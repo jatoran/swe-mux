@@ -24,6 +24,7 @@ import { DRAWER_TAB_ICONS } from './railIcons'
 import { OverflowRail } from './RailScroller'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
+import { hasHarnessTranscript } from './harnessRegistry'
 
 // Host for the right-edge utility drawer. Two renderings, one component:
 //
@@ -176,6 +177,7 @@ export function UtilityDrawer(props: Props) {
   }
   const focusedTab = presentation.focused_tab
   const stackOrder = drawerTabs(layout)
+  const tabAvailable = (id: DrawerTabId) => id !== 'transcript' || hasHarnessTranscript(session?.backend)
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
@@ -350,7 +352,7 @@ export function UtilityDrawer(props: Props) {
       'aria-label':projection ? 'Panel sections' : `Panel section ${stack.id}`,
     }}
   >
-    {stack.tabs.map((id, index) => {
+    {stack.tabs.filter(tabAvailable).map((id, index, visibleTabs) => {
       const item = drawerTab(id)
       return <button
         id={tabDomId(stack.id, id)}
@@ -379,7 +381,7 @@ export function UtilityDrawer(props: Props) {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
           const offset = event.key === 'ArrowLeft' ? -1 : 1
-          const next = stack.tabs[(index + offset + stack.tabs.length) % stack.tabs.length]
+          const next = visibleTabs[(index + offset + visibleTabs.length) % visibleTabs.length]
           onTab(next)
           focusTabButton(stack.id, next)
         }}
@@ -391,7 +393,9 @@ export function UtilityDrawer(props: Props) {
   </OverflowRail>
 
   const renderStack = (stack: DrawerStack, selectedOverride?: DrawerTabId) => {
-    const selected = selectedOverride || presentation.selected_tabs[stack.id] || stack.tabs[0]
+    const visibleTabs=stack.tabs.filter(tabAvailable)
+    const requested = selectedOverride || presentation.selected_tabs[stack.id] || visibleTabs[0]
+    const selected = visibleTabs.includes(requested) ? requested : visibleTabs[0]
     const active = drawerTab(selected)
     const notesHere = stack.tabs.includes('notes')
     return <section

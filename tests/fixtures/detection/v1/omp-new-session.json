@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "The first records in the transcript selected after OMP new form an independent session and root turn.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "title", "v": 1, "title": "fresh"}},
+    {"kind": "transcript", "record": {"type": "session", "version": 3, "id": "fresh-native", "cwd": "."}},
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "new conversation"}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a", "parentId": "u", "message": {"role": "assistant", "content": "fresh answer", "stopReason": "stop"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

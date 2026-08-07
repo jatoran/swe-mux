@@ -208,6 +208,36 @@ def test_claude_inventory_finds_hooks_agents_mcp_and_documented_builtins(
     assert "--api-key" not in serialized
 
 
+def test_omp_inventory_reads_native_mcp_and_documents_xdev_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "omp-home"
+    cwd = tmp_path / "repo"
+    extension = tmp_path / "mux-extension"
+    home.mkdir()
+    (cwd / ".omp").mkdir(parents=True)
+    extension.mkdir()
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(home))
+    (home / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"user-docs": {"url": "https://docs.test/mcp"}}}),
+        encoding="utf-8",
+    )
+    (extension / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"mux": {"url": "http://127.0.0.1:8765/mcp"}}}),
+        encoding="utf-8",
+    )
+
+    payload = _discover("omp", cwd, args=["--extension", str(extension)])
+
+    mcp = {item["name"]: item for item in _section(payload, "mcp")["items"]}
+    tools = {item["name"]: item for item in _section(payload, "tools")["items"]}
+    assert set(mcp) == {"mux", "user-docs"}
+    assert mcp["mux"]["scope"] == "session"
+    assert len(tools) == 31
+    assert "[xd://]" in tools["ast_edit"]["description"]
+    assert "[xd://]" not in tools["read"]["description"]
+
+
 def test_hooks_group_by_event_and_mark_the_ones_swe_mux_installs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -350,5 +380,5 @@ def test_new_conversation_run_does_not_reuse_stale_runtime_metadata(
 
 
 def test_shell_backend_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="only for Claude and Codex"):
+    with pytest.raises(ValueError, match="registered agent sessions"):
         _discover("shell", tmp_path)

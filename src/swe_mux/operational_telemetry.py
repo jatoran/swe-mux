@@ -12,10 +12,11 @@ from bisect import bisect_left
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, assert_never
 
 from .background_tasks import background
 from .event_bus import EventBus
+from .harness import Backend, require_backend
 from .models import MuxEvent
 from .sqlite_store import (
     connect_or_quarantine,
@@ -36,6 +37,9 @@ TOOL_PARSER_VERSION = "phase2-v1"
 TOOL_PARSER_VERSIONS = {
     "claude": f"claude-{TOOL_PARSER_VERSION}",
     "codex": f"codex-{TOOL_PARSER_VERSION}",
+    # OMP support was added after the original phase2 parser shipped.
+    # Keep its revision independent so existing Claude/Codex coverage remains current.
+    "omp": "omp-phase2-v2",
 }
 CODEX_KNOWN_OUTER_RECORDS = {
     "compacted",
@@ -74,6 +78,25 @@ CODEX_KNOWN_PAYLOADS = {
     "turn_aborted",
     "user_message",
     "web_search_end",
+}
+OMP_KNOWN_RECORDS = {
+    "branch_summary",
+    "compaction",
+    "credential_pin",
+    "custom",
+    "custom_message",
+    "label",
+    "message",
+    "mode_change",
+    "model_change",
+    "reset_boundary",
+    "service_tier_change",
+    "session",
+    "session_init",
+    "thinking_level_change",
+    "title",
+    "title_change",
+    "ttsr_injection",
 }
 RESET_EXPECTED_TOLERANCE_SECONDS = 15 * 60
 # Rebound a confirming sample may show over the reset's post-value and still
@@ -567,10 +590,11 @@ class OperationalTelemetryStore:
                 summary["skipped"] += 1
                 continue
             try:
+                backend = require_backend(str(row["backend"]))
                 scan = await asyncio.to_thread(
                     scan_native_telemetry,
                     path,
-                    str(row["backend"]),
+                    backend,
                     str(row["id"]),
                     row.get("project_id"),
                     row.get("model"),
@@ -721,9 +745,9 @@ class OperationalTelemetryStore:
                 index = bisect_left(live_compactions, target - 2)
                 return index < len(live_compactions) and live_compactions[index] <= target + 2
 
-            compaction_rows = [
-                (
-                    hashlib.sha256(item["source_identity"].encode()).hexdigest(),
+            def compaction_row(item: dict[str, Any], event_id: str) -> tuple[Any, ...]:
+                return (
+                    event_id,
                     None,
                     row["id"],
                     row["id"],
@@ -738,9 +762,38 @@ class OperationalTelemetryStore:
                         str(row["backend"]), f"{row['backend']}-{TOOL_PARSER_VERSION}"
                     ),
                 )
-                for item in compaction_items
-                if not duplicates_live_compaction(item)
-            ]
+
+            compaction_rows: list[tuple[Any, ...]] = []
+            for item in compaction_items:
+                native_id = str(item.get("compaction_id") or "").strip()
+                if native_id:
+                    # OMP reports the same native ID from its hook and JSONL.
+                    # A complete transcript scan upgrades older timestamp-keyed
+                    # rows to that stable identity and removes only siblings in
+                    # the measured hook-to-append window. This repairs duplicate
+                    # counts without discarding unrelated hook-only evidence.
+                    identity = (
+                        f"{row['id']}\0{row['backend']}\0{native_id}\0compaction"
+                    )
+                    event_id = hashlib.sha256(identity.encode()).hexdigest()
+                    observed_at = float(item["observed_at"])
+                    self._db.execute(
+                        "DELETE FROM context_compactions WHERE session_id=? AND id!=? "
+                        "AND observed_at BETWEEN ? AND ?",
+                        (row["id"], event_id, observed_at - 0.25, observed_at + 0.25),
+                    )
+                    exists = self._db.execute(
+                        "SELECT 1 FROM context_compactions WHERE id=?", (event_id,)
+                    ).fetchone()
+                    if not exists:
+                        compaction_rows.append(compaction_row(item, event_id))
+                elif not duplicates_live_compaction(item):
+                    compaction_rows.append(
+                        compaction_row(
+                            item,
+                            hashlib.sha256(item["source_identity"].encode()).hexdigest(),
+                        )
+                    )
             if compaction_rows:
                 self._db.executemany(
                     "INSERT OR IGNORE INTO context_compactions"
@@ -791,6 +844,20 @@ class OperationalTelemetryStore:
             "explicit_native" if scan["compactions"] else None,
             "high" if scan["compactions"] else None,
         )
+        if scan.get("diagnostic") is None and self.sessions is not None:
+            session = self.sessions.sessions.get(str(row["id"]))
+            if session is not None and session.record.agent_run_id == str(row["id"]):
+                session.record.compaction_count = len(scan["compactions"])
+                session.record.last_compaction_at = max(
+                    (item["observed_at"] for item in scan["compactions"]), default=None
+                )
+                session.record.compaction_capability = (
+                    "explicit_native" if scan["compactions"] else None
+                )
+                session.record.compaction_confidence = (
+                    "high" if scan["compactions"] else None
+                )
+                session.publish_update()
 
     def _session_dimensions(self, session_id: str) -> dict[str, Any]:
         session = self.sessions.sessions.get(session_id) if self.sessions else None
@@ -817,9 +884,13 @@ class OperationalTelemetryStore:
         capability = str(event.payload.get("capability") or "explicit_native")
         confidence = str(event.payload.get("confidence") or "high")
         parser_version = f"{backend}:{event.payload.get('parser_version') or TOOL_PARSER_VERSION}"
-        event_id = hashlib.sha256(
-            f"{event.session_id}\0{event.ts:.6f}\0{event.source}\0compaction".encode()
-        ).hexdigest()
+        compaction_id = str(event.payload.get("compaction_id") or "").strip()
+        event_identity = (
+            f"{event.session_id}\0{backend}\0{compaction_id}\0compaction"
+            if compaction_id
+            else f"{event.session_id}\0{event.ts:.6f}\0{event.source}\0compaction"
+        )
+        event_id = hashlib.sha256(event_identity.encode()).hexdigest()
 
         def op() -> bool:
             cursor = self._db.execute(
@@ -1656,7 +1727,7 @@ class OperationalTelemetryStore:
 
 def scan_native_telemetry(
     path: Path,
-    backend: str,
+    backend: Backend,
     session_id: str,
     project_id: str | None,
     model: str | None,
@@ -1857,8 +1928,83 @@ def scan_native_telemetry(
                         "observed_at": when,
                     }
                 )
-        else:
+        elif backend == "shell":
             unknown += 1
+        elif backend == "omp":
+            outer = str(record.get("type") or "")
+            if outer not in OMP_KNOWN_RECORDS:
+                unknown += 1
+                continue
+            recognized += 1
+            if outer == "compaction":
+                compaction_id = str(record.get("id") or f"line-{index}")
+                compactions.append(
+                    {
+                        "source_identity": (
+                            f"native:{session_id}:compaction:{compaction_id}"
+                        ),
+                        "compaction_id": compaction_id,
+                        "observed_at": when,
+                    }
+                )
+                continue
+            if outer != "message":
+                continue
+            omp_message_value = record.get("message")
+            omp_message: dict[str, Any] = (
+                omp_message_value if isinstance(omp_message_value, dict) else {}
+            )
+            role = str(omp_message.get("role") or "")
+            if role == "assistant":
+                content = omp_message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block_index, block in enumerate(content):
+                    if not isinstance(block, dict) or block.get("type") != "toolCall":
+                        continue
+                    call_id = str(
+                        block.get("id")
+                        or block.get("toolCallId")
+                        or f"line-{index}-{block_index}"
+                    )
+                    name = str(block.get("name") or "tool")
+                    names[call_id] = name
+                    arguments = block.get("arguments")
+                    arguments = arguments if isinstance(arguments, dict) else {}
+                    skill_value = arguments.get("skill") or arguments.get("name")
+                    explicit_skill = (
+                        skill_value.strip()[:200]
+                        if name.casefold() == "skill" and isinstance(skill_value, str)
+                        else None
+                    )
+                    tools.append(
+                        {
+                            "source_identity": (
+                                f"native:{session_id}:tool_use:{call_id}"
+                            ),
+                            "observed_at": when,
+                            "kind": "tool_use",
+                            "raw_tool": name,
+                            "explicit_skill": explicit_skill,
+                        }
+                    )
+            elif role == "toolResult":
+                call_id = str(omp_message.get("toolCallId") or f"line-{index}")
+                name = names.get(call_id, str(omp_message.get("toolName") or "tool"))
+                tools.append(
+                    {
+                        "source_identity": (
+                            f"native:{session_id}:tool_result:{call_id}"
+                        ),
+                        "observed_at": when,
+                        "kind": "tool_result",
+                        "raw_tool": name,
+                        "success": int(not bool(omp_message.get("isError"))),
+                        "duration_ms": _finite(omp_message.get("duration")),
+                    }
+                )
+        else:
+            assert_never(backend)
     return {
         "tools": tools,
         "compactions": compactions,

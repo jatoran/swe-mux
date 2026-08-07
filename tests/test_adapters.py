@@ -1,14 +1,25 @@
+import asyncio
 import json
 import os
 import shlex
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from swe_mux.adapters import ClaudeAdapter, CodexAdapter, ShellAdapter, SpawnOptions, SpawnSpec
+from swe_mux.adapters import (
+    ClaudeAdapter,
+    CodexAdapter,
+    OmpAdapter,
+    ShellAdapter,
+    SpawnOptions,
+    SpawnSpec,
+)
 from swe_mux.adapters.claude import _hook_command, encode_cwd
 from swe_mux.adapters.codex import CODEX_LIFECYCLE_HOOK_EVENTS, codex_lifecycle_hook_args
+from swe_mux.adapters.omp import materialize_mux_extension, omp_hook_path
 from swe_mux.reconcile import inspect_claude, inspect_codex
 
 
@@ -19,6 +30,282 @@ def test_spawn_spec_defaults_are_safe() -> None:
     assert first.argv == ()
     assert first.env == {}
     assert first.env is not second.env
+
+
+def test_omp_launch_and_resume_specs_preserve_structured_arguments(tmp_path: Path) -> None:
+    adapter = OmpAdapter("custom-omp", ["--theme", "dark"])
+    options = SpawnOptions(cwd=tmp_path, args=["--model", "fast"])
+
+    assert adapter.spawn_spec("mux-id", options) == SpawnSpec(
+        "custom-omp",
+        ("--extension", str(omp_hook_path()), "--theme", "dark", "--model", "fast"),
+        adapter._terminal_env("mux-id"),
+    )
+    assert adapter.resume_spec("native-id", options) == SpawnSpec(
+        "custom-omp",
+        (
+            "--extension",
+            str(omp_hook_path()),
+            "--resume",
+            "native-id",
+            "--theme",
+            "dark",
+            "--model",
+            "fast",
+        ),
+        adapter._terminal_env("native-id"),
+    )
+    assert adapter.graceful_exit_keys() == "\x03\x04"
+    assert adapter.reports_conversation_rollover is True
+    assert omp_hook_path().is_file()
+
+
+def test_omp_session_extension_registers_mux_mcp_without_touching_user_config(
+    tmp_path: Path,
+) -> None:
+    adapter = OmpAdapter(
+        "omp",
+        data_dir=tmp_path / "mux",
+        data_home=tmp_path / "omp-home",
+        mcp_url="http://127.0.0.1:8765/mcp",
+    )
+    spec = adapter.spawn_spec(
+        "native",
+        SpawnOptions(tmp_path, session_id="mux-session", mcp_token="session-secret"),
+    )
+
+    extension = Path(spec.argv[spec.argv.index("--extension") + 1])
+    assert extension == tmp_path / "mux" / "omp-extensions" / "mux-session"
+    assert (extension / "index.ts").read_bytes() == omp_hook_path().read_bytes()
+    config = json.loads((extension / ".mcp.json").read_text(encoding="utf-8"))
+    server = config["mcpServers"]["mux"]
+    assert server == {
+        "type": "http",
+        "url": "http://127.0.0.1:8765/mcp",
+        "headers": {"Authorization": "Bearer session-secret"},
+    }
+    assert not (tmp_path / "omp-home" / "mcp.json").exists()
+
+
+def test_omp_mux_extension_does_not_replace_user_extensions(tmp_path: Path) -> None:
+    mux_extension = materialize_mux_extension(tmp_path / "mux-extension")
+    adapter = OmpAdapter("omp", data_dir=tmp_path / "data")
+    spec = adapter.spawn_spec(
+        "native",
+        SpawnOptions(
+            tmp_path,
+            args=["--extension", str(tmp_path / "user-extension")],
+            session_id="mux-session",
+        ),
+    )
+    argv = list(spec.argv)
+    assert argv.count("--extension") == 2
+    assert str(tmp_path / "user-extension") in argv
+    assert str(mux_extension) not in argv
+
+
+@pytest.mark.skipif(shutil.which("bun") is None, reason="bun is required to load an OMP extension")
+def test_omp_hook_sequences_retries_and_reconnects_without_reordering() -> None:
+    hook_uri = json.dumps(omp_hook_path().as_uri())
+    script = f"""
+      import factory from {hook_uri};
+      process.env.MUX_HOOK_URL = "http://127.0.0.1:9/hook";
+      process.env.MUX_HOOK_SECRET = "secret";
+      const handlers = new Map();
+      const bodies = [];
+      let calls = 0;
+      globalThis.fetch = async (_url, init) => {{
+        bodies.push(JSON.parse(String(init.body)));
+        calls += 1;
+        if (calls === 1) throw new Error("simulated reconnect");
+        return new Response("{{}}", {{ status: 200 }});
+      }};
+      factory({{
+        on(name, handler) {{ handlers.set(name, handler); }},
+        logger: {{ warn(message) {{ throw new Error(message); }} }},
+      }});
+      const context = {{
+        cwd: "D:/repo",
+        sessionManager: {{
+          getSessionId() {{ return "native-1"; }},
+          getSessionFile() {{ return "D:/sessions/native-1.jsonl"; }},
+        }},
+      }};
+      await handlers.get("session_start")({{ type: "session_start" }}, context);
+      await handlers.get("before_agent_start")(
+        {{ type: "before_agent_start", prompt: "test" }}, context
+      );
+      await handlers.get("session_switch")(
+        {{ type: "session_switch", reason: "resume" }}, context
+      );
+      const sequences = bodies.map((body) => body.sequence);
+      if (JSON.stringify(sequences) !== JSON.stringify([1, 1, 2, 3])) {{
+        throw new Error(`unexpected sequences: ${{JSON.stringify(sequences)}}`);
+      }}
+      if (!handlers.has("tool_approval_requested") || !handlers.has("tool_approval_resolved")) {{
+        throw new Error("approval hooks were not registered");
+      }}
+    """
+    result = subprocess.run(
+        [shutil.which("bun") or "bun", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def _write_omp_session(
+    path: Path,
+    native_id: str,
+    cwd: Path,
+    *,
+    previous: list[Path] | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    title = json.dumps({"type": "title", "v": 1}).encode()
+    title_slot = title.ljust(255, b" ") + b"\n"
+    header = {
+        "type": "session",
+        "version": 3,
+        "id": native_id,
+        "timestamp": "2026-08-06T12:00:00.000Z",
+        "cwd": str(cwd),
+    }
+    if previous:
+        header["previousSessionFiles"] = [str(item) for item in previous]
+    path.write_bytes(title_slot + json.dumps(header).encode() + b"\n")
+
+
+def _write_omp_breadcrumb(
+    adapter: OmpAdapter,
+    session_id: str,
+    cwd: Path,
+    transcript: Path,
+    *,
+    fresh: bool = False,
+) -> None:
+    path = (
+        adapter.data_home
+        / "terminal-sessions"
+        / f"apple-swe-mux-{session_id}"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = "fresh\n" if fresh else ""
+    path.write_text(f"{cwd}\n{transcript}\n{suffix}", encoding="utf-8")
+
+
+def test_omp_breadcrumb_binds_a_materialized_or_fresh_transcript(tmp_path: Path) -> None:
+    home = tmp_path / "omp-home"
+    cwd = tmp_path / "repo"
+    adapter = OmpAdapter(data_home=home)
+    transcript = home / "sessions" / "bucket" / "stamp_native-1.jsonl"
+
+    assert adapter.session_env("mux-1") == {"TERM_SESSION_ID": "swe-mux-mux-1"}
+    _write_omp_breadcrumb(adapter, "mux-1", cwd, transcript, fresh=True)
+    assert adapter.transcript_path("mux-1", cwd) == transcript
+    assert adapter.pending_transcript_path("mux-1", tmp_path / "old.jsonl") == transcript
+    assert adapter.transcript_native_id(transcript) == "native-1"
+
+    _write_omp_session(transcript, "native-1", cwd)
+    assert adapter.transcript_path("mux-1", cwd) == transcript
+    assert adapter.pending_transcript_path("mux-1", tmp_path / "old.jsonl") is None
+    assert adapter.transcript_native_id(transcript) == "native-1"
+
+
+def test_omp_follows_previous_session_file_after_move(tmp_path: Path) -> None:
+    home = tmp_path / "omp-home"
+    cwd = tmp_path / "repo"
+    adapter = OmpAdapter(data_home=home)
+    previous = home / "sessions" / "old" / "stamp_native-2.jsonl"
+    moved = home / "sessions" / "new" / "stamp_native-2.jsonl"
+    _write_omp_session(moved, "native-2", cwd, previous=[previous])
+    _write_omp_breadcrumb(adapter, "mux-2", cwd, previous)
+
+    assert adapter.transcript_path("mux-2", cwd) == moved
+    assert adapter.locate_transcript("native-2") == moved
+
+
+def test_omp_recent_transcripts_supports_current_and_hashed_buckets(tmp_path: Path) -> None:
+    home = tmp_path / "omp-home"
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    adapter = OmpAdapter(data_home=home)
+    current_dir, hashed_dir = adapter._candidate_dirs(cwd)
+    current = current_dir / "stamp_current.jsonl"
+    hashed = hashed_dir / "stamp_hashed.jsonl"
+    _write_omp_session(current, "current", cwd)
+    _write_omp_session(hashed, "hashed", cwd)
+
+    recent = adapter.recent_transcripts(cwd, time.time())
+    assert {(path, native_id) for _, path, native_id in recent} == {
+        (current, "current"),
+        (hashed, "hashed"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_omp_await_transcript_accepts_fresh_unmaterialized_boundary(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "omp-home"
+    cwd = tmp_path / "repo"
+    adapter = OmpAdapter(data_home=home)
+    transcript = home / "sessions" / "bucket" / "stamp_native-3.jsonl"
+    _write_omp_breadcrumb(adapter, "mux-3", cwd, transcript, fresh=True)
+
+    assert (
+        await adapter.await_transcript("mux-3", cwd, time.time(), asyncio.Event())
+        == transcript
+    )
+
+
+def test_second_claude_family_adapter_keeps_paths_and_shim_names_isolated(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "mux"
+    claude_home = tmp_path / ".claude"
+    compatible_home = tmp_path / ".compatible"
+    claude = ClaudeAdapter(data_dir=data_dir, data_home_resolver=lambda: claude_home)
+    compatible = ClaudeAdapter(
+        "compatible.exe",
+        data_dir,
+        name="compatible",
+        config_dir_name=".compatible",
+        script_base_name="compatible",
+        data_home_resolver=lambda: compatible_home,
+    )
+
+    assert claude.settings_path == data_dir / "claude-hooks.json"
+    assert compatible.settings_path == data_dir / "compatible-hooks.json"
+    assert claude.shim_name == "claude.cmd"
+    assert compatible.shim_name == "compatible.cmd"
+    assert claude.transcript_path("same", tmp_path).is_relative_to(claude_home)
+    assert compatible.transcript_path("same", tmp_path).is_relative_to(compatible_home)
+
+
+def test_codex_family_uses_injected_data_home_and_rollout_prefix(tmp_path: Path) -> None:
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    rollout = tmp_path / "custom-home" / "sessions" / "2026" / "custom-thread-id.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "thread-id", "cwd": str(cwd)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter = CodexAdapter(
+        data_home_resolver=lambda: tmp_path / "custom-home",
+        rollout_file_prefix="custom-",
+    )
+
+    assert adapter.transcript_path("thread-id", cwd) == rollout
 
 
 def test_locate_transcript_finds_a_conversation_whose_cwd_moved(

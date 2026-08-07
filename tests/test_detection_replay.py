@@ -5,18 +5,24 @@ from pathlib import Path
 
 import pytest
 
+from swe_mux.harness import HARNESSES, HarnessLevel
 from tests.support.detection_replay import DetectionReplay, load_manifest
 
 FIXTURES = Path(__file__).parent / "fixtures" / "detection" / "v1"
 INVENTORY = FIXTURES / "edge_case_inventory.json"
+SCENARIO_FLOOR = {
+    HarnessLevel.observed: 1,
+    HarnessLevel.hooked: 3,
+    HarnessLevel.managed: 5,
+}
 
 
 @pytest.mark.parametrize("path", sorted(FIXTURES.glob("*.json")), ids=lambda path: path.stem)
-async def test_versioned_detection_replay_golden(path: Path) -> None:
+async def test_versioned_detection_replay_golden(path: Path, tmp_path: Path) -> None:
     if path.name == INVENTORY.name:
         pytest.skip("inventory registry, not a replay fixture")
     manifest = load_manifest(path)
-    result = await DetectionReplay(manifest["backend"]).run(manifest)
+    result = await DetectionReplay(manifest["backend"], tmp_path).run(manifest)
 
     assert result["events"] == manifest["expected"]["events"]
     assert result["parser"] == manifest["expected"]["parser"]
@@ -25,6 +31,9 @@ async def test_versioned_detection_replay_golden(path: Path) -> None:
     assert result["readiness"]["authorized"] is False
     assert [item["actual"] for item in result["checkpoints"]] == [
         item["expected"] for item in result["checkpoints"]
+    ]
+    assert [item["actual"] for item in result["path_checkpoints"]] == [
+        item["expected"] for item in result["path_checkpoints"]
     ]
     # Phase 3.5: the user-visible status stream is a golden output with the same
     # no-drift protection as delivery_state. Every fixture must pin it.
@@ -41,7 +50,9 @@ async def test_versioned_detection_replay_golden(path: Path) -> None:
         assert result["standing_activity"] == manifest["expected"]["standing"]
 
 
-async def test_replay_oracles_have_no_false_safe_or_false_blocked_decisions() -> None:
+async def test_replay_oracles_have_no_false_safe_or_false_blocked_decisions(
+    tmp_path: Path,
+) -> None:
     false_safe = 0
     false_blocked = 0
     exercised = 0
@@ -49,7 +60,7 @@ async def test_replay_oracles_have_no_false_safe_or_false_blocked_decisions() ->
         if path.name == INVENTORY.name:
             continue
         manifest = load_manifest(path)
-        result = await DetectionReplay(manifest["backend"]).run(manifest)
+        result = await DetectionReplay(manifest["backend"], tmp_path / path.stem).run(manifest)
         for checkpoint in result["checkpoints"]:
             exercised += 1
             actual_safe = checkpoint["actual"] == "safe"
@@ -62,8 +73,17 @@ async def test_replay_oracles_have_no_false_safe_or_false_blocked_decisions() ->
     assert false_blocked == 0
 
 
-async def test_replay_corpus_covers_phase1_evidence_and_lifecycle_matrix() -> None:
-    fixture_counts = {"claude": 0, "codex": 0}
+async def test_replay_corpus_covers_phase1_evidence_and_lifecycle_matrix(
+    tmp_path: Path,
+) -> None:
+    observed = {
+        name: harness
+        for name, harness in HARNESSES.items()
+        if harness.level >= HarnessLevel.observed
+    }
+    fixture_counts = dict.fromkeys(observed, 0)
+    harness_step_kinds = {name: set() for name in observed}
+    harness_state_sources = {name: set() for name in observed}
     step_kinds: set[str] = set()
     event_types: set[str] = set()
     delivery_states: set[str] = set()
@@ -72,19 +92,39 @@ async def test_replay_corpus_covers_phase1_evidence_and_lifecycle_matrix() -> No
         if path.name == INVENTORY.name:
             continue
         manifest = load_manifest(path)
-        fixture_counts[manifest["backend"]] += 1
-        step_kinds.update(str(step["kind"]) for step in manifest["steps"])
-        result = await DetectionReplay(manifest["backend"]).run(manifest)
+        backend = manifest["backend"]
+        assert backend in observed, f"{path.name}: unregistered or unobserved backend {backend}"
+        fixture_counts[backend] += 1
+        fixture_steps = {str(step["kind"]) for step in manifest["steps"]}
+        step_kinds.update(fixture_steps)
+        harness_step_kinds[backend].update(fixture_steps)
+        result = await DetectionReplay(backend, tmp_path / path.stem).run(manifest)
         event_types.update(item["type"] for item in result["events"])
         delivery_states.update(item["actual"] for item in result["checkpoints"])
         parser_states.add(result["parser"]["status"])
+        harness_state_sources[backend].update(item["source"] for item in result["states"])
 
-    assert fixture_counts["claude"] >= 5
-    assert fixture_counts["codex"] >= 5
-    assert step_kinds >= {
+    for name, harness in observed.items():
+        floor = max(
+            count for level, count in SCENARIO_FLOOR.items() if harness.level >= level
+        )
+        assert fixture_counts[name] >= floor, f"{name} needs at least {floor} scenarios"
+        if harness.level >= HarnessLevel.hooked:
+            assert "hook" in harness_step_kinds[name], f"{name} needs hook-step coverage"
+        if "transcript" in harness.state_sources:
+            assert "transcript" in harness_step_kinds[name]
+            assert "transcript" in harness_state_sources[name]
+        if "hook" in harness.state_sources:
+            assert "hook" in harness_state_sources[name]
+        if "pty" in harness.state_sources:
+            assert harness_step_kinds[name] & {"pty", "pty_tail", "terminal"}
+            assert harness_state_sources[name] & {"pty", "watchdog-pty"}
+        if "cli_state" in harness.state_sources:
+            assert "process" in harness_step_kinds[name]
+
+    required_step_kinds = {
         "event",
         "focus",
-        "hook",
         "input",
         "process",
         "restart",
@@ -95,7 +135,16 @@ async def test_replay_corpus_covers_phase1_evidence_and_lifecycle_matrix() -> No
         "transcript",
         "transcript_chunk",
     }
-    assert event_types >= {
+    if any("hook" in harness.state_sources for harness in observed.values()):
+        required_step_kinds.add("hook")
+    assert step_kinds >= required_step_kinds
+
+    normalized_events = {
+        event
+        for harness in observed.values()
+        for event in harness.normalized_events
+    }
+    assert event_types >= normalized_events | {
         "approval_needed",
         "backend_demoted",
         "backend_detected",
@@ -114,7 +163,21 @@ async def test_replay_corpus_covers_phase1_evidence_and_lifecycle_matrix() -> No
     assert parser_states >= {"degraded", "ready", "watching"}
 
 
-async def test_replay_corpus_covers_phase35_status_matrix() -> None:
+async def test_every_observed_harness_has_a_replay_fixture() -> None:
+    fixture_backends = {
+        load_manifest(path)["backend"]
+        for path in FIXTURES.glob("*.json")
+        if path.name != INVENTORY.name
+    }
+    observed = {
+        name
+        for name, harness in HARNESSES.items()
+        if harness.level >= HarnessLevel.observed
+    }
+    assert fixture_backends >= observed
+
+
+async def test_replay_corpus_covers_phase35_status_matrix(tmp_path: Path) -> None:
     """The corpus must exercise the full user-visible status surface.
 
     Every SessionState reachable by observation, every awaiting sub-reason,
@@ -131,12 +194,13 @@ async def test_replay_corpus_covers_phase35_status_matrix() -> None:
     standing_adds: set[str] = set()
     standing_clears: set[str] = set()
     contract_violations = 0
+    authority_contract_violations = 0
     for path in sorted(FIXTURES.glob("*.json")):
         if path.name == INVENTORY.name:
             continue
         manifest = load_manifest(path)
         step_kinds.update(str(step["kind"]) for step in manifest["steps"])
-        result = await DetectionReplay(manifest["backend"]).run(manifest)
+        result = await DetectionReplay(manifest["backend"], tmp_path / path.stem).run(manifest)
         for item in result["states"]:
             states_seen.add(item["state"])
             proofs.add(item["proof"])
@@ -150,6 +214,9 @@ async def test_replay_corpus_covers_phase35_status_matrix() -> None:
                 standing_clears.add(entry["activity"])
         watchdog_actions.update(result["health"]["watchdog_recovery_actions"])
         contract_violations += result["health"]["counters"].get("contract_violations", 0)
+        authority_contract_violations += result["health"]["counters"].get(
+            "authority_contract_violations", 0
+        )
 
     # Every standing-activity kind must appear with at least one add and one
     # clear (positive removal or TTL expiry) somewhere in the corpus.
@@ -158,7 +225,15 @@ async def test_replay_corpus_covers_phase35_status_matrix() -> None:
     assert states_seen >= {"working", "idle", "awaiting", "crashed", "exited"}
     assert awaiting_reasons >= {"approval", "question", "elicitation", "rate_limit"}
     assert proofs == {"proven", "inferred"}
-    assert sources >= {"transcript", "hook", "watchdog", "watchdog-pty", "pty"}
+    observed = [
+        harness for harness in HARNESSES.values() if harness.level >= HarnessLevel.observed
+    ]
+    required_sources = {source for source in ("transcript", "hook") if any(
+        source in harness.state_sources for harness in observed
+    )}
+    if any("pty" in harness.state_sources for harness in observed):
+        required_sources.update({"watchdog", "watchdog-pty", "pty"})
+    assert sources >= required_sources
     assert watchdog_actions >= {
         "transcript_tail_terminal",
         "pty_idle_prompt",
@@ -168,6 +243,7 @@ async def test_replay_corpus_covers_phase35_status_matrix() -> None:
     # The status contract holds across the whole corpus: no state was ever set
     # by a source outside its allowed evidence set.
     assert contract_violations == 0
+    assert authority_contract_violations == 0
 
 
 async def test_every_fixture_pins_the_status_stream() -> None:

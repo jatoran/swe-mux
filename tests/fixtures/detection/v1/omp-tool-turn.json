@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "OMP toolCall and toolResult messages normalize without ending the root turn before the final assistant answer.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "run tests"}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a1", "parentId": "u", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "c1", "name": "bash", "arguments": {"command": "pytest"}}], "stopReason": "toolUse"}}},
+    {"kind": "transcript", "record": {"type": "custom", "id": "s1", "parentId": "a1", "customType": "tool_execution_start", "data": {"toolCallId": "c1", "toolName": "bash", "args": {"command": "pytest"}}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "r1", "parentId": "s1", "message": {"role": "toolResult", "toolCallId": "c1", "toolName": "bash", "content": [{"type": "text", "text": "3 passed"}], "isError": false}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a2", "parentId": "r1", "message": {"role": "assistant", "content": "done", "stopReason": "stop"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "bash"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "bash", "success": true},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 5, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

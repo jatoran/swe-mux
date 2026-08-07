@@ -36,10 +36,11 @@ import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from .adapters.claude import claude_data_home
 from .adapters.codex import codex_data_home
+from .harness import Backend, descriptor, is_agent_harness
 
 # Enough to cover any real frontmatter block without reading a whole skill body.
 FRONTMATTER_BYTES = 16 * 1024
@@ -257,7 +258,7 @@ def _scan_skill_root(
     two names differ). Getting this backwards produces a button that types a
     command the agent does not have.
     """
-    prefix = "/" if vendor == "claude" else "$"
+    prefix = "/" if vendor == "claude" else "/skill:" if vendor == "omp" else "$"
     found: list[DiscoveredSkill] = []
     try:
         entries = sorted(directory.iterdir(), key=lambda item: item.name.lower())
@@ -494,6 +495,63 @@ def _codex_inventory(cwd: Path, codex_home: Path, now: float) -> SkillInventory:
     return inventory
 
 
+def _project_ancestors(cwd: Path) -> list[Path]:
+    """OMP's closest-first project walk, stopping at the repository root."""
+    result: list[Path] = []
+    current = cwd
+    # unsupervised-loop-ok: finite synchronous parent walk ending at a repository or volume root.
+    while True:
+        result.append(current)
+        if (current / ".git").exists() or current.parent == current:
+            return result
+        current = current.parent
+
+
+def _omp_inventory(cwd: Path, omp_home: Path, now: float) -> SkillInventory:
+    """Mirror OMP's authored-skill providers without invoking its TUI."""
+    inventory = SkillInventory(backend="omp", cwd=str(cwd), generated_at=now)
+    user_home = Path.home()
+    plan: list[tuple[Path, str, str]] = []
+    for ancestor in _project_ancestors(cwd):
+        plan.extend(
+            (
+                (ancestor / ".omp" / "skills", "project", "OMP project skills"),
+                (ancestor / ".claude" / "skills", "project", "Claude project skills"),
+                (ancestor / ".agent" / "skills", "project", "Agent Skills project root"),
+                (ancestor / ".agents" / "skills", "project", "Agent Skills project root"),
+            )
+        )
+    plan.extend(
+        (
+            (cwd / ".codex" / "skills", "project", "Codex project skills"),
+            (cwd / ".github" / "skills", "project", "GitHub Copilot project skills"),
+            (omp_home / "skills", "user", "OMP user skills"),
+            (user_home / ".claude" / "skills", "user", "Claude user skills"),
+            (user_home / ".codex" / "skills", "user", "Codex user skills"),
+            (user_home / ".agent" / "skills", "user", "Agent Skills user root"),
+            (user_home / ".agents" / "skills", "user", "Agent Skills user root"),
+            (omp_home / "managed-skills", "system", "OMP managed skills"),
+        )
+    )
+    seen: set[str] = set()
+    for directory, scope, origin in plan:
+        identity = str(directory.resolve(strict=False)).casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        exists = directory.is_dir()
+        found = (
+            _scan_skill_root(directory, scope, origin, "omp", inventory.errors)
+            if exists
+            else []
+        )
+        inventory.roots.append(
+            SkillRoot(str(directory), scope, "skill", origin, exists, len(found))
+        )
+        inventory.skills.extend(found)
+    return inventory
+
+
 def _resolve(inventory: SkillInventory) -> SkillInventory:
     """Order by scope, then mark name collisions and apply the ceiling."""
     inventory.skills.sort(key=lambda skill: (_SCOPE_RANK.get(skill.scope, 9), skill.name.lower()))
@@ -515,11 +573,12 @@ _CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
 
 
 def discover_skills(
-    backend: str,
+    backend: Backend,
     cwd: Path | str,
     *,
     claude_home: Path | None = None,
     codex_home: Path | None = None,
+    omp_home: Path | None = None,
     now: float | None = None,
     refresh: bool = False,
 ) -> dict[str, Any]:
@@ -530,24 +589,34 @@ def discover_skills(
     collapses a drawer open into one scan without letting a stale answer outlive
     the click that follows it.
     """
-    if backend not in {"claude", "codex"}:
-        raise ValueError("skills are discoverable only for claude and codex sessions")
+    if not is_agent_harness(backend):
+        raise ValueError("skills are discoverable only for registered agent sessions")
     moment = time.time() if now is None else now
     root = Path(cwd)
-    home = (
-        (claude_home or claude_data_home())
-        if backend == "claude"
-        else (codex_home or codex_data_home())
-    )
+    if backend == "claude":
+        home = claude_home or claude_data_home()
+    elif backend == "codex":
+        home = codex_home or codex_data_home()
+    elif backend == "omp":
+        home = omp_home or descriptor("omp").data_home()
+    elif backend == "shell":
+        raise ValueError("shell sessions do not have agent skills")
+    else:
+        assert_never(backend)
     key = (backend, str(root), str(home))
     cached = _CACHE.get(key)
     if cached and not refresh and moment - cached[0] < CACHE_TTL_SECONDS:
         return cached[1]
-    inventory = (
-        _claude_inventory(root, home, moment)
-        if backend == "claude"
-        else _codex_inventory(root, home, moment)
-    )
+    if backend == "claude":
+        inventory = _claude_inventory(root, home, moment)
+    elif backend == "codex":
+        inventory = _codex_inventory(root, home, moment)
+    elif backend == "omp":
+        inventory = _omp_inventory(root, home, moment)
+    elif backend == "shell":
+        raise AssertionError("shell backend rejected before skill dispatch")
+    else:
+        assert_never(backend)
     payload = _resolve(inventory).to_dict()
     _CACHE[key] = (moment, payload)
     return payload

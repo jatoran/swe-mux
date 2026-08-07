@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "Two OMP task calls expose subagent fan-out until both tool results arrive.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "fan out"}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a1", "parentId": "u", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "t1", "name": "task", "arguments": {"prompt": "one"}}, {"type": "toolCall", "id": "t2", "name": "task", "arguments": {"prompt": "two"}}], "stopReason": "toolUse"}}, "expect_standing": [{"kind": "subagents", "source": "transcript", "evidence": "transcript:omp:task", "count": 2, "detail": null, "expires": true}]},
+    {"kind": "transcript", "record": {"type": "message", "id": "r1", "parentId": "a1", "message": {"role": "toolResult", "toolCallId": "t1", "toolName": "task", "content": "one done"}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "r2", "parentId": "r1", "message": {"role": "toolResult", "toolCallId": "t2", "toolName": "task", "content": "two done"}}, "expect_standing": []},
+    {"kind": "transcript", "record": {"type": "message", "id": "a2", "parentId": "r2", "message": {"role": "assistant", "content": "done", "stopReason": "stop"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "task"},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "started"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "task"},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "started"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "task", "success": true},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "completed"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "task", "success": true},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "completed"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "standing": [],
+    "parser": {"status": "ready", "recognized": 5, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

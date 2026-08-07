@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import deque
 from dataclasses import dataclass
@@ -16,16 +17,20 @@ from swe_mux.observation import (
     _claude,
     _codex,
     _finish_transcript_catchup,
+    _omp,
     _record_parser_observation,
+    _transcript_authoritative,
     apply_hook_observation,
     classify_transcript_event,
     foreign_conversation_hook_id,
+    hook_event_scope,
     tail_turn_state,
 )
 from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
 from swe_mux.session import (
     STATE_CHANGE_LOG_LIMIT,
     STATE_TRANSITION_LOG_LIMIT,
+    SessionManager,
     apply_state_transition,
     apply_watchdog_recovery,
     expire_standing_activity,
@@ -85,8 +90,14 @@ class ReplaySession:
     between production and the golden corpus.
     """
 
-    def __init__(self, backend: str, clock: VirtualClock | None = None) -> None:
+    def __init__(
+        self,
+        backend: str,
+        clock: VirtualClock | None = None,
+        workspace: Path | None = None,
+    ) -> None:
         self.clock = clock or VirtualClock()
+        self.workspace = workspace
         self.record = SessionRecord(
             "replay-session",
             f"{backend}-replay",
@@ -111,6 +122,8 @@ class ReplaySession:
             name=backend,
             reports_conversation_rollover=backend == "claude",
             assigns_conversation_id=backend == "claude",
+            resolves_transcript_by_cwd=backend == "claude",
+            transcript_native_id=lambda path: Path(path).stem,
         )
         self.state_source_priority = -1
         # Which evidence channels this session has ever had. `session_is_unwitnessed`
@@ -118,8 +131,13 @@ class ReplaySession:
         # so the harness has to track them the way a live Session does rather than
         # letting a fixture assert the conclusion directly.
         self.transcript_path: Path | None = None
+        self.pending_transcript_path: Path | None = None
+        self.transcript_relocation_signal = asyncio.Event()
+        self.transcript_provisional = False
+        self.stopping = False
         self.last_hook_ts = 0.0
         self.last_turn_hook_ts = 0.0
+        self.transcript_growth_ts = 0.0
         self.tool_names: dict[str, str] = {}
         self.observation_state: dict[str, Any] = {
             "root_turn_active": False,
@@ -257,7 +275,16 @@ def normalized_standing_activity(session: ReplaySession) -> list[dict[str, Any]]
 
 def normalized_event(event: MuxEvent) -> dict[str, Any]:
     item: dict[str, Any] = {"type": event.type, "source": event.source}
-    for key in ("scope", "kind", "outcome", "tool", "success", "previous", "state"):
+    for key in (
+        "scope",
+        "kind",
+        "outcome",
+        "tool",
+        "success",
+        "approved",
+        "previous",
+        "state",
+    ):
         if key in event.payload:
             item[key] = event.payload[key]
     return item
@@ -284,9 +311,9 @@ def normalized_state_stream(session: ReplaySession) -> list[dict[str, Any]]:
 
 
 class DetectionReplay:
-    def __init__(self, backend: str) -> None:
+    def __init__(self, backend: str, workspace: Path | None = None) -> None:
         self.clock = VirtualClock()
-        self.session = ReplaySession(backend, self.clock)
+        self.session = ReplaySession(backend, self.clock, workspace)
         self.events = EventBus(clock=self.clock.wall)
         self.queue = self.events.subscribe()
         self.readiness = DeliveryReadinessTracker(clock=self.clock.monotonic)
@@ -294,6 +321,7 @@ class DetectionReplay:
         self.checkpoints: list[dict[str, Any]] = []
         self.state_checkpoints: list[dict[str, Any]] = []
         self.standing_checkpoints: list[dict[str, Any]] = []
+        self.path_checkpoints: list[dict[str, Any]] = []
         self.decoder = IncrementalJsonlDecoder()
         # What the transcript file's tail would contain on disk. Regular
         # transcript steps append here too; "transcript_tail" steps append
@@ -328,12 +356,17 @@ class DetectionReplay:
         # Observing a record means a transcript is bound, which is what production
         # sets before the observer reads its first line.
         self.session.transcript_path = REPLAY_TRANSCRIPT
+        self.session.transcript_growth_ts = self.clock.wall()
         self.tail_records.append(dict(record))
         recognized, signature = classify_transcript_event(self.session.record.backend, record)
         if self.session.record.backend == "claude":
             await _claude(self.session, record, self.events)  # type: ignore[arg-type]
-        else:
+        elif self.session.record.backend == "codex":
             await _codex(self.session, record, self.events)  # type: ignore[arg-type]
+        elif self.session.record.backend == "omp":
+            await _omp(self.session, record, self.events)  # type: ignore[arg-type]
+        else:
+            raise AssertionError(f"no transcript parser for {self.session.record.backend}")
         await _record_parser_observation(
             self.session, self.events, recognized, signature  # type: ignore[arg-type]
         )
@@ -385,11 +418,49 @@ class DetectionReplay:
             payload = dict(step.get("payload") or {})
             if foreign_conversation_hook_id(self.session, payload) is None:  # type: ignore[arg-type]
                 self.session.last_hook_ts = self.clock.wall()
+                from swe_mux.server import _TRANSCRIPT_BACKED_HOOK_EVENTS
+
+                if (
+                    str(step["event"]) in _TRANSCRIPT_BACKED_HOOK_EVENTS
+                    and hook_event_scope(str(step["event"]), payload) != "subagent"
+                ):
+                    self.session.last_turn_hook_ts = self.session.last_hook_ts
             await apply_hook_observation(
                 self.session,  # type: ignore[arg-type]
                 str(step["event"]),
                 payload,
                 self.events,
+            )
+        elif kind == "hook_transcript_path":
+            workspace = self.session.workspace
+            if workspace is None:
+                raise AssertionError("hook_transcript_path requires a replay workspace")
+            native_id = self.session.record.native_session_id
+            current = workspace / "computed" / f"{native_id}.jsonl"
+            reported = workspace / "reported" / f"{native_id}.jsonl"
+            current.parent.mkdir(parents=True, exist_ok=True)
+            reported.parent.mkdir(parents=True, exist_ok=True)
+            current.write_text("{}\n", encoding="utf-8")
+            reported.write_text("{}\n", encoding="utf-8")
+            self.session.transcript_path = current
+            manager = object.__new__(SessionManager)
+            manager.sessions = {}
+            manager.note_hook_transcript_path(
+                self.session, {"transcript_path": str(reported)}  # type: ignore[arg-type]
+            )
+            followed = manager._staged_transcript_relocation(
+                self.session, current  # type: ignore[arg-type]
+            )
+            if followed is not None:
+                self.session.transcript_path = followed
+            self.path_checkpoints.append(
+                {
+                    "actual": {
+                        "followed_reported": self.session.transcript_path == reported,
+                        "stale": self.session.record.observation_stale_since is not None,
+                    },
+                    "expected": dict(step["expected"]),
+                }
             )
         elif kind == "terminal":
             # The browser's report of xterm's active buffer. Diagnostic only: it
@@ -459,6 +530,14 @@ class DetectionReplay:
         else:
             raise AssertionError(f"unknown replay step: {kind}")
         await self.drain()
+        growth = float(self.session.transcript_growth_ts)
+        latest_hook = float(self.session.last_turn_hook_ts)
+        expected_authority = growth > 0.0 and growth >= latest_hook
+        if _transcript_authoritative(self.session) is not expected_authority:  # type: ignore[arg-type]
+            counters = self.session.status_health_counters
+            counters["authority_contract_violations"] = (
+                counters.get("authority_contract_violations", 0) + 1
+            )
         if "expect_delivery" in step:
             actual = self.readiness.evaluate(self.session)
             self.checkpoints.append(
@@ -500,7 +579,7 @@ class DetectionReplay:
         # any other watchdog rule and owes nothing to turn state.
         expire_standing_activity(session, now=now)
         stalled = max(0.0, self.clock.monotonic() - session.last_state_change_monotonic)
-        pty_state = pty_tail_state(self.pty_tail)
+        pty_state = pty_tail_state(self.pty_tail, backend=session.record.backend)
         unwitnessed = session_is_unwitnessed(session)
         # Startup-dialog tracking and the classifier-drift self-check mirror the
         # production pass through the same shared helpers.
@@ -614,6 +693,7 @@ class DetectionReplay:
             "checkpoints": self.checkpoints,
             "state_checkpoints": self.state_checkpoints,
             "standing_checkpoints": self.standing_checkpoints,
+            "path_checkpoints": self.path_checkpoints,
             "standing_activity": normalized_standing_activity(self.session),
             # Annotation lifecycle actions, for the corpus coverage matrix:
             # every kind must appear with at least one add and one clear.
@@ -640,6 +720,6 @@ class DetectionReplay:
 def load_manifest(path: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
-    assert manifest["backend"] in {"claude", "codex"}
+    assert manifest["backend"] in {"claude", "codex", "omp"}
     assert isinstance(manifest["steps"], list)
     return manifest

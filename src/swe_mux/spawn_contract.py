@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .harness import Backend, is_agent_harness
+
 # A spawn may direct a session at a subdirectory of its project (a task that runs
 # in ./frontend), never outside it, and may carry a bounded environment.
 MAX_SPAWN_ENV = 64
@@ -33,7 +35,7 @@ CLAUDE_SESSION_MARKERS = frozenset(
 
 def infer_agent_executable_backend(
     executable: str | None, arguments: Sequence[str] | None
-) -> str | None:
+) -> Backend | None:
     """Identify a direct agent root from its retained executable contract."""
     executable_name = Path(executable or "").name.casefold()
     entrypoint = (
@@ -173,9 +175,9 @@ class SpawnRequest:
         raw_argv = body.get("argv", body.get("exe_args", []))
         if not isinstance(raw_argv, list) or not all(isinstance(item, str) for item in raw_argv):
             raise ValueError({"argv": "must be an array of strings"})
-        if backend and backend not in {"shell", "claude", "codex"}:
-            raise ValueError({"backend": "must be shell, claude, or codex"})
-        if profile and backend in {"claude", "codex"}:
+        if backend and backend != "shell" and not is_agent_harness(backend):
+            raise ValueError({"backend": "must be shell or a registered agent"})
+        if profile and is_agent_harness(backend):
             raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
         if profile and executable:
             raise ValueError({"executable": "cannot be combined with profile_id"})

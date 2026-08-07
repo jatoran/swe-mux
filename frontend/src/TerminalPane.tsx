@@ -10,6 +10,7 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import type { Session } from './types'
+import { harnessDisplayName, isAgentBackend } from './harnessRegistry.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
@@ -59,7 +60,7 @@ import { pastePayload } from './noteSelection'
 import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
 import { attachmentReferenceText, attachmentSafeBroadcast, MAX_ATTACHMENTS_PER_ACTION, type UploadedTerminalAttachment } from './terminalAttachments'
 import { localPreviewUrl } from './previewLinks'
-import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness, type ConnectionPhase } from './liveness'
+import { HANDSHAKE_TIMEOUT_MS, retryDelay, terminalAttachAllowed, watchLiveness, type ConnectionPhase } from './liveness'
 import {
   shouldLoadWebgl,
   terminalAttachReadyFrame,
@@ -73,6 +74,7 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
+import { remountDecision, surfaceDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
   caretSteerCommand,
@@ -168,7 +170,7 @@ function reportError(message: string) {
 }
 
 function acceptsTerminalAttachments(session: Session) {
-  return session.backend === 'claude' || session.backend === 'codex'
+  return isAgentBackend(session.backend)
 }
 
 /**
@@ -407,6 +409,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Set inside the mount effect; lets a layout change outside the ResizeObserver's reach
   // (the voice strip appearing/vanishing under the terminal) force an xterm re-fit.
   const scheduleFitRef=useRef<()=>void>(()=>{})
+  // Last-resort self-repair: a detected-dead write pipeline bumps this epoch, which
+  // re-runs the mount effect — a fresh Terminal, socket, and replay. Bounded by
+  // `remountDecision` so a poison sequence in the retained buffer (replayed on every
+  // rebuild) degrades into one visible error rather than a remount loop.
+  const [remountEpoch,setRemountEpoch]=useState(0)
+  const remountAttemptsRef=useRef<number[]>([])
+  const requestPaneRemount=()=>{
+    const decision=remountDecision(remountAttemptsRef.current,Date.now())
+    remountAttemptsRef.current=decision.attempts
+    if(!decision.allow){
+      reportError('The terminal renderer failed repeatedly for this session; its output may be stale until you reopen the pane.')
+      return
+    }
+    reportError('The terminal renderer stalled; rebuilding this pane.')
+    setRemountEpoch(epoch=>epoch+1)
+  }
+  const requestPaneRemountRef=useRef(requestPaneRemount)
+  requestPaneRemountRef.current=requestPaneRemount
   // Set inside the mount effect; lets the connection overlay force an immediate attempt
   // instead of leaving the user waiting on a backoff they cannot see.
   const reconnectNowRef=useRef<()=>void>(()=>{})
@@ -448,7 +468,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   attachFilesRef.current=async(files:Blob[])=>{
     if(!acceptsTerminalAttachments(session)){
-      reportError('Attach files to an open Claude or Codex session.')
+      reportError('Attach files to an open agent session.')
       return
     }
     if(['exited','crashed'].includes(session.state)){
@@ -712,6 +732,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let replayEndReceived = false
     let replayAllowsTerminalResponses = false
     let pendingReplayWrites = 0
+    // Write-pipeline liveness: byte arrival vs parse progress. A parser exception
+    // kills xterm's write loop without any event this pane could subscribe to, so
+    // the health sweep compares these two clocks instead (`writePipelineStalled`).
+    let lastBytesAt: number | null = null
+    let lastParsedAt: number | null = null
     // Keystrokes typed while the buffer replays. Returning to a tab always re-attaches
     // (and a long absence reconnects), so the tap-and-type right after coming back lands
     // mid-replay; sending it then would race the replayed bytes, and dropping it loses
@@ -751,7 +776,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     } : null
     if (onRenderError) window.addEventListener('error', onRenderError)
     const loadLatestReply=()=>{
-      if(session.backend==='shell')return
+      if(!isAgentBackend(session.backend))return
       void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
         // Clear on an empty result too: keeping the previous value here is what
         // let a session with no reply yet still answer "Copy reply".
@@ -759,7 +784,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }).catch(()=>{if(!disposed)setLastReply('')})
     }
     const scheduleLatestReply=(delay=700)=>{
-      if(session.backend==='shell')return
+      if(!isAgentBackend(session.backend))return
       if(replyRefreshTimer!==undefined)window.clearTimeout(replyRefreshTimer)
       replyRefreshTimer=window.setTimeout(()=>{replyRefreshTimer=undefined;loadLatestReply()},delay)
     }
@@ -788,7 +813,46 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const tailScroll = term.onScroll(syncTail)
     const tailRender = term.onRender(syncTail)
-    const terminalStateTimer = window.setInterval(reportTerminalState, 5000)
+    // Parse-progress clock for the write-pipeline liveness check below.
+    const writeParsed = term.onWriteParsed(() => { lastParsedAt = performance.now() })
+    // The invariant half of terminal display correctness (`terminalHealth.ts`):
+    // every event path can be raced or missed, so on the same slow clock as the
+    // terminal-state report, compare what the pane shows against what it should
+    // show and route any drift through the ordinary repair machinery.
+    const sweepTerminalHealth = () => {
+      if (disposed) return
+      if (
+        socket?.readyState === WebSocket.OPEN
+        && writePipelineStalled(lastBytesAt, lastParsedAt, performance.now())
+      ) {
+        diagnoseRender?.('write_pipeline_dead', {
+          lastBytesAt,
+          lastParsedAt,
+          replaying,
+          pendingReplayWrites,
+          renderer: activeRenderer,
+        })
+        requestPaneRemountRef.current()
+        return
+      }
+      if (surfaceDrifted(
+        confirmedSurface,
+        terminalSurface(term, host.current),
+        replaying,
+        paneIsHidden(),
+      )) {
+        diagnoseRender?.('surface_drift_repair', {
+          confirmed: confirmedSurface,
+          cols: term.cols,
+          rows: term.rows,
+        })
+        scheduleFit()
+      }
+    }
+    const terminalStateTimer = window.setInterval(() => {
+      reportTerminalState()
+      sweepTerminalHealth()
+    }, TERMINAL_HEALTH_SWEEP_MS)
     // Shared-PTY geometry. `localFit` is what this pane would show at its own font size;
     // `serverGeometry` is what the daemon arbitrated across every attached device. They
     // differ exactly when another device owns input, and then this pane letterboxes
@@ -1288,6 +1352,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const handleMessage=(event:MessageEvent)=>{
       if (event.data instanceof ArrayBuffer) {
         scheduleLatestReply()
+        lastBytesAt = performance.now()
         if (replaying) {
           pendingReplayWrites += 1
           term.write(new Uint8Array(event.data), () => {
@@ -1383,7 +1448,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
     }
     const connect=(reconnecting:boolean)=>{
-      if(disposed||['exited','crashed'].includes(stateRef.current))return
+      if(disposed||!terminalAttachAllowed(['exited','crashed'].includes(stateRef.current),reconnecting))return
       if(reconnectTimer!==undefined){clearTimeout(reconnectTimer);reconnectTimer=undefined}
       nextAttemptAt=null
       clearHandshakeWatchdog()
@@ -1523,7 +1588,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       sendInput(sequence, false, false)
     }
     let mobileInputValue=''
-    // A shell can promote into Claude/Codex without replacing the pane, so read
+    // A shell can promote into an agent harness without replacing the pane, so read
     // the live backend at the event rather than capturing the effect's first one.
     const mobileLineBreak=()=>mobileEnterPayload(backendRef.current)
     let lineBreakSent=false
@@ -1704,7 +1769,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const mobilePaste=(event:ClipboardEvent)=>{
       if(!mobileLiveInput||!event.clipboardData)return
       const image=clipboardImage(Array.from(event.clipboardData.items))
-      if(image&&['claude','codex'].includes(backendRef.current)){
+      if(image&&isAgentBackend(backendRef.current)){
         event.preventDefault();resetMobileInput()
         void attachFilesRef.current([image])
         return
@@ -2020,7 +2085,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       event.preventDefault()
     }
     const pasteEvent = (event: ClipboardEvent) => {
-      if (!['claude','codex'].includes(backendRef.current) || !event.clipboardData) return
+      if (!isAgentBackend(backendRef.current) || !event.clipboardData) return
       const transferred=Array.from(event.clipboardData.files)
       const image = clipboardImage(Array.from(event.clipboardData.items))
       const files:Blob[]=transferred.length?transferred:image?[image]:[]
@@ -2033,13 +2098,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const dragEnter = (event: DragEvent) => {
       if (!hasFiles(event)) return
       event.preventDefault()
-      if (['claude','codex'].includes(backendRef.current) && !['exited','crashed'].includes(stateRef.current)) setFileDropActive(true)
+      if (isAgentBackend(backendRef.current) && !['exited','crashed'].includes(stateRef.current)) setFileDropActive(true)
     }
     const dragOver = (event: DragEvent) => {
       if (!hasFiles(event)) return
       event.preventDefault()
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = ['claude','codex'].includes(backendRef.current) && !['exited','crashed'].includes(stateRef.current) ? 'copy' : 'none'
+        event.dataTransfer.dropEffect = isAgentBackend(backendRef.current) && !['exited','crashed'].includes(stateRef.current) ? 'copy' : 'none'
       }
     }
     const dragLeave = (event: DragEvent) => {
@@ -2052,8 +2117,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       event.preventDefault()
       event.stopPropagation()
       setFileDropActive(false)
-      if (!['claude','codex'].includes(backendRef.current)) {
-        reportError('Drop files into an open Claude or Codex session.')
+      if (!isAgentBackend(backendRef.current)) {
+        reportError('Drop files into an open agent session.')
         return
       }
       const files=Array.from(event.dataTransfer?.files||[])
@@ -2106,8 +2171,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
-  }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput])
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+  }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
   // listing the scale in its deps would dispose the terminal, drop the socket and
@@ -2354,12 +2419,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // without a word, and dropping four rail-widths of text is what keeps the terminal keys
       // reachable without scrolling. Copy resume deliberately keeps its label — a copy glyph
       // alone cannot distinguish it from Copy reply, and the two sit side by side.
-      case 'copyReply':return isTask?null:<button key={item.id} class="rail-icon" disabled={session.backend==='shell'} aria-label="Copy last reply" title={session.backend==='shell'?'Copy reply is available in Claude and Codex sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
-      case 'copyResume':return isTask?null:<button key={item.id} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:session.backend==='codex'?'Codex has not reported its session id yet':'Resume commands are available in Claude and Codex sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
+      case 'copyReply':return isTask?null:<button key={item.id} class="rail-icon" disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
+      case 'copyResume':return isTask?null:<button key={item.id} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&session.backend!=='claude'?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
       case 'branch':{
         if(!onBranch)return null
-        const ready=session.backend==='claude'||(session.backend==='codex'&&!!session.native_session_id&&session.native_session_id!==session.id)
-        return <button key={item.id} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':session.backend==='codex'?'Codex has not reported its session id yet — branch is available shortly':'Branching is available in Claude and Codex sessions'} onClick={()=>onBranch()}><BranchIcon/></button>
+        // Mirrors the server's implemented branch strategies (Claude native fork,
+        // Codex resume-child) — harness-specific behavior like resumeCommand, not
+        // a membership test. The server refuses anything else with
+        // `branch_unsupported`; this gate just says so before the click.
+        const branchable=session.backend==='claude'||session.backend==='codex'
+        const ready=session.backend==='claude'||(branchable&&!!session.native_session_id&&session.native_session_id!==session.id)
+        return <button key={item.id} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet — branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}><BranchIcon/></button>
       }
       case 'paste':return <button key={item.id} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
       case 'clipboardHistory':return <button key={item.id} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>

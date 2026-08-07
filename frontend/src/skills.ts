@@ -44,7 +44,7 @@ export interface SkillRoot {
 }
 
 export interface SkillInventory {
-  backend: 'claude' | 'codex'
+  backend: string
   cwd: string
   generated_at: number
   agent_loaded_at: number

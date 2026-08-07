@@ -460,6 +460,89 @@ async def test_hook_ingress_rejects_expired_sessions_and_bounded_bursts() -> Non
         assert expired.status == 410
 
 
+@pytest.mark.asyncio
+async def test_hook_ingress_requires_and_deduplicates_ordered_omp_sequences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applied: list[tuple[str, dict[str, object]]] = []
+
+    class Events:
+        async def emit(self, *_: object, **__: object) -> None:
+            return None
+
+    async def apply(
+        _session: object, event_type: str, payload: dict[str, object], _events: object
+    ) -> None:
+        applied.append((event_type, payload))
+
+    async def heal(_session: object, _payload: object) -> None:
+        return None
+
+    monkeypatch.setattr("swe_mux.server.apply_hook_observation", apply)
+    monkeypatch.setattr(
+        "swe_mux.server.foreign_conversation_hook_id", lambda _session, _payload: None
+    )
+    record = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001",
+        native_session_id="00000000-0000-4000-8000-000000000001",
+        backend="omp",
+        state="running",
+    )
+    session = SimpleNamespace(
+        record=record,
+        adapter=SimpleNamespace(assigns_conversation_id=False),
+        hook_secret="secret",
+        observation_state={},
+        state_transitions=deque(),
+        last_hook_ts=0.0,
+        last_turn_hook_ts=0.0,
+    )
+    sessions = SimpleNamespace(
+        sessions={record.id: session},
+        resolve=lambda _sid: session,
+        maybe_heal_from_own_conversation_hook=heal,
+        note_hook_cwd=lambda _session, _payload: None,
+        note_hook_transcript_path=lambda _session, _payload: None,
+    )
+    app = web.Application(middlewares=[error_middleware, security_middleware])
+    app["sessions"] = sessions
+    app["events"] = Events()
+    app["automation"] = SimpleNamespace(note_native_hook=lambda _sid: None)
+    app["hook_ingress_windows"] = {}
+    app.router.add_post("/api/hooks/{sid}", hook_ingress)
+    headers = {"X-Mux-Hook-Secret": "secret"}
+    envelope = {
+        "event": "task_started",
+        "source": "omp-extension",
+        "sequence": 1,
+        "payload": {"omp_event": "agent_start"},
+    }
+    async with TestClient(TestServer(app)) as client:
+        first = await client.post(f"/api/hooks/{record.id}", json=envelope, headers=headers)
+        duplicate = await client.post(f"/api/hooks/{record.id}", json=envelope, headers=headers)
+        duplicate_body = await duplicate.json()
+        second = await client.post(
+            f"/api/hooks/{record.id}",
+            json={**envelope, "sequence": 2},
+            headers=headers,
+        )
+        missing = await client.post(
+            f"/api/hooks/{record.id}",
+            json={"event": "task_started", "payload": {}},
+            headers=headers,
+        )
+
+    assert first.status == 200
+    assert duplicate.status == 200
+    assert duplicate_body == {"ok": True, "ignored": "duplicate_or_stale_sequence"}
+    assert second.status == 200
+    assert missing.status == 400
+    assert [event for event, _ in applied] == ["task_started", "task_started"]
+    assert session.observation_state["hook_sequences"] == {"omp-extension": 2}
+    assert session.observation_state["hook_sequence_duplicates"] == 1
+    assert any(item.get("kind") == "hook_sequence_duplicate" for item in session.state_transitions)
+
+
 def _passthrough_registration(port: int) -> PreviewRegistration:
     return PreviewRegistration(
         "preview-a",

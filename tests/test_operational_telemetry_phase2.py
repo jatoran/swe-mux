@@ -42,6 +42,7 @@ def phase2_path() -> Path:
         Path(f"{path}-shm"),
         path.with_suffix(".claude.jsonl"),
         path.with_suffix(".codex.jsonl"),
+        path.with_suffix(".omp.jsonl"),
     ):
         with suppress(OSError):
             candidate.unlink()
@@ -897,6 +898,7 @@ async def test_explicit_compaction_tool_and_skill_events_are_durable(
     assert snapshot["tools"]["parser_versions"] == {
         "claude": "claude-phase2-v1",
         "codex": "codex-phase2-v1",
+        "omp": "omp-phase2-v2",
     }
     assert snapshot["tools"]["skills"][0]["explicit_skill"] == "review-code"
     assert snapshot["compactions"][0]["count"] == 1
@@ -912,6 +914,117 @@ async def test_explicit_compaction_tool_and_skill_events_are_durable(
     assert durable["tools"]["skills"][0]["explicit_skill"] == "review-code"
     assert durable["compactions"][0]["count"] == 1
     reopened.close()
+    history.close()
+
+
+async def test_native_compaction_identity_deduplicates_hook_and_transcript(
+    phase2_path: Path,
+) -> None:
+    history = HistoryIndex(phase2_path)
+    live = FakeLiveSession("omp")
+    await history.session_started(live.record, None)
+    sessions = SimpleNamespace(sessions={live.record.id: live})
+    events = EventBus(history.append_event)
+    store = OperationalTelemetryStore(phase2_path)
+    store.start(events, sessions=sessions, history=history)
+
+    for source in ("hook", "transcript"):
+        await events.emit(
+            "context_compacted",
+            session_id=live.record.id,
+            source=source,
+            scope="root",
+            backend="omp",
+            capability="explicit_native",
+            confidence="high",
+            compaction_id="compact-1",
+            parser_version="2",
+        )
+    assert store._event_queue is not None
+    await store._event_queue.join()
+
+    snapshot = await store.snapshot()
+    assert snapshot["compactions"][0]["count"] == 1
+    assert live.record.compaction_count == 1
+
+    await store.stop()
+    store.close()
+    history.close()
+
+
+async def test_complete_omp_scan_repairs_legacy_cross_source_compaction_duplicate(
+    phase2_path: Path,
+) -> None:
+    history = HistoryIndex(phase2_path)
+    live = FakeLiveSession("omp")
+    live.record.compaction_count = 2
+    await history.session_started(live.record, None)
+    store = OperationalTelemetryStore(phase2_path)
+    store.sessions = SimpleNamespace(sessions={live.record.id: live})
+    store.history = history
+    observed_at = 1_800_000_000.0
+    for event_id, source, offset in (
+        ("legacy-hook", "hook", 0.0),
+        ("legacy-transcript", "transcript", 0.04),
+    ):
+        store._db.execute(
+            "INSERT INTO context_compactions"
+            "(id,event_seq,session_id,agent_run_id,project_id,backend,model,observed_at,"
+            "source,capability,confidence,parser_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                event_id,
+                None,
+                live.record.id,
+                live.record.agent_run_id,
+                live.record.project_id,
+                "omp",
+                live.record.model,
+                observed_at + offset,
+                source,
+                "explicit_native",
+                "high",
+                "omp:3",
+            ),
+        )
+    store._db.commit()
+
+    await store._persist_transcript_scan(
+        {
+            "id": live.record.id,
+            "backend": "omp",
+            "project_id": live.record.project_id,
+            "model": live.record.model,
+            "transcript_path": "omp.jsonl",
+        },
+        1,
+        100,
+        {
+            "tools": [],
+            "compactions": [
+                {
+                    "source_identity": (
+                        f"native:{live.record.id}:compaction:compact-native"
+                    ),
+                    "compaction_id": "compact-native",
+                    "observed_at": observed_at,
+                }
+            ],
+            "recognized": 1,
+            "unknown": 0,
+            "diagnostic": None,
+        },
+    )
+
+    rows = store._db.execute(
+        "SELECT id FROM context_compactions WHERE session_id=?", (live.record.id,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["id"] not in {"legacy-hook", "legacy-transcript"}
+    assert live.record.compaction_count == 1
+    assert live.updates == 1
+    history_row = await history.history_entry(live.record.id)
+    assert history_row and history_row["compaction_count"] == 1
+    store.close()
     history.close()
 
 

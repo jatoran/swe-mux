@@ -1,11 +1,11 @@
 """The readable conversation view behind the drawer's Transcript tab.
 
-Both CLIs write their own machinery into the transcript as ``user`` records, so
+The harnesses write their own machinery into transcripts as ``user`` records, so
 these tests are mostly about what must NOT reach a reader: skill bodies, slash
 command expansions, shell escapes, interrupt markers, environment blocks. The
 field shapes asserted here were taken from real transcripts (Claude 2.1.220,
-current Codex rollouts); when a CLI changes them, this is the file that should
-fail rather than the drawer quietly emptying.
+current Codex rollouts, and OMP session version 3); when a CLI changes them,
+this is the file that should fail rather than the drawer quietly emptying.
 """
 
 from __future__ import annotations
@@ -154,6 +154,60 @@ def codex_message(role: str, text: str) -> dict[str, Any]:
         "timestamp": "2026-08-02T10:00:00Z",
         "payload": {"type": "message", "role": role, "content": [{"type": "text", "text": text}]},
     }
+
+
+def omp_message(role: str, content: list[dict[str, Any]], **fields: Any) -> dict[str, Any]:
+    return {
+        "type": "message",
+        "id": f"omp-{role}",
+        "parentId": None,
+        "timestamp": "2026-08-06T23:52:17.407Z",
+        "message": {"role": role, "content": content, **fields},
+    }
+
+
+def test_omp_keeps_conversation_text_and_drops_protocol_messages_and_tools(
+    tmp_path: Path,
+) -> None:
+    path = write_jsonl(
+        tmp_path / "omp.jsonl",
+        [
+            {"type": "session", "version": 3, "id": "native-omp"},
+            omp_message(
+                "user",
+                [{"type": "text", "text": "verify the harness"}],
+                attribution="user",
+            ),
+            omp_message(
+                "developer",
+                [{"type": "text", "text": "internal extension context"}],
+            ),
+            omp_message(
+                "assistant",
+                [
+                    {"type": "text", "text": "Checking."},
+                    {"type": "toolCall", "id": "call-1", "name": "read"},
+                ],
+                stopReason="toolUse",
+            ),
+            omp_message(
+                "toolResult",
+                [{"type": "text", "text": "private tool output"}],
+                toolCallId="call-1",
+            ),
+            omp_message(
+                "assistant",
+                [{"type": "text", "text": "Verified."}],
+                stopReason="stop",
+            ),
+        ],
+    )
+    view = conversation_view(path, "omp")
+    assert [(item["role"], item["text"]) for item in view["messages"]] == [
+        ("user", "verify the harness"),
+        ("assistant", "Checking.\n\nVerified."),
+    ]
+    assert view["hidden"] == 0
 
 
 def test_codex_drops_tool_calls_and_harness_blocks_but_keeps_its_instructions(

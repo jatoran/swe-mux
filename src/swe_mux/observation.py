@@ -10,10 +10,11 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
+from .harness import Backend, reports_lifecycle_hooks
 from .models import SessionState
 from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
@@ -87,6 +88,28 @@ CODEX_KNOWN_PAYLOADS = {
     "user_message",
     "web_search_end",
 }
+
+OMP_KNOWN_RECORDS = {
+    "title",
+    "session",
+    "message",
+    "thinking_level_change",
+    "model_change",
+    "service_tier_change",
+    "compaction",
+    "branch_summary",
+    "reset_boundary",
+    "custom",
+    "custom_message",
+    "label",
+    "title_change",
+    "ttsr_injection",
+    "credential_pin",
+    "session_init",
+    "mode_change",
+}
+
+TRANSCRIPT_CLASSIFIER_BACKENDS = frozenset({"claude", "codex", "omp"})
 
 # Local slash commands (/copy, /model, /resume, ...) are logged as user records
 # but never reach the model, so they must not begin or sustain a root turn.
@@ -723,6 +746,24 @@ class IncrementalJsonlDecoder:
         return [item for _position, item in self.feed_with_positions(chunk)]
 
 
+async def _dispatch_transcript_event(
+    backend: Backend,
+    session: Session,
+    event: dict[str, Any],
+    events: EventBus,
+) -> None:
+    if backend == "claude":
+        await _claude(session, event, events)
+    elif backend == "codex":
+        await _codex(session, event, events)
+    elif backend == "omp":
+        await _omp(session, event, events)
+    elif backend == "shell":
+        return
+    else:
+        assert_never(backend)
+
+
 async def observe_transcript(
     session: Session, path: Path, events: EventBus, stop: asyncio.Event
 ) -> None:
@@ -773,10 +814,9 @@ async def observe_transcript(
                     last_historical_ts = ts
                 session.observation_replay = True
                 try:
-                    if session.record.backend == "claude":
-                        await _claude(session, event, _NULL_EVENTS)
-                    elif session.record.backend == "codex":
-                        await _codex(session, event, _NULL_EVENTS)
+                    await _dispatch_transcript_event(
+                        session.record.backend, session, event, _NULL_EVENTS
+                    )
                 finally:
                     session.observation_replay = replay_pending
                 continue
@@ -788,10 +828,7 @@ async def observe_transcript(
                     session, events, attach_ts, last_historical_ts, historical_seen
                 )
             recognized, signature = classify_transcript_event(session.record.backend, event)
-            if session.record.backend == "claude":
-                await _claude(session, event, events)
-            elif session.record.backend == "codex":
-                await _codex(session, event, events)
+            await _dispatch_transcript_event(session.record.backend, session, event, events)
             await _record_parser_observation(session, events, recognized, signature)
     finally:
         session.observation_replay = False
@@ -858,7 +895,7 @@ async def _finish_transcript_catchup(
             # is how many of this session's own transcript records were read to
             # reach the conclusion; non-zero is itself proof the transcript was
             # found, owned, parsed, and understood, which is what readiness asks
-            # of `parser_or_hook_supported` and which an idle session cannot
+            # of `observation_supported` and which an idle session cannot
             # otherwise demonstrate until its next turn. The revision and screen
             # are captured here, not when the reader gets around to it, so the
             # composer-collision guard still measures from this instant.
@@ -881,7 +918,7 @@ async def _finish_transcript_catchup(
     _publish_update(session)
 
 
-def classify_transcript_event(backend: str, event: dict[str, Any]) -> tuple[bool, str]:
+def classify_transcript_event(backend: Backend, event: dict[str, Any]) -> tuple[bool, str]:
     outer = str(event.get("type") or "<missing>")
     if backend == "claude":
         return outer in CLAUDE_KNOWN_RECORDS, f"claude:{outer}"
@@ -893,7 +930,11 @@ def classify_transcript_event(backend: str, event: dict[str, Any]) -> tuple[bool
             outer in CODEX_KNOWN_OUTER_RECORDS or payload_type in CODEX_KNOWN_PAYLOADS,
             signature,
         )
-    return False, f"{backend}:{outer}"
+    if backend == "omp":
+        return outer in OMP_KNOWN_RECORDS, f"omp:{outer}"
+    if backend == "shell":
+        return False, f"shell:{outer}"
+    assert_never(backend)
 
 
 # Trailing records the provider appends after a turn (naming, mode markers,
@@ -912,7 +953,7 @@ _CLAUDE_TAIL_IGNORED = {
 TRANSCRIPT_TAIL_BYTES = 131_072
 
 
-def transcript_tail_turn_state(backend: str, path: Path) -> str:
+def transcript_tail_turn_state(backend: Backend, path: Path) -> str:
     """Classify the transcript tail as ``ended``, ``open`` or ``unknown``.
 
     Used by the quiescence watchdog to decide whether a stuck "working" session
@@ -943,13 +984,17 @@ def transcript_tail_turn_state(backend: str, path: Path) -> str:
     return tail_turn_state(backend, records)
 
 
-def tail_turn_state(backend: str, records: list[dict[str, Any]]) -> str:
+def tail_turn_state(backend: Backend, records: list[dict[str, Any]]) -> str:
     """Classify already-parsed tail records; shared with the replay harness."""
     if backend == "claude":
         return _claude_tail_state(records)
     if backend == "codex":
         return _codex_tail_state(records)
-    return "unknown"
+    if backend == "omp":
+        return _omp_tail_state(records)
+    if backend == "shell":
+        return "unknown"
+    assert_never(backend)
 
 
 def _claude_tail_state(records: list[dict[str, Any]]) -> str:
@@ -1021,6 +1066,96 @@ def _codex_tail_state(records: list[dict[str, Any]]) -> str:
     return "unknown"
 
 
+def _omp_chain(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return OMP's active root-to-leaf branch from append-ordered records."""
+    entries = {
+        str(event["id"]): event
+        for event in records
+        if isinstance(event.get("id"), str) and event.get("id")
+    }
+    leaf = next(
+        (
+            str(event["id"])
+            for event in reversed(records)
+            if isinstance(event.get("id"), str) and event.get("id")
+        ),
+        None,
+    )
+    chain: list[dict[str, Any]] = []
+    visited: set[str] = set()
+    while leaf and leaf not in visited:
+        visited.add(leaf)
+        event = entries.get(leaf)
+        if event is None:
+            break
+        chain.append(event)
+        parent = event.get("parentId")
+        leaf = parent if isinstance(parent, str) and parent else None
+    chain.reverse()
+    return chain
+
+
+def _omp_message_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    return [
+        block
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "toolCall"
+    ]
+
+
+def _omp_chain_turn_state(records: list[dict[str, Any]]) -> str:
+    pending: set[str] = set()
+    verdict = "unknown"
+    for event in records:
+        event_type = event.get("type")
+        if event_type == "reset_boundary":
+            pending.clear()
+            verdict = "ended"
+            continue
+        if event_type == "custom":
+            if event.get("customType") != "session_exit":
+                continue
+            data = event.get("data")
+            if not isinstance(data, dict):
+                continue
+            pending_calls = data.get("pendingToolCalls")
+            if data.get("kind") != "normal" or (
+                isinstance(pending_calls, list) and bool(pending_calls)
+            ):
+                pending.clear()
+                verdict = "ended"
+            continue
+        if event_type != "message":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role in {"user", "developer"}:
+            verdict = "open"
+        elif role == "toolResult":
+            call_id = message.get("toolCallId")
+            if isinstance(call_id, str):
+                pending.discard(call_id)
+            verdict = "open"
+        elif role == "assistant":
+            calls = _omp_message_tool_calls(message)
+            pending.update(str(call.get("id")) for call in calls if call.get("id"))
+            stop_reason = str(message.get("stopReason") or "")
+            if calls or stop_reason in {"toolUse", "tool_use"}:
+                verdict = "open"
+            elif stop_reason in {"stop", "end_turn", "aborted", "error", "length"}:
+                verdict = "ended"
+    return "open" if pending else verdict
+
+
+def _omp_tail_state(records: list[dict[str, Any]]) -> str:
+    return _omp_chain_turn_state(_omp_chain(records))
+
+
 async def _record_parser_observation(
     session: Session,
     events: EventBus,
@@ -1033,6 +1168,16 @@ async def _record_parser_observation(
         # A record read from the followed transcript is proof it is the live
         # conversation after all: whatever made it look abandoned has resolved.
         record.observation_stale_since = None
+        record.observation_diagnostic = None
+        ledger = getattr(session, "state_transitions", None)
+        if ledger is not None:
+            ledger.append(
+                {
+                    "ts": time.time(),
+                    "kind": "observation_liveness_restored",
+                    "reason": "transcript_record_read",
+                }
+            )
     if recognized:
         record.parser_events_seen += 1
     else:
@@ -1085,6 +1230,33 @@ def _observation_state(session: Session) -> dict[str, Any]:
     return state
 
 
+def _first_compaction_evidence(
+    session: Session, backend: str, compaction_id: object
+) -> bool:
+    """Accept one event when hooks and transcripts name the same compaction.
+
+    OMP emits ``session_compact`` before appending the matching transcript
+    entry.  Both are explicit evidence, but they describe one boundary.  Keep
+    the native identity in the run-scoped observation state so whichever source
+    arrives first wins without making source precedence part of telemetry.
+    """
+    identity = str(compaction_id or "").strip()
+    if not identity:
+        return True
+    state = _observation_state(session)
+    seen = state.setdefault("compaction_evidence_ids", {})
+    if not isinstance(seen, dict):
+        seen = {}
+        state["compaction_evidence_ids"] = seen
+    key = f"{backend}:{identity}"
+    if key in seen:
+        return False
+    seen[key] = None
+    while len(seen) > 256:
+        seen.pop(next(iter(seen)))
+    return True
+
+
 def provisional_observation(session: Session) -> bool:
     """True while the followed transcript was chosen by elimination, not identity.
 
@@ -1115,25 +1287,32 @@ def provisional_observation(session: Session) -> bool:
 
 
 def _transcript_authoritative(session: Session) -> bool:
-    """True once the ordered transcript observer has proven itself healthy.
+    """True while the ordered transcript has reported since the latest turn hook.
 
-    Hooks are an unordered, retried side channel — each event is a separate POST
-    with its own backoff, so a late ``PreToolUse``/``PostToolUse`` can land after
-    the transcript's end-of-turn and strand a finished session as "working".
-    Once the parser is ``ready`` the transcript is the authoritative, in-order
-    record of turn boundaries and tool activity, so hooks must not drive that
-    state; while it is still warming up (``watching``, no recognized records yet)
-    or has ``degraded``, hooks remain the fallback that keeps state moving.
+    Parser status measures schema confidence only. It says nothing about whether
+    the followed file is alive, which is the fact needed for source arbitration.
+    The tailer's growth stamp is first-hand evidence that ordered records are still
+    arriving. A transcript owns boundaries after it has grown at or after the most
+    recent root hook whose event must also produce transcript records. Until then,
+    hooks remain the conservative fallback.
 
-    A *stale* transcript revokes that authority outright. The parser is healthy and
-    the file is well-formed; it is simply no longer the conversation this PTY is
-    running (an unfollowable `/clear` or `/new`). Continuing to treat it as
-    authoritative is what froze such sessions: the transcript can no longer report
-    a turn boundary, and hooks were being dropped as redundant to it.
+    This comparison also absorbs every former staleness exception. A missing or
+    abandoned file cannot advance its growth stamp; a refused or unadoptable
+    rollover advances the hook stamp while the retired file stays still. The
+    diagnostics flag remains for delivery and incident reporting, but it does not
+    participate in precedence.
     """
-    if getattr(session.record, "observation_stale_since", None):
-        return False
-    return getattr(session.record, "parser_status", "") == "ready"
+    growth = float(getattr(session, "transcript_growth_ts", 0.0))
+    latest_turn_hook = float(getattr(session, "last_turn_hook_ts", 0.0))
+    return growth > 0.0 and growth >= latest_turn_hook
+
+
+def _measurements_publishable(session: Session) -> bool:
+    """Whether transcript measurements are attributable and schema-confident."""
+    return (
+        not provisional_observation(session)
+        and getattr(session.record, "parser_status", "") != "degraded"
+    )
 
 
 def session_pty_state(session: Session) -> str:
@@ -1143,7 +1322,8 @@ def session_pty_state(session: Session) -> str:
         return "unknown"
     try:
         return pty_tail_state(
-            scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+            scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace"),
+            backend=session.record.backend,
         )
     except (OSError, ValueError):
         return "unknown"
@@ -1231,7 +1411,11 @@ def _background_wait_reason(session: Session) -> str | None:
         tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
     except Exception:
         return None
-    return "waiting_on_background" if pty_tail_waiting_on_background(tail) else None
+    return (
+        "waiting_on_background"
+        if pty_tail_waiting_on_background(tail, backend=session.record.backend)
+        else None
+    )
 
 
 async def _finish_root_turn(
@@ -1677,7 +1861,7 @@ async def _bind_native_id_from_hook(
     Deliberately one-way: it only fills an *unknown* id and never overwrites one
     the daemon already established, so a hook cannot rekey a bound session.
     """
-    if session.record.backend not in {"claude", "codex"}:
+    if not reports_lifecycle_hooks(session.record.backend):
         return
     if not conversation_unbound(session):
         return
@@ -1773,7 +1957,7 @@ def conversation_rollover_decision(
     nothing = RolloverDecision()
     if event_type != "SessionStart" or hook_event_scope(event_type, payload) != "root":
         return nothing
-    if session.record.backend not in {"claude", "codex"}:
+    if not reports_lifecycle_hooks(session.record.backend):
         return nothing
     current = session.record.native_session_id or ""
     if not _HOOK_NATIVE_ID.fullmatch(current):
@@ -1816,7 +2000,7 @@ def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> s
     it speaking while the session is bound elsewhere is identity-corruption
     evidence, which the heal path acts on rather than discarding.
     """
-    if session.record.backend not in {"claude", "codex"}:
+    if not reports_lifecycle_hooks(session.record.backend):
         return None
     if conversation_unbound(session):
         return None
@@ -2447,12 +2631,51 @@ async def apply_hook_observation(
         )
     elif event_type in {"PermissionRequest", "approval_needed", "approval-requested"}:
         tool = str(payload.get("tool_name") or payload.get("message") or "approval")
-        await _request_stabilized_approval(
-            session,
-            events,
-            detail=tool,
+        if payload.get("omp_event") == "tool_approval_requested":
+            cancel_pending_approval(session, "omp_exact_approval")
+            await _transition(
+                session,
+                events,
+                "awaiting",
+                tool,
+                source="hook",
+                evidence="hook:omp:tool_approval_requested",
+                awaiting_reason="approval",
+            )
+            await events.emit(
+                "approval_needed",
+                session_id=session.record.id,
+                source="hook",
+                scope="root",
+                kind="approval",
+                detail=tool,
+            )
+        else:
+            await _request_stabilized_approval(
+                session,
+                events,
+                detail=tool,
+                source="hook",
+                evidence=f"hook:{event_type}",
+            )
+    elif event_type == "approval_resolved":
+        cancel_pending_approval(session, "hook:approval_resolved")
+        if session.record.state == "awaiting" and session.record.awaiting_reason == "approval":
+            await _transition(
+                session,
+                events,
+                "working",
+                source="hook",
+                force=True,
+                evidence="hook:approval_resolved",
+            )
+        await events.emit(
+            "approval_resolved",
+            session_id=session.record.id,
             source="hook",
-            evidence=f"hook:{event_type}",
+            scope="root",
+            approved=payload.get("approved") is True,
+            tool=payload.get("tool_name"),
         )
     elif event_type == "Notification":
         notification = str(payload.get("notification_type") or "")
@@ -2514,6 +2737,18 @@ async def apply_hook_observation(
                 source="hook",
                 scope="root",
             )
+    elif event_type == "turn_ended" and payload.get("root_completion") is False:
+        await events.emit(
+            "provider_turn_ended",
+            session_id=session.record.id,
+            source="hook",
+            scope="root",
+            turn_index=payload.get("turn_index"),
+        )
+    elif event_type == "task_complete" and payload.get("will_continue") is True:
+        await _transition(
+            session, events, "working", source="hook", evidence="hook:task_continuing"
+        )
     elif event_type in {"Stop", "turn_ended", "agent-turn-complete", "task_complete"}:
         # SessionStart normally binds Codex before the first turn. Its completion
         # notify remains a compatibility/repair path when lifecycle hooks are
@@ -2521,6 +2756,25 @@ async def apply_hook_observation(
         # transcript can be exact-matched and catch-up replays the turn that just ran.
         await _bind_native_id_from_hook(session, payload, events)
         await _finish_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
+    elif (
+        event_type == "context_compacted"
+        and not provisional_observation(session)
+        and _first_compaction_evidence(
+            session, session.record.backend, payload.get("compaction_id")
+        )
+    ):
+        await events.emit(
+            "context_compacted",
+            session_id=session.record.id,
+            source="hook",
+            scope="root",
+            backend=session.record.backend,
+            capability="explicit_native",
+            confidence="high",
+            compaction_id=payload.get("compaction_id"),
+            tokens_before=payload.get("tokens_before"),
+            parser_version=OBSERVATION_SCHEMA_VERSION,
+        )
     elif event_type == "SessionEnd":
         await _finish_root_turn(
             session,
@@ -2800,7 +3054,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
                     )
                 _extract_standing_tool_use(session, event, name, block)
         usage = message.get("usage") or {}
-        if usage:
+        if usage and _measurements_publishable(session):
             session.record.tokens_in = sum(
                 int(usage.get(key, 0))
                 for key in (
@@ -3119,7 +3373,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         # is attribution rather than state and waits for the conversation to be
         # proven. Nothing is lost by waiting: Codex reports cumulative totals, so
         # the first count read after the binding carries the whole turn.
-        if provisional_observation(session):
+        if not _measurements_publishable(session):
             return
         info = payload.get("info") or payload
         total = info.get("total_token_usage") or {}
@@ -3136,6 +3390,502 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         session.record.model = str(info.get("model") or "") or session.record.model
         session.record.measurement_source = "codex-transcript"
         _publish_update(session)
+
+
+def _omp_index_entry(
+    session: Session, event: dict[str, Any]
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    """Index one append and return (active chain, branch changed, duplicate)."""
+    state = _observation_state(session)
+    entry_id = event.get("id")
+    if not isinstance(entry_id, str) or not entry_id:
+        return [], False, False
+    entries = state.setdefault("omp_entries", {})
+    if entry_id in entries:
+        active_ids = state.get("omp_active_ids") or []
+        return [entries[item] for item in active_ids if item in entries], False, True
+    old_leaf = state.get("omp_leaf_id")
+    entries[entry_id] = event
+    parent = event.get("parentId")
+    parent_id = parent if isinstance(parent, str) and parent else None
+    branch_changed = old_leaf is not None and parent_id != old_leaf
+    if old_leaf is None or parent_id == old_leaf:
+        active_ids = [*state.get("omp_active_ids", []), entry_id]
+    else:
+        active_ids = []
+        cursor: str | None = entry_id
+        visited: set[str] = set()
+        while cursor and cursor not in visited:
+            visited.add(cursor)
+            item = entries.get(cursor)
+            if not isinstance(item, dict):
+                break
+            active_ids.append(cursor)
+            item_parent = item.get("parentId")
+            cursor = item_parent if isinstance(item_parent, str) and item_parent else None
+        active_ids.reverse()
+    state["omp_leaf_id"] = entry_id
+    state["omp_active_ids"] = active_ids
+    return [entries[item] for item in active_ids if item in entries], branch_changed, False
+
+
+def _omp_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _omp_context_window(session: Session, provider: str, model: str) -> int:
+    resolver = getattr(getattr(session, "adapter", None), "model_context_window", None)
+    if callable(resolver):
+        try:
+            value = resolver(provider, model)
+            if isinstance(value, int) and value > 0:
+                return value
+        except (OSError, ValueError):
+            pass
+    if provider == "anthropic" and model == "claude-opus-4-8":
+        return 1_000_000
+    return 0
+
+
+def _omp_update_measurements(session: Session, active_chain: list[dict[str, Any]]) -> None:
+    if not _measurements_publishable(session):
+        return
+    state = _observation_state(session)
+    entries = state.get("omp_entries")
+    if not isinstance(entries, dict):
+        return
+    tokens_in = 0
+    tokens_out = 0
+    cache_read = 0
+    cache_write = 0
+    cost_usd = 0.0
+    for event in entries.values():
+        if not isinstance(event, dict) or event.get("type") != "message":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        tokens_in += _omp_int(usage.get("input"))
+        tokens_out += _omp_int(usage.get("output"))
+        cache_read += _omp_int(usage.get("cacheRead"))
+        cache_write += _omp_int(usage.get("cacheWrite"))
+        cost = usage.get("cost")
+        if isinstance(cost, dict):
+            try:
+                cost_usd += max(0.0, float(cost.get("total") or 0.0))
+            except (TypeError, ValueError):
+                pass
+
+    last_model: str | None = None
+    last_provider = ""
+    last_used = 0
+    peak = 0.0
+    last_window = 0
+    provider_account_hashes: dict[str, str] = {}
+    for event in active_chain:
+        if event.get("type") == "credential_pin":
+            pin_provider = str(event.get("provider") or "").strip()
+            account_hash = str(event.get("hash") or "").strip().lower()
+            if pin_provider and re.fullmatch(r"[0-9a-f]{64}", account_hash):
+                provider_account_hashes[pin_provider] = account_hash
+            continue
+        if event.get("type") != "message":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        model = str(message.get("model") or "")
+        provider = str(message.get("provider") or "")
+        usage = message.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        snapshot = message.get("contextSnapshot")
+        used = (
+            _omp_int(snapshot.get("promptTokens"))
+            if isinstance(snapshot, dict)
+            else _omp_int(usage.get("input"))
+            + _omp_int(usage.get("cacheRead"))
+            + _omp_int(usage.get("cacheWrite"))
+        )
+        window = _omp_context_window(session, provider, model)
+        if window:
+            peak = max(peak, min(1.0, used / window))
+        last_model = model or last_model
+        last_provider = provider
+        last_used = used
+        last_window = window
+
+    record = session.record
+    record.tokens_in = tokens_in
+    record.tokens_out = tokens_out
+    record.tokens_cache_read = cache_read
+    record.tokens_cache_write = cache_write
+    record.cost_usd = cost_usd
+    record.context_window = last_window
+    record.context_pct = min(1.0, last_used / last_window) if last_window else 0.0
+    record.context_peak_pct = peak
+    record.provider = last_provider or record.provider
+    record.provider_account_hashes = provider_account_hashes
+    record.model = last_model or record.model
+    record.measurement_source = "omp-transcript"
+    state["omp_last_provider"] = last_provider
+    _publish_update(session)
+
+
+def _omp_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(block.get("text") or "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return ""
+
+
+def _omp_note_task_start(session: Session, event: dict[str, Any]) -> None:
+    if getattr(session, "observation_replay", False):
+        return
+    changed = _refresh_subagents(
+        session,
+        source="transcript",
+        evidence="transcript:omp:task",
+        now=_standing_now(session, event),
+        count=_standing_activity_count(session, "subagents") + 1,
+    )
+    if changed:
+        _publish_update(session)
+
+
+def _omp_note_task_end(session: Session, event: dict[str, Any]) -> None:
+    if getattr(session, "observation_replay", False):
+        return
+    if _drop_subagent(
+        session,
+        source="transcript",
+        evidence="transcript:omp:task_result",
+        now=_standing_now(session, event),
+    ):
+        _publish_update(session)
+
+
+def _omp_note_hub_call(
+    session: Session,
+    event: dict[str, Any],
+    call_id: str,
+    arguments: dict[str, Any],
+) -> None:
+    if getattr(session, "observation_replay", False):
+        return
+    op = str(arguments.get("op") or "")
+    name = str(arguments.get("name") or "") or None
+    now = _standing_now(session, event)
+    changed = False
+    if op in {"start", "restart"}:
+        changed = _open_background_task(
+            session,
+            tool_use_id=call_id,
+            evidence=f"transcript:omp:hub:{op}",
+            now=now,
+            label=_standing_detail(name or arguments.get("command")),
+            task_id=name,
+        )
+    elif op == "stop" and name:
+        changed = _close_background_task(
+            session,
+            evidence="transcript:omp:hub:stop",
+            now=now,
+            task_id=name,
+        )
+    if changed:
+        _publish_update(session)
+
+
+async def _omp_tool_call(
+    session: Session,
+    event: dict[str, Any],
+    block: dict[str, Any],
+    events: EventBus,
+) -> None:
+    name = str(block.get("name") or "tool")
+    call_id = str(block.get("id") or block.get("toolCallId") or "")
+    arguments = block.get("arguments")
+    arguments = arguments if isinstance(arguments, dict) else {}
+    target, content_hash = tool_call_evidence(arguments)
+    _remember_tool_call(session, call_id, name, target)
+    emitted = _observation_state(session).setdefault("omp_emitted_tool_calls", set())
+    if call_id and call_id in emitted:
+        return
+    if call_id:
+        emitted.add(call_id)
+    await _transition(session, events, "working", name, evidence="omp:tool_call")
+    await events.emit(
+        "tool_use",
+        session_id=session.record.id,
+        source="transcript",
+        scope="root",
+        tool=name,
+        call_id=call_id or None,
+        target=target,
+        content_hash=content_hash,
+        parser_version=OBSERVATION_SCHEMA_VERSION,
+    )
+    if name == "task":
+        _omp_note_task_start(session, event)
+        await events.emit(
+            "subagent_activity",
+            session_id=session.record.id,
+            source="transcript",
+            scope="subagent",
+            kind="started",
+        )
+    elif name == "hub":
+        _omp_note_hub_call(session, event, call_id, arguments)
+
+
+async def _omp_tool_result(
+    session: Session,
+    event: dict[str, Any],
+    message: dict[str, Any],
+    events: EventBus,
+) -> None:
+    call_id = str(message.get("toolCallId") or "")
+    fallback = str(message.get("toolName") or "tool")
+    tool, target = _recall_tool_call(session, call_id, fallback)
+    detail = _omp_content_text(message.get("content"))
+    content_hash, test_outcome = tool_result_evidence(detail)
+    await events.emit(
+        "tool_result",
+        session_id=session.record.id,
+        source="transcript",
+        scope="root",
+        tool=tool,
+        call_id=call_id or None,
+        target=target,
+        content_hash=content_hash,
+        test_outcome=test_outcome,
+        success=not bool(message.get("isError")),
+        exit_code=None,
+        parser_version=OBSERVATION_SCHEMA_VERSION,
+        detail=bounded_detail(detail),
+    )
+    if tool == "task":
+        _omp_note_task_end(session, event)
+        await events.emit(
+            "subagent_activity",
+            session_id=session.record.id,
+            source="transcript",
+            scope="subagent",
+            kind="completed",
+        )
+
+
+async def _omp_reconcile_branch_state(
+    session: Session, active_chain: list[dict[str, Any]], events: EventBus
+) -> None:
+    state = _observation_state(session)
+    verdict = _omp_chain_turn_state(active_chain)
+    if verdict == "open":
+        state["root_turn_active"] = True
+        state["root_completion_seen"] = False
+        await _transition(
+            session, events, "working", source="transcript", force=True,
+            evidence="omp:active_branch_open",
+        )
+    elif verdict == "ended":
+        state["root_turn_active"] = False
+        state["root_completion_seen"] = True
+        await _transition(
+            session, events, "idle", source="transcript", force=True,
+            evidence="omp:active_branch_ended",
+        )
+
+
+async def _omp(session: Session, event: dict[str, Any], events: EventBus) -> None:
+    event_type = str(event.get("type") or "")
+    if event_type == "session":
+        version = event.get("version")
+        if isinstance(version, int):
+            _observation_state(session)["omp_session_version"] = version
+        native_id = event.get("id")
+        if isinstance(native_id, str) and native_id and not provisional_observation(session):
+            session.record.native_session_id = native_id
+        return
+    if event_type == "title":
+        return
+
+    active_chain, branch_changed, duplicate = _omp_index_entry(session, event)
+    if duplicate:
+        return
+    if active_chain:
+        _omp_update_measurements(session, active_chain)
+    if branch_changed:
+        await _omp_reconcile_branch_state(session, active_chain, events)
+
+    if event_type == "message":
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return
+        role = str(message.get("role") or "")
+        if role in {"user", "developer"}:
+            text = _omp_content_text(message.get("content"))
+            _remember_user_prompt(session, {"prompt": text})
+            await _resume_from_awaiting(session, events, event, evidence="omp:user_message")
+            await _begin_root_turn(
+                session, events, source="transcript", evidence="omp:user_message"
+            )
+            await events.emit(
+                "transcript_message",
+                session_id=session.record.id,
+                source="transcript",
+                scope="root",
+                role="user",
+            )
+            return
+        if role == "toolResult":
+            await _resume_from_awaiting(session, events, event, evidence="omp:tool_result")
+            await _begin_root_turn(
+                session, events, source="transcript", evidence="omp:tool_result"
+            )
+            await _omp_tool_result(session, event, message, events)
+            return
+        if role != "assistant":
+            return
+        await _resume_from_awaiting(session, events, event, evidence="omp:assistant")
+        calls = _omp_message_tool_calls(message)
+        stop_reason = str(message.get("stopReason") or "")
+        state = _observation_state(session)
+        trailing_completion = (
+            not calls
+            and stop_reason in {"stop", "end_turn"}
+            and not state.get("root_turn_active")
+            and state.get("root_completion_seen")
+        )
+        if not trailing_completion:
+            await _begin_root_turn(
+                session, events, source="transcript", evidence="omp:assistant"
+            )
+        state["turn_saw_activity"] = True
+        for block in calls:
+            await _omp_tool_call(session, event, block, events)
+        if not calls and stop_reason in {"stop", "end_turn"}:
+            await _finish_root_turn(
+                session, events, source="transcript", evidence=f"omp:stopReason={stop_reason}"
+            )
+        elif not calls and stop_reason in {"aborted", "error", "length"}:
+            await _finish_root_turn(
+                session,
+                events,
+                source="transcript",
+                outcome=stop_reason,
+                force=True,
+                evidence=f"omp:stopReason={stop_reason}",
+            )
+        return
+
+    if event_type == "reset_boundary":
+        for kind in ("subagents", "background_tasks"):
+            clear_standing_activity(
+                session, kind, evidence="transcript:omp:reset_boundary",
+                now=_standing_now(session, event),
+            )
+        _tool_names(session).clear()
+        _tool_targets(session).clear()
+        await _finish_root_turn(
+            session,
+            events,
+            source="transcript",
+            outcome="cleared",
+            force=True,
+            evidence="omp:reset_boundary",
+        )
+        return
+
+    if (
+        event_type == "compaction"
+        and not provisional_observation(session)
+        and _first_compaction_evidence(session, "omp", event.get("id"))
+    ):
+        await events.emit(
+            "context_compacted",
+            session_id=session.record.id,
+            source="transcript",
+            scope="root",
+            backend="omp",
+            capability="explicit_native",
+            confidence="high",
+            compaction_id=event.get("id"),
+            tokens_before=event.get("tokensBefore"),
+            parser_version=OBSERVATION_SCHEMA_VERSION,
+        )
+        return
+
+    if event_type != "custom":
+        return
+    custom_type = str(event.get("customType") or "")
+    data = event.get("data")
+    data = data if isinstance(data, dict) else {}
+    if custom_type == "tool_execution_start":
+        call_id = str(data.get("toolCallId") or "")
+        name = str(data.get("toolName") or "tool")
+        arguments = data.get("args")
+        arguments = arguments if isinstance(arguments, dict) else {}
+        await _begin_root_turn(
+            session, events, source="transcript", evidence="omp:tool_execution_start"
+        )
+        await _omp_tool_call(
+            session,
+            event,
+            {"type": "toolCall", "id": call_id, "name": name, "arguments": arguments},
+            events,
+        )
+    elif custom_type == "session_exit":
+        pending = data.get("pendingToolCalls")
+        pending_calls = pending if isinstance(pending, list) else []
+        abnormal = str(data.get("kind") or "normal") != "normal"
+        if pending_calls or abnormal:
+            clear_standing_activity(
+                session,
+                "subagents",
+                evidence="transcript:omp:session_exit",
+                now=_standing_now(session, event),
+            )
+            for item in pending_calls:
+                if not isinstance(item, dict):
+                    continue
+                call_id = str(item.get("toolCallId") or "")
+                tool, target = _recall_tool_call(
+                    session, call_id, str(item.get("toolName") or "tool")
+                )
+                await events.emit(
+                    "tool_result",
+                    session_id=session.record.id,
+                    source="transcript",
+                    scope="root",
+                    tool=tool,
+                    call_id=call_id or None,
+                    target=target,
+                    success=False,
+                    exit_code=None,
+                    parser_version=OBSERVATION_SCHEMA_VERSION,
+                    detail="interrupted before tool completion",
+                )
+            await _finish_root_turn(
+                session,
+                events,
+                source="transcript",
+                outcome="interrupted",
+                force=True,
+                evidence="omp:session_exit",
+                reason=data.get("reason"),
+                exit_kind=data.get("kind"),
+            )
 
 
 async def find_codex_transcript(cwd: str, created_at: float, stop: asyncio.Event) -> Path | None:

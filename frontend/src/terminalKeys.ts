@@ -1,3 +1,5 @@
+import { isAgentBackend } from './harnessRegistry.ts'
+
 export type TerminalKeyDecision =
   | { kind: 'pass' }
   | { kind: 'command'; command: string }
@@ -30,7 +32,7 @@ export function terminalKeyDecision(
   }
   const key = event.key.toLowerCase()
   if (key === 'enter' && (event.shiftKey || event.ctrlKey) && !event.altKey && !event.metaKey) {
-    if (backend === 'claude' || backend === 'codex') return { kind: 'sendInput', data: AGENT_NEWLINE }
+    if (isAgentBackend(backend)) return { kind: 'sendInput', data: AGENT_NEWLINE }
   }
   if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'v') return { kind: 'browserPaste' }
   if (event.ctrlKey && !event.altKey && !event.metaKey && key === 'c' && hasSelection) {

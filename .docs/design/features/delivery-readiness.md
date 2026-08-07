@@ -2,13 +2,13 @@
 
 ## What it is
 
-Phase 1 provides a deterministic regression boundary around Claude/Codex lifecycle
-observation and a provider-neutral, read-only delivery classification. It does not type into
-a PTY or authorize automation.
+The versioned replay corpus provides a deterministic regression boundary around every observed
+harness and a provider-neutral, read-only delivery classification.
+It does not type into a PTY or authorize automation.
 
 `delivery_state` is separate from display state:
 
-- `safe` means every required root-lifecycle, run, parser/hook, and human-input fact is
+- `safe` means every required root-lifecycle, run, observation, and human-input fact is
   positively known, and nothing contradicts the screen the agent draws its prompt on.
 - `blocked` means current evidence positively forbids delivery, such as working, approval,
   elicitation, rate limit, a screen that is not the agent's own, recent/post-completion
@@ -54,6 +54,13 @@ subagent-scoped activity. Child stops never complete a root turn. Hook/transcrip
 coalesce, while completion boundaries remain tied to a stable `agent_run_id` — and
 "stable" now includes the in-CLI conversation boundary: a `/clear` mints a new run id, so
 `stable_run_identity` fails and the tracker refuses until the successor proves itself.
+
+Observation liveness and measurement confidence are separate facts.
+Transcript growth at or after the latest transcript-backed root hook makes the transcript authoritative for ordered turn boundaries.
+A newer hook leaves hooks active until the tailer reports again.
+`parser_status == "degraded"` withholds new token, context, cost, and model measurements and the UI labels existing figures stale, but it does not by itself change lifecycle authority or delivery readiness.
+Conversely, a parser that still reads `ready` cannot make a silent transcript authoritative.
+This split preserves transcript precedence because Claude and Codex hooks are unordered retried side channels, while preventing an old confidence bit from suppressing current lifecycle evidence.
 
 Provider identity and transcript ownership are prerequisites for interpreting that evidence.
 Root-process provider identity is immutable; nested launcher hooks cannot replace it. A

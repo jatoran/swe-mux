@@ -3,6 +3,7 @@ import { api } from './api'
 import { notifyPromptLibraryChanged } from './promptLibraryEvents'
 import { renderPromptTemplate } from './promptTemplates'
 import type { Project, ProjectBackend } from './types'
+import { allBackendNames } from './harnessRegistry'
 
 export type PromptTemplate={
   id:string;key:string;scope:'global'|'project';title:string;body:string;tags:string[];variables:string[]
@@ -11,7 +12,7 @@ export type PromptTemplate={
 }
 type Library={configured_scope:string;items:PromptTemplate[];diagnostics:Array<{path:string;error:string}>}
 type Draft={scope:'global'|'project';title:string;body:string;tags:string;backends:ProjectBackend[]}
-const emptyDraft=(project?:Project):Draft=>({scope:project?'project':'global',title:'',body:'',tags:'',backends:['claude','codex','shell']})
+const emptyDraft=(project?:Project):Draft=>({scope:project?'project':'global',title:'',body:'',tags:'',backends:allBackendNames()})
 
 export function PromptLibrary({project,backend,onInsert,onClose}:{project?:Project;backend?:ProjectBackend;onInsert:(text:string)=>void;onClose:()=>void}){
   const [library,setLibrary]=useState<Library|null>(null)
@@ -75,7 +76,7 @@ export function PromptLibrary({project,backend,onInsert,onClose}:{project?:Proje
         <label>Scope<select value={draft.scope} disabled={Boolean(editing)} onChange={event=>setDraft({...draft,scope:event.currentTarget.value as Draft['scope']})}><option value="global">Global</option>{project&&<option value="project">Project</option>}</select></label>
         <label>Title<input value={draft.title} onInput={event=>setDraft({...draft,title:event.currentTarget.value})}/></label>
         <label>Tags<input value={draft.tags} placeholder="review, git, planning" onInput={event=>setDraft({...draft,tags:event.currentTarget.value})}/></label>
-        <fieldset><legend>Compatible backends</legend>{(['claude','codex','shell'] as ProjectBackend[]).map(value=><label class="check"><span>{value}</span><input type="checkbox" checked={draft.backends.includes(value)} onChange={event=>setDraft({...draft,backends:event.currentTarget.checked?[...draft.backends,value]:draft.backends.filter(item=>item!==value)})}/></label>)}</fieldset>
+        <fieldset><legend>Compatible backends</legend>{allBackendNames().map(value=><label class="check"><span>{value}</span><input type="checkbox" checked={draft.backends.includes(value)} onChange={event=>setDraft({...draft,backends:event.currentTarget.checked?[...draft.backends,value]:draft.backends.filter(item=>item!==value)})}/></label>)}</fieldset>
         <label>Template body<textarea rows={14} value={draft.body} placeholder="Use {{variable_name}} placeholders." onInput={event=>setDraft({...draft,body:event.currentTarget.value})}/></label>
         <div class="prompt-actions"><button disabled={!dirty} class="primary" onClick={()=>void save()}>Save</button><button onClick={()=>{setDraft(null);setSavedDraft(null);setEditing(null)}}>Discard</button>{editing&&!confirmDelete&&<button class="danger" onClick={()=>setConfirmDelete(true)}>Delete</button>}{editing&&confirmDelete&&<><button class="danger" onClick={()=>void remove()}>Confirm delete</button><button onClick={()=>setConfirmDelete(false)}>Cancel</button></>}</div>
       </div>:<div class="prompt-library-body">

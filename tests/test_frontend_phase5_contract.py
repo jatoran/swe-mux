@@ -31,7 +31,8 @@ def test_settings_explain_that_agent_conversations_default_on() -> None:
     settings = (ROOT / "Settings.tsx").read_text(encoding="utf-8")
 
     assert (
-        "every new Claude/Codex conversation starts with bounded auto-delivery enabled" in settings
+        "every new observed agent conversation starts with bounded auto-delivery enabled"
+        in settings
     )
     assert "Allow auto-delivery for agent conversations" in settings
 

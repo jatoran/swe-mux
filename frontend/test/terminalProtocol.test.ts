@@ -23,6 +23,18 @@ test('fresh replay forwards only terminal-generated protocol responses', () => {
   assert.equal(isTerminalProtocolResponse('typed\x1b]10;rgb:c0c0/caca/f5f5\x1b\\'), false)
 })
 
+test('DECRPM mode reports are protocol responses, so oh-my-pi startup probes get answers', () => {
+  // omp sends DECRQM for modes 2026/2048/2031/1010/1011 at spawn; xterm answers
+  // with `CSI ? Ps ; Pm $ y` (and `CSI Ps ; Pm $ y` for the ANSI variant). Those
+  // answers must ride the protocol-response path — recognized here — or the
+  // first-attach probe window drops them as user input.
+  assert.equal(isTerminalProtocolResponse('\x1b[?2026;2$y'), true)
+  assert.equal(isTerminalProtocolResponse('\x1b[?2048;0$y'), true)
+  assert.equal(isTerminalProtocolResponse('\x1b[?1010;0$y\x1b[?1011;0$y'), true)
+  assert.equal(isTerminalProtocolResponse('\x1b[4;2$y'), true)
+  assert.equal(isTerminalProtocolResponse('typed\x1b[?2026;2$y'), false)
+})
+
 test('Codex drops bounded startup color replies that can arrive as composer input', () => {
   const foreground = '\x1b]10;rgb:c0c0/caca/f5f5\x1b\\'
   const background = '\x1b]11;rgb:1a1a/1b1b/2626\x1b\\'

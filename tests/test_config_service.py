@@ -204,12 +204,54 @@ def test_legacy_separate_ccusage_commands_migrate_to_one_unified_cli(
 
     config = load_config(path)
 
-    assert config.ccusage_claude_command == default_ccusage_command("claude")
-    assert config.ccusage_codex_command == default_ccusage_command("codex")
+    assert config.usage_commands["claude"] == default_ccusage_command("claude")
+    assert config.usage_commands["codex"] == default_ccusage_command("codex")
     assert path.with_suffix(".toml.bak").is_file()
     persisted = tomllib.loads(path.read_text(encoding="utf-8"))
-    assert persisted["ccusage_claude_command"] == ["ccusage", "claude", "daily", "--json"]
-    assert persisted["ccusage_codex_command"] == ["ccusage", "codex", "daily", "--json"]
+    assert persisted["usage_commands"]["claude"] == [
+        "ccusage",
+        "claude",
+        "daily",
+        "--json",
+    ]
+    assert persisted["usage_commands"]["codex"] == [
+        "ccusage",
+        "codex",
+        "daily",
+        "--json",
+    ]
+
+
+def test_legacy_harness_executable_and_argument_keys_migrate_to_registry_maps(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 18\n"
+        'claude_exe = "claude-custom"\n'
+        'codex_exe = "codex-custom"\n'
+        'claude_args = ["--claude-flag"]\n'
+        'codex_args = ["--codex-flag"]\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.harness_exe == {
+        "claude": "claude-custom",
+        "codex": "codex-custom",
+        "omp": "omp",
+    }
+    assert config.harness_args == {
+        "claude": ["--claude-flag"],
+        "codex": ["--codex-flag"],
+        "omp": [],
+    }
+    persisted = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert persisted["harness_exe"] == config.harness_exe
+    assert persisted["harness_args"] == config.harness_args
+    assert "claude_exe" not in persisted
+    assert "codex_args" not in persisted
 
 
 def test_invalid_update_changes_neither_memory_nor_disk(tmp_path: Path) -> None:

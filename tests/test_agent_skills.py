@@ -189,6 +189,40 @@ def test_codex_scans_both_repo_roots_and_ignores_the_claude_one(tmp_path: Path) 
     assert all(skill["invocation"].startswith("$") for skill in payload["skills"])
 
 
+def test_omp_scans_native_and_imported_skill_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_home = tmp_path / "home"
+    omp_home = user_home / ".omp" / "agent"
+    cwd = user_home / "repo" / "nested"
+    (user_home / "repo" / ".git").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: user_home))
+    write_skill(omp_home / "skills", "native-user")
+    write_skill(omp_home / "managed-skills", "managed")
+    write_skill(user_home / ".claude" / "skills", "claude-user")
+    write_skill(user_home / ".agents" / "skills", "agents-user")
+    write_skill(user_home / "repo" / ".omp" / "skills", "native-project")
+    write_skill(cwd / ".claude" / "skills", "claude-project")
+    write_skill(cwd / ".agents" / "skills", "agents-project")
+    write_skill(cwd / ".codex" / "skills", "codex-project")
+    write_skill(cwd / ".github" / "skills", "github-project")
+
+    payload = discover_skills("omp", cwd, omp_home=omp_home)
+
+    assert set(names(payload)) == {
+        "agents-project",
+        "agents-user",
+        "claude-project",
+        "claude-user",
+        "codex-project",
+        "github-project",
+        "managed",
+        "native-project",
+        "native-user",
+    }
+    assert all(skill["invocation"].startswith("/skill:") for skill in payload["skills"])
+
+
 def test_codex_scans_only_plugins_config_says_are_enabled(tmp_path: Path) -> None:
     """The plugin cache is a download area, not an install list.
 

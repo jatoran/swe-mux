@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "A degraded measurement parser does not surrender ordered turn boundaries while its transcript continues reporting.",
+  "steps": [
+    {"kind": "session", "record": {"parser_status": "degraded", "parser_unknown_events": 20, "parser_unknown_signatures": {"claude:future": 20}}},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "work"}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"},
+    {"kind": "hook", "event": "PreToolUse", "payload": {"tool_name": "Read"}, "expect_state": "idle"},
+    {"kind": "terminal", "mode": "alternate"},
+    {"kind": "timer", "seconds": 2.1, "expect_delivery": "safe", "oracle_safe": true, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "degraded", "recognized": 2, "unknown": 20, "unknown_signatures": {"claude:future": 20}},
+    "delivery_state": "safe",
+    "delivery_reason": "all_required_evidence_positive"
+  }
+}

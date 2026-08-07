@@ -32,8 +32,9 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
+from .harness import Backend
 from .status_timeline import note_layer_reading
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,18 @@ log = logging.getLogger(__name__)
 # flip and mux's own transition race each other at boundaries, and a comparison
 # inside that window measures the race, not a defect.
 CLI_STATE_SETTLE_SECONDS = 10.0
+
+
+def _publishes_cli_state(backend: Backend) -> bool:
+    if backend == "claude":
+        return True
+    if backend == "codex":
+        return False
+    if backend == "omp":
+        return False
+    if backend == "shell":
+        return False
+    assert_never(backend)
 
 
 @dataclass(slots=True)
@@ -162,7 +175,7 @@ class CliStateMonitor:
         live: list[Any] = [
             session
             for session in sessions
-            if session.record.backend == "claude"
+            if _publishes_cli_state(session.record.backend)
             and session.record.state not in {"exited", "crashed"}
         ]
         live_conversations = {session.record.native_session_id for session in live}

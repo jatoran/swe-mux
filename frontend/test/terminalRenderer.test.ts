@@ -25,16 +25,27 @@ test('mobile viewports always use the built-in DOM renderer', () => {
   assert.equal(shouldLoadWebgl('dom', true, 'codex'), false)
 })
 
-test('Codex stays on the DOM renderer under auto so off-tail scrollback stays stable', () => {
+test('scrollback-repainting harnesses stay on the DOM renderer under auto', () => {
+  // Driven by the descriptor's repaints_scrollback trait, not by name: Codex
+  // reflows its normal-screen transcript on resize and OMP repaints its tail
+  // continuously, and both redraw shapes can corrupt WebGL scrollback while the
+  // viewport is off-tail.
   assert.equal(shouldLoadWebgl('auto', false, 'codex'), false)
   assert.equal(shouldLoadWebgl('dom', false, 'codex'), false)
+  assert.equal(shouldLoadWebgl('auto', false, 'omp'), false)
+  assert.equal(shouldLoadWebgl('dom', false, 'omp'), false)
+  // Claude paints on the alternate screen and never rewrites scrollback.
+  assert.equal(shouldLoadWebgl('auto', false, 'claude'), true)
+  // An agent name the registry does not know defaults to the safe renderer.
+  assert.equal(shouldLoadWebgl('auto', false, 'shell'), true)
 })
 
-test('an explicit webgl preference reaches Codex, which is the one backend it was silently skipping', () => {
-  // The setting existed and the user could select it, but the backend whose repaint
+test('an explicit webgl preference reaches repainting harnesses, which auto silently skips', () => {
+  // The setting existed and the user could select it, but the backends whose repaint
   // cost makes the renderer worth choosing ignored it. Opting in has a visible failure
   // mode and is the only way to find out whether the exclusion still earns its place.
   assert.equal(shouldLoadWebgl('webgl', false, 'codex'), true)
+  assert.equal(shouldLoadWebgl('webgl', false, 'omp'), true)
   // Never on a phone, whatever the preference says: Chromium device emulation can keep
   // a live context while changing pixel ratio and leave the pane blank.
   assert.equal(shouldLoadWebgl('webgl', true, 'codex'), false)

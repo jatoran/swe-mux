@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "OMP reset_boundary closes the current turn in the same conversation file.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "before clear"}}},
+    {"kind": "transcript", "record": {"type": "reset_boundary", "id": "clear", "parentId": "u"}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_aborted", "source": "transcript", "scope": "root", "outcome": "cleared"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "root_turn_cleared"
+  }
+}

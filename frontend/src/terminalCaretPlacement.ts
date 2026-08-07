@@ -30,7 +30,7 @@ export interface TerminalCaretSnapshot {
 }
 
 export interface TerminalTapDecision {
-  backend: 'claude' | 'codex' | 'shell'
+  backend: string
   pointerType: CaretPointerType
   still: boolean
   primary: boolean

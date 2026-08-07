@@ -8,7 +8,7 @@
     {"kind": "watchdog", "expect_state": "idle"},
     {"kind": "timer", "seconds": 12},
     {"kind": "watchdog", "expect_state": "awaiting", "expect_awaiting": "approval", "expect_delivery": "blocked", "oracle_safe": false},
-    {"kind": "pty_tail", "data": "OpenAI Codex v0.5\nready\n"},
+    {"kind": "pty_tail", "data": "OpenAI Codex v0.5\n? for shortcuts\n"},
     {"kind": "watchdog", "expect_state": "idle"}
   ],
   "expected": {

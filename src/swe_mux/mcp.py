@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from .clipboard_store import looks_like_secret
+from .harness import agent_harnesses
 from .prompt_queue import QueueError
 from .transcript_view import parse_transcript_cached, searchable_transcript_messages
 
@@ -245,7 +246,7 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "backend": {
                     "type": "string",
-                    "enum": ["claude", "codex"],
+                    "enum": list(agent_harnesses()),
                     "description": "Preferred agent CLI (defaults to yours)",
                 },
                 "name": {"type": "string", "description": "Suggested session name"},
@@ -258,8 +259,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_history",
         "description": (
-            "Full-text search over your Project's archived agent conversations "
-            "(Claude and Codex), with match excerpts. Returns nothing rather "
+            "Full-text search over your Project's archived agent conversations, "
+            "with match excerpts. Returns nothing rather "
             "than weak matches."
         ),
         "inputSchema": {

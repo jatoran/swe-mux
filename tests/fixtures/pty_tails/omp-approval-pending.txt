@@ -1,0 +1,4 @@
+⠋ Run git status ⟦esc⟧
+⠙ Run git status ⟦esc⟧
+⠹ Run git status ⟦esc⟧
+⠸ Run git status ⟦esc⟧

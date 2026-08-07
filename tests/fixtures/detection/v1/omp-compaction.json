@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "An OMP compaction entry is explicit context-compacted evidence while the root turn remains open.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "continue"}}},
+    {"kind": "transcript", "record": {"type": "compaction", "id": "c", "parentId": "u", "summary": "summary", "firstKeptEntryId": "u", "tokensBefore": 42000}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a", "parentId": "c", "message": {"role": "assistant", "content": "done", "stopReason": "stop"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "context_compacted", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

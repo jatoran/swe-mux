@@ -400,6 +400,9 @@ async def test_session_manager_reattaches_after_daemon_restart(
         assert "MUX_SESSION_ID" in spawned_env
         if session.registration_task is not None:
             await session.registration_task
+        session.observation_state["hook_sequences"] = {"omp-extension": 17}
+        session.observation_state["hook_sequence_duplicates"] = 2
+        session.meta_sink()
         session.pty.write("echo daemon_one_marker\r")
         deadline = time.monotonic() + READ_TIMEOUT
         while b"daemon_one_marker" not in session.scrollback.bytes():
@@ -421,6 +424,8 @@ async def test_session_manager_reattaches_after_daemon_restart(
         assert revived.record.name == "reload-me"
         assert revived.record.backend == "shell"
         assert revived.hook_secret == session.hook_secret
+        assert revived.observation_state["hook_sequences"] == {"omp-extension": 17}
+        assert revived.observation_state["hook_sequence_duplicates"] == 2
         assert b"daemon_one_marker" in revived.scrollback.bytes()
         assert revived.pty.isalive()
 

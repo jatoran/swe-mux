@@ -33,6 +33,17 @@ export const RETRY_MAX_MS = 10000
 export type ConnectionPhase = 'open' | 'connecting' | 'closed'
 export type LivenessSignal = 'visible' | 'pageshow' | 'online' | 'focus' | 'poll'
 
+/**
+ * Whether a terminal socket attempt is useful after the process has ended.
+ *
+ * The first attach is still required because the daemon retains and replays the PTY buffer,
+ * then sends its `already_ended` frame.
+ * Later reconnects have nothing new to retrieve and would otherwise poll forever.
+ */
+export function terminalAttachAllowed(sessionEnded: boolean, reconnecting: boolean): boolean {
+  return !sessionEnded || !reconnecting
+}
+
 /** Exponential backoff, capped. Attempt 0 is the first retry. */
 export function retryDelay(attempt: number, base = RETRY_BASE_MS, cap = RETRY_MAX_MS): number {
   const exponent = Math.min(Math.max(0, Math.trunc(attempt)), 30)

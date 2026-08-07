@@ -17,7 +17,7 @@ from swe_mux.meta_hooks import HookRule, MetaHookEngine
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.profiles import resolve_profile
 from swe_mux.project_files import DEFAULT_NOTE_STORAGE_ID, read_note, write_note
-from swe_mux.runtime_cwd import Osc7Parser, local_directory_from_osc7
+from swe_mux.runtime_cwd import Osc7Parser, OscSignalParser, local_directory_from_osc7
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
 
@@ -32,6 +32,20 @@ def test_osc7_parser_handles_fragmentation_and_rejects_remote_or_missing_paths(
     assert local_directory_from_osc7(tmp_path.as_uri()) == tmp_path.resolve()
     assert local_directory_from_osc7("file://attacker.example/tmp") is None
     assert local_directory_from_osc7((tmp_path / "missing").as_uri()) is None
+
+
+def test_osc_signal_parser_handles_split_title_and_progress_channels() -> None:
+    parser = OscSignalParser()
+    assert parser.feed(b"\x1b]0;Building") == []
+    assert parser.feed(b" tests\x07\x1b]9;4;2;50\x1b\\") == [
+        ("title", "Building tests"),
+        ("progress", "2;50"),
+    ]
+    assert parser.feed(b"\x1b]4;1;rgb:ff/00/00\x07") == [
+        ("progress", "1;rgb:ff/00/00")
+    ]
+    assert parser.title == "Building tests"
+    assert parser.progress == "1;rgb:ff/00/00"
 
 
 def test_shell_profile_cwd_integration_is_explicit_and_process_local(tmp_path: Path) -> None:

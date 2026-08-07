@@ -260,7 +260,7 @@ async def test_codex_observation_fails_closed_when_a_turn_ran_off_the_file(
     await SessionManager._note_transcript_staleness(manager, session, current)
 
     assert record.observation_stale_since is not None
-    assert "may have been replaced" in (record.parser_diagnostic or "")
+    assert "may have been replaced" in (record.observation_diagnostic or "")
 
 
 async def test_subagent_hooks_never_date_transcript_staleness_evidence(

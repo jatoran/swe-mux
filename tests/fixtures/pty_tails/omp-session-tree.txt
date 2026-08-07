@@ -1,0 +1,4 @@
+───────────────────────────────────────────────────────────────────────────────────────────────
+ Session Tree
+Enter: switch. Alt+↑/↓: previous/next turn. PgUp/PgDn (←/→): page. Home/End: first/last item. Shift+Enter: summarize & …
+ Search:

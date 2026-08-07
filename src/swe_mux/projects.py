@@ -6,6 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
+from .harness import is_agent_harness
 from .history import HistoryIndex
 from .layouts import normalize_layout
 from .models import ProjectGroupRecord, ProjectRecord
@@ -181,8 +182,13 @@ class ProjectManager:
                 raise ValueError("unknown project group")
         if changes.get("resource_open_mode") not in {None, "dock", "popout"}:
             raise ValueError("resource_open_mode must be dock, popout, or null")
-        if changes.get("default_backend") not in {None, "shell", "claude", "codex"}:
-            raise ValueError("default_backend must be shell, claude, codex, or null")
+        default_backend = changes.get("default_backend")
+        if (
+            default_backend is not None
+            and default_backend != "shell"
+            and not is_agent_harness(default_backend)
+        ):
+            raise ValueError("default_backend must be shell, a registered agent, or null")
         if "git_compare_ref" in changes:
             compare_ref = changes["git_compare_ref"]
             if compare_ref is not None and (

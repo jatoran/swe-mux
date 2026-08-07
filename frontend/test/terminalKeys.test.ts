@@ -7,7 +7,7 @@ const key = (value: string, overrides: Partial<TerminalKey> = {}): TerminalKey =
   ...overrides,
 })
 
-for (const [label, backend] of [['PowerShell', 'shell'], ['CMD', 'shell'], ['pwsh', 'shell'], ['WSL', 'shell'], ['Claude', 'claude'], ['Codex', 'codex']]) {
+for (const [label, backend] of [['PowerShell', 'shell'], ['CMD', 'shell'], ['pwsh', 'shell'], ['WSL', 'shell'], ['Claude', 'claude'], ['Codex', 'codex'], ['oh-my-pi', 'omp']]) {
   test(`${label}: ordinary input and disabled copy reach the PTY`, () => {
     assert.deepEqual(terminalKeyDecision(key('a'), undefined, false, backend), { kind: 'pass' })
     assert.deepEqual(terminalKeyDecision(key('c', { ctrlKey: true }), undefined, false, backend), { kind: 'pass' })
@@ -26,7 +26,7 @@ for (const [label, backend] of [['PowerShell', 'shell'], ['CMD', 'shell'], ['pws
   })
 }
 
-for (const backend of ['claude', 'codex']) {
+for (const backend of ['claude', 'codex', 'omp']) {
   test(`${backend}: Shift+Enter and Ctrl+Enter both insert a newline`, () => {
     const newline = { kind: 'sendInput', data: AGENT_NEWLINE }
     assert.deepEqual(terminalKeyDecision(key('Enter', { shiftKey: true }), undefined, false, backend), newline)

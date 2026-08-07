@@ -1316,12 +1316,16 @@ body {
    the rest of the chrome and any size declared here would be dead code. */
 .terminal-jump-latest{grid-row:1;grid-column:1;justify-self:end;align-self:end;z-index:14;margin:0 9px 9px 0;min-width:26px;min-height:26px;padding:0;border:1px solid var(--green);background:color-mix(in srgb,var(--bg) 88%,var(--green));color:var(--green);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer;box-shadow:0 2px 10px #0009}
 .terminal-jump-latest:hover{background:color-mix(in srgb,var(--bg) 72%,var(--green))}
-/* Peek toggle. Bottom-left so it can never collide with jump-to-latest, which is bottom-right
-   and appears independently. Shares the chip shape; amber rather than green because it is a
-   temporary way of looking at the pane and not a move to the newest output. */
-.terminal-peek-top{grid-row:1;grid-column:1;justify-self:start;align-self:end;z-index:14;margin:0 0 9px 9px;min-width:26px;min-height:26px;padding:0;border:1px solid var(--amber);background:color-mix(in srgb,var(--bg) 88%,var(--amber));color:var(--amber);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer;box-shadow:0 2px 10px #0009}
+/* Peek toggle. Bottom-right, clustered with jump-to-latest: the corner slot belongs to
+   jump-to-latest, and peek keeps a fixed one-button offset from it whether or not the
+   latest chip is currently shown — both appear and vanish independently, and a button
+   that shifts position when its neighbour toggles is a mis-tap under a thumb. Shares
+   the chip shape; amber rather than green because it is a temporary way of looking at
+   the pane and not a move to the newest output. */
+.terminal-peek-top{grid-row:1;grid-column:1;justify-self:end;align-self:end;z-index:14;margin:0 41px 9px 0;min-width:26px;min-height:26px;padding:0;border:1px solid var(--amber);background:color-mix(in srgb,var(--bg) 88%,var(--amber));color:var(--amber);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer;box-shadow:0 2px 10px #0009}
 .terminal-peek-top.active{background:color-mix(in srgb,var(--bg) 62%,var(--amber))}
-@media(hover:none){.terminal-peek-top{min-width:38px;min-height:38px;padding:0}}
+/* Touch targets are 38px, so the offset that clears the latest chip grows with them. */
+@media(hover:none){.terminal-peek-top{min-width:38px;min-height:38px;padding:0;margin:0 53px 9px 0}}
 @media(hover:none){.terminal-jump-latest{min-width:38px;min-height:38px;padding:0}}
 .terminal-image-drop{position:absolute;z-index:18;inset:10px;display:grid;place-items:center;border:2px dashed var(--green);background:color-mix(in srgb,var(--bg) 82%,transparent);color:var(--green);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none}
 .terminal-connection{position:absolute;z-index:13;top:5px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:3px 7px;border:1px solid var(--line);background:var(--panel);color:var(--muted);pointer-events:none}

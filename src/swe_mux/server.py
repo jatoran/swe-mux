@@ -36,7 +36,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
 from . import git_review
-from .adapters import BackendAdapter, ClaudeAdapter, CodexAdapter, ShellAdapter
+from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
 from .agent_messaging import AgentMessagingService
@@ -67,6 +67,15 @@ from .file_manager import open_in_file_manager
 from .fleet_intelligence import FleetIntelligence
 from .git_monitor import GitMonitor, _git
 from .git_projects import ProjectIdentity, resolve_project
+from .harness import (
+    AGENT_BACKENDS,
+    HARNESSES,
+    delivers_prompts_through_pty,
+    descriptor,
+    has_observable_transcript,
+    is_agent_harness,
+    public_harness_registry,
+)
 from .history import HistoryIndex
 from .history_backfill import HistoryBackfillManager
 from .keybindings import (
@@ -157,14 +166,15 @@ from .provider_accounts import (
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
+from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
-    AGENT_BACKENDS,
     STATE_WATCHDOG_LOOP,
     Session,
     SessionManager,
     clear_all_standing_activity,
     clear_standing_activity,
+    pty_tail_explain,
     session_is_unwitnessed,
 )
 from .session_attachments import (
@@ -509,6 +519,7 @@ def create_app(
             web.get("/manifest.webmanifest", manifest),
             web.get("/sw.js", service_worker),
             web.get("/api/health", health),
+            web.get("/api/harnesses", get_harnesses),
             web.get("/api/debug/log-level", get_log_level),
             web.post("/api/debug/log-level", put_log_level),
             web.post("/api/desktop/shutdown", desktop_shutdown),
@@ -866,19 +877,18 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 "will not survive a daemon restart"
             )
     mcp_url = f"http://127.0.0.1:{config.port}/mcp"
-    adapters: dict[str, BackendAdapter] = {
-        "shell": ShellAdapter(config.shell_exe),
-        "claude": ClaudeAdapter(
-            config.claude_exe, config.data_dir, config.claude_args, mcp_url=mcp_url
-        ),
-        "codex": CodexAdapter(
-            config.codex_exe,
-            notify=True,
-            default_args=config.codex_args,
-            command_resolver=resolve_codex_pty_command,
+    adapters: dict[str, BackendAdapter] = {"shell": ShellAdapter(config.shell_exe)}
+    for name, harness in HARNESSES.items():
+        adapters[name] = build_agent_adapter(
+            harness,
+            executable=config.harness_exe[name],
+            args=config.harness_args[name],
+            data_dir=config.data_dir,
             mcp_url=mcp_url,
-        ),
-    }
+            command_resolver=(
+                resolve_codex_pty_command if harness.adapter_family == "codex" else None
+            ),
+        )
     child_env = create_agent_shims(
         config,
         adapters["claude"].settings_path,  # type: ignore[attr-defined]
@@ -934,8 +944,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     provider_accounts = ProviderAccountManager(
         config.data_dir,
         events,
-        claude_exe=config.claude_exe,
-        codex_exe=config.codex_exe,
+        executables=config.harness_exe,
         poll_seconds=config.provider_quota_poll_minutes * 60,
         telemetry=telemetry,
         sessions=sessions,
@@ -1330,18 +1339,16 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
     if sessions:
         if "scrollback_bytes" in changed:
             sessions.max_scrollback = config.scrollback_bytes
-        adapter_config = {
-            "shell": (config.shell_exe, []),
-            "claude": (config.claude_exe, config.claude_args),
-            "codex": (config.codex_exe, config.codex_args),
-        }
-        for backend, (executable, args) in adapter_config.items():
-            relevant = {f"{backend}_exe", f"{backend}_args"}
-            if changed & relevant:
+        if "shell_exe" in changed:
+            sessions.adapters["shell"].configure(config.shell_exe, [])
+        if changed & {"harness_exe", "harness_args"}:
+            for backend in HARNESSES:
+                executable = config.harness_exe[backend]
+                args = config.harness_args[backend]
                 sessions.adapters[backend].configure(executable, args)
-                if backend != "shell":
-                    sessions.child_env[f"MUX_{backend.upper()}_EXE"] = resolve_command(executable)
-                    sessions.child_env[f"MUX_{backend.upper()}_ARGS"] = json.dumps(args)
+                prefix = f"MUX_{backend.upper().replace('-', '_')}"
+                sessions.child_env[f"{prefix}_EXE"] = resolve_command(executable)
+                sessions.child_env[f"{prefix}_ARGS"] = json.dumps(args)
     git_monitor: GitMonitor | None = app.get("git_monitor")
     if git_monitor and "git_poll_seconds" in changed:
         git_monitor.cadence = config.git_poll_seconds
@@ -1361,10 +1368,9 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             provider_accounts.turn_refresh_min_seconds = (
                 config.provider_quota_turn_refresh_min_minutes * 60
             )
-        if "claude_exe" in changed:
-            provider_accounts.executables["claude"] = config.claude_exe
-        if "codex_exe" in changed:
-            provider_accounts.executables["codex"] = config.codex_exe
+        if "harness_exe" in changed:
+            for provider in provider_accounts.executables:
+                provider_accounts.executables[provider] = config.harness_exe[provider]
     clipboard: ClipboardStore | None = app.get("clipboard")
     if clipboard and any(field.startswith("clipboard_history_") for field in changed):
         # Owns its own side effects: disabling drops the ring, and turning
@@ -1427,6 +1433,10 @@ async def health(request: web.Request) -> web.Response:
             "supervisor_unadopted": unadopted,
         }
     )
+
+
+async def get_harnesses(_request: web.Request) -> web.Response:
+    return json_response(public_harness_registry())
 
 
 async def get_log_level(request: web.Request) -> web.Response:
@@ -2330,11 +2340,11 @@ async def second_opinion(request: web.Request) -> web.Response:
         if live and live.agent_run_id:
             source_id = live.agent_run_id
             source = await history.history_entry(source_id)
-    if not source or source.get("backend") not in {"claude", "codex"}:
+    if not source or not has_observable_transcript(source.get("backend")):
         raise KeyError(source_id)
     body = await request.json()
     backend = str(body.get("backend") or ("codex" if source["backend"] == "claude" else "claude"))
-    if backend not in {"claude", "codex"} or backend == source["backend"]:
+    if not has_observable_transcript(backend) or backend == source["backend"]:
         raise ValueError("second opinion backend must be the other supported agent")
     annotations = await request.app["automation_store"].annotations(
         agent_run_id=source_id, limit=50
@@ -2439,7 +2449,7 @@ async def _review_worktree_context(cwd: str) -> str:
 async def export_handoff(request: web.Request) -> web.Response:
     run_id = request.match_info["sid"]
     row = await request.app["history"].history_entry(run_id)
-    if not row or row.get("backend") not in {"claude", "codex"}:
+    if not row or not has_observable_transcript(row.get("backend")):
         raise KeyError(run_id)
     annotations = await request.app["automation_store"].annotations(agent_run_id=run_id, limit=200)
     summaries = [
@@ -2564,7 +2574,7 @@ async def create_observer_batch(request: web.Request) -> web.Response:
         row = await request.app["history"].history_entry(identity)
         if (
             not row
-            or row.get("backend") not in {"claude", "codex"}
+            or not has_observable_transcript(row.get("backend"))
             or not row.get("exited_at")
             or not row.get("transcript_path")
         ):
@@ -3712,7 +3722,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
     )
     if spec.completion_mode == "one_shot" and backend != "shell":
         raise ValueError("one-shot completion is available only for shell sessions")
-    if spec.profile_id and backend in {"claude", "codex"}:
+    if spec.profile_id and is_agent_harness(backend):
         raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
     # A spawn may target a subdirectory of its own project (a task that runs in
     # ./frontend); the containment check is here because this is the only layer
@@ -3747,7 +3757,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         argv = [*profile.argv, *argv]
         profile_env = profile.env
     if spec.seed_text:
-        if backend not in {"claude", "codex"}:
+        if not is_agent_harness(backend):
             raise ValueError({"seed_text": "seed prompts require an agent backend"})
         # Short bodies ride argv; over-bound ones are staged into the workspace
         # with a reader prompt (file I/O off-loop).
@@ -3805,6 +3815,18 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
             transcript_mtime = transcript.stat().st_mtime
         except OSError:
             transcript_mtime = None
+    try:
+        pty_tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+        pty_explanation = pty_tail_explain(
+            pty_tail,
+            backend=session.record.backend,
+            osc_title=session.osc_signals.title,
+            osc_progress=session.osc_signals.progress,
+        )
+    except (AttributeError, OSError, ValueError):
+        pty_explanation = {"outcome": "unknown", "rules": []}
+    raw_hook_sequences = session.observation_state.get("hook_sequences", {})
+    hook_sequences = dict(raw_hook_sequences) if isinstance(raw_hook_sequences, dict) else {}
     return {
         "id": session.record.id,
         "live": True,
@@ -3829,12 +3851,17 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         "observer_restart_count": session.observer_restart_count,
         "observer_last_fault": session.observer_last_fault,
         "watchdog_recoveries": session.watchdog_recoveries,
+        "hook_sequences": hook_sequences,
+        "hook_sequence_duplicates": session.observation_state.get(
+            "hook_sequence_duplicates", 0
+        ),
         "observation_replay": session.observation_replay,
         # The one fault class that presents as a perfectly healthy session:
         # the transcript parses fine, it is just not this PTY's conversation
         # any more. Paired with the run counter, because "which conversation
         # am I looking at" is the question this endpoint exists to answer.
         "observation_stale_since": session.record.observation_stale_since,
+        "observation_diagnostic": session.record.observation_diagnostic,
         # When the tailer last saw that file grow, which is what staleness is
         # actually decided on. Reported beside `transcript_mtime` because the pair
         # is the diagnosis: a frozen `transcript_mtime` next to a recent
@@ -3854,6 +3881,7 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         # Last observed reading per detection-ladder layer; the flips behind
         # these values are ledgered as `layer_reading` timeline entries.
         "layer_readings": dict(session.layer_readings),
+        "pty_explain": pty_explanation,
         "status_health": session.status_health(now),
         # Multi-device terminal arbitration. Non-zero rejections mean keystrokes
         # arrived from a client that had lost input ownership; non-zero denials
@@ -4132,7 +4160,7 @@ async def patch_session(request: web.Request) -> web.Response:
 async def regenerate_session_title(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     record = session.record
-    if record.backend not in {"claude", "codex"} or not record.agent_run_id:
+    if not has_observable_transcript(record.backend) or not record.agent_run_id:
         raise ValueError("title regeneration requires an active agent run")
     if record.state in {"exited", "crashed"}:
         raise ValueError("an ended session cannot regenerate its title")
@@ -4310,6 +4338,13 @@ async def _await_claude_fork(
     return False, None
 
 
+# Harnesses with an implemented branch strategy. Claude forks natively in place;
+# Codex simulates a fork by resuming a child thread. Any other backend is refused
+# in branch_session — see the comment there for why the generic fallback is not
+# safe to reuse.
+_BRANCH_STRATEGY_BACKENDS = frozenset({"claude", "codex"})
+
+
 async def branch_session(request: web.Request) -> web.Response:
     """Fork an agent conversation, keeping the original and the branch both open.
 
@@ -4333,9 +4368,23 @@ async def branch_session(request: web.Request) -> web.Response:
     manager: SessionManager = request.app["sessions"]
     source = manager.resolve(request.match_info["sid"])
     record = source.record
-    if record.backend not in {"claude", "codex"}:
+    if not has_observable_transcript(record.backend):
         return json_response(
-            {"error": "only Claude and Codex sessions can branch", "code": "not_agent"}, 422
+            {"error": "only observable agent sessions can branch", "code": "not_agent"}, 422
+        )
+    if record.backend not in _BRANCH_STRATEGY_BACKENDS:
+        # The fallback below resumes the original conversation id while the
+        # source is still live. Codex tolerates that (resume starts a child
+        # thread with its own rollout); OMP's --resume appends to the *same*
+        # session file, so two live processes would interleave writes into one
+        # JSONL. A harness without an implemented strategy is refused outright
+        # rather than corrupted politely.
+        return json_response(
+            {
+                "error": f"branching is not implemented for {record.backend} sessions",
+                "code": "branch_unsupported",
+            },
+            422,
         )
     original = _branch_source_id(source)
     if not original:
@@ -4731,17 +4780,12 @@ _MEDIA_SIGNATURES = {
     "image/gif": (b"GIF87a", b"GIF89a"),
 }
 _HOOK_EVENT_TYPES = {
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PermissionRequest",
-    "Notification",
-    "Stop",
-    "SessionEnd",
-    "SubagentStart",
-    "SubagentStop",
+    event
+    for harness in HARNESSES.values()
+    for event in harness.hook_events
+} | {
+    # Compatibility events emitted by older Codex notify integrations and test
+    # probes. Native hook catalogs live on the descriptors above.
     "turn_started",
     "turn_ended",
     "agent-turn-complete",
@@ -4759,6 +4803,8 @@ _NORMALIZED_HOOK_EVENT_TYPES = {
     "approval_needed",
     "task_started",
     "task_complete",
+    "approval_resolved",
+    "context_compacted",
     "rate_limit",
     "rate_limited",
 }
@@ -4926,8 +4972,8 @@ async def _upload_session_attachment(
         raise web.HTTPForbidden(text=f"terminal {noun} requires an explicit user action")
     session = request.app["sessions"].resolve(request.match_info["sid"])
     adapter: BackendAdapter = request.app["sessions"].adapters[session.record.backend]
-    if session.record.backend not in {"claude", "codex"}:
-        raise ValueError("attachments are supported only in Claude and Codex sessions")
+    if not is_agent_harness(session.record.backend):
+        raise ValueError("attachments are supported only in registered agent sessions")
     if session.record.state in {"exited", "crashed"}:
         raise ValueError("attachments cannot be added to an ended session")
     project = request.app["projects"].projects.get(session.record.project_id)
@@ -5102,8 +5148,8 @@ async def patch_project(request: web.Request) -> web.Response:
     if "sidebar_visible" in body and not isinstance(body["sidebar_visible"], bool):
         raise ValueError({"sidebar_visible": "must be a boolean"})
     backend = body.get("default_backend")
-    if backend not in {None, "shell", "claude", "codex"}:
-        raise ValueError({"default_backend": "must be shell, claude, codex, or null"})
+    if backend is not None and backend != "shell" and not is_agent_harness(backend):
+        raise ValueError({"default_backend": "must be shell, a registered agent, or null"})
     profile_id = body.get("default_profile_id")
     if profile_id is not None and profile_id not in {
         profile.id for profile in request.app["config"].shell_profiles
@@ -5775,9 +5821,9 @@ async def resume_history(request: web.Request) -> web.Response:
     row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
-    if not row.get("agent_visible") or row.get("backend") not in {"claude", "codex"}:
+    if not row.get("agent_visible") or not has_observable_transcript(row.get("backend")):
         return json_response(
-            {"error": "only Claude and Codex history can be resumed", "code": "not_agent"},
+            {"error": "only observable agent history can be resumed", "code": "not_agent"},
             422,
         )
     # History stores the stable raw session name; generated titles live in run
@@ -6108,7 +6154,7 @@ async def voice_status(request: web.Request) -> web.Response:
 async def voice_transcribe(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     session = request.app["sessions"].resolve(request.match_info["sid"])
-    if session.record.backend not in {"claude", "codex"}:
+    if not is_agent_harness(session.record.backend):
         return json_response({"error": "conversation mode requires an agent session"}, 409)
     if request.content_type not in {"audio/wav", "audio/x-wav", "application/octet-stream"}:
         return json_response({"error": "voice transcription requires WAV audio"}, 415)
@@ -6125,7 +6171,7 @@ async def voice_transcribe(request: web.Request) -> web.Response:
 async def voice_submit(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     session = request.app["sessions"].resolve(request.match_info["sid"])
-    if session.record.backend not in {"claude", "codex"}:
+    if not delivers_prompts_through_pty(session.record.backend):
         return json_response({"error": "conversation mode requires an agent session"}, 409)
     if session.record.state in {"exited", "crashed"}:
         return json_response({"error": "the agent session has ended"}, 409)
@@ -6152,7 +6198,7 @@ async def voice_submit(request: web.Request) -> web.Response:
 
 async def voice_interrupt(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
-    if session.record.backend not in {"claude", "codex"}:
+    if not delivers_prompts_through_pty(session.record.backend):
         return json_response({"error": "conversation mode requires an agent session"}, 409)
     if session.record.state in {"exited", "crashed"}:
         return json_response({"ok": True, "already_ended": True})
@@ -6166,7 +6212,7 @@ async def voice_interrupt(request: web.Request) -> web.Response:
 async def session_last_reply(request: web.Request) -> web.Response:
     """Return normalized assistant text without routing through terminal OSC 52."""
     session = request.app["sessions"].resolve(request.match_info["sid"])
-    if session.record.backend not in {"claude", "codex"}:
+    if not has_observable_transcript(session.record.backend):
         return json_response({"error": "last reply is available only for agent sessions"}, 409)
     path = session.transcript_path
     if not path or not path.exists():
@@ -6228,7 +6274,7 @@ async def session_transcript(request: web.Request) -> web.Response:
         "truncated": False,
         "reason": None,
     }
-    if record.backend not in {"claude", "codex"}:
+    if not has_observable_transcript(record.backend):
         return json_response({**empty, "reason": "not_agent"})
     path = session.transcript_path
     if path is None or not path.is_file():
@@ -6254,7 +6300,7 @@ async def session_skills(request: web.Request) -> web.Response:
     """
     session = request.app["sessions"].resolve(request.match_info["sid"])
     backend = session.record.backend
-    if backend not in {"claude", "codex"}:
+    if not is_agent_harness(backend):
         return json_response({"error": "skills are available only for agent sessions"}, 409)
     record = session.record
     cwd = Path(
@@ -6306,7 +6352,7 @@ async def session_agent_environment(request: web.Request) -> web.Response:
     """Return a bounded passive inventory for the focused agent CLI."""
     session = request.app["sessions"].resolve(request.match_info["sid"])
     record = session.record
-    if record.backend not in {"claude", "codex"}:
+    if not is_agent_harness(record.backend):
         return json_response(
             {"error": "agent environment is available only for agent sessions"}, 409
         )
@@ -7304,6 +7350,47 @@ async def hook_ingress(request: web.Request) -> web.Response:
     payload = body.get("payload") or {}
     if not isinstance(payload, dict):
         raise ValueError("hook payload must be a JSON object")
+    hook_source = str(body.get("source") or "")[:64]
+    sequence_value = body.get("sequence")
+    sequence: int | None = None
+    sequence_state = session.observation_state.setdefault("hook_sequences", {})
+    if not isinstance(sequence_state, dict):
+        sequence_state = {}
+        session.observation_state["hook_sequences"] = sequence_state
+    if sequence_value is not None:
+        if isinstance(sequence_value, bool) or not isinstance(sequence_value, int):
+            raise ValueError("hook sequence must be a positive integer")
+        if sequence_value < 1 or not hook_source:
+            raise ValueError("sequenced hooks require a source and positive sequence")
+        sequence = sequence_value
+        previous_sequence = sequence_state.get(hook_source)
+        if isinstance(previous_sequence, int) and sequence <= previous_sequence:
+            duplicate_count = session.observation_state.get("hook_sequence_duplicates", 0)
+            session.observation_state["hook_sequence_duplicates"] = (
+                duplicate_count + 1 if isinstance(duplicate_count, int) else 1
+            )
+            session.state_transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "hook_sequence_duplicate",
+                    "source": hook_source,
+                    "previous": previous_sequence,
+                    "sequence": sequence,
+                }
+            )
+            return json_response({"ok": True, "ignored": "duplicate_or_stale_sequence"})
+        if isinstance(previous_sequence, int) and sequence > previous_sequence + 1:
+            session.state_transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "hook_sequence_gap",
+                    "source": hook_source,
+                    "previous": previous_sequence,
+                    "sequence": sequence,
+                }
+            )
+    elif descriptor(session.record.backend).hook_ordering_guarantee:
+        raise ValueError("this harness requires sequenced hook events")
     event_payload = hook_event_payload(payload)
     scope = hook_event_scope(event_type, payload)
     # An in-CLI `/clear` replaces the conversation under a live PTY: the CLI
@@ -7315,7 +7402,11 @@ async def hook_ingress(request: web.Request) -> web.Response:
     # conversation moved and we did not manage to follow it.
     decision = conversation_rollover_decision(session, event_type, payload)
     if decision.roll_to is not None:
-        reported_transcript = str(payload.get("transcript_path") or "")
+        reported_transcript = (
+            str(payload.get("transcript_path") or "")
+            if descriptor(session.record.backend).reports_transcript_path
+            else ""
+        )
         try:
             await request.app["sessions"].roll_agent_conversation(
                 session.record.id,
@@ -7332,8 +7423,15 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 session.record.id,
             )
             session.record.observation_stale_since = time.time()
-            session.record.parser_diagnostic = (
+            session.record.observation_diagnostic = (
                 "the CLI reported a new conversation that could not be adopted"
+            )
+            session.state_transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "observation_liveness_lost",
+                    "reason": "rollover_unadoptable",
+                }
             )
             session.publish_update()
     elif decision.refused is not None:
@@ -7398,6 +7496,10 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 **event_payload,
             )
     await apply_hook_observation(session, event_type, payload, request.app["events"])
+    if sequence is not None:
+        sequence_state = session.observation_state.setdefault("hook_sequences", {})
+        if isinstance(sequence_state, dict):
+            sequence_state[hook_source] = sequence
     return json_response({"ok": True})
 
 

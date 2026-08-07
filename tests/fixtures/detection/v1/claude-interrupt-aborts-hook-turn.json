@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "Esc writes only a transcript interrupt record - no Stop hook ever fires. The ordered transcript evidence must abort a turn the unordered hook channel started, or the session stays working forever. One of the three cross-source corrections the authority split deliberately keeps.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"prompt": "run the migration"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_aborted", "source": "transcript", "scope": "root", "outcome": "interrupted"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 1, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "root_turn_interrupted"
+  }
+}

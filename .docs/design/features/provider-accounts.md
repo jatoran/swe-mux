@@ -2,8 +2,15 @@
 
 ## What it is
 
-- App-owned Claude Code and Codex credential snapshots reconciled against one live system
-  login per provider.
+- App-owned credential snapshots for harnesses that explicitly declare provider-account management, reconciled against one live system login per provider.
+- The provider inventory comes from the independent `provider_account_management` descriptor capability, not the derived `managed` level.
+- Claude Code and Codex are the current providers with account-manager implementations.
+- OMP is report-only.
+  Its session and history surfaces expose the current message provider, model, exact native cost, and each `credential_pin` provider-to-pseudonymous-hash mapping.
+  The hashes are linkable SHA-256 account/scope identifiers, not anonymous values, and raw account identities are never copied into mux.
+  Mux does not start OMP's auth broker, generate account-pool files, select OMP accounts, or poll broker usage.
+  This avoids the broker's default collision with mux on `127.0.0.1:8765` and preserves OMP's own account-routing policy.
+- Provider CLI discovery uses the registry-backed `harness_exe` configuration map.
 - Continuous durable quota tracking for every saved account. Selection never creates isolated
   config, skill, project, or transcript directories.
 

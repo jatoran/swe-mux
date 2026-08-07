@@ -4,10 +4,12 @@ import os
 import shutil
 from pathlib import Path
 
+from .harness import agent_harnesses
+
 # Written into every ~/.mux/bin/{claude,codex}.cmd shim; the marker both routes
 # the launch and identifies a file as one of our shims during resolution.
 SHIM_MARKER = "swe_mux.agent_launcher"
-SHIM_NAMES = ("claude.cmd", "codex.cmd")
+SHIM_NAMES = tuple(f"{name}.cmd" for name in agent_harnesses())
 
 
 def is_mux_shim(path: str | os.PathLike[str]) -> bool:

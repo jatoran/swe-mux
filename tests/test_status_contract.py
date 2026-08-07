@@ -4,6 +4,7 @@ fleet status-health bounds."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast, get_args
 
 import pytest
@@ -30,6 +31,8 @@ from swe_mux.session import (
     watchdog_decision,
 )
 from tests.support.detection_replay import DetectionReplay, ReplaySession
+
+PTY_TAIL_FIXTURES = Path(__file__).parent / "fixtures" / "pty_tails"
 
 
 def test_state_evidence_sources_cover_every_session_state() -> None:
@@ -85,6 +88,25 @@ def test_state_evidence_sources_cover_every_session_state() -> None:
         )
         == "none"
     )
+
+
+def test_uninformative_viewers_never_drive_watchdog_or_unwitnessed_state() -> None:
+    for state in ("idle", "working", "awaiting"):
+        assert (
+            watchdog_decision(
+                cast(Any, state),
+                stalled_seconds=10_000,
+                tail_verdict="open",
+                pty_state="uninformative",
+                awaiting_reason="approval",
+                unwitnessed=True,
+                unwitnessed_turn_armed=True,
+                startup_no_turn=True,
+                startup_dialog_seconds=30.0,
+                startup_dialog_raised=True,
+            )
+            == "none"
+        )
 
 
 def test_transition_proof_classification() -> None:
@@ -232,6 +254,24 @@ def test_resume_working_is_confined_to_answered_approvals() -> None:
             awaiting_reason="approval",
         )
         == "resume_working"
+    )
+
+
+def test_omp_approval_animation_cannot_erase_proven_awaiting_state() -> None:
+    tail = (PTY_TAIL_FIXTURES / "omp-approval-pending.txt").read_text(encoding="utf-8")
+
+    pty_state = pty_tail_state(tail, backend="omp")
+
+    assert pty_state == "unknown"
+    assert (
+        watchdog_decision(
+            "awaiting",
+            stalled_seconds=STATE_WATCHDOG_AWAITING_RESUME_SECONDS * 10,
+            tail_verdict=None,
+            pty_state=pty_state,
+            awaiting_reason="approval",
+        )
+        == "none"
     )
     # An unset reason keeps the historical behavior (approval is the default).
     assert (
@@ -486,6 +526,32 @@ async def test_compaction_records_never_disturb_turn_state() -> None:
     )
     assert replay.session.record.state == "working"
     compacted = [e for e in replay.normalized if e["type"] == "context_compacted"]
+    assert len(compacted) == 1
+
+
+async def test_omp_hook_and_transcript_compaction_evidence_is_one_boundary() -> None:
+    replay = DetectionReplay("omp")
+
+    await replay.step(
+        {
+            "kind": "hook",
+            "event": "context_compacted",
+            "payload": {"compaction_id": "compact-1", "tokens_before": 42000},
+        }
+    )
+    await replay.step(
+        {
+            "kind": "transcript",
+            "record": {
+                "type": "compaction",
+                "id": "compact-1",
+                "summary": "summary",
+                "tokensBefore": 42000,
+            },
+        }
+    )
+
+    compacted = [event for event in replay.normalized if event["type"] == "context_compacted"]
     assert len(compacted) == 1
 
 

@@ -9,6 +9,7 @@ import {
 import { enqueueMessage } from './queueApi'
 import type { Project, Session } from './types'
 import type { MessageScope } from './noteSelection'
+import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
 
 // Where a note/markdown selection goes: a brand new agent, or one that is already running.
 // The message is shown in full and stays editable — this is a user-initiated send, and the
@@ -27,7 +28,7 @@ export type SendToAgentRequest = {
 }
 
 export type SendToAgentTarget =
-  | { kind: 'new'; backend: 'claude' | 'codex'; projectId: string }
+  | { kind: 'new'; backend: string; projectId: string }
   | {
       kind: 'session'
       session: Session
@@ -221,8 +222,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
             </select>
           </label>
           <div class="send-agent-targets" role="radiogroup" aria-label="Send target">
-            {option(newTargetKey('claude'), null, 'New Claude session', 'Starts in this project, opening beside this pane')}
-            {option(newTargetKey('codex'), null, 'New Codex session', 'Starts in this project, opening beside this pane')}
+            {promptDeliveryHarnesses().map(harness=>option(newTargetKey(harness.name), null, `New ${harness.display_name} session`, 'Starts in this project, opening beside this pane'))}
             {agents.map(session =>
               option(
                 sessionTargetKey(session.id),
@@ -233,7 +233,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
             )}
             {!agents.length && (
               <p class="send-agent-empty">
-                No live Claude or Codex session in this project. Shell sessions are not offered:
+                No live agent session in this project. Shell sessions are not offered:
                 a paste would run as commands.
               </p>
             )}
@@ -309,7 +309,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
               ? confirmMode
                 ? 'Send anyway'
                 : 'Send'
-              : `Start ${backendFromTargetKey(target) === 'codex' ? 'Codex' : 'Claude'}`}
+              : `Start ${harnessDisplayName(backendFromTargetKey(target))}`}
           </button>
         </div>
       </section>

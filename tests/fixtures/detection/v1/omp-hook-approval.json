@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "OMP's exact approval hooks enter awaiting immediately and resume working when the approval resolves.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"prompt": "run tests", "omp_event": "before_agent_start"}, "expect_state": "working"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "bash", "tool_use_id": "call-1", "omp_event": "tool_approval_requested"}, "expect_state": "awaiting", "expect_awaiting": "approval", "expect_delivery": "blocked", "oracle_safe": false},
+    {"kind": "hook", "event": "approval_resolved", "payload": {"tool_name": "bash", "tool_use_id": "call-1", "approved": true, "omp_event": "tool_approval_resolved"}, "expect_state": "working"},
+    {"kind": "hook", "event": "task_complete", "payload": {"will_continue": false, "omp_event": "agent_end"}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "approval_resolved", "source": "hook", "scope": "root", "tool": "bash", "approved": true},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

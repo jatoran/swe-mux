@@ -150,6 +150,18 @@ def test_a_screen_change_after_the_turn_completed_is_blocked() -> None:
     assert "screen_not_at_agent_prompt" in evaluation["reasons"]
 
 
+def test_agent_owned_viewer_withholds_delivery_screen_evidence() -> None:
+    session, tracker, _clock = _idle_agent()
+    session.scrollback.data = (
+        b"Select a model\n1. Default\n2. Fast\nEnter to select - Esc to cancel\n"
+    )
+
+    evaluation = tracker.evaluate(session)
+    assert evaluation["evidence"]["pty_state"] == "uninformative"
+    assert evaluation["delivery_state"] == "blocked"
+    assert "screen_not_at_agent_prompt" in evaluation["reasons"]
+
+
 def test_the_daemons_screen_reading_outranks_a_browser_report() -> None:
     """A pane that detached mid-pager must not keep vouching for the screen."""
     session, tracker, clock = _idle_agent()

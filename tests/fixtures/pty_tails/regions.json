@@ -1,0 +1,30 @@
+[
+  {
+    "region": "whole_tail",
+    "tail": "first line\nsecond line",
+    "expected": "first line\nsecond line"
+  },
+  {
+    "region": "bottom_non_empty_lines",
+    "lines": 2,
+    "tail": "old\n\nnew one\nnew two",
+    "expected": "new one\nnew two"
+  },
+  {
+    "region": "after_last_prompt_marker",
+    "tail": "Running... esc to interrupt\nfinished\n? for shortcuts",
+    "expected": "? for shortcuts"
+  },
+  {
+    "region": "osc_title",
+    "tail": "body",
+    "osc_title": "Fix tests",
+    "expected": "Fix tests"
+  },
+  {
+    "region": "osc_progress",
+    "tail": "body",
+    "osc_progress": "2;50",
+    "expected": "2;50"
+  }
+]

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .git_projects import ProjectIdentity
+from .harness import AGENT_BACKENDS, has_observable_transcript, is_agent_harness
 from .models import MuxEvent, ProjectGroupRecord, ProjectRecord, SessionRecord
 from .spawn_contract import infer_agent_executable_backend
 from .sqlite_store import (
@@ -27,6 +28,23 @@ from .transcript_view import (
 )
 
 T = TypeVar("T")
+_AGENT_BACKEND_ARGS = tuple(sorted(AGENT_BACKENDS))
+_AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
+
+
+def _public_history_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    raw = item.pop("provider_account_hashes_json", "{}")
+    try:
+        hashes = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        hashes = {}
+    item["provider_account_hashes"] = (
+        {str(provider): str(account_hash) for provider, account_hash in hashes.items()}
+        if isinstance(hashes, dict)
+        else {}
+    )
+    return item
 
 # Exit reasons that mark a run as deliberately hidden because it was proven to be
 # a cross-attribution artifact. No migration or backfill may make these visible
@@ -56,12 +74,16 @@ CREATE TABLE IF NOT EXISTS history (
   name TEXT NOT NULL, cwd TEXT NOT NULL, project_id TEXT, note_id TEXT,
   spawned_at REAL NOT NULL, exited_at REAL, exit_reason TEXT,
   tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
   transcript_path TEXT, external INTEGER NOT NULL DEFAULT 0,
   executable TEXT, argv_json TEXT, pinned_attention INTEGER NOT NULL DEFAULT 0,
   shell_profile_id TEXT, agent_visible INTEGER NOT NULL DEFAULT 0,
   repository_id TEXT, project_label TEXT, project_root TEXT,
   final_state TEXT, context_window INTEGER, final_context_pct REAL,
-  peak_context_pct REAL, model TEXT, measurement_source TEXT,
+  peak_context_pct REAL, provider TEXT, provider_account_hashes_json TEXT NOT NULL DEFAULT '{}',
+  model TEXT, measurement_source TEXT,
   compaction_count INTEGER NOT NULL DEFAULT 0, last_compaction_at REAL,
   compaction_capability TEXT, compaction_confidence TEXT,
   project_scope_id TEXT, repo_group_id TEXT,
@@ -233,7 +255,19 @@ class HistoryIndex:
             "final_context_pct": "ALTER TABLE history ADD COLUMN final_context_pct REAL",
             "peak_context_pct": "ALTER TABLE history ADD COLUMN peak_context_pct REAL",
             "model": "ALTER TABLE history ADD COLUMN model TEXT",
+            "provider": "ALTER TABLE history ADD COLUMN provider TEXT",
+            "provider_account_hashes_json": (
+                "ALTER TABLE history ADD COLUMN provider_account_hashes_json "
+                "TEXT NOT NULL DEFAULT '{}'"
+            ),
             "measurement_source": "ALTER TABLE history ADD COLUMN measurement_source TEXT",
+            "tokens_cache_read": (
+                "ALTER TABLE history ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0"
+            ),
+            "tokens_cache_write": (
+                "ALTER TABLE history ADD COLUMN tokens_cache_write INTEGER NOT NULL DEFAULT 0"
+            ),
+            "cost_usd": "ALTER TABLE history ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0",
             "compaction_count": (
                 "ALTER TABLE history ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0"
             ),
@@ -293,8 +327,9 @@ class HistoryIndex:
             # misattributed run on every daemon start — silently undoing the
             # cross-attribution repair layer within one session-preserving reload.
             self._db.execute(
-                "UPDATE history SET agent_visible=1 WHERE backend IN ('claude','codex') "
-                f"AND (exit_reason IS NULL OR exit_reason NOT IN ({_QUARANTINE_REASON_SQL}))"
+                f"UPDATE history SET agent_visible=1 WHERE backend IN ({_AGENT_BACKEND_SQL}) "
+                f"AND (exit_reason IS NULL OR exit_reason NOT IN ({_QUARANTINE_REASON_SQL}))",
+                _AGENT_BACKEND_ARGS,
             )
         self._db.execute(
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
@@ -502,11 +537,13 @@ class HistoryIndex:
         self._db.execute(
             "INSERT OR REPLACE INTO history"
             "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,"
-            "tokens_in,tokens_out,transcript_path,executable,argv_json,"
+            "tokens_in,tokens_out,tokens_cache_read,tokens_cache_write,cost_usd,"
+            "transcript_path,executable,argv_json,"
             "pinned_attention,shell_profile_id,agent_visible,repository_id,project_label,"
             "project_root,context_window,final_context_pct,peak_context_pct,model,"
-            "measurement_source,project_scope_id,repo_group_id,auto_named) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "measurement_source,project_scope_id,repo_group_id,auto_named,"
+            "provider,provider_account_hashes_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row_id,
                 session.native_session_id,
@@ -518,12 +555,15 @@ class HistoryIndex:
                 session.created_at,
                 session.tokens_in,
                 session.tokens_out,
+                session.tokens_cache_read,
+                session.tokens_cache_write,
+                session.cost_usd,
                 transcript,
                 session.exe,
                 json.dumps(session.args),
                 int(session.pinned_attention),
                 session.shell_profile_id,
-                int(session.backend in {"claude", "codex"}),
+                int(is_agent_harness(session.backend)),
                 session.repository_id,
                 session.project_label,
                 session.project_root,
@@ -535,6 +575,8 @@ class HistoryIndex:
                 session.project_scope_id or session.repository_id,
                 session.repo_group_id,
                 int(session.auto_named),
+                session.provider,
+                json.dumps(session.provider_account_hashes, sort_keys=True),
             ),
         )
 
@@ -647,16 +689,21 @@ class HistoryIndex:
                 return
             self._db.execute(
                 "UPDATE history SET exited_at=?,exit_reason=?,tokens_in=?,tokens_out=?,"
+                "tokens_cache_read=?,tokens_cache_write=?,cost_usd=?,"
                 "name=?,cwd=?,project_id=?,executable=?,argv_json=?,pinned_attention=?,"
                 "shell_profile_id=?,final_state=?,context_window=COALESCE(?,context_window),"
                 "final_context_pct=COALESCE(?,final_context_pct),"
-                "peak_context_pct=COALESCE(?,peak_context_pct),model=COALESCE(?,model),"
+                "peak_context_pct=COALESCE(?,peak_context_pct),provider=COALESCE(?,provider),"
+                "provider_account_hashes_json=?,model=COALESCE(?,model),"
                 "measurement_source=COALESCE(?,measurement_source),auto_named=? WHERE id=?",
                 (
                     session.last_activity_ts,
                     reason,
                     session.tokens_in,
                     session.tokens_out,
+                    session.tokens_cache_read,
+                    session.tokens_cache_write,
+                    session.cost_usd,
                     session.name,
                     session.cwd,
                     session.project_id,
@@ -668,6 +715,8 @@ class HistoryIndex:
                     session.context_window or None,
                     session.context_pct if session.context_window else None,
                     session.context_peak_pct if session.context_window else None,
+                    session.provider,
+                    json.dumps(session.provider_account_hashes, sort_keys=True),
                     session.model,
                     session.measurement_source,
                     int(session.auto_named),
@@ -679,20 +728,36 @@ class HistoryIndex:
         await self._run(op)
 
     async def update_agent_summary(self, session: SessionRecord) -> None:
-        if not session.context_window:
+        if not (
+            session.context_window
+            or session.tokens_in
+            or session.tokens_out
+            or session.tokens_cache_read
+            or session.tokens_cache_write
+            or session.cost_usd
+            or session.provider
+            or session.provider_account_hashes
+        ):
             return
 
         def op() -> None:
             self._db.execute(
-                "UPDATE history SET tokens_in=?,tokens_out=?,context_window=?,"
-                "final_context_pct=?,peak_context_pct=?,model=?,measurement_source=? "
+                "UPDATE history SET tokens_in=?,tokens_out=?,tokens_cache_read=?,"
+                "tokens_cache_write=?,cost_usd=?,context_window=?,"
+                "final_context_pct=?,peak_context_pct=?,provider=?,"
+                "provider_account_hashes_json=?,model=?,measurement_source=? "
                 "WHERE id=? AND agent_visible=1",
                 (
                     session.tokens_in,
                     session.tokens_out,
+                    session.tokens_cache_read,
+                    session.tokens_cache_write,
+                    session.cost_usd,
                     session.context_window,
                     session.context_pct,
                     session.context_peak_pct,
+                    session.provider,
+                    json.dumps(session.provider_account_hashes, sort_keys=True),
                     session.model,
                     session.measurement_source,
                     session.agent_run_id or session.id,
@@ -712,11 +777,13 @@ class HistoryIndex:
             self._db.execute(
                 "INSERT INTO history"
                 "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,tokens_in,tokens_out,"
+                "tokens_cache_read,tokens_cache_write,cost_usd,"
                 "transcript_path,executable,argv_json,pinned_attention,shell_profile_id,"
                 "agent_visible,repository_id,project_label,project_root,context_window,"
                 "final_context_pct,peak_context_pct,model,measurement_source,"
-                "project_scope_id,repo_group_id,auto_named) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "project_scope_id,repo_group_id,auto_named,provider,"
+                "provider_account_hashes_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET native_id=excluded.native_id,"
                 "backend=excluded.backend,name=excluded.name,cwd=excluded.cwd,"
                 "project_id=excluded.project_id,transcript_path=excluded.transcript_path,"
@@ -724,7 +791,8 @@ class HistoryIndex:
                 "agent_visible=1,repository_id=excluded.repository_id,"
                 "project_label=excluded.project_label,project_root=excluded.project_root,"
                 "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
-                "auto_named=excluded.auto_named",
+                "auto_named=excluded.auto_named,provider=excluded.provider,"
+                "provider_account_hashes_json=excluded.provider_account_hashes_json",
                 (
                     run_id,
                     session.native_session_id,
@@ -736,6 +804,9 @@ class HistoryIndex:
                     session.agent_run_started_at or session.created_at,
                     session.tokens_in,
                     session.tokens_out,
+                    session.tokens_cache_read,
+                    session.tokens_cache_write,
+                    session.cost_usd,
                     transcript,
                     session.exe,
                     json.dumps(session.args),
@@ -753,6 +824,8 @@ class HistoryIndex:
                     session.project_scope_id,
                     session.repo_group_id,
                     int(session.auto_named),
+                    session.provider,
+                    json.dumps(session.provider_account_hashes, sort_keys=True),
                 ),
             )
             self._db.commit()
@@ -834,7 +907,8 @@ class HistoryIndex:
         def op() -> list[tuple[str, str, str]]:
             rows = self._db.execute(
                 "SELECT id,native_id,backend,note_id,transcript_path,executable,argv_json "
-                "FROM history WHERE agent_visible=1 AND backend IN ('claude','codex')"
+                f"FROM history WHERE agent_visible=1 AND backend IN ({_AGENT_BACKEND_SQL})",
+                _AGENT_BACKEND_ARGS,
             ).fetchall()
             by_id = {str(row["id"]): row for row in rows}
             repairs: list[tuple[str, str, str]] = []
@@ -908,19 +982,26 @@ class HistoryIndex:
         def op() -> None:
             self._db.execute(
                 "UPDATE history SET exited_at=?,exit_reason=?,tokens_in=?,tokens_out=?,"
+                "tokens_cache_read=?,tokens_cache_write=?,cost_usd=?,"
                 "final_state=?,context_window=COALESCE(?,context_window),"
                 "final_context_pct=COALESCE(?,final_context_pct),"
-                "peak_context_pct=COALESCE(?,peak_context_pct),model=COALESCE(?,model),"
+                "peak_context_pct=COALESCE(?,peak_context_pct),provider=COALESCE(?,provider),"
+                "provider_account_hashes_json=?,model=COALESCE(?,model),"
                 "measurement_source=COALESCE(?,measurement_source) WHERE id=? AND agent_visible=1",
                 (
                     time.time(),
                     reason,
                     session.tokens_in,
                     session.tokens_out,
+                    session.tokens_cache_read,
+                    session.tokens_cache_write,
+                    session.cost_usd,
                     "idle" if reason == "agent_exit" else session.state,
                     session.context_window or None,
                     session.context_pct if session.context_window else None,
                     session.context_peak_pct if session.context_window else None,
+                    session.provider,
+                    json.dumps(session.provider_account_hashes, sort_keys=True),
                     session.model,
                     session.measurement_source,
                     run_id,
@@ -951,6 +1032,11 @@ class HistoryIndex:
         peak_context_pct: float | None = None,
         tokens_in: int = 0,
         tokens_out: int = 0,
+        tokens_cache_read: int = 0,
+        tokens_cache_write: int = 0,
+        cost_usd: float = 0.0,
+        provider: str | None = None,
+        provider_account_hashes: dict[str, str] | None = None,
         model: str | None = None,
         measurement_source: str | None = None,
         mtime_ns: int | None = None,
@@ -968,10 +1054,12 @@ class HistoryIndex:
                     "INSERT INTO history"
                     "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,transcript_path,external,"
                     "agent_visible,repository_id,project_label,project_root,context_window,"
-                    "final_context_pct,peak_context_pct,tokens_in,tokens_out,model,"
+                    "final_context_pct,peak_context_pct,tokens_in,tokens_out,"
+                    "tokens_cache_read,tokens_cache_write,cost_usd,provider,"
+                    "provider_account_hashes_json,model,"
                     "measurement_source,project_scope_id,repo_group_id,"
                     "transcript_mtime_ns,transcript_size) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET "
                     "name=excluded.name,cwd=excluded.cwd,spawned_at=excluded.spawned_at,"
                     "project_id=COALESCE(excluded.project_id,history.project_id),"
@@ -991,7 +1079,11 @@ class HistoryIndex:
                     "context_window=excluded.context_window,"
                     "final_context_pct=excluded.final_context_pct,"
                     "peak_context_pct=excluded.peak_context_pct,tokens_in=excluded.tokens_in,"
-                    "tokens_out=excluded.tokens_out,model=excluded.model,"
+                    "tokens_out=excluded.tokens_out,tokens_cache_read=excluded.tokens_cache_read,"
+                    "tokens_cache_write=excluded.tokens_cache_write,cost_usd=excluded.cost_usd,"
+                    "provider=excluded.provider,"
+                    "provider_account_hashes_json=excluded.provider_account_hashes_json,"
+                    "model=excluded.model,"
                     "measurement_source=excluded.measurement_source,"
                     "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
                     "transcript_mtime_ns=excluded.transcript_mtime_ns,"
@@ -1014,6 +1106,11 @@ class HistoryIndex:
                         peak_context_pct,
                         tokens_in,
                         tokens_out,
+                        tokens_cache_read,
+                        tokens_cache_write,
+                        cost_usd,
+                        provider,
+                        json.dumps(provider_account_hashes or {}, sort_keys=True),
                         model,
                         measurement_source,
                         project_scope_id or repository_id,
@@ -1222,7 +1319,7 @@ class HistoryIndex:
 
         async def inspect(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
             transcript = item.get("transcript_path")
-            if not transcript or item.get("backend") not in {"claude", "codex"}:
+            if not transcript or not has_observable_transcript(item.get("backend")):
                 return None
             path = Path(str(transcript))
             try:
@@ -1353,8 +1450,8 @@ class HistoryIndex:
         # Skip the leading-wildcard LIKE (which no index can serve and which runs
         # per row) for an empty query; the empty-query `%%` matched every row
         # anyway, so omitting the clause is behaviourally identical.
-        sql = "SELECT * FROM history WHERE agent_visible=1 AND backend IN ('claude','codex')"
-        args: list[Any] = []
+        sql = f"SELECT * FROM history WHERE agent_visible=1 AND backend IN ({_AGENT_BACKEND_SQL})"
+        args: list[Any] = list(_AGENT_BACKEND_ARGS)
         if query:
             sql += " AND (name LIKE ? OR cwd LIKE ? OR COALESCE(project_label,'') LIKE ?)"
             args += [f"%{query}%", f"%{query}%", f"%{query}%"]
@@ -1366,7 +1463,7 @@ class HistoryIndex:
 
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(sql, args).fetchall()
-            return [dict(r) for r in rows]
+            return [_public_history_row(r) for r in rows]
 
         return await self._run(op)
 
@@ -1401,9 +1498,10 @@ class HistoryIndex:
         if time_basis not in {"started", "last_message"}:
             raise ValueError("history time basis must be started or last_message")
         sql = (
-            "SELECT h.* FROM history h WHERE h.agent_visible=1 AND h.backend IN ('claude','codex')"
+            "SELECT h.* FROM history h WHERE h.agent_visible=1 "
+            f"AND h.backend IN ({_AGENT_BACKEND_SQL})"
         )
-        args: list[Any] = []
+        args: list[Any] = list(_AGENT_BACKEND_ARGS)
         match_query = _fts_query(query)
         if query:
             metadata_sql = "(h.name LIKE ? OR h.cwd LIKE ? OR COALESCE(h.project_label,'') LIKE ?)"
@@ -1463,7 +1561,7 @@ class HistoryIndex:
             rows = self._db.execute(sql, args).fetchall()
             has_more = len(rows) > limit
             page = rows[:limit]
-            items = [dict(row) for row in page]
+            items = [_public_history_row(row) for row in page]
             if query and match_query:
                 role = search_scope if search_scope in {"user", "assistant"} else None
                 for item in items:
@@ -1525,8 +1623,9 @@ class HistoryIndex:
                 "SELECT h.project_id,COALESCE(MAX(p.name),'Unassigned') AS label,"
                 "MAX(p.root) AS root,COUNT(*) AS sessions,MAX(h.spawned_at) AS last_activity "
                 "FROM history h LEFT JOIN projects p ON p.id=h.project_id "
-                "WHERE h.agent_visible=1 AND h.backend IN ('claude','codex') "
-                "GROUP BY h.project_id ORDER BY last_activity DESC"
+                f"WHERE h.agent_visible=1 AND h.backend IN ({_AGENT_BACKEND_SQL}) "
+                "GROUP BY h.project_id ORDER BY last_activity DESC",
+                _AGENT_BACKEND_ARGS,
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -1604,7 +1703,7 @@ class HistoryIndex:
     async def history_entry(self, session_id: str) -> dict[str, Any] | None:
         def op() -> dict[str, Any] | None:
             row = self._db.execute("SELECT * FROM history WHERE id=?", (session_id,)).fetchone()
-            return dict(row) if row else None
+            return _public_history_row(row) if row else None
 
         return await self._run(op)
 
@@ -1801,9 +1900,14 @@ class HistoryIndex:
             for column in (
                 "tokens_in",
                 "tokens_out",
+                "tokens_cache_read",
+                "tokens_cache_write",
+                "cost_usd",
                 "context_window",
                 "final_context_pct",
                 "peak_context_pct",
+                "provider",
+                "provider_account_hashes_json",
                 "model",
                 "measurement_source",
             ):

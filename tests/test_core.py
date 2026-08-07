@@ -122,12 +122,17 @@ async def test_history_and_event_bus_persist_contract(tmp_path: Path) -> None:
         "mux-id",
         "test",
         "default",
-        "claude",
+        "omp",
         "native-id",
         str(tmp_path),
-        "claude.exe",
+        "omp.exe",
         [],
         state="running",
+        tokens_cache_read=29_248,
+        tokens_cache_write=42_183,
+        cost_usd=0.436699,
+        provider="anthropic",
+        provider_account_hashes={"anthropic": "a" * 64},
     )
     await history.session_started(session, None)
     bus = EventBus(history.append_event)
@@ -137,6 +142,11 @@ async def test_history_and_event_bus_persist_contract(tmp_path: Path) -> None:
 
     rows = await history.history("test")
     assert rows[0]["native_id"] == "native-id"
+    assert rows[0]["tokens_cache_read"] == 29_248
+    assert rows[0]["tokens_cache_write"] == 42_183
+    assert rows[0]["cost_usd"] == pytest.approx(0.436699)
+    assert rows[0]["provider"] == "anthropic"
+    assert rows[0]["provider_account_hashes"] == {"anthropic": "a" * 64}
     events = await history.events(session_id=session.id)
     assert events[0]["type"] == "session_spawned"
     assert events[0]["payload"] == {"name": "test"}
@@ -211,15 +221,29 @@ def test_claude_shim_captures_an_explicit_resume_conversation_id() -> None:
         assert "--session-id" not in args
 
 
+@pytest.mark.parametrize(
+    ("backend", "launcher_name", "executable", "command_args", "native_id"),
+    [
+        ("claude", "_claude", "claude.exe", ["--session-id", "native"], "native"),
+        ("omp", "_omp", "omp.exe", ["--extension", "mux"], ""),
+    ],
+)
 def test_agent_launcher_demotes_terminal_when_agent_exits(
     monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    launcher_name: str,
+    executable: str,
+    command_args: list[str],
+    native_id: str,
 ) -> None:
     calls: list[tuple[str, str, str] | tuple[str, list[str]]] = []
-    monkeypatch.setattr(sys, "argv", ["launcher", "claude"])
+    monkeypatch.delenv("MUX_OMP_EXTENSION_ROOT", raising=False)
+    monkeypatch.delenv("MUX_SESSION_ID", raising=False)
+    monkeypatch.setattr(sys, "argv", ["launcher", backend])
     monkeypatch.setattr(
         agent_launcher,
-        "_claude",
-        lambda args: ("claude.exe", ["--session-id", "native"], "native"),
+        launcher_name,
+        lambda args: (executable, command_args, native_id),
     )
     monkeypatch.setattr(
         agent_launcher,
@@ -242,9 +266,9 @@ def test_agent_launcher_demotes_terminal_when_agent_exits(
         agent_launcher.main()
 
     assert calls == [
-        ("promote", "claude", "native"),
-        ("exec", ["claude.exe", "--session-id", "native"]),
-        ("demote", "claude", "native"),
+        ("promote", backend, native_id),
+        ("exec", [executable, *command_args]),
+        ("demote", backend, native_id),
     ]
 
 

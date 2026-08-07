@@ -45,7 +45,7 @@ export interface AgentEnvironmentSource {
 
 export interface AgentEnvironmentInventory {
   schema_version: number
-  backend: 'claude' | 'codex'
+  backend: string
   cwd: string
   generated_at: number
   runtime: {

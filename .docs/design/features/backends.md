@@ -3,16 +3,76 @@
 ## What it is
 
 - Adapters isolate spawn/resume syntax, transcript discovery, hook wiring, and graceful exit.
-- A plain terminal promotes itself when its inherited mux-local `claude` or `codex`
-  shim starts the real CLI; no UI backend picker or PTY text injection is required.
+- The harness registry declares provider identity, state and measurement sources, delivery etiquette, automation capabilities, built-in tool catalogs, and hook event sets.
+- A plain terminal promotes itself when an inherited mux-local harness shim starts the real CLI.
+- No UI backend picker or PTY text injection is required for promotion.
 
 ## Key concepts
 
 - Mux ID: stable for one PTY lifetime.
 - Spawn backend/native ID: immutable identity of the process that owns the PTY.
-- Native ID: Claude/Codex transcript identity used for history and resume.
-- Promotion: authenticated `shell → claude|codex` in the same PTY, preserving mux ID,
-  pane, cwd, scrollback, and any user-assigned name.
+- Native ID: the harness conversation identity used for history and resume when the harness exposes one.
+- Promotion: authenticated `shell -> harness` transition in the same PTY, preserving mux ID, pane, cwd, scrollback, and any user-assigned name.
+
+## Registry contract
+
+`src/swe_mux/harness.py` is the single inventory of agent harnesses.
+Every backend-independent consumer asks the registry a capability question instead of comparing names.
+The closed `Backend` literal still includes `shell` and every registered harness so `assert_never` makes incomplete provider dispatches fail type checking.
+
+Capability has two independent axes.
+`state_sources` declares which ordered evidence channels can report lifecycle state: `hook`, `transcript`, `pty`, and `cli_state`.
+`measurement_source` declares whether tokens, context, cost, and model measurements come from a transcript or are unavailable.
+Neither axis implies the other.
+
+`HarnessLevel` is a derived presentation tier, not declared capability.
+
+| Level | Derived condition | Product surface |
+|---|---|---|
+| `launchable` | No state source and no measurement source | PTY launch and input only; the UI states `not observed by mux` |
+| `identified` | Transcript measurements without a state source | Conversation identity and measured data, but no lifecycle badge |
+| `observed` | At least one state source | Normalized lifecycle state and delivery evidence |
+| `hooked` | Hook state without transcript measurements | Ordered or best-effort hook lifecycle according to the harness contract |
+| `managed` | Hook state plus transcript measurements | Complete observation and measurement surface |
+
+The daemon publishes the browser-safe projection at `GET /api/harnesses`.
+The frontend replaces its startup compatibility seed with that response and gates transcript, measurement, status, launch, queue, and command surfaces from the published capabilities.
+
+## Capability queries
+
+| Question | Registry query | Consumers |
+|---|---|---|
+| Is this an agent rather than a shell? | `is_agent_harness(name)` or `name in AGENT_BACKENDS` | Session identity, history visibility, process attribution, agent messaging, skills, environment inventory |
+| Can mux read normalized transcript state? | `has_observable_transcript(name)` | Observation startup, transcript/history views, branching, title generation, read-aloud, watchdog recovery |
+| Can mux submit a prompt through the PTY? | `delivers_prompts_through_pty(name)` | Prompt queue, auto-delivery, voice submission and interruption |
+| Does the harness report lifecycle hooks? | `reports_lifecycle_hooks(name)` | Hook identity binding, rollover decisions, hook-reported transcript relocation |
+| Which harnesses need an external usage command? | `external_usage_harnesses()` | Usage polling and provider-state creation |
+| Which harnesses expose mux-managed accounts? | `provider_account_harnesses()` | Credential inventory, swapping, and quota polling |
+| Does the TUI rewrite content already in scrollback? | `repaints_scrollback` (published capability; frontend `repaintsScrollback(name)`) | Terminal renderer selection: repainting harnesses stay on the DOM renderer under the `auto` preference |
+
+`AGENT_BACKENDS` is derived once in `harness.py`; session and voice code do not declare local backend sets.
+Provider-account and external-usage iteration derives from independent descriptor capabilities, because a managed harness can report both through its native transcript without exposing mux-managed accounts.
+Direct `claude` and `codex` branches remain only where provider data shapes, parser records, authentication, argv, or resume behavior differ.
+Adapter construction, shim generation, and launcher dispatch derive from the registry and each descriptor's adapter family.
+Executable and argument overrides live in the per-harness `harness_exe` and `harness_args` configuration maps.
+
+## Supporting a new harness
+
+Add one descriptor before adding provider-specific consumers.
+The descriptor is the source of truth for all generic surfaces.
+
+- Every harness declares identity and launch fields: `name`, `display_name`, `executable`, `default_args`, `data_home`, `adapter_family`, `config_dir_name`, and `script_base_name`.
+- Every harness declares both capability axes: `state_sources` and `measurement_source`.
+- Every harness declares conversation behavior: `reports_conversation_rollover`, `assigns_conversation_id`, `resolves_transcript_by_cwd`, `reports_transcript_path`, and any rollout-file prefix.
+- Every harness declares PTY delivery etiquette: `submission`, `root_completion`, and `screen`.
+- Every harness declares `repaints_scrollback`, and a new harness should declare it `true` unless its TUI provably never rewrites scrollback (alternate-screen TUIs): the flag decides whether `auto` may give the pane the WebGL renderer, and the safe default is the DOM renderer.
+- Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.
+- Every hooked harness declares `native_hooks`, its `hook_events`, a hook installer, and replay hook-step coverage.
+- Every transcript-capable harness declares its transcript semantics and measurement parser.
+- Every harness declares automation evidence, tool-catalog provenance, and whether historical usage needs an external command.
+- Add the harness name to the closed `Backend` literal and handle every new `assert_never` failure explicitly.
+- Add provider-specific branches only for real differences in record schema, auth, argv, resume, or TUI behavior.
+- Verify the public registry payload and the launchable-harness frontend contract before enabling richer levels.
 
 ## Operations
 
@@ -59,9 +119,92 @@
   `notify` program remains a completion and identity fallback, and resume uses `codex resume`.
   Direct and shim-launched Codex sessions default `tui.alternate_screen="never"`, keeping the
   transcript in native xterm scrollback instead of asking its full-screen TUI to repaint history
-  while the viewport is off-tail. An explicit `codex_args` or per-launch config value wins for
+  while the viewport is off-tail. An explicit `harness_args["codex"]` or per-launch config value wins for
   that key. The Project Run menu and custom launcher both use this same direct adapter spawn
   path; neither types an agent command into an intermediate shell.
+- oh-my-pi explicit spawn, resume, and shell-shim launches materialize a private extension
+  package under the mux data directory and add its directory through `--extension <path>`.
+  The package copies `src/swe_mux/assets/omp_mux_hook.ts` to `index.ts` and carries a sibling
+  `.mcp.json` that registers the mux Streamable HTTP endpoint with that session's bearer token.
+  OMP has no per-launch MCP-config flag, and its extension-package MCP loader does not expand
+  environment variables, so a shared registration would either fail authentication or leak one
+  session's identity into another.
+  Mux does not modify project MCP files or `~/.omp/agent/mcp.json`.
+  The source is an OMP `ExtensionAPI` factory because installed omp 17.2.10 exposes exact
+  approval-request and approval-resolution events only through that current API, not the legacy
+  `HookAPI` surface.
+  It posts authenticated normalized lifecycle events through `MUX_HOOK_URL`, emits one
+  monotonically increasing source sequence, and retries a failed delivery with the same envelope.
+  Source launches copy the checked-out asset, while a frozen desktop rebuild copies the entire
+  `swe_mux/assets` directory into the bundle, so the standard redeploy flow refreshes the source
+  used by newly materialized packages.
+  Existing PTYs retain their original argv and require a fresh omp process to load a changed
+  extension.
+  Mux sets `TERM_SESSION_ID=swe-mux-<mux-id>` for each OMP process.
+  Direct OMP launches also receive an explicit xterm-compatible capability environment instead
+  of inheriting emulator and multiplexer markers from the terminal that launched the daemon.
+  DEC 2026 synchronized output is disabled because a retained byte replay can cross a paint
+  transaction boundary, and native image protocols are disabled because mux exposes OMP's text
+  fallback rather than an inline-image terminal addon.
+  OMP normalizes that value to `apple-swe-mux-<mux-id>` and writes
+  `~/.omp/agent/terminal-sessions/<terminal-id>` with the cwd, exact session file, and optional
+  `fresh` boundary marker.
+  This breadcrumb is the primary pane-to-transcript binding and avoids same-cwd correlation.
+  The adapter reads the native id from the session header after the 256-byte title slot, follows
+  `previousSessionFiles` after a move, and uses cwd buckets only when the breadcrumb is absent.
+  `/new` and `/fork` create a new native id and transcript file, so mux retires the current run
+  and binds a new one in the same PTY.
+  `/clear` appends `reset_boundary` in the same file and keeps the same native id.
+  `/branch` first opens OMP's Session Tree viewer and is not itself a rollover.
+  The selected branch is represented by the file's `id` and `parentId` tree, so observation walks
+  the active parent chain instead of treating file order as conversation order.
+  `/resume` appends to the original conversation file and keeps its native id.
+  OMP transcript observation also publishes the latest assistant message's provider and model,
+  exact native token/cache/cost measurements, and the active branch's provider-to-account-hash
+  credential pins into live and historical session summaries.
+  The account hashes are OMP's pseudonymous SHA-256 values and remain linkable.
+  OMP deliberately declares neither provider-account management nor an external usage command.
+  The descriptor publishes its documented 31 built-in tools and labels the 16 discoverable tools
+  that mount under `xd://` when xdev is enabled.
+  `read`, `write`, the other essential tools, and the four integration-sensitive discoverable
+  tools (`todo`, `ask`, `grep`, and `web_search`) remain top-level.
+  The inventory records setting-gated tools as gated rather than claiming they are active.
+- OMP's capability providers load authored skills from native `.omp`, imported `.claude` and
+  `.codex`, shared `.agent` and `.agents`, project `.github`, and managed-skill roots.
+  Extension-package skill roots are deliberately not scanned: mux's only managed extension
+  package is its per-session hook package (no skills), and the user's OMP extension
+  configuration is OMP-internal state mux does not read.
+  Cursor and Cline contribute rules and configuration, not skill directories.
+  The Commands surface invokes OMP skills as `/skill:<name>`.
+- OMP's ordinary TUI runs on the normal screen and commits transcript rows into native scrollback.
+  Fullscreen overlays borrow the alternate screen only for their lifetime.
+  Installed OMP 17.2.10 treats native Windows and WSL-hosted output as ConPTY, bounds large writes,
+  and uses ConPTY-specific repaint settling without changing mux's bounded replay contract.
+  Its startup enables bracketed paste once, so mux's replay prefix restoration is required after
+  a deep reconnect and is covered by the same parser path as Claude and Codex.
+  Replay also closes a synchronized-output or autowrap-disable sequence only when the retained
+  bytes contain a complete unmatched opening sequence, keeping the replay self-contained without
+  inserting control bytes into a partial CSI at the live-output boundary.
+  OMP is the only integrated harness that sends DECRQM mode queries (`CSI ? Ps $ p`) at startup,
+  and those queries crashed the bundled xterm 6.0.0 parser: Rollup dead-code elimination dropped
+  the declaration of `requestMode`'s function-local enum while keeping its assignment, a
+  strict-mode `ReferenceError` that killed xterm's write loop and rendered every OMP pane black
+  (measured 2026-08-06).
+  `frontend/scripts/patch-xterm-requestmode.mjs` removes the unused enum before bundling, and
+  `frontend/scripts/verify-bundle.mjs` fails both frontend build paths if any emitted asset
+  carries the dropped-declaration artifact again.
+- The shell shim promotes OMP with an empty native conversation ID because OMP mints that identity.
+  The in-process extension and terminal breadcrumb establish the actual conversation, while the
+  shim's `finally` block always posts demotion after the child exits.
+  The same `agent_launcher.py` path supports non-interactive OMP arguments without introducing a
+  second PTY execution mechanism.
+  OMP's Python RPC client was evaluated only for a future headless automation consumer and is not
+  used for interactive PTY sessions or current mux automation.
+  OMP transcript records report messages, branch/reset boundaries, provider and model changes,
+  credential pins, native tool calls/results, and explicit compactions.
+  They do not report browser rendering, PTY delivery readiness, or approval timing by themselves.
+  The in-process extension supplies low-latency lifecycle and approval evidence, while PTY rules
+  remain the visible-screen guard for delivery.
 - **`tui.raw_output_mode` is the CLI's to decide, not mux's.** It was previously forced to
   `true` alongside the screen-buffer default and is no longer set at all. Raw output suppresses
   Codex's rich transcript rendering, which cost panes their colour (measured 2026-08-05 over a
@@ -71,7 +214,7 @@
   repaints of one fixed screen, and xterm owning every scroll all follow from
   `tui.alternate_screen="never"` alone. Codex ships raw output off, so omitting it restores the
   CLI default and leaves `~/.codex/config.toml` in charge. `/raw` toggles it for one live
-  session; `codex_args` pins it for new ones.
+  session; `harness_args["codex"]` pins it for new ones.
 - Hooks provide low-latency state changes. Native transcripts are authoritative fallbacks,
   including when an agent is launched outside a shim or an agent mode omits a hook. Source
   priority arbitrates conflicting evidence within one root turn and is released at the next
@@ -326,6 +469,7 @@ this boundary is additionally scrubbed by `text_safety.utf8_safe`; see
 
 ## Key files
 
+- Harness registry: `src/swe_mux/harness.py`
 - Adapters: `src/swe_mux/adapters/`
 - Tailer/parsers: `src/swe_mux/observation.py`
 - Hook command: `src/swe_mux/hook_client.py`

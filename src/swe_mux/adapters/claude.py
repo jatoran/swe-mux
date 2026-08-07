@@ -7,8 +7,10 @@ import re
 import shlex
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
+from ..harness import HARNESSES, descriptor
 from .base import SpawnOptions, SpawnSpec
 
 
@@ -31,8 +33,7 @@ def is_conversation_transcript(path: Path) -> bool:
 
 
 def claude_data_home() -> Path:
-    configured = os.environ.get("CLAUDE_CONFIG_DIR")
-    return Path(configured).expanduser() if configured else Path.home() / ".claude"
+    return descriptor("claude").data_home()
 
 
 def _bash_executable_path(executable: str) -> str:
@@ -54,14 +55,14 @@ class ClaudeAdapter:
     # every conversation replacement (`/clear`, in-CLI `/resume`) is reported by
     # the CLI itself via the SessionStart ingress. Rollovers are hook-driven;
     # the transcript-switch heuristic must never move a Claude session.
-    reports_conversation_rollover = True
+    reports_conversation_rollover = descriptor(name).reports_conversation_rollover
     # mux spawns with `--session-id <mux id>`, so the CLI writes exactly that
     # conversation and native_session_id is authoritative from the first moment.
-    assigns_conversation_id = True
+    assigns_conversation_id = descriptor(name).assigns_conversation_id
     # Transcripts live under `projects/<encoded cwd>/`, so a cwd change *moves the
     # existing file*. Entering a Claude native worktree is exactly that, and it is
     # why a live session's transcript path is never permanently true.
-    resolves_transcript_by_cwd = True
+    resolves_transcript_by_cwd = descriptor(name).resolves_transcript_by_cwd
 
     def __init__(
         self,
@@ -69,17 +70,36 @@ class ClaudeAdapter:
         data_dir: Path | None = None,
         default_args: list[str] | None = None,
         mcp_url: str | None = None,
+        *,
+        name: str = "claude",
+        config_dir_name: str = ".claude",
+        script_base_name: str = "claude",
+        data_home_resolver: Callable[[], Path] | None = None,
     ) -> None:
+        self.name = name
+        self.shim_name = f"{name}.cmd"
+        self.config_dir_name = config_dir_name
+        self.script_base_name = script_base_name
+        self._data_home_resolver = data_home_resolver or (
+            claude_data_home
+            if name == "claude"
+            else lambda: Path.home() / config_dir_name
+        )
+        family = descriptor(name) if name in HARNESSES else descriptor("claude")
+        self.reports_conversation_rollover = family.reports_conversation_rollover
+        self.assigns_conversation_id = family.assigns_conversation_id
+        self.resolves_transcript_by_cwd = family.resolves_transcript_by_cwd
         self.default_exe = default_exe
         self.default_args = default_args or []
         self.data_dir = data_dir
+        if data_dir:
+            data_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = self._write_hook_settings(data_dir) if data_dir else None
         self.mcp_config_path = (
             self._write_mcp_config(data_dir, mcp_url) if data_dir and mcp_url else None
         )
 
-    @staticmethod
-    def _write_mcp_config(data_dir: Path, mcp_url: str) -> Path:
+    def _write_mcp_config(self, data_dir: Path, mcp_url: str) -> Path:
         """One static registration file for the mux MCP server (`--mcp-config`).
 
         The URL is literal (stable daemon port); only the bearer token is
@@ -87,7 +107,7 @@ class ClaudeAdapter:
         per-session file is needed. `--mcp-config` *adds* servers, so a user's
         own MCP configuration is untouched.
         """
-        path = data_dir / "claude-mcp.json"
+        path = data_dir / f"{self.script_base_name}-mcp.json"
         payload = {
             "mcpServers": {
                 "mux": {
@@ -103,25 +123,10 @@ class ClaudeAdapter:
         return path
 
     def _write_hook_settings(self, data_dir: Path) -> Path:
-        path = data_dir / "claude-hooks.json"
+        path = data_dir / f"{self.script_base_name}-hooks.json"
         hooks: dict[str, list[dict[str, object]]] = {}
-        for event in (
-            "SessionStart",
-            "UserPromptSubmit",
-            "PreToolUse",
-            "PostToolUse",
-            "PostToolUseFailure",
-            "PermissionRequest",
-            "Notification",
-            # Subagent lifecycle drives the `subagents` standing-activity count
-            # (starts − stops); sidechain transcript records are the fallback
-            # tier when these are lost. They arrive subagent-scoped and carry
-            # the root session_id, so the foreign-conversation filter composes.
-            "SubagentStart",
-            "SubagentStop",
-            "Stop",
-            "SessionEnd",
-        ):
+        family = descriptor(self.name) if self.name in HARNESSES else descriptor("claude")
+        for event in family.hook_events:
             command = _hook_command(event)
             hooks[event] = [{"hooks": [{"type": "command", "command": command}]}]
         temporary = path.with_suffix(".json.tmp")
@@ -132,7 +137,7 @@ class ClaudeAdapter:
     def _session_settings(self, session_id: str | None) -> Path | None:
         if not self.data_dir or not session_id:
             return self.settings_path
-        path = self.data_dir / "sessions" / session_id / "claude-hooks.json"
+        path = self.data_dir / "sessions" / session_id / f"{self.script_base_name}-hooks.json"
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             generated = self._write_hook_settings(path.parent)
@@ -188,7 +193,7 @@ class ClaudeAdapter:
             return False
 
     def transcript_path(self, native_id: str, cwd: Path) -> Path:
-        return claude_data_home() / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
+        return self._data_home_resolver() / "projects" / encode_cwd(cwd) / f"{native_id}.jsonl"
 
     def locate_transcript(self, native_id: str) -> Path | None:
         """Find `<native_id>.jsonl` in whichever project directory now holds it.
@@ -214,7 +219,7 @@ class ClaudeAdapter:
         """
         if not native_id:
             return None
-        root = claude_data_home() / "projects"
+        root = self._data_home_resolver() / "projects"
         name = f"{native_id}.jsonl"
         found: list[tuple[int, Path]] = []
         try:
@@ -235,11 +240,15 @@ class ClaudeAdapter:
             return None
         return max(found)[1]
 
+    def pending_transcript_path(self, session_id: str, current: Path) -> None:
+        del session_id, current
+        return None
+
     def graceful_exit_keys(self) -> str:
         return "/exit\r"
 
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]:
-        root = claude_data_home() / "projects" / encode_cwd(cwd)
+        root = self._data_home_resolver() / "projects" / encode_cwd(cwd)
         if not root.exists():
             return []
         recent: list[tuple[float, Path, str]] = []
@@ -272,13 +281,18 @@ class ClaudeAdapter:
     def transcript_native_id(self, path: Path) -> str:
         return path.stem
 
+    def model_context_window(self, provider: str, model: str) -> int:
+        del provider, model
+        return 0
+
     def cleanup(self, session_id: str) -> None:
         if self.data_dir:
             shutil.rmtree(self.data_dir / "sessions" / session_id, ignore_errors=True)
 
     def session_env(self, session_id: str) -> dict[str, str]:
         settings = self._session_settings(session_id)
-        return {"MUX_CLAUDE_SETTINGS": str(settings)} if settings else {}
+        key = f"MUX_{self.name.upper().replace('-', '_')}_SETTINGS"
+        return {key: str(settings)} if settings else {}
 
     def configure(self, executable: str, args: list[str]) -> None:
         self.default_exe = executable

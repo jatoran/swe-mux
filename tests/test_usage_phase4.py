@@ -38,8 +38,7 @@ async def test_refresh_is_cached_and_failure_keeps_last_known_good(tmp_path: Pat
     config = Config(
         data_dir=tmp_path,
         ccusage_enabled=True,
-        ccusage_claude_command=["fixture-claude"],
-        ccusage_codex_command=["fixture-codex"],
+        usage_commands={"claude": ["fixture-claude"], "codex": ["fixture-codex"]},
     )
     manager = UsageManager(config, EventBus())
     calls = 0
@@ -102,9 +101,9 @@ def test_current_codex_model_map_is_aggregated_with_proportional_cost() -> None:
 
 def test_unified_defaults_select_each_provider_from_one_ccusage_executable() -> None:
     config = Config()
-    assert config.ccusage_claude_command == default_ccusage_command("claude")
-    assert config.ccusage_codex_command == default_ccusage_command("codex")
-    assert config.ccusage_claude_command[0] == config.ccusage_codex_command[0] == "ccusage"
+    assert config.usage_commands["claude"] == default_ccusage_command("claude")
+    assert config.usage_commands["codex"] == default_ccusage_command("codex")
+    assert config.usage_commands["claude"][0] == config.usage_commands["codex"][0] == "ccusage"
 
 
 def test_usage_command_resolves_windows_batch_shim_through_comspec(

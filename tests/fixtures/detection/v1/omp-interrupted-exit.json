@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "OMP session_exit recovers a pending task call as an interrupted root turn.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "delegate"}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a", "parentId": "u", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "t1", "name": "task", "arguments": {"prompt": "inspect"}}], "stopReason": "toolUse"}}},
+    {"kind": "transcript", "record": {"type": "custom", "id": "s", "parentId": "a", "customType": "tool_execution_start", "data": {"toolCallId": "t1", "toolName": "task"}}},
+    {"kind": "transcript", "record": {"type": "custom", "id": "x", "parentId": "s", "customType": "session_exit", "data": {"reason": "process_exit", "kind": "process_exit", "pendingToolCalls": [{"toolCallId": "t1", "toolName": "task"}]}}, "expect_state": "idle", "expect_standing": []}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "task"},
+      {"type": "subagent_activity", "source": "transcript", "scope": "subagent", "kind": "started"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "task", "success": false},
+      {"type": "turn_aborted", "source": "transcript", "scope": "root", "outcome": "interrupted"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "standing": [],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "root_turn_interrupted"
+  }
+}

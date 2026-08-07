@@ -7,6 +7,7 @@ import {
   RESUME_SLEEP_MS,
   retryDelay,
   shouldForceReconnect,
+  terminalAttachAllowed,
   watchLiveness,
   watchResume,
   type ConnectionPhase,
@@ -90,6 +91,13 @@ test('retry backoff grows exponentially and stays capped', () => {
   assert.equal(retryDelay(4), 10000)
   assert.equal(retryDelay(99), 10000)
   assert.equal(retryDelay(-1), 1000)
+})
+
+test('an ended terminal attaches once for retained replay but never reconnects', () => {
+  assert.equal(terminalAttachAllowed(true, false), true)
+  assert.equal(terminalAttachAllowed(true, true), false)
+  assert.equal(terminalAttachAllowed(false, false), true)
+  assert.equal(terminalAttachAllowed(false, true), true)
 })
 
 test('a connection that was never attempted is always started', () => {

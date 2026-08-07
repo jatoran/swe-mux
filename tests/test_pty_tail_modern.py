@@ -1,4 +1,4 @@
-"""The screen classifier against the current Claude Code CLI's real byte streams.
+"""The screen classifier against current harnesses' real ConPTY byte streams.
 
 The fixtures under tests/fixtures/pty_tails/ are raw ConPTY captures (scrubbed of
 the capturing user's name) taken 2026-07-31 from the installed CLI. They pin the
@@ -8,18 +8,27 @@ absolute columns so no marker is a contiguous substring of the raw stream. The
 classifier survives both — via the frame-recurring spinner ellipsis, the current
 dialog/footer affordances, and cursor-movement-as-spacing normalization. If a CLI
 update drifts the markers again, recapture with a scrubbed probe and extend the
-marker tables; do not weaken these fixtures to synthesized text.
+marker tables; do not weaken these fixtures to synthesized text. The scrubbed omp
+fixtures were captured from omp 17.2.10 on 2026-08-06.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from swe_mux.session import (
+    AFTER_LAST_PROMPT_MARKER,
+    OSC_PROGRESS,
+    OSC_TITLE,
+    WHOLE_TAIL,
+    bottom_non_empty_lines,
+    pty_tail_explain,
     pty_tail_state,
     pty_tail_waiting_on_background,
+    screen_region_text,
 )
 
 TAILS = Path(__file__).parent / "fixtures" / "pty_tails"
@@ -92,3 +101,78 @@ def test_window_titles_never_classify_a_frame() -> None:
     assert pty_tail_state(title_only) == "unknown"
     cut_mid_write = "❯ ready (shift+tab to cycle)\x1b]0;✳ Fixing tests…"
     assert pty_tail_state(cut_mid_write) == "idle"
+
+
+def test_every_declared_screen_region_extracts_its_fixture() -> None:
+    regions = {
+        "whole_tail": WHOLE_TAIL,
+        "bottom_non_empty_lines": bottom_non_empty_lines(2),
+        "after_last_prompt_marker": AFTER_LAST_PROMPT_MARKER,
+        "osc_title": OSC_TITLE,
+        "osc_progress": OSC_PROGRESS,
+    }
+    cases = json.loads((TAILS / "regions.json").read_text(encoding="utf-8"))
+    for case in cases:
+        assert (
+            screen_region_text(
+                regions[case["region"]],
+                case["tail"],
+                osc_title=case.get("osc_title"),
+                osc_progress=case.get("osc_progress"),
+            )
+            == case["expected"]
+        )
+
+
+def test_prose_outside_the_live_frame_cannot_report_background_waiting() -> None:
+    value = tail("prose-false-positive.txt")
+    assert pty_tail_state(value) == "idle"
+    assert pty_tail_waiting_on_background(value) is False
+
+
+def test_agent_owned_viewer_is_uninformative_and_explainable() -> None:
+    value = tail("model-picker.txt")
+    explanation = pty_tail_explain(value)
+    assert explanation["outcome"] == "uninformative"
+    assert pty_tail_state(value) == "uninformative"
+    first = explanation["rules"][0]
+    assert first["id"] == "viewer.model_picker"
+    assert first["state"] == "uninformative"
+    assert first["region"] == "bottom_non_empty_lines"
+    assert first["region_lines"] == 12
+    assert first["matched"] is True
+    assert "Select a model" in first["preview"]
+    assert "Enter to select - Esc to cancel" in first["preview"]
+
+
+def test_omp_captured_idle_prompt_classifies() -> None:
+    explanation = pty_tail_explain(tail("omp-idle.txt"), backend="omp")
+    assert explanation["outcome"] == "idle"
+    matched = [rule for rule in explanation["rules"] if rule["matched"]]
+    assert any(rule["id"] == "idle.omp_prompt" for rule in matched)
+
+
+def test_omp_idle_thinking_level_glyph_is_not_a_working_spinner() -> None:
+    explanation = pty_tail_explain(tail("omp-idle-thinking-level.txt"), backend="omp")
+    assert explanation["outcome"] == "idle"
+    spinner = next(rule for rule in explanation["rules"] if rule["id"] == "working.spinner")
+    assert spinner["applicable"] is False
+    assert spinner["matched"] is False
+    assert any(
+        rule["id"] == "idle.omp_prompt" and rule["matched"]
+        for rule in explanation["rules"]
+    )
+
+
+def test_omp_captured_model_picker_is_uninformative() -> None:
+    explanation = pty_tail_explain(tail("omp-model-picker.txt"), backend="omp")
+    assert explanation["outcome"] == "uninformative"
+    matched = [rule for rule in explanation["rules"] if rule["matched"]]
+    assert any(rule["id"] == "viewer.omp_model_picker" for rule in matched)
+
+
+def test_omp_captured_session_tree_is_uninformative() -> None:
+    explanation = pty_tail_explain(tail("omp-session-tree.txt"), backend="omp")
+    assert explanation["outcome"] == "uninformative"
+    matched = [rule for rule in explanation["rules"] if rule["matched"]]
+    assert any(rule["id"] == "viewer.omp_session_tree" for rule in matched)

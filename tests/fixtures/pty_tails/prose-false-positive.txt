@@ -1,0 +1,3 @@
+User: I am waiting for the build to finish and checking whether the daemon is still running.
+Assistant: I will inspect the background task now.
+? for shortcuts

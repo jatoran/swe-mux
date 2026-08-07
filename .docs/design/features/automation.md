@@ -2,8 +2,9 @@
 
 ## What it is
 
-Asynchronous, provider-neutral rules over persisted mux events. Deterministic actions and
-bounded read-only observers annotate or notify without entering an agent's execution path.
+Asynchronous, harness-neutral rules over normalized persisted mux events.
+Deterministic actions and bounded read-only observers annotate or notify without entering an agent's execution path.
+Eligible event and transcript surfaces come from harness descriptor capabilities rather than a fixed provider list.
 
 ## Contract
 

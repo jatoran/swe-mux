@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-TRANSCRIPT_PARSER_VERSION = 2
+TRANSCRIPT_PARSER_VERSION = 3
 _SOURCE_OFFSET_KEY = "__swe_mux_source_offset"
 
 
@@ -44,7 +44,15 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         if event.get("isSidechain") is True:
             return None
         blocks = _blocks((event.get("message") or {}).get("content"))
-    else:
+    elif backend == "omp":
+        if event.get("type") != "message":
+            return None
+        native_message = event.get("message") or {}
+        role = native_message.get("role")
+        if role not in {"user", "assistant"}:
+            return None
+        blocks = _blocks(native_message.get("content"))
+    elif backend == "codex":
         payload = event.get("payload") or {}
         payload_type = payload.get("type")
         if event.get("type") == "response_item" and payload_type == "message":
@@ -61,6 +69,8 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
             blocks = _blocks(content)
         else:
             return None
+    else:
+        return None
     if not any(block.get("type") == "text" and block.get("text") for block in blocks):
         return None
     return {"role": role, "ts": timestamp, "content": blocks}
@@ -199,6 +209,9 @@ def parse_transcript(
                         ],
                     }
                 )
+        elif backend == "omp":
+            if message := _native_conversation_message(event, backend):
+                messages.append(message)
     return messages
 
 

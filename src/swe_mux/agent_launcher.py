@@ -9,10 +9,12 @@ import sys
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from .adapters.codex import codex_lifecycle_hook_args
+from .adapters.omp import materialize_mux_extension, retire_mux_extension, with_mux_hook
 from .codex_tui import with_scrollback_safe_tui
+from .harness import Backend, agent_harnesses, descriptor, is_agent_harness, require_backend
 from .shim_paths import is_mux_shim, path_without_shim_dirs
 
 
@@ -32,13 +34,13 @@ def _notify_lifecycle(url_name: str, payload: dict[str, str]) -> None:
         pass
 
 
-def _promote(backend: str, native_id: str) -> None:
+def _promote(backend: Backend, native_id: str) -> None:
     _notify_lifecycle(
         "MUX_PROMOTE_URL", {"backend": backend, "native_id": native_id, "cwd": os.getcwd()}
     )
 
 
-def _demote(backend: str, native_id: str) -> None:
+def _demote(backend: Backend, native_id: str) -> None:
     _notify_lifecycle("MUX_DEMOTE_URL", {"backend": backend, "native_id": native_id})
 
 
@@ -69,8 +71,15 @@ _CLAUDE_RESUME_FLAGS = ("--resume", "-r")
 _CLAUDE_CONTINUE_FLAGS = ("--continue", "-c")
 
 
-def _claude(args: list[str]) -> tuple[str, list[str], str]:
-    exe = os.environ.get("MUX_CLAUDE_EXE", "claude.exe")
+def _env_prefix(name: str) -> str:
+    return f"MUX_{name.upper().replace('-', '_')}"
+
+
+def _claude(
+    args: list[str], *, name: str = "claude", default_executable: str = "claude.exe"
+) -> tuple[str, list[str], str]:
+    prefix = _env_prefix(name)
+    exe = os.environ.get(f"{prefix}_EXE", default_executable)
     native_id = _value_after(args, "--session-id") or ""
     resuming = any(flag in args for flag in (*_CLAUDE_RESUME_FLAGS, *_CLAUDE_CONTINUE_FLAGS))
     if not native_id:
@@ -88,23 +97,26 @@ def _claude(args: list[str]) -> tuple[str, list[str], str]:
         # one. Promotion reports it empty and the daemon binds the transcript from
         # the CLI's own SessionStart hook instead of guessing.
         native_id = ""
-    settings = os.environ.get("MUX_CLAUDE_SETTINGS")
+    settings = os.environ.get(f"{prefix}_SETTINGS")
     if settings and "--settings" not in args:
         args = ["--settings", settings, *args]
     # Register the mux MCP server only when this session actually holds an MCP
     # identity; a registration without a token would just 401 inside the CLI.
-    mcp_config = os.environ.get("MUX_CLAUDE_MCP_CONFIG")
+    mcp_config = os.environ.get(f"{prefix}_MCP_CONFIG")
     if mcp_config and os.environ.get("MUX_MCP_TOKEN") and "--mcp-config" not in args:
         args = ["--mcp-config", mcp_config, *args]
-    args = [*json.loads(os.environ.get("MUX_CLAUDE_ARGS", "[]")), *args]
+    args = [*json.loads(os.environ.get(f"{prefix}_ARGS", "[]")), *args]
     return exe, args, native_id
 
 
-def _codex(args: list[str]) -> tuple[str, list[str], str]:
-    exe = os.environ.get("MUX_CODEX_EXE", "codex.exe")
+def _codex(
+    args: list[str], *, name: str = "codex", default_executable: str = "codex.exe"
+) -> tuple[str, list[str], str]:
+    prefix = _env_prefix(name)
+    exe = os.environ.get(f"{prefix}_EXE", default_executable)
     native_id = args[1] if len(args) > 1 and args[0] == "resume" else str(uuid.uuid4())
     args = with_scrollback_safe_tui(
-        [*json.loads(os.environ.get("MUX_CODEX_ARGS", "[]")), *args]
+        [*json.loads(os.environ.get(f"{prefix}_ARGS", "[]")), *args]
     )
     if not any("notify=" in arg for arg in args):
         notify = [sys.executable, "-m", "swe_mux.hook_client", "codex_notify"]
@@ -124,6 +136,22 @@ def _codex(args: list[str]) -> tuple[str, list[str], str]:
             *args,
         ]
     return exe, args, native_id
+
+
+def _omp(args: list[str]) -> tuple[str, list[str], str]:
+    prefix = _env_prefix("omp")
+    exe = os.environ.get(f"{prefix}_EXE", "omp")
+    configured = json.loads(os.environ.get(f"{prefix}_ARGS", "[]"))
+    extension: Path | None = None
+    root = os.environ.get("MUX_OMP_EXTENSION_ROOT")
+    session_id = os.environ.get("MUX_SESSION_ID")
+    if root and session_id:
+        extension = materialize_mux_extension(
+            Path(root) / session_id,
+            mcp_url=os.environ.get("MUX_MCP_URL"),
+            mcp_token=os.environ.get("MUX_MCP_TOKEN"),
+        )
+    return exe, with_mux_hook([*configured, *args], extension), ""
 
 
 def _attach_parent_console() -> None:
@@ -219,12 +247,38 @@ def _launch(executable: str, args: list[str]) -> int:
     return subprocess.call([executable, *args], **stdio)
 
 
+def _build_launch(backend: Backend, args: list[str]) -> tuple[str, list[str], str]:
+    if backend == "shell":
+        raise ValueError("shell does not use the agent launcher")
+    if backend == "claude":
+        pass
+    elif backend == "codex":
+        pass
+    elif backend == "omp":
+        return _omp(args)
+    else:
+        assert_never(backend)
+    harness = descriptor(backend)
+    if harness.adapter_family == "claude":
+        if backend == "claude":
+            return _claude(args)
+        return _claude(args, name=backend, default_executable=harness.executable)
+    if harness.adapter_family == "codex":
+        if backend == "codex":
+            return _codex(args)
+        return _codex(args, name=backend, default_executable=harness.executable)
+    if harness.adapter_family == "omp":
+        return _omp(args)
+    assert_never(harness.adapter_family)
+
+
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] not in {"claude", "codex"}:
-        raise SystemExit("usage: python -m swe_mux.agent_launcher claude|codex [args...]")
-    backend, args = sys.argv[1], sys.argv[2:]
+    if len(sys.argv) < 2 or not is_agent_harness(sys.argv[1]):
+        names = "|".join(descriptor_name for descriptor_name in sorted(agent_harnesses()))
+        raise SystemExit(f"usage: python -m swe_mux.agent_launcher {names} [args...]")
+    backend, args = require_backend(sys.argv[1]), sys.argv[2:]
     _attach_parent_console()
-    exe, command_args, native_id = _claude(args) if backend == "claude" else _codex(args)
+    exe, command_args, native_id = _build_launch(backend, args)
     _promote(backend, native_id)
     exit_code = 130
     try:
@@ -233,6 +287,11 @@ def main() -> None:
         pass
     finally:
         _demote(backend, native_id)
+        if backend == "omp":
+            root = os.environ.get("MUX_OMP_EXTENSION_ROOT")
+            session_id = os.environ.get("MUX_SESSION_ID")
+            if root and session_id:
+                retire_mux_extension(Path(root), session_id)
     raise SystemExit(exit_code)
 
 

@@ -2,8 +2,10 @@
 
 ## What it is
 
-- Optional cached summaries for Claude and Codex from one unified, locally installed
-  `ccusage` CLI.
+- Optional cached summaries for registry harnesses that declare an external usage command.
+- Claude Code and Codex currently use one unified, locally installed `ccusage` CLI.
+- Refresh state and all-provider iteration use the independent `external_usage_command` harness capability.
+  OMP is managed but excluded because its native transcript already reports exact tokens, cache traffic, and cost.
 - This is historical cost/token analytics, not live context-window truth or quota failover.
 - Provider subscription windows and account switching belong to
   `provider-accounts.md`; the two caches and refresh workers are independent.
@@ -19,12 +21,22 @@
   `ccusage codex daily --json`. Settings installs or updates the unified CLI explicitly
   with `npm install -g ccusage@latest`; the npm tag resolves only during that operator
   action. Refreshes use the installed executable and never download or update code.
+- Per-harness command overrides live in `usage_commands`; descriptors that measure usage from
+  their own transcripts can opt out of an external command.
+- OMP usage is aggregated across assistant messages on the active transcript branch.
+  `message.usage.input`, `output`, `cacheRead`, and `cacheWrite` populate the four token counters,
+  while `message.usage.cost.total` is summed into `cost_usd`.
+  This cost is provider-reported native cost, not a mux price-table estimate.
+  The latest assistant message supplies provider and model, and OMP's cached model catalog supplies
+  the context window used for final and peak context percentages.
+  A packaged Anthropic probe measured all four token counters, exact cost, model, provider, context,
+  and credential pin in the live session and the same finalized values in history after exit.
 - Exact legacy defaults using `npx --no-install` and the deprecated separate Codex package
   migrate automatically. Custom commands remain untouched.
 - Executables are resolved before launch. On Windows, npm `.cmd`/`.bat` shims run through
   `COMSPEC`, while Linux and macOS execute the resolved native command directly.
-- Claude/Codex JSON is validated and normalized to daily, monthly, session, model, token,
-  and cost aggregates with source/version provenance. The adapter accepts legacy
+- Each supported command's JSON is validated and normalized to daily, monthly, session, model,
+  token, and cost aggregates with source/version provenance. The current adapter accepts legacy
   `modelBreakdowns` arrays and current Codex `models` maps; model rows retain their daily
   key so range-scoped breakdowns can be derived. Calculated costs remain labelled estimates.
 - A successful refresh atomically replaces the last-known-good cache. Failure preserves

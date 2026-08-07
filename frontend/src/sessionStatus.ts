@@ -1,4 +1,5 @@
 import type { Session, SessionState, StandingActivity } from './types'
+import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harnessRegistry.ts'
 
 // Single source of truth for rendering the user-visible session status.
 // Desktop sidebar rows, pane headers, tab strips, and the mobile unified-tab
@@ -79,10 +80,6 @@ export function idleLabel(session: Session): string {
     : 'ready · turn complete'
 }
 
-function isAgentBackend(session: Session): boolean {
-  return session.backend === 'claude' || session.backend === 'codex'
-}
-
 /** One compact affordance per standing-activity annotation. */
 export interface ActivityBadge {
   glyph: string
@@ -130,8 +127,13 @@ export function activityBadges(session: Session): ActivityBadge[] {
 
 /** Status line text shown next to a session; total over SessionState. */
 export function sessionStatus(session: Session): string {
-  if (!isAgentBackend(session)) return session.state
-  const context = session.context_pct > 0 ? ` · ${Math.round(session.context_pct * 100)}%` : ''
+  if (!isAgentBackend(session.backend)) return session.state
+  if (!isObservedHarness(session.backend)) return 'not observed by mux'
+  const context = session.parser_status === 'degraded'
+    ? ' · measurements stale'
+    : hasHarnessMeasurement(session.backend) && session.context_pct > 0
+      ? ` · ${Math.round(session.context_pct * 100)}%`
+      : ''
   const badges = activityBadges(session)
   const standing = badges.map(badge => ` · ${badge.label}`).join('')
   if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}`

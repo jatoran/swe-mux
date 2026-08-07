@@ -207,6 +207,13 @@ test('the background annotation supersedes the derived idle_reason text', () => 
   )
 })
 
+test('degraded measurement confidence hides percentages and marks them stale', () => {
+  assert.equal(
+    sessionStatus(agent('idle', { context_pct: 0.72, parser_status: 'degraded' })),
+    'ready · turn complete · measurements stale',
+  )
+})
+
 test('loop and cron share one glyph; the tooltip distinguishes them', () => {
   const both = activityBadges(agent('idle', {
     standing_activity: [annotation('loop'), annotation('cron', { count: 2, detail: '*/5 * * * *' })],

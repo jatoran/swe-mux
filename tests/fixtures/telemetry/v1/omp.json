@@ -1,0 +1,65 @@
+{
+  "backend": "omp",
+  "records": [
+    {
+      "type": "session",
+      "id": "native-omp",
+      "version": 3
+    },
+    {
+      "type": "message",
+      "id": "assistant-tool",
+      "parentId": null,
+      "timestamp": "2026-08-07T00:00:00Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "tool-1",
+            "name": "skill",
+            "arguments": {
+              "name": "review-code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "message",
+      "id": "tool-result",
+      "parentId": "assistant-tool",
+      "timestamp": "2026-08-07T00:00:01Z",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "tool-1",
+        "toolName": "skill",
+        "isError": false,
+        "content": [
+          {
+            "type": "text",
+            "text": "loaded"
+          }
+        ]
+      }
+    },
+    {
+      "type": "compaction",
+      "id": "compact-1",
+      "parentId": "tool-result",
+      "timestamp": "2026-08-07T00:00:02Z",
+      "tokensBefore": 32000
+    },
+    {
+      "type": "future_record",
+      "id": "unknown-1"
+    }
+  ],
+  "expected": {
+    "tools": 2,
+    "skills": 1,
+    "compactions": 1,
+    "unknown": 1,
+    "errors": 0
+  }
+}

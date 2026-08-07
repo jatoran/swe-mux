@@ -1,9 +1,10 @@
+import { isAgentBackend } from './harnessRegistry.ts'
 import { AGENT_NEWLINE } from './terminalKeys.ts'
 
 export const TERMINAL_DELETE = '\x7f'
 
 export function mobileEnterNeedsPinnedSend(backend:string):boolean {
-  return backend==='claude'||backend==='codex'
+  return isAgentBackend(backend)
 }
 
 /** The mobile IME's Enter action. Agent composers get a newline; ordinary

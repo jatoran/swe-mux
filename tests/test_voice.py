@@ -345,7 +345,7 @@ async def test_engine_failure_records_failed_clip(tmp_path: Path) -> None:
 async def test_generate_rejects_plain_shells(tmp_path: Path) -> None:
     service, _events, _emitted, _record = make_service(tmp_path, backend="shell")
     try:
-        with pytest.raises(VoiceError, match="Claude or Codex"):
+        with pytest.raises(VoiceError, match="observable agent session"):
             await service.generate("s1", trigger="manual")
     finally:
         service.store.close()

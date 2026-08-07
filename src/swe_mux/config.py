@@ -10,9 +10,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .harness import HARNESSES, is_agent_harness
 from .keybindings import is_command
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -206,6 +207,22 @@ def default_ccusage_command(provider: str) -> list[str]:
     return ["ccusage", provider, "daily", "--json"]
 
 
+def default_harness_executables() -> dict[str, str]:
+    return {name: harness.executable for name, harness in HARNESSES.items()}
+
+
+def default_harness_args() -> dict[str, list[str]]:
+    return {name: list(harness.default_args) for name, harness in HARNESSES.items()}
+
+
+def default_usage_commands() -> dict[str, list[str]]:
+    return {
+        name: default_ccusage_command(name)
+        for name, harness in HARNESSES.items()
+        if harness.external_usage_command
+    }
+
+
 _LEGACY_CCUSAGE_COMMANDS = {
     "claude": ["--no-install", "ccusage@17.1.5", "daily", "--json"],
     "codex": ["--no-install", "@ccusage/codex@0.2.7", "daily", "--json"],
@@ -249,10 +266,8 @@ class Config:
     tailnet_enabled: bool = True
     default_backend: str = "shell"
     shell_exe: str = "powershell.exe"
-    claude_exe: str = "claude.exe"
-    codex_exe: str = "codex.exe"
-    claude_args: list[str] = field(default_factory=list)
-    codex_args: list[str] = field(default_factory=list)
+    harness_exe: dict[str, str] = field(default_factory=default_harness_executables)
+    harness_args: dict[str, list[str]] = field(default_factory=default_harness_args)
     scrollback_bytes: int = 5 * 1024 * 1024
     # What a *fresh attach* replays, as opposed to what the daemon retains. The
     # client has to parse every replayed byte before it can render anything, and
@@ -367,12 +382,7 @@ class Config:
     )
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0
-    ccusage_claude_command: list[str] = field(
-        default_factory=lambda: default_ccusage_command("claude")
-    )
-    ccusage_codex_command: list[str] = field(
-        default_factory=lambda: default_ccusage_command("codex")
-    )
+    usage_commands: dict[str, list[str]] = field(default_factory=default_usage_commands)
     default_shell_profile: str = "default"
     shell_profiles: list[ShellProfile] = field(default_factory=list)
     pinned_directories: list[str] = field(default_factory=list)
@@ -558,8 +568,8 @@ def _validate(config: Config) -> None:
         )
     if not 1 <= config.port <= 65535:
         errors["port"] = "must be between 1 and 65535"
-    if config.default_backend not in {"shell", "claude", "codex"}:
-        errors["default_backend"] = "must be shell, claude, or codex"
+    if config.default_backend != "shell" and not is_agent_harness(config.default_backend):
+        errors["default_backend"] = "must be shell or a registered agent"
     if config.terminal_renderer not in {"auto", "dom", "webgl"}:
         errors["terminal_renderer"] = "must be auto, dom, or webgl"
     if str(config.log_level).strip().upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
@@ -627,16 +637,32 @@ def _validate(config: Config) -> None:
                 errors["mobile_gestures"] = (
                     "unknown command for gestures: " + ", ".join(bad)
                 )
-    for field_name in (
-        "claude_args",
-        "codex_args",
-        "ccusage_claude_command",
-        "ccusage_codex_command",
-        "project_ignore_patterns",
-    ):
+    for field_name in ("harness_args", "usage_commands"):
         value = getattr(config, field_name)
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            errors[field_name] = "must be an array of strings"
+        if not isinstance(value, dict) or any(
+            not isinstance(name, str)
+            or not isinstance(command, list)
+            or not all(isinstance(item, str) for item in command)
+            for name, command in value.items()
+        ):
+            errors[field_name] = "must map harness names to arrays of strings"
+    if not isinstance(config.harness_exe, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(executable, str)
+        or not executable.strip()
+        for name, executable in config.harness_exe.items()
+    ):
+        errors["harness_exe"] = "must map harness names to non-empty executable strings"
+    for field_name in ("harness_exe", "harness_args", "usage_commands"):
+        value = getattr(config, field_name)
+        if isinstance(value, dict):
+            unknown = set(value) - set(HARNESSES)
+            if unknown:
+                errors[field_name] = "unknown harnesses: " + ", ".join(sorted(unknown))
+    if not isinstance(config.project_ignore_patterns, list) or not all(
+        isinstance(item, str) for item in config.project_ignore_patterns
+    ):
+        errors["project_ignore_patterns"] = "must be an array of strings"
     if isinstance(config.project_ignore_patterns, list) and (
         len(config.project_ignore_patterns) > 256
         or any(
@@ -647,9 +673,12 @@ def _validate(config: Config) -> None:
         errors["project_ignore_patterns"] = (
             "must contain at most 256 non-empty patterns of 200 characters or fewer"
         )
-    for field_name in ("ccusage_claude_command", "ccusage_codex_command"):
-        if config.ccusage_enabled and not getattr(config, field_name):
-            errors[field_name] = "must not be empty while usage analytics is enabled"
+    if config.ccusage_enabled:
+        for name, harness in HARNESSES.items():
+            if harness.external_usage_command and not config.usage_commands.get(name):
+                errors[f"usage_commands.{name}"] = (
+                    "must not be empty while usage analytics is enabled"
+                )
     if not 0 <= config.ccusage_refresh_minutes <= 24 * 60:
         errors["ccusage_refresh_minutes"] = "must be between 0 and 1440 minutes"
     if not 1024 <= config.scrollback_bytes <= 1024 * 1024 * 1024:
@@ -904,11 +933,10 @@ def save_config(config: Config, *, backup: bool = False) -> None:
 def _migrate_legacy_ccusage_commands(config: Config) -> bool:
     changed = False
     for provider, legacy_tail in _LEGACY_CCUSAGE_COMMANDS.items():
-        field_name = f"ccusage_{provider}_command"
-        command = getattr(config, field_name)
+        command = config.usage_commands.get(provider, [])
         executable = Path(command[0]).stem.casefold() if command else ""
         if executable == "npx" and command[1:] == legacy_tail:
-            setattr(config, field_name, default_ccusage_command(provider))
+            config.usage_commands[provider] = default_ccusage_command(provider)
             changed = True
     return changed
 
@@ -961,6 +989,33 @@ def load_config(path: Path | None = None) -> Config:
                 continue
             if key in raw:
                 setattr(cfg, key, Path(raw[key]) if key == "data_dir" else raw[key])
+        configured_exe = (
+            dict(raw["harness_exe"]) if isinstance(raw.get("harness_exe"), dict) else {}
+        )
+        configured_args = (
+            dict(raw["harness_args"]) if isinstance(raw.get("harness_args"), dict) else {}
+        )
+        configured_usage = (
+            dict(raw["usage_commands"])
+            if isinstance(raw.get("usage_commands"), dict)
+            else {}
+        )
+        for name in HARNESSES:
+            legacy_exe = raw.get(f"{name}_exe")
+            legacy_args = raw.get(f"{name}_args")
+            legacy_usage = raw.get(f"ccusage_{name}_command")
+            if isinstance(legacy_exe, str) and name not in configured_exe:
+                configured_exe[name] = legacy_exe
+                migrated = True
+            if isinstance(legacy_args, list) and name not in configured_args:
+                configured_args[name] = legacy_args
+                migrated = True
+            if isinstance(legacy_usage, list) and name not in configured_usage:
+                configured_usage[name] = legacy_usage
+                migrated = True
+        cfg.harness_exe = {**default_harness_executables(), **configured_exe}
+        cfg.harness_args = {**default_harness_args(), **configured_args}
+        cfg.usage_commands = {**default_usage_commands(), **configured_usage}
         # Unknown *top-level* keys are deliberately tolerated above; profile keys
         # get the same treatment. Without it a mistyped key — or a profile field
         # added by a newer build, which the redeploy rollback path makes real —

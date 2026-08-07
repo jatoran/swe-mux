@@ -139,6 +139,20 @@ rules existed: a continuous splitter drag sent ~22 resizes per second per visibl
 after, the same drag sends one resize per `VIEWPORT_SETTLE_MAX_MS` per pane and the sweep
 drops none.
 
+**A slow health sweep enforces the display invariant the event paths cannot guarantee**
+(`frontend/src/terminalHealth.ts`, run on the pane's existing 5 s `terminal_state` interval).
+Every event-driven repair above covers a named path; the sweep covers the unnamed ones by
+comparing invariants against reality. Surface drift — a visible, settled, non-replaying pane
+whose host box or grid differs from the surface it last confirmed drawing — schedules an
+ordinary viewport pass, turning "the user drags a splitter to bump the pane" into
+self-correction within one sweep. Write-pipeline death — bytes arriving on the socket while
+`onWriteParsed` stops advancing (`WRITE_PIPELINE_STALL_MS`) — is a parser exception having
+killed xterm's write loop, which no event reports; the pane rebuilds itself (fresh Terminal,
+socket, and replay), budgeted by `remountDecision` to two attempts per five minutes so a
+poison byte sequence in the retained buffer degrades into one visible error rather than a
+remount loop. Both detections leave `surface_drift_repair` / `write_pipeline_dead`
+breadcrumbs in the render diagnostics.
+
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
 session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm

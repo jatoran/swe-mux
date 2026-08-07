@@ -4,7 +4,9 @@ export type AgentContextDirection = 'claude_to_agents' | 'agents_to_claude'
 
 export interface AgentContextSource {
   id: string
-  provider: 'claude' | 'codex'
+  // A harness name from the registry; open because the daemon's inventory
+  // decides which harnesses contribute context sources, not this type.
+  provider: string
   kind: 'instructions' | 'memory'
   scope: 'project' | 'global'
   label: string
@@ -33,7 +35,7 @@ export function agentContextSourceMenuEnabled(
 }
 
 export interface AgentContextProvider {
-  id: 'claude' | 'codex'
+  id: string
   label: string
   status: AgentContextStatus
   detail: string

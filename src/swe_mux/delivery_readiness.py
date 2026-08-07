@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from .harness import HARNESSES
 from .models import MuxEvent
 
 DeliveryState = Literal["safe", "blocked", "unknown"]
@@ -44,6 +45,7 @@ class ReadinessSession(Protocol):
     # Daemon-side screen tracking (`screen_mode.py`). Optional on the protocol so
     # a stand-in without a PTY simply has no daemon evidence.
     screen: Any
+    scrollback: Any
 
 
 @dataclass(slots=True)
@@ -71,16 +73,7 @@ class ReadinessMemory:
 # `tui.alternate_screen="never"` for scrollback (`codex_tui.py`), so its prompt is
 # on the normal screen. Only a *contradiction* of this blocks — see `_screen_check`.
 ADAPTER_DELIVERY_ETIQUETTE: dict[str, dict[str, str]] = {
-    "claude": {
-        "submission": "terminal_line",
-        "root_completion": "stop_or_transcript",
-        "screen": "alternate",
-    },
-    "codex": {
-        "submission": "terminal_line",
-        "root_completion": "task_complete",
-        "screen": "normal",
-    },
+    name: harness.delivery_etiquette() for name, harness in HARNESSES.items()
 }
 
 
@@ -298,7 +291,7 @@ class DeliveryReadinessTracker:
         memory.phase_since = now
         memory.transition_count += 1
         # A native hook fired for this session, which is the same capability
-        # proof `_parser_check` accepts from any other hook.
+        # proof `_observation_check` accepts from any other hook.
         memory.observation_proven = True
         memory.input_revision_at_completion = 0
         memory.screen_at_completion = getattr(getattr(session, "screen", None), "mode", None)
@@ -360,7 +353,12 @@ class DeliveryReadinessTracker:
 
     @classmethod
     def _screen_check(
-        cls, record: Any, memory: ReadinessMemory, mode: str | None, source: str
+        cls,
+        record: Any,
+        memory: ReadinessMemory,
+        mode: str | None,
+        source: str,
+        pty_state: str,
     ) -> bool:
         """False only when the daemon watched the child leave its prompt's screen.
 
@@ -372,28 +370,26 @@ class DeliveryReadinessTracker:
         pane's replayed copy of the stream selected rather than the one the child
         did.
         """
+        if pty_state == "uninformative":
+            return False
         expected = cls._expected_screen(record, memory)
         if source != "daemon" or mode is None or expected is None:
             return True
         return mode == expected
 
     @staticmethod
-    def _parser_check(session: ReadinessSession, memory: ReadinessMemory) -> bool | None:
-        status = str(session.record.parser_status or "")
-        if status == "degraded":
-            return None
-        if status == "ready":
+    def _observation_check(session: ReadinessSession, memory: ReadinessMemory) -> bool | None:
+        """Whether lifecycle evidence came from an observed harness channel.
+
+        Parser status is deliberately absent. It measures transcript schema
+        confidence for tokens, context, cost, and model fields, not whether a
+        hook or recognized boundary record actually reported this turn.
+        """
+        if memory.source in {"hook", "transcript"}:
             return True
-        # A native hook is positive lifecycle evidence even while transcript discovery is
-        # pending. PTY-only or daemon-only inference is insufficient.
-        if memory.source == "hook":
-            return True
-        # So is having read this session's own transcript: `parser_status` only
-        # reaches "ready" off a *live* record, which a session idle since before
-        # the daemon started will not produce until its next turn, and no hook
-        # fires while it waits. The observer's catch-up over real records proves
-        # the same capability.
         if memory.observation_proven:
+            return True
+        if int(getattr(session.record, "parser_events_seen", 0)) > 0:
             return True
         return None
 
@@ -418,7 +414,17 @@ class DeliveryReadinessTracker:
             else None
         )
         screen_mode, screen_source = self._screen_evidence(session, now)
-        screen_at_agent_prompt = self._screen_check(record, memory, screen_mode, screen_source)
+        from .scrollback import SCREEN_TAIL_BYTES
+        from .session import pty_tail_state
+
+        try:
+            tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+            pty_state = pty_tail_state(tail, backend=record.backend)
+        except (AttributeError, OSError, ValueError):
+            pty_state = "unknown"
+        screen_at_agent_prompt = self._screen_check(
+            record, memory, screen_mode, screen_source, pty_state
+        )
 
         root_ready = record.state == "idle" and memory.phase == "ready"
         # An agent parked at its prompt does not decay. Freshness guards against
@@ -440,7 +446,7 @@ class DeliveryReadinessTracker:
             "root_prompt_ready": root_ready,
             "root_completion_observed": memory.phase == "ready",
             "lifecycle_evidence_fresh": lifecycle_fresh,
-            "parser_or_hook_supported": self._parser_check(session, memory),
+            "observation_supported": self._observation_check(session, memory),
             "operator_quiet": operator_quiet,
             "partial_input_absent": partial_input_absent,
             "screen_at_agent_prompt": screen_at_agent_prompt,
@@ -486,7 +492,7 @@ class DeliveryReadinessTracker:
         unknown_reasons: list[str] = []
         if memory.phase == "unknown":
             unknown_reasons.append("no_root_lifecycle_evidence")
-        if checks["parser_or_hook_supported"] is None:
+        if checks["observation_supported"] is None:
             unknown_reasons.append("observation_capability_unknown")
         if partial_input_absent is None:
             unknown_reasons.append("completion_input_boundary_unknown")
@@ -528,6 +534,7 @@ class DeliveryReadinessTracker:
                 "age_s": round(lifecycle_age, 3),
                 "screen_mode": screen_mode or "unknown",
                 "screen_source": screen_source,
+                "pty_state": pty_state,
                 "expected_screen": self._expected_screen(record, memory),
                 "completion_screen": memory.screen_at_completion,
                 "terminal_mode": terminal_mode or "unknown",

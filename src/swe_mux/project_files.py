@@ -21,6 +21,7 @@ from PIL import Image, UnidentifiedImageError
 
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
+from .harness import is_agent_harness
 
 PROJECT_CONFIG_VERSION = 1
 PROJECT_CONFIG_FIELDS = {
@@ -955,8 +956,13 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError(f"unknown project fields: {', '.join(unknown)}")
     if "default_shell_profile" in parsed and not isinstance(parsed["default_shell_profile"], str):
         raise ValueError("default_shell_profile must be a string")
-    if parsed.get("preferred_backend") not in {None, "shell", "claude", "codex"}:
-        raise ValueError("preferred_backend must be shell, claude, or codex")
+    preferred_backend = parsed.get("preferred_backend")
+    if (
+        preferred_backend is not None
+        and preferred_backend != "shell"
+        and not is_agent_harness(preferred_backend)
+    ):
+        raise ValueError("preferred_backend must be shell or a registered agent")
     if parsed.get("resource_open_mode") not in {None, "dock", "popout"}:
         raise ValueError("resource_open_mode must be dock or popout")
     if parsed.get("prompt_library_scope") not in {None, "off", "global", "project", "both"}:

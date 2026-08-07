@@ -355,22 +355,36 @@ def test_codex_adapter_registers_streamable_http_with_env_bearer() -> None:
     assert not any("tok" in arg.casefold() and "token_env" not in arg for arg in argv)
 
 
-def test_shims_register_mcp_only_when_the_session_holds_a_token(monkeypatch: Any) -> None:
-    from swe_mux.agent_launcher import _claude, _codex
+def test_shims_register_mcp_only_when_the_session_holds_a_token(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from swe_mux.agent_launcher import _claude, _codex, _omp
 
     monkeypatch.setenv("MUX_CLAUDE_MCP_CONFIG", "C:/data/claude-mcp.json")
     monkeypatch.setenv("MUX_MCP_URL", "http://127.0.0.1:8765/mcp")
     monkeypatch.delenv("MUX_MCP_TOKEN", raising=False)
     monkeypatch.setenv("MUX_CLAUDE_ARGS", "[]")
     monkeypatch.setenv("MUX_CODEX_ARGS", "[]")
+    monkeypatch.setenv("MUX_OMP_ARGS", "[]")
+    monkeypatch.setenv("MUX_OMP_EXTENSION_ROOT", str(tmp_path / "omp-extensions"))
+    monkeypatch.setenv("MUX_SESSION_ID", "mux-session")
 
     _, claude_args, _ = _claude([])
     assert "--mcp-config" not in claude_args
     _, codex_args, _ = _codex([])
     assert not any("mcp_servers" in arg for arg in codex_args)
+    _, omp_args, _ = _omp([])
+    omp_extension = Path(omp_args[omp_args.index("--extension") + 1])
+    assert not (omp_extension / ".mcp.json").exists()
 
     monkeypatch.setenv("MUX_MCP_TOKEN", "tok")
     _, claude_args, _ = _claude([])
     assert claude_args[claude_args.index("--mcp-config") + 1] == "C:/data/claude-mcp.json"
     _, codex_args, _ = _codex([])
     assert any("mcp_servers.mux.url" in arg for arg in codex_args)
+    _, omp_args, _ = _omp([])
+    omp_extension = Path(omp_args[omp_args.index("--extension") + 1])
+    server = json.loads((omp_extension / ".mcp.json").read_text(encoding="utf-8"))[
+        "mcpServers"
+    ]["mux"]
+    assert server["headers"]["Authorization"] == "Bearer tok"

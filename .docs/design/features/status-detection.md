@@ -81,23 +81,31 @@ Source arbitration is unchanged from before this phase: priority `{pty:0, transc
 hook:2}` within a turn, released at new-turn boundaries, with `force` (interrupt/abort,
 process exit, lifecycle changes, transcript-authoritative closes) reclaiming authority.
 
-**Transcript authority is revoked when the transcript is stale.** Hooks are suppressed as
-redundant only while the transcript is authoritative (`parser_status == "ready"`), which is
-correct exactly as long as the file being tailed is this PTY's conversation. Staleness
-evidence (`last_turn_hook_ts`) is **root-scope only**: a subagent-scoped tool hook proves a
-*subagent* ran, not that the root conversation wrote records somewhere else — a background
-subagent writes nothing into the root transcript, so counting its stream here false-fired
-`observation_stale_since` on a healthy session waiting on its agents (measured live
-2026-08-02, 666 s of staleness warning). When the transcript provably
-is not this conversation — an in-CLI `/clear` or `/new` the daemon could not follow, marked by
-`observation_stale_since` (`backends.md`) — the suppression is what freezes the session:
-the transcript can no longer report a turn boundary and the only source that can is being
-dropped. Staleness therefore returns state to the hook/PTY fallback tiers and hard-blocks
-delivery, rather than leaving a healthy-looking session reporting a retired conversation.
-Whether the followed transcript is dead is decided by growth the daemon's own tailer observed
-(`Session.transcript_growth_ts`), never by the file's timestamp — a live Codex rollout on
-Windows reports an mtime frozen at its creation, which made this fire on healthy sessions and
-hard-block their queued messages (`backends.md`, `delivery-readiness.md`).
+**Turn-boundary authority follows observed liveness, not parser confidence.**
+The transcript suppresses redundant hook transitions only after the tailer has observed growth at or after the most recent root-scoped transcript-backed hook.
+The comparison uses `Session.transcript_growth_ts` and `last_turn_hook_ts`.
+It never uses filesystem mtime because Windows can freeze the timestamp of a file a CLI still holds open.
+It never uses `parser_status`, which now reports only whether token, context, cost, and model measurements are trustworthy.
+This preserves transcript precedence without letting a healthy-looking but silent parser suppress the only source still reporting.
+
+Precedence deliberately did not move to hooks.
+Claude and Codex hooks are independently delivered and retried, so a late `PreToolUse` can arrive after the ordered transcript has already recorded the turn end.
+Making hooks generally authoritative would strand that finished turn as `working`.
+The ordered transcript therefore still owns boundaries whenever it is live, while explicit cross-source corrections remain able to abort an interrupted turn, close a missed completion, or clear an approval after the existing post-block slack.
+
+OMP's in-process extension adds a strictly increasing source sequence to every hook envelope.
+The daemon persists the last accepted sequence in supervisor metadata, preserving the ledger across
+daemon reloads, `/clear`, `/new`, `/fork`, and `/resume` while the extension process remains alive.
+A repeated or lower sequence is acknowledged without reapplying state, increments the bounded
+duplicate counter, and is exposed in the state log.
+Sequence ordering makes retries idempotent but does not override the transcript-liveness authority
+contract.
+
+Liveness evidence (`last_turn_hook_ts`) is root-scope only.
+A subagent-scoped tool hook proves a subagent ran, not that the root conversation wrote records somewhere else.
+A background subagent writes nothing into the root transcript, so counting its stream here false-fired `observation_stale_since` on a healthy session waiting on its agents, measured live 2026-08-02 as 666 seconds of false staleness.
+The four stale, missing, rollover-refused, and rollover-unadoptable paths retain their diagnostic reason strings and delivery block, but authority itself has no special-case branch for them.
+Each path naturally leaves transcript growth behind a newer hook, which returns state to the hook and PTY fallback tiers.
 A conversation rollover itself is a `daemon`-sourced forced transition to `starting`, the same
 lifecycle class as promotion.
 
@@ -105,9 +113,9 @@ lifecycle class as promotion.
 Claude derives a transcript's directory from the CLI's working directory, so entering a
 native worktree *moves the file*: the path resolved at spawn stops existing and a file with
 the same name appears under the new directory's slug, with nothing telling the daemon.
-`parser_status` then stays frozen at `ready` from the last successful read, and because
-that field is what `_transcript_authoritative` reads, the hook tier keeps being suppressed
-as redundant to a transcript that can no longer report anything. Measured live 2026-08-06:
+`parser_status` then stays frozen at `ready` from the last successful read.
+Before authority was split from measurement confidence, that stale value kept the hook tier suppressed as redundant to a transcript that could no longer report anything.
+Measured live 2026-08-06:
 a session latched `idle` for four minutes while its own screen showed the working spinner,
 its cli-state file read `busy`, and root turn hooks kept arriving 8 s apart - every layer
 that could have spoken was either blind or being dropped. Three rules close it, in the
@@ -137,8 +145,8 @@ order the observer's switch watcher consults them:
   history row, and mint a new agent run for a conversation that never ended. Claude-only:
   Codex mints rollout filenames the daemon cannot reconstruct.
 - **The staleness net**: a missing followed file alongside a recent root turn hook marks
-  `observation_stale_since` (`reason: transcript_missing`), which is what un-suppresses
-  hooks whatever the cause. Previously a missing file returned early - "no reading" was
+  `observation_stale_since` (`reason: transcript_missing`) and hard-blocks delivery while
+  the liveness comparison independently leaves hooks unsuppressed. Previously a missing file returned early - "no reading" was
   read as "no evidence" - which made the guard written for a moved conversation
   unreachable in the case where it moved hardest. A missing file *without* a turn hook
   stays silent: the observer is aimed before the CLI creates the file, so that is an
@@ -329,10 +337,10 @@ Record shapes verified 2026-07-31 against live transcripts and the CLI's own too
   quietly become a source. Measured live 2026-08-06: the transcript positively closed the
   annotation and this reading re-added it 29 s later with a fresh 30-minute TTL, after
   which nothing but that TTL could clear it. This is the same rule the subagent tier's
-  `create=False` already had. Its markers must also name a **count**
-  (`PTY_BACKGROUND_WAIT_MARKERS`), which is what distinguishes a footer from prose: the
-  same screen carries the user's prompts and the agent's replies, and the captured fixture
-  itself contains a prompt reading "wait for it, then say done".
+  `create=False` already had.
+  The background rules currently include a count because the measured footer does, but that is no longer a classifier-wide requirement.
+  Region scoping now distinguishes the live footer from prose elsewhere in the retained screen.
+  The captured negative fixture includes the former false-positive wording outside the current frame.
 
   `idle_reason: waiting_on_background` is still *derived* from this annotation (or the
   live footer) at each turn end — kept one release for UI compat.
@@ -469,34 +477,38 @@ spinner and a waiting dialog's `●` pulse keep writing while the screen is stat
 of that traffic evicted a dialog's own text within ~90 s (the verdict then degrades to
 `unknown`, which is conservative but blind).
 
-Before matching, the tail is normalized (`_normalize_tail_text`): window titles (OSC) are
-removed outright — the CLI rewrites them with arbitrary task text while working — cursor
-movement reads as a space, styling as nothing, and whitespace runs collapse. This is not
-cosmetic: the current CLI positions every word of a dialog footer at an absolute column
-(`Enter\x1b[8Gto\x1b[11Gconfirm`), so no marker phrase is a contiguous substring of the
-raw stream.
+Before matching, the tail is normalized by `_normalize_tail_text`.
+OSC is removed from body text, cursor movement reads as a space, styling reads as nothing, and horizontal whitespace runs collapse.
+This is not cosmetic because the current CLI positions every word of a dialog footer at an absolute column, such as `Enter\x1b[8Gto\x1b[11Gconfirm`.
 
-`pty_tail_state` classifies the normalized tail as `working`, `approval` (a permission or
-workspace-trust dialog), `idle`, or `unknown`. The markers are version-layered: pre-2.x
-CLIs draw "esc to interrupt" / "? for shortcuts", while the current CLI draws neither —
-its frame-recurring working marker is the spinner phrase ellipsis ("✶ Envisioning…",
-re-written on every animation tick), its idle marker the permission-mode footer's
-"(shift+tab to cycle)", and its dialogs say "Do you want to proceed?" / "Esc to cancel" /
-"Tab to amend" / "Enter to confirm". Marker drift here is silent and disabling — measured
-2026-07-31, the old markers matched nothing the current CLI writes (0 hits across 518 KB
-of a busy session), so every screen recovery below was dead and a stale "awaiting
-approval" survived minutes of visible work. Real captured streams are pinned under
-`tests/fixtures/pty_tails/` (`test_pty_tail_modern.py`); when the CLI drifts again,
-recapture rather than synthesize.
+`PTY_RULES` is one declared, ordered Python table.
+Every rule carries an id, outcome, `ScreenRegion`, and regex predicate.
+The supported regions are `whole_tail`, `bottom_non_empty_lines(n)`, `after_last_prompt_marker`, `osc_title`, and `osc_progress`.
+First match wins when two rules conflict.
+The named prompt-frame region centralizes the former `rfind` ordering arithmetic used separately by lifecycle and background-wait classification.
 
-The tail retains redraw history, so **presence is not enough** — a session that showed a
-dialog and then resumed still contains the dialog text. Only the marker that appears
-*last* describes the live frame, and every caller treats `unknown` as no evidence rather
-than a licence to change state. Ordering is also what keeps the ellipsis honest: a dialog
-or an idle footer is always drawn after the last spinner frame, so their markers outrank
-it on a blocked or finished screen. The approval markers are deliberately narrow: a false
-`approval` only makes the daemon more conservative (it vetoes clearing an awaiting and
-blocks the idle backstop).
+`pty_tail_state` returns `working`, `approval`, `idle`, `uninformative`, or `unknown`.
+Agent-owned model pickers, transcript viewers, and resume lists are `uninformative` because their body text describes a selected item rather than the live agent state.
+All three consumers withhold lifecycle conclusions from that outcome: delivery vetoes sending, watchdog recovery does nothing, and the unwitnessed first-turn fallback does nothing.
+The viewer fixtures and the prose false-positive fixture live under `tests/fixtures/pty_tails/`.
+
+The markers remain version-layered.
+Pre-2.x CLIs draw "esc to interrupt" and "? for shortcuts", while the current Claude CLI draws neither.
+Its recurring working marker is the spinner ellipsis, its idle marker is `(shift+tab to cycle)`, and its dialogs expose narrow cancel, amend, and confirm affordances.
+Marker drift here is silent and disabling.
+Measured 2026-07-31, the old markers matched nothing across 518 KB of a busy session, so every screen recovery was dead and a stale approval survived minutes of visible work.
+Real captured streams are pinned by `test_pty_tail_modern.py` and must be recaptured when the CLI drifts.
+
+OSC 0/2 title and OSC 9;4/4 progress values are extracted incrementally with the same bounded partial-sequence retention used for OSC 7.
+They stay isolated from body text and appear only through their named regions and diagnostics.
+Local ConPTY measurement on 2026-08-06 used Claude Code 2.1.223 and Codex CLI 0.146.1.
+Claude emitted two OSC 0 title writes during startup and no OSC 2, OSC 9;4, or OSC 4 writes.
+Codex emitted none of those channels during startup.
+The retained real Claude captures likewise contain OSC 0 only.
+No title or progress classification rule was added because the measured title is arbitrary task text and neither harness supplied a verified semantic state signal.
+
+`pty_tail_explain` returns every evaluated rule, its match result, its region, and a bounded region preview.
+The live state-log exposes this as `pty_explain`, so a marker drift can be diagnosed without attaching a debugger.
 
 ## Watchdog recovery (pinned behavior)
 

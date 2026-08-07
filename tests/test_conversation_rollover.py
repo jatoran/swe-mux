@@ -563,6 +563,7 @@ def stale_manager(
             # The tailer's own reading of the followed file. Zero means "no growth
             # observed", which is what an actually-dead transcript looks like.
             transcript_growth_ts=transcript_growth_ts,
+            state_transitions=[],
             publish_update=lambda: None,
         ),
     )
@@ -686,7 +687,7 @@ def relocation_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
     manager.events = SimpleNamespace(emit=AsyncMock())
     record = agent_record(cwd=str(tmp_path / "repo"))
     record.native_session_id = native
-    adapter = ClaudeAdapter()
+    adapter = ClaudeAdapter(data_home_resolver=lambda: projects.parent)
     session = cast(
         Any,
         SimpleNamespace(
@@ -699,18 +700,13 @@ def relocation_fixture(tmp_path: Path) -> tuple[Any, Any, Path, Path]:
     return manager, session, current, moved
 
 
-def test_a_relocated_transcript_is_re_found_from_the_live_cwd(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_a_relocated_transcript_is_re_found_from_the_live_cwd(tmp_path: Path) -> None:
     # Not the mtime heuristic and needing none of its ownership analysis: that
     # one guesses *which* conversation a session moved to and can latch onto a
     # sibling's, while this re-finds a file named by the conversation id the
     # session already owns. Both halves are proven - the followed path is gone,
     # and the candidate's stem is this session's own native id.
     manager, session, current, moved = relocation_fixture(tmp_path)
-    monkeypatch.setattr(
-        "swe_mux.adapters.claude.claude_data_home", lambda: moved.parent.parent.parent
-    )
     assert SessionManager._relocated_transcript_candidate(manager, session, current) == moved
 
 
@@ -1132,12 +1128,21 @@ async def test_a_frozen_mtime_leaves_a_finished_agent_deliverable(
 
 
 def test_a_stale_transcript_loses_its_authority_over_hooks() -> None:
-    # This is the half that froze sessions: the parser stayed `ready`, so the hook
-    # fallback was dropped as redundant to a transcript that could no longer report
-    # anything at all.
-    session = cast(Any, SimpleNamespace(record=agent_record()))
+    # Parser confidence is irrelevant to precedence. Growth after the latest
+    # transcript-backed hook owns boundaries; a newer hook proves the followed
+    # transcript has not yet reported that activity.
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=agent_record(),
+            transcript_growth_ts=20.0,
+            last_turn_hook_ts=10.0,
+        ),
+    )
     session.record.parser_status = "ready"
     assert _transcript_authoritative(session) is True
+    session.last_turn_hook_ts = 30.0
+    assert _transcript_authoritative(session) is False
     session.record.observation_stale_since = time.time()
     assert _transcript_authoritative(session) is False
 

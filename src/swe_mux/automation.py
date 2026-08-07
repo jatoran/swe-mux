@@ -18,6 +18,7 @@ from .automation_store import AutomationStore
 from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
+from .harness import HARNESSES
 from .models import MuxEvent, SessionRecord
 from .openrouter import OpenRouterClient, OpenRouterError, OpenRouterResult
 from .session import SessionManager
@@ -153,29 +154,8 @@ TITLE_RETRY_SWEEP_LIMIT = 4
 MAX_TITLE_RETRY_DELAY_SECONDS = 900.0
 CAPABILITY_RANK = {"telemetry": 1, "inferred": 1, "semantic": 2, "derived": 2, "trusted": 3}
 ADAPTER_CAPABILITIES: dict[str, dict[str, Any]] = {
-    "claude": {
-        "native_hooks": True,
-        "transcript": "semantic",
-        "pty": "telemetry",
-        "normalized_events": [
-            "turn_started",
-            "turn_ended",
-            "tool_use",
-            "tool_result",
-            "approval_needed",
-        ],
-    },
-    "codex": {
-        "native_hooks": True,
-        "transcript": "semantic",
-        "pty": "telemetry",
-        "normalized_events": [
-            "turn_started",
-            "turn_ended",
-            "tool_use",
-            "tool_result",
-            "approval_needed",
-        ],
+    **{
+        name: harness.automation_capabilities() for name, harness in HARNESSES.items()
     },
     "shell": {
         "native_hooks": False,

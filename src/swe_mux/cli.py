@@ -7,6 +7,8 @@ import sys
 import urllib.error
 import urllib.request
 
+from .harness import agent_harnesses
+
 
 def request(method: str, path: str, body: dict[str, object] | None = None) -> object:
     base = os.environ.get("MUX_URL", "http://127.0.0.1:8765").rstrip("/")
@@ -26,7 +28,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("ls")
     spawn = sub.add_parser("spawn")
-    spawn.add_argument("--backend", choices=("shell", "claude", "codex"), default="shell")
+    spawn.add_argument("--backend", choices=("shell", *agent_harnesses()), default="shell")
     spawn.add_argument("--name")
     spawn.add_argument("--project", required=True)
     spawn.add_argument("--profile")

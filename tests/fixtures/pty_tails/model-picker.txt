@@ -1,0 +1,6 @@
+Select a model
+
+  1. Default
+  2. Fast
+
+Enter to select - Esc to cancel

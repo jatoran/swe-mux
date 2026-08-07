@@ -3,6 +3,9 @@
 - Changing process/session lifecycle or package boundaries: `design/architecture.md`,
   `design/features/sessions.md`, `design/features/backends.md`,
   `design/features/delivery-readiness.md`
+- Changing the harness registry, descriptors, capability levels, adapter families, or adding a
+  harness: `design/features/backends.md`,
+  `development/HARNESS_ABSTRACTION_AND_OMP.md`
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project notes, the global Scratchpad, files, ignores, or watches:
@@ -67,7 +70,7 @@
   shape: `design/features/notifications.md`, `design/features/device-presence.md`,
   `design/interfaces.md`, `technical/backend/packages.md`,
   `technical/frontend/packages.md`
-- Changing Claude/Codex account capture, switching, or quota polling:
+- Changing managed-harness account capture, switching, or quota polling:
   `design/features/provider-accounts.md`, `design/features/backends.md`
 - Changing history, transcripts, or cross-vendor review: `design/features/history.md`,
   `design/interfaces.md`

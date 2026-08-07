@@ -44,6 +44,12 @@ type UnstyledCodexCaretResult = {
   target: { column: number; row: number } | null
 }
 
+type DecrqmProbeResult = {
+  painted: string
+  responses: string[]
+  writeCompleted: boolean
+}
+
 declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
@@ -52,6 +58,7 @@ declare global {
     runTerminalMobileCursorInitialization: () => Promise<MobileCursorInitializationResult>
     runTerminalSyntheticMouseTap: () => Promise<SyntheticMouseTapResult>
     runUnstyledCodexCaretResolution: () => Promise<UnstyledCodexCaretResult>
+    runDecrqmProbe: () => Promise<DecrqmProbeResult>
   }
 }
 
@@ -250,6 +257,50 @@ window.runTerminalSyntheticMouseTap = async () => {
   const rect=screen.getBoundingClientRect()
   dispatchTerminalMouseTap(screen,rect.left+rect.width/2,rect.top+rect.height/2)
   const result={tracking:domTerm.modes.mouseTrackingMode,reports}
+  input.dispose()
+  domTerm.dispose()
+  return result
+}
+
+/**
+ * oh-my-pi's measured startup probe barrage, DECRQM included. xterm 6.0.0's
+ * DECRQM handler is the one sequence the production bundler used to break
+ * (see scripts/patch-xterm-requestmode.mjs): the first `$p` threw and killed
+ * the write loop, so nothing written afterwards ever rendered. The probe
+ * asserts the write completes, the paint after the queries reaches the grid,
+ * and every mode query got a DECRPM `$y` answer on the onData path.
+ */
+window.runDecrqmProbe = async () => {
+  host.style.display = 'none'
+  const domHost = document.querySelector<HTMLDivElement>('#dom-terminal')!
+  domHost.style.display = 'block'
+  const domTerm = new Terminal({fontFamily:'Consolas, monospace',fontSize:12})
+  const domFit = new FitAddon()
+  domTerm.loadAddon(domFit)
+  domTerm.open(domHost)
+  domFit.fit()
+  const responses:string[]=[]
+  const input=domTerm.onData(data=>responses.push(data))
+  // Captured 2026-08-06 from installed omp 17.2.10 on ConPTY: kitty query,
+  // repeated DA1, OSC 11 background probe, then five DECRQM mode queries.
+  // A parser crash never invokes write callbacks again, so the writes are
+  // raced against a timeout instead of awaited: the broken-bundle failure
+  // mode is a hang, and the probe must report it rather than inherit it.
+  let writeCompleted=false
+  const writes=(async()=>{
+    await writeTo(
+      domTerm,
+      '\x1b[?2004h\x1b[?1l\x1b>\x1b[?u\x1b[c\x1b]11;?\x07\x1b[c\x1b[?2031h\x1b[?2026$p\x1b[c\x1b[?2048$p\x1b[c\x1b[?2031$p\x1b[c\x1b[?1010$p\x1b[c\x1b[?1011$p\x1b[c\x1b[$p',
+    )
+    await writeTo(domTerm,'\r\nomp probe survived\r\n')
+    writeCompleted=true
+  })()
+  await Promise.race([writes,new Promise(resolve=>setTimeout(resolve,3000))])
+  await frame()
+  const buffer=domTerm.buffer.active
+  const lines:string[]=[]
+  for(let row=0;row<domTerm.rows;row+=1)lines.push(buffer.getLine(row)?.translateToString(true)??'')
+  const result={painted:lines.join('\n'),responses,writeCompleted}
   input.dispose()
   domTerm.dispose()
   return result

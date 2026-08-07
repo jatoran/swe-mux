@@ -12,7 +12,7 @@ import pytest
 from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
-from swe_mux.runtime_cwd import Osc7Parser
+from swe_mux.runtime_cwd import Osc7Parser, OscSignalParser
 from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
 from swe_mux.server import session_startup_metrics
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
@@ -145,6 +145,20 @@ def test_a_bounded_replay_restates_the_bracketed_paste_mode_it_cut_off() -> None
     fake.bracketed_paste.feed(b"\x1b[?2004h")
     fake.scrollback.append(b"\x1b[?2004h" + b"output\n" * 40)
     replay = Session.replay_bytes(fake)
+    assert replay.startswith(b"\x1b[?2004h")
+
+
+def test_an_omp_deep_session_replay_preserves_its_startup_bracketed_paste() -> None:
+    # OMP 17.2.10 emits the same DECSET 2004 startup toggle under ConPTY and
+    # leaves its transcript in the normal buffer.  A deep reconnect must carry
+    # that one-time mode declaration back into xterm before replayed output.
+    fake = _fake_session(8192)
+    fake.attach_replay_bytes = 48
+    fake.bracketed_paste.feed(b"\x1b[?2004h")
+    fake.scrollback.append(b"\x1b[?2004h" + b"omp transcript line\n" * 200)
+
+    replay = Session.replay_bytes(fake)
+
     assert replay.startswith(b"\x1b[?2004h")
 
 
@@ -353,6 +367,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
         stopping=True,
         output_window=deque(),
         osc7=Osc7Parser(),
+        osc_signals=OscSignalParser(),
         screen=ScreenModeParser(),
         bracketed_paste=BracketedPasteParser(),
         scrollback=ScrollbackBuffer(1024),

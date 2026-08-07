@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .background_tasks import background
+from .harness import delivers_prompts_through_pty
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -1457,7 +1458,7 @@ class PromptQueueService:
         if session is None:
             raise QueueError("unknown_target", "no such session", status=404)
         record = session.record
-        if record.backend not in {"claude", "codex"}:
+        if not delivers_prompts_through_pty(record.backend):
             raise QueueError(
                 "not_agent_target",
                 "queues target agent sessions only (a shell would execute a paste)",

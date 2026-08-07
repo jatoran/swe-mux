@@ -358,8 +358,11 @@ def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> No
     # The recursive layout feeds pane rails. The depth-first projection feeds the launcher.
     assert "layout={drawerLayout}" in app
     assert "presentation={activeDrawerPresentation}" in app
-    assert "drawerLauncherTabs.map(tab=>{" in app
-    assert "stack.tabs.map((id, index) => {" in drawer
+    assert (
+        "drawerLauncherTabs.filter("
+        "tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{"
+    ) in app
+    assert "stack.tabs.filter(tabAvailable).map((id, index, visibleTabs) => {" in drawer
     assert "renderNode(layout.root)" in drawer
     assert "onTabDragStart={beginDrawerTabDrag}" in app
     assert "props.onTabDragStart(event, id)" in drawer

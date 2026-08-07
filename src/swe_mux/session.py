@@ -28,6 +28,14 @@ from .background_tasks import background
 from .cli_state import CliStateMonitor
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
+from .harness import (
+    AGENT_BACKENDS,
+    Backend,
+    descriptor,
+    has_observable_transcript,
+    reports_lifecycle_hooks,
+    require_backend,
+)
 from .history import HistoryIndex
 from .models import (
     GitState,
@@ -37,7 +45,7 @@ from .models import (
     StandingActivityKind,
 )
 from .pty_host import PtyHost, merge_environment
-from .runtime_cwd import Osc7Parser, local_directory_from_osc7
+from .runtime_cwd import Osc7Parser, OscSignalParser, local_directory_from_osc7
 from .screen_mode import (
     BRACKETED_PASTE_TOGGLE,
     SCREEN_TOGGLE,
@@ -207,7 +215,6 @@ STATE_EVIDENCE_SOURCES: dict[str, frozenset[str]] = {
 # notification/process). The startup-quiet PTY fallback passes inferred=True
 # explicitly because "pty" is also the proven source for process exits.
 INFERRED_TRANSITION_SOURCES = frozenset({"watchdog", "watchdog-pty"})
-AGENT_BACKENDS = frozenset({"claude", "codex"})
 
 # Bound on the inferred share of turn terminals before status health alarms.
 # A healthy fleet reaches terminal status by proven evidence; inferred
@@ -278,7 +285,7 @@ def fleet_status_health(sessions: Any, *, now: float | None = None) -> dict[str,
     path_claims: dict[tuple[str, str], list[str]] = {}
     for session in sessions:
         record = session.record
-        if record.backend not in {"claude", "codex"}:
+        if record.backend not in AGENT_BACKENDS:
             continue
         if record.state not in {"exited", "crashed"}:
             if record.native_session_id:
@@ -808,60 +815,153 @@ WatchdogAction = Literal[
     "startup_dialog_clear",
 ]
 
-# What the CLI is showing right now, read from the scrollback tail. The tail
-# holds redraw history, so presence alone is not enough: the marker that appears
-# *last* is the live frame. An unrecognized TUI reads "unknown" and every caller
-# treats that as "no evidence", never as a licence to change state.
-PtyTailState = Literal["working", "approval", "idle", "unknown"]
-# "esc to interrupt" is the pre-2.x CLI. Captured 2026-07-31 against the current
-# Claude Code: no working frame contains it (0 hits across 518 KB of a busy
-# session's scrollback), which silently disabled every screen-based recovery —
-# most visibly `resume_working`, leaving sessions displayed "awaiting approval"
-# through minutes of real work. The invariant that survives the CLI's partial-
-# cell redraws is the spinner phrase itself ("✶ Envisioning…", "● Reading 1
-# file…"): the word varies per frame but always ends in U+2026, and it recurs on
-# every animation tick, so it stays inside the 8 KiB tail for as long as the CLI
-# is actually busy. Ordering keeps it honest — a dialog or an idle footer is
-# always drawn *after* the last spinner frame, so their markers outrank it on a
-# blocked or finished screen. Window titles are the one later writer that could
-# carry stray text; `pty_tail_state` strips OSC sequences before matching.
-PTY_WORKING_MARKERS = ("esc to interrupt", "…")
-# Deliberately narrow: a false "approval" only ever makes the daemon *more*
-# conservative (it vetoes clearing an awaiting and blocks the idle backstop).
-# "esc to cancel"/"tab to amend" are the current CLI's dialog affordances
-# (permission dialogs say "Do you want to proceed? … Esc to cancel · Tab to
-# amend"); "enter to confirm" covers the workspace-trust dialog, whose body
-# never says "do you want to" but blocks the session just the same.
-PTY_APPROVAL_MARKERS = (
-    "do you want to",
-    "allow this command",
-    "allow codex to",
-    "esc to cancel",
-    "tab to amend",
-    "enter to confirm",
+# What the CLI is showing right now, read from named parts of its terminal
+# evidence. Agent-owned viewers deliberately return `uninformative`: their body
+# text describes another screen and must not be mistaken for live lifecycle
+# evidence by any PTY consumer.
+PtyTailState = Literal["working", "approval", "idle", "uninformative", "unknown"]
+ScreenRuleState = Literal[
+    "working", "approval", "idle", "background_wait", "uninformative"
+]
+ScreenRegionKind = Literal[
+    "whole_tail",
+    "bottom_non_empty_lines",
+    "after_last_prompt_marker",
+    "osc_title",
+    "osc_progress",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenRegion:
+    kind: ScreenRegionKind
+    lines: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenRule:
+    id: str
+    state: ScreenRuleState
+    region: ScreenRegion
+    predicate: re.Pattern[str]
+    backends: frozenset[str] | None = None
+
+
+WHOLE_TAIL = ScreenRegion("whole_tail")
+AFTER_LAST_PROMPT_MARKER = ScreenRegion("after_last_prompt_marker")
+OSC_TITLE = ScreenRegion("osc_title")
+OSC_PROGRESS = ScreenRegion("osc_progress")
+
+
+def bottom_non_empty_lines(lines: int) -> ScreenRegion:
+    if lines < 1:
+        raise ValueError("screen region line count must be positive")
+    return ScreenRegion("bottom_non_empty_lines", lines)
+
+
+def _contains(value: str) -> re.Pattern[str]:
+    return re.compile(re.escape(value), re.IGNORECASE)
+
+
+# Declared order is conflict precedence. The first matching rule wins.
+# Viewer predicates are deliberately conjunctive and footer-scoped so ordinary
+# transcript prose containing words such as "model" or "resume" cannot hide a
+# live state reading.
+PTY_RULES: tuple[ScreenRule, ...] = (
+    ScreenRule(
+        "viewer.model_picker",
+        "uninformative",
+        bottom_non_empty_lines(12),
+        re.compile(r"(?is)(?:select|choose) (?:a )?model.*(?:enter to select|esc to cancel)"),
+    ),
+    ScreenRule(
+        "viewer.resume_list",
+        "uninformative",
+        bottom_non_empty_lines(12),
+        re.compile(
+            r"(?is)resume (?:a )?(?:conversation|session).*(?:enter to select|esc to cancel)"
+        ),
+    ),
+    ScreenRule(
+        "viewer.transcript",
+        "uninformative",
+        bottom_non_empty_lines(12),
+        re.compile(r"(?is)transcript.*(?:esc to (?:close|go back)|press q to (?:quit|close))"),
+    ),
+    ScreenRule(
+        "viewer.omp_model_picker",
+        "uninformative",
+        bottom_non_empty_lines(12),
+        re.compile(
+            r"(?is)all available models.*enter assign roles.*type to search.*esc close"
+        ),
+    ),
+    ScreenRule(
+        "viewer.omp_session_tree",
+        "uninformative",
+        bottom_non_empty_lines(12),
+        re.compile(r"(?is)session tree.*enter: switch.*search:"),
+    ),
+    ScreenRule(
+        "approval.question", "approval", AFTER_LAST_PROMPT_MARKER, _contains("do you want to")
+    ),
+    ScreenRule(
+        "approval.command",
+        "approval",
+        AFTER_LAST_PROMPT_MARKER,
+        _contains("allow this command"),
+    ),
+    ScreenRule("approval.codex", "approval", AFTER_LAST_PROMPT_MARKER, _contains("allow codex to")),
+    ScreenRule("approval.cancel", "approval", AFTER_LAST_PROMPT_MARKER, _contains("esc to cancel")),
+    ScreenRule("approval.amend", "approval", AFTER_LAST_PROMPT_MARKER, _contains("tab to amend")),
+    ScreenRule(
+        "approval.confirm",
+        "approval",
+        AFTER_LAST_PROMPT_MARKER,
+        _contains("enter to confirm"),
+    ),
+    ScreenRule(
+        "working.interrupt",
+        "working",
+        AFTER_LAST_PROMPT_MARKER,
+        _contains("esc to interrupt"),
+    ),
+    ScreenRule(
+        "working.spinner",
+        "working",
+        AFTER_LAST_PROMPT_MARKER,
+        _contains("…"),
+        frozenset({"claude"}),
+    ),
+    ScreenRule("idle.shortcuts", "idle", AFTER_LAST_PROMPT_MARKER, _contains("? for shortcuts")),
+    ScreenRule(
+        "idle.mode_cycle",
+        "idle",
+        AFTER_LAST_PROMPT_MARKER,
+        _contains("(shift+tab to cycle)"),
+    ),
+    ScreenRule(
+        "idle.omp_prompt",
+        "idle",
+        bottom_non_empty_lines(4),
+        re.compile(r"(?is)π\s*>.*\(sub\)\s*▶"),
+    ),
+    ScreenRule(
+        "background.still_running",
+        "background_wait",
+        AFTER_LAST_PROMPT_MARKER,
+        re.compile(r"\d+\s+[a-z]+s?\s+still running", re.IGNORECASE),
+    ),
+    ScreenRule(
+        "background.waiting_count",
+        "background_wait",
+        AFTER_LAST_PROMPT_MARKER,
+        re.compile(r"waiting for\s+\d+\s+background task", re.IGNORECASE),
+    ),
 )
-# "? for shortcuts" is the pre-2.x idle footer; the current CLI's idle screen
-# shows the permission-mode line ("⏵⏵ accept edits on (shift+tab to cycle) …")
-# instead, and that parenthetical is its stable, mode-independent fragment.
-PTY_IDLE_MARKERS = ("? for shortcuts", "(shift+tab to cycle)")
-# The CLI's own line for "my turn is over but background work is still running".
-# Pre-2.x drew `✻ Waiting for 2 background tasks to finish`; the current CLI
-# (captured 2026-07-31, tests/fixtures/pty_tails/background-wait.bin) replaces
-# the idle footer hint with `✻ churned for 4s · 1 shell still running · check
-# the task status` - the noun varies (`shell`, `monitor`), the count does not.
-# This is an *idle sub-reason* / `background_tasks` annotation corroboration,
-# never a state: the composer accepts input and delivery is safe either way.
-#
-# Every marker must name a **count**, which is what makes it a footer rather than
-# prose. The earlier bare substrings ("waiting for", "background task", "still
-# running") were searched over 32 KiB of screen that also carries the user's
-# prompts, the agent's own replies, and any tool output - the same fixture that
-# pins the real footer also contains a user prompt reading "wait for it, then say
-# done". A marker that arbitrary English can satisfy is not evidence, and this
-# one had no negative signal to retract it: the reading only ever added.
-PTY_BACKGROUND_WAIT_MARKERS = (
-    re.compile(r"\d+\s+[a-z]+s?\s+still running"),
-    re.compile(r"waiting for\s+\d+\s+background task"),
+
+_PROMPT_FRAME_RULES = tuple(
+    rule for rule in PTY_RULES if rule.region.kind == "after_last_prompt_marker"
 )
 
 
@@ -880,67 +980,94 @@ _OSC_TITLE_SEQUENCE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _OSC_TITLE_UNTERMINATED = re.compile(r"\x1b\][^\x07\x1b]*\Z")
 _CSI_CURSOR_MOVEMENT = re.compile(r"\x1b\[[0-9;]*[ABCDEFGHfd]")
 _CSI_OR_SIMPLE_ESCAPE = re.compile(r"\x1b\[[0-9;:?<=>]*[A-Za-z@`~]|\x1b[=>()#][0-9A-Za-z]?")
-_TAIL_WHITESPACE_RUN = re.compile(r"[\s\x00-\x08\x0b-\x1f]+")
-
-
-def pty_tail_waiting_on_background(tail: str) -> bool:
-    """True when the live frame shows the CLI waiting on its own background work.
-
-    Ordering-aware like `pty_tail_state`: the marker must appear *after* the last
-    idle prompt, because the retained tail also holds the frame from before the
-    turn ended.
-
-    Compared against the hard interrupt hint only, not the spinner-ellipsis
-    working marker: the background-wait line is itself spinner-drawn, so on
-    current CLIs its own frame would outrank it and the sub-reason could never
-    be read.
-    """
-    lowered = _normalize_tail_text(tail).lower()
-    starts = [
-        match.start()
-        for pattern in PTY_BACKGROUND_WAIT_MARKERS
-        for match in pattern.finditer(lowered)
-    ]
-    marker = max(starts, default=-1)
-    if marker < 0:
-        return False
-    working = lowered.rfind("esc to interrupt")
-    # A live turn ("esc to interrupt") is `working`, not a background wait.
-    return marker > working
+_TAIL_HORIZONTAL_WHITESPACE_RUN = re.compile(r"[^\S\r\n\x0b\x0c]+|[\x00-\x08\x0b\x0c\x0e-\x1f]+")
 
 
 def _normalize_tail_text(tail: str) -> str:
     text = _OSC_TITLE_UNTERMINATED.sub("", _OSC_TITLE_SEQUENCE.sub("", tail))
     text = _CSI_CURSOR_MOVEMENT.sub(" ", text)
     text = _CSI_OR_SIMPLE_ESCAPE.sub("", text)
-    return _TAIL_WHITESPACE_RUN.sub(" ", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return _TAIL_HORIZONTAL_WHITESPACE_RUN.sub(" ", text)
 
 
-def pty_tail_state(tail: str) -> PtyTailState:
-    """Classify the CLI's current screen from its scrollback tail.
+def screen_region_text(
+    region: ScreenRegion,
+    normalized_tail: str,
+    *,
+    osc_title: str | None = None,
+    osc_progress: str | None = None,
+) -> str:
+    if region.kind == "whole_tail":
+        return normalized_tail
+    if region.kind == "bottom_non_empty_lines":
+        lines = [line for line in normalized_tail.splitlines() if line.strip()]
+        return "\n".join(lines[-region.lines :])
+    if region.kind == "osc_title":
+        return osc_title or ""
+    if region.kind == "osc_progress":
+        return osc_progress or ""
+    starts = [
+        match.start()
+        for rule in _PROMPT_FRAME_RULES
+        for match in rule.predicate.finditer(normalized_tail)
+    ]
+    return normalized_tail[max(starts, default=0) :]
 
-    Ordering-aware by construction: a session that showed a permission dialog
-    and then resumed still has the dialog text in the retained tail, so only the
-    last marker describes the live frame.
-    """
-    lowered = _normalize_tail_text(tail).lower()
-    positions: list[tuple[int, PtyTailState]] = []
-    for markers, name in (
-        (PTY_WORKING_MARKERS, "working"),
-        (PTY_APPROVAL_MARKERS, "approval"),
-        (PTY_IDLE_MARKERS, "idle"),
-    ):
-        found = max((lowered.rfind(marker) for marker in markers), default=-1)
-        if found >= 0:
-            positions.append((found, name))  # type: ignore[arg-type]
-    if not positions:
-        return "unknown"
-    return max(positions)[1]
+
+def pty_tail_explain(
+    tail: str,
+    *,
+    backend: str | None = None,
+    osc_title: str | None = None,
+    osc_progress: str | None = None,
+) -> dict[str, Any]:
+    """Return the classifier outcome and bounded evidence for every rule."""
+    normalized = _normalize_tail_text(tail)
+    evaluations: list[dict[str, Any]] = []
+    outcome: PtyTailState = "unknown"
+    for rule in PTY_RULES:
+        applicable = rule.backends is None or backend is None or backend in rule.backends
+        text = screen_region_text(
+            rule.region,
+            normalized,
+            osc_title=osc_title,
+            osc_progress=osc_progress,
+        )
+        matched = applicable and rule.predicate.search(text) is not None
+        evaluations.append(
+            {
+                "id": rule.id,
+                "state": rule.state,
+                "applicable": applicable,
+                "region": rule.region.kind,
+                "region_lines": rule.region.lines or None,
+                "matched": matched,
+                "preview": text[-240:],
+            }
+        )
+        if matched and rule.state != "background_wait" and outcome == "unknown":
+            outcome = cast(PtyTailState, rule.state)
+    return {"outcome": outcome, "rules": evaluations}
 
 
-def pty_tail_appears_idle(tail: str) -> bool:
+def pty_tail_waiting_on_background(tail: str, *, backend: str | None = None) -> bool:
+    """True when the live frame shows the CLI waiting on background work."""
+    explanation = pty_tail_explain(tail, backend=backend)
+    return any(
+        item["matched"] and item["state"] == "background_wait"
+        for item in explanation["rules"]
+    )
+
+
+def pty_tail_state(tail: str, *, backend: str | None = None) -> PtyTailState:
+    """Classify the CLI's current screen from its scrollback tail."""
+    return cast(PtyTailState, pty_tail_explain(tail, backend=backend)["outcome"])
+
+
+def pty_tail_appears_idle(tail: str, *, backend: str | None = None) -> bool:
     """True only when the CLI's latest frame is its idle input prompt."""
-    return pty_tail_state(tail) == "idle"
+    return pty_tail_state(tail, backend=backend) == "idle"
 
 
 def session_is_unwitnessed(session: Any) -> bool:
@@ -1034,7 +1161,11 @@ def watchdog_decision(
             and (startup_dialog_seconds or 0.0) >= STATE_WATCHDOG_STARTUP_DIALOG_SECONDS
         ):
             return "startup_dialog_block"
-        if state == "awaiting" and startup_dialog_raised and pty_state != "approval":
+        if (
+            state == "awaiting"
+            and startup_dialog_raised
+            and pty_state in {"working", "idle"}
+        ):
             return "startup_dialog_clear"
     if state not in {"working", "awaiting"}:
         return "none"
@@ -1293,11 +1424,22 @@ def reset_session_observation_state(session: Any, evidence: str) -> None:
     from .observation import cancel_pending_approval
 
     cancel_pending_approval(session, evidence)
+    previous = session.observation_state if isinstance(session.observation_state, dict) else {}
+    # Ordered hook delivery belongs to the live harness process, not one
+    # conversation run. OMP keeps the same extension instance and sequence
+    # across /new, /fork, /resume, and /clear, so resetting this ledger at a
+    # rollover would let a delayed pre-rollover retry mutate the new run.
+    hook_sequences = previous.get("hook_sequences")
+    hook_sequence_duplicates = previous.get("hook_sequence_duplicates")
     session.observation_state = {
         "root_turn_active": False,
         "root_completion_seen": False,
         "codex_scope": "root",
     }
+    if isinstance(hook_sequences, dict):
+        session.observation_state["hook_sequences"] = dict(hook_sequences)
+    if isinstance(hook_sequence_duplicates, int) and hook_sequence_duplicates >= 0:
+        session.observation_state["hook_sequence_duplicates"] = hook_sequence_duplicates
 
 
 class Session:
@@ -1476,6 +1618,7 @@ class Session:
         # promotion may reuse the same native id (for example, resume).
         self.ignored_detection_runs: set[tuple[str, str]] = set()
         self.osc7 = Osc7Parser()
+        self.osc_signals = OscSignalParser()
         self.cwd_debounce_task: asyncio.Task[Any] | None = None
         self.cwd_switches: deque[float] = deque()
         self.cwd_telemetry_dropped = 0
@@ -1553,18 +1696,35 @@ class Session:
 
         A bounded window can begin after the child selected the alternate screen,
         which would leave the client painting a full-screen TUI into its *normal*
-        buffer — every repaint growing scrollback instead of overwriting one
+        buffer - every repaint growing scrollback instead of overwriting one
         screen, which is precisely the cost the bound exists to remove. The daemon
         tracks the mode from the stream itself (`screen_mode.py`), so it can
         restate it.
 
         Only restated when the window carries no toggle of its own. A window that
-        does contains its own answer, and prefixing would override a child that
+        contains its own answer, and prefixing would override a child that
         deliberately left the alternate screen inside it.
         """
         replay = self.scrollback.tail(self.attach_replay_bytes)
+        suffix = b""
+        # Boundary guard, not a diagnosis: the 2026-08-06 black OMP panes were an
+        # xterm bundling defect crashing on DECRQM (see
+        # frontend/scripts/patch-xterm-requestmode.mjs), not an unmatched paint
+        # bracket. The guard stays because the hazard it names is real for any
+        # harness that brackets paints: the replay snapshot may land between a
+        # DEC 2026 begin/end or an autowrap off/on pair, and a window ending on
+        # the open half leaves a fresh client withholding (2026) or mis-wrapping
+        # (autowrap) everything after it until the live stream happens to close
+        # the bracket - forever, if the child stops painting. Close only modes
+        # whose complete opening sequence is newer than their complete closing
+        # sequence; this does not splice bytes into a partial CSI at the
+        # snapshot boundary.
+        if replay.rfind(b"\x1b[?2026h") > replay.rfind(b"\x1b[?2026l"):
+            suffix += b"\x1b[?2026l"
+        if replay.rfind(b"\x1b[?7l") > replay.rfind(b"\x1b[?7h"):
+            suffix += b"\x1b[?7h"
         if len(replay) == self.scrollback.size:
-            return replay
+            return replay + suffix
         preamble = b""
         # Agent CLIs enable bracketed paste once at startup and never restate it, so
         # a bounded window over a long session never carries it. A reconnecting pane
@@ -1574,7 +1734,7 @@ class Session:
             preamble += b"\x1b[?2004h"
         if self.screen.mode == "alternate" and not SCREEN_TOGGLE.search(replay):
             preamble += b"\x1b[?1049h"
-        return preamble + replay if preamble else replay
+        return preamble + replay + suffix
 
     def _schedule_resync(self, subscriber: PtySubscriber, rejected: bytes | None = None) -> None:
         if rejected is not None:
@@ -1909,6 +2069,7 @@ class SessionManager:
         startup_timing_ms = dict(startup_timing_ms or {})
         if backend not in self.adapters:
             raise ValueError(f"unknown backend: {backend}")
+        backend = require_backend(backend)
         if completion_mode not in {"interactive", "one_shot"}:
             raise ValueError(f"unknown completion mode: {completion_mode}")
         if completion_mode == "one_shot" and backend != "shell":
@@ -1920,11 +2081,13 @@ class SessionManager:
             raise ValueError("adopting an agent run requires resuming its conversation")
         sid = str(uuid.uuid4())
         native_id = resume_native_id or sid
+        hook_secret = secrets.token_urlsafe(24)
+        mcp_token = secrets.token_urlsafe(32)
         resolved_cwd = Path(cwd or Path.cwd()).resolve()
         if not resolved_cwd.is_dir():
             raise ValueError(f"cwd does not exist: {resolved_cwd}")
         adapter = self.adapters[backend]
-        opts = SpawnOptions(resolved_cwd, exe, args or [], sid)
+        opts = SpawnOptions(resolved_cwd, exe, args or [], sid, mcp_token)
         spawn_spec = (
             adapter.resume_spec(native_id, opts)
             if resume_native_id
@@ -1970,7 +2133,7 @@ class SessionManager:
         record.spawn_project_label = record.project_label
         record.spawn_project_root = project.root
         record.runtime_cwd = str(resolved_cwd)
-        if backend in {"claude", "codex"}:
+        if backend in AGENT_BACKENDS:
             record.agent_run_id = adopt_run_id or sid
             # The run's start stays this PTY's own: it is the floor for spooled
             # hook replay and transcript candidacy, and backdating it to the
@@ -1980,8 +2143,6 @@ class SessionManager:
             record.run_cwd = str(resolved_cwd)
             record.run_project_scope_id = project.id
             record.run_repo_group_id = project.repo_group_id
-        hook_secret = secrets.token_urlsafe(24)
-        mcp_token = secrets.token_urlsafe(32)
         env_extra = {
             **self.child_env,
             **{
@@ -2130,7 +2291,7 @@ class SessionManager:
         registration_task.add_done_callback(session.tasks.discard)
         session.tasks.add(asyncio.create_task(self._fanout(session), name=f"fanout-{sid}"))
         session.tasks.add(asyncio.create_task(self._ticker(session), name=f"ticker-{sid}"))
-        if backend in {"claude", "codex"}:
+        if has_observable_transcript(backend):
             record.parser_status = "waiting"
             self._start_observer(session, transcript)
         elif backend == "shell":
@@ -2259,6 +2420,21 @@ class SessionManager:
         # re-enters `_await_owned_transcript` and either exact-matches (the hook
         # bound it in the meantime) or guesses again under the same rules.
         transcript = None if session.transcript_provisional else session.transcript_path
+        observation_state = getattr(session, "observation_state", {})
+        hook_sequences = observation_state.get("hook_sequences")
+        ordered_hook_state = (
+            {
+                str(source)[:64]: sequence
+                for source, sequence in hook_sequences.items()
+                if isinstance(source, str)
+                and isinstance(sequence, int)
+                and not isinstance(sequence, bool)
+                and sequence > 0
+            }
+            if isinstance(hook_sequences, dict)
+            else {}
+        )
+        hook_sequence_duplicates = observation_state.get("hook_sequence_duplicates", 0)
         return {
             "record": session.record.snapshot(),
             "hook_secret": session.hook_secret,
@@ -2266,10 +2442,18 @@ class SessionManager:
             "transcript_path": str(transcript) if transcript else None,
             "agent_lifecycle_id": session.agent_lifecycle_id,
             "approval_candidate": getattr(session, "approval_candidate", None),
+            "hook_sequences": ordered_hook_state,
+            "hook_sequence_duplicates": (
+                hook_sequence_duplicates
+                if isinstance(hook_sequence_duplicates, int)
+                and not isinstance(hook_sequence_duplicates, bool)
+                and hook_sequence_duplicates >= 0
+                else 0
+            ),
         }
 
     @staticmethod
-    def _infer_spawn_backend(record: SessionRecord) -> str:
+    def _infer_spawn_backend(record: SessionRecord) -> Backend:
         """Recover the immutable root provider from legacy supervisor metadata."""
         if record.spawn_backend == "shell" or record.spawn_backend in AGENT_BACKENDS:
             return record.spawn_backend
@@ -2698,6 +2882,9 @@ class SessionManager:
         record.awaiting_reason = None
         record.tokens_in = 0
         record.tokens_out = 0
+        record.tokens_cache_read = 0
+        record.tokens_cache_write = 0
+        record.cost_usd = 0.0
         record.context_window = 0
         record.context_pct = 0
         record.context_peak_pct = 0
@@ -2705,6 +2892,8 @@ class SessionManager:
         record.last_compaction_at = None
         record.compaction_capability = None
         record.compaction_confidence = None
+        record.provider = None
+        record.provider_account_hashes = {}
         record.model = None
         record.measurement_source = None
         record.parser_status = "waiting"
@@ -2714,6 +2903,7 @@ class SessionManager:
         record.parser_unknown_signatures = {}
         record.parser_schema_version = None
         record.observation_stale_since = None
+        record.observation_diagnostic = None
         # Annotations describe the observation identity being reset here. This is
         # a silent record-level clear for the adoption-repair paths (no Session,
         # no ledger yet); live callers ledger via clear_all_standing_activity
@@ -2945,6 +3135,25 @@ class SessionManager:
                 mcp_token=str(meta.get("mcp_token") or ""),
                 attach_replay_bytes=self.attach_replay_bytes,
             )
+            raw_hook_sequences = meta.get("hook_sequences")
+            if isinstance(raw_hook_sequences, dict):
+                session.observation_state["hook_sequences"] = {
+                    str(source)[:64]: sequence
+                    for source, sequence in raw_hook_sequences.items()
+                    if isinstance(source, str)
+                    and isinstance(sequence, int)
+                    and not isinstance(sequence, bool)
+                    and sequence > 0
+                }
+            raw_hook_sequence_duplicates = meta.get("hook_sequence_duplicates")
+            if (
+                isinstance(raw_hook_sequence_duplicates, int)
+                and not isinstance(raw_hook_sequence_duplicates, bool)
+                and raw_hook_sequence_duplicates >= 0
+            ):
+                session.observation_state["hook_sequence_duplicates"] = (
+                    raw_hook_sequence_duplicates
+                )
             raw_approval_candidate = meta.get("approval_candidate")
             if isinstance(raw_approval_candidate, dict):
                 raw_candidate_started_at = raw_approval_candidate.get("started_at")
@@ -2978,6 +3187,7 @@ class SessionManager:
             # it the fact would be lost for the whole remaining life of the PTY.
             session.screen.feed(replay)
             session.bracketed_paste.feed(replay)
+            session.osc_signals.feed(replay)
             session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")
             # The lifecycle anchor is what Branch forks from and what the exit
@@ -3044,7 +3254,7 @@ class SessionManager:
                             str(session.transcript_path) if session.transcript_path else None
                         ),
                     )
-                if record.backend in AGENT_BACKENDS:
+                if has_observable_transcript(record.backend):
                     self._start_observer(session, session.transcript_path)
                 elif record.backend == "shell":
                     self._start_detection(session)
@@ -3217,6 +3427,7 @@ class SessionManager:
             }
             if len(distinct) == 1:
                 _, backend, path, native_id = next(iter(distinct.values()))
+                backend = require_backend(backend)
                 await self._begin_agent_run(session)
                 session.adapter = self.adapters[backend]
                 session.pty.graceful_exit = session.adapter.graceful_exit_keys()
@@ -3251,8 +3462,9 @@ class SessionManager:
     async def promote(
         self, sid: str, backend: str, native_id: str, launch_cwd: str | None = None
     ) -> Session:
-        if backend not in {"claude", "codex"}:
+        if backend not in AGENT_BACKENDS:
             raise ValueError(f"cannot promote session to {backend}")
+        backend = require_backend(backend)
         session = self.resolve(sid)
         self._ensure_spawn_identity(session.record)
         if session.record.spawn_backend in AGENT_BACKENDS:
@@ -3462,9 +3674,17 @@ class SessionManager:
             # writing somewhere else now, so our view of it is no longer true:
             # fail closed the same way an unfollowable rollover does.
             record.observation_stale_since = time.time()
-            record.parser_diagnostic = (
+            record.observation_diagnostic = (
                 f"the CLI moved to conversation {native_id}, which live session "
                 f"{owner.record.id} owns; refusing to follow it"
+            )
+            session.state_transitions.append(
+                {
+                    "ts": time.time(),
+                    "kind": "observation_liveness_lost",
+                    "reason": "rollover_claimed_by_live_sibling",
+                    "native_session_id": native_id,
+                }
             )
             log.warning(
                 "session %s tried to roll onto conversation %s owned by live session %s",
@@ -3514,8 +3734,12 @@ class SessionManager:
         session.first_user_prompt = None
         session.last_user_prompt = None
         record.observation_stale_since = None
+        record.observation_diagnostic = None
         record.tokens_in = 0
         record.tokens_out = 0
+        record.tokens_cache_read = 0
+        record.tokens_cache_write = 0
+        record.cost_usd = 0.0
         record.context_window = 0
         record.context_pct = 0.0
         record.context_peak_pct = 0.0
@@ -3575,7 +3799,7 @@ class SessionManager:
         if session is None:
             return False
         record = session.record
-        if record.backend not in AGENT_BACKENDS:
+        if not reports_lifecycle_hooks(record.backend):
             return False
         adapter = self.adapters.get(record.backend)
         if transcript is None and adapter is not None:
@@ -3744,7 +3968,7 @@ class SessionManager:
             await self._await_switch_tick(session, stop_event)
             if stop_event.is_set() or observe_task.done():
                 break
-            if session.record.backend not in {"claude", "codex"}:
+            if not has_observable_transcript(session.record.backend):
                 break
             # The CLI's own word first. A hook names the file it is writing, which
             # settles in one comparison what the readings below have to infer from
@@ -3765,6 +3989,25 @@ class SessionManager:
                     reported,
                 )
                 return reported
+            pending_resolver = getattr(session.adapter, "pending_transcript_path", None)
+            try:
+                pending = (
+                    pending_resolver(session.record.id, current)
+                    if callable(pending_resolver)
+                    else None
+                )
+            except (OSError, ValueError):
+                pending = None
+            if isinstance(pending, Path):
+                await self.events.emit(
+                    "transcript_retargeted",
+                    session_id=session.record.id,
+                    source="breadcrumb",
+                    backend=session.record.backend,
+                    previous=str(current),
+                    path=str(pending),
+                )
+                return pending
             relocated = self._relocated_transcript_candidate(session, current)
             if relocated is not None:
                 await self.events.emit(
@@ -3870,7 +4113,9 @@ class SessionManager:
         for a session that only changed directory.
         """
         record = session.record
-        if record.backend not in AGENT_BACKENDS or session.stopping:
+        if not reports_lifecycle_hooks(record.backend) or session.stopping:
+            return
+        if not descriptor(record.backend).reports_transcript_path:
             return
         if not getattr(session.adapter, "resolves_transcript_by_cwd", False):
             # A backend that addresses conversations by id never moves a file, so a
@@ -4004,7 +4249,14 @@ class SessionManager:
         if marked is None:
             return
         record.observation_stale_since = None
-        record.parser_diagnostic = None
+        record.observation_diagnostic = None
+        session.state_transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "observation_liveness_restored",
+                "reason": evidence,
+            }
+        )
         log.info(
             "session %s observation no longer stale after %.1fs (%s)",
             record.id,
@@ -4070,9 +4322,17 @@ class SessionManager:
             if now - session.last_turn_hook_ts > TRANSCRIPT_STALE_SECONDS:
                 return
             record.observation_stale_since = now
-            record.parser_diagnostic = (
+            record.observation_diagnostic = (
                 f"transcript {current.name} is missing while the CLI kept reporting "
                 "activity; the conversation may have moved"
+            )
+            session.state_transitions.append(
+                {
+                    "ts": now,
+                    "kind": "observation_liveness_lost",
+                    "reason": "transcript_missing",
+                    "transcript_path": str(current),
+                }
             )
             log.warning(
                 "session %s observation stale: transcript %s missing with a turn hook %.0fs ago",
@@ -4112,10 +4372,18 @@ class SessionManager:
         if not stale:
             return
         record.observation_stale_since = now
-        record.parser_diagnostic = (
+        record.observation_diagnostic = (
             f"transcript {current.name} last written "
             f"{int(now - last_write)}s ago while the CLI kept reporting activity; "
             "the conversation may have been replaced"
+        )
+        session.state_transitions.append(
+            {
+                "ts": now,
+                "kind": "observation_liveness_lost",
+                "reason": "transcript_stale",
+                "transcript_path": str(current),
+            }
         )
         # Warned, not just emitted: this blocks delivery and revokes the
         # transcript's authority, and the 2026-08-06 false-positive incident left
@@ -4552,7 +4820,7 @@ class SessionManager:
         from .observation import transcript_tail_turn_state
 
         record = session.record
-        if record.backend not in {"claude", "codex"}:
+        if not has_observable_transcript(record.backend):
             return
         # Annotation TTL sweep runs before any early return below: expiry is
         # time-based and owes nothing to turn state or transcript quiet.
@@ -4893,7 +5161,16 @@ class SessionManager:
             tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
         except (OSError, ValueError):
             return "unknown"
-        return pty_tail_state(tail)
+        osc_signals = getattr(session, "osc_signals", None)
+        return cast(
+            PtyTailState,
+            pty_tail_explain(
+                tail,
+                backend=session.record.backend,
+                osc_title=getattr(osc_signals, "title", None),
+                osc_progress=getattr(osc_signals, "progress", None),
+            )["outcome"],
+        )
 
     def _pty_appears_idle(self, session: Session) -> bool:
         """Apply the shared idle-prompt heuristic to this session's scrollback tail."""
@@ -4925,6 +5202,7 @@ class SessionManager:
                 session.output_window.popleft()
             session.screen.feed(chunk)
             session.bracketed_paste.feed(chunk)
+            session.osc_signals.feed(chunk)
             prompt_uris = session.osc7.feed(chunk)
             if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
                 session.record.startup_timing_ms["first_prompt"] = round(
@@ -4933,11 +5211,11 @@ class SessionManager:
                 timing_changed = True
             for uri in prompt_uris:
                 self._queue_runtime_cwd(session, uri)
-            if prompt_uris and session.record.backend in {"claude", "codex"}:
+            if prompt_uris and session.record.backend in AGENT_BACKENDS:
                 self._queue_agent_exit_check(session)
             session.scrollback.append(chunk)
             session.publish_output(chunk)
-            if session.record.backend in {"claude", "codex"} and session.record.state == "starting":
+            if session.record.backend in AGENT_BACKENDS and session.record.state == "starting":
                 self._queue_agent_ready_check(session)
             if timing_changed:
                 session.publish_update()
@@ -5017,7 +5295,7 @@ class SessionManager:
             if session.stop_event.is_set() or session.stopping:
                 return
             backend = session.record.backend
-            if backend not in {"claude", "codex"}:
+            if backend not in AGENT_BACKENDS:
                 return
             path = session.transcript_path
             quiet = True
@@ -5190,6 +5468,9 @@ class SessionManager:
         session.record.run_repo_group_id = project.repo_group_id
         session.record.tokens_in = 0
         session.record.tokens_out = 0
+        session.record.tokens_cache_read = 0
+        session.record.tokens_cache_write = 0
+        session.record.cost_usd = 0.0
         session.record.context_window = 0
         session.record.context_pct = 0
         session.record.context_peak_pct = 0

@@ -8,6 +8,7 @@ import {
   type AgentSkill, type SkillInventory,
 } from './skills'
 import type { Session } from './types'
+import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 
 // The command rail's long tail, as a grid, plus the agent's own skills.
 //
@@ -58,7 +59,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   const [skillsError, setSkillsError] = useState('')
   const [query, setQuery] = useState('')
   const backend = (session?.backend || 'shell') as RailBackend
-  const isAgent = backend === 'claude' || backend === 'codex'
+  const isAgent = isAgentBackend(backend)
   const items = useMemo(
     () => resolveRail(loadRailItems(session?.project_id), { platform: currentProfile(), backend }, 'drawer'),
     [session?.project_id, backend],
@@ -161,7 +162,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
     {!visible.length && <p class="drawer-empty">Nothing is assigned to the drawer for this session. Move rail items here from Settings → Command rail.</p>}
     {isAgent && <section class="drawer-skills">
       <header>
-        <h4>{backend === 'codex' ? 'Codex skills' : 'Claude skills'}</h4>
+        <h4>{harnessDisplayName(backend)} skills</h4>
         <span>{inventory ? `${matched.length}${query ? ` / ${inventory.skills.length}` : ''}` : ''}</span>
         <button title="Rescan the skill directories now" onClick={() => { if (session) void loadSkills(session.id, true) }}>Rescan</button>
       </header>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, ShellProfile } from './types'
+import { allBackendNames } from './harnessRegistry'
 
 // The Projects registry is the ONLY per-Project editor. Settings holds global
 // options exclusively; anything scoped to one Project — its record and its
@@ -156,7 +157,6 @@ type Props = {
   onDelete:(project:Project)=>Promise<void>
 }
 
-const BACKENDS:ProjectBackend[]=['shell','claude','codex']
 const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
 
 export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNotes,onFiles,onPatch,onDelete}:Props){
@@ -296,7 +296,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               <p>Blank inherits the global default. Each value is stored either on this device or in the Project's <code>.swe-mux/config.toml</code>; device wins where both are set.{config?` · .swe-mux/config.toml: ${config.status}${config.error?` · ${config.error}`:''}`:' · reading .swe-mux/config.toml…'}</p>
               <div class="project-setting">
                 <label><span class="project-setting-name">Default backend{backendValue&&<em class="project-setting-chip">{backendLayer==='repo'?'repo':'device'}</em>}</span>
-                  <select value={backendValue} disabled={busy} onChange={event=>setBackend(event.currentTarget.value,backendLayer)}><option value="">Inherit ({effective?.backend||'shell'})</option>{BACKENDS.map(backend=><option value={backend}>{backend}</option>)}</select>
+                  <select value={backendValue} disabled={busy} onChange={event=>setBackend(event.currentTarget.value,backendLayer)}><option value="">Inherit ({effective?.backend||'shell'})</option>{allBackendNames().map(backend=><option value={backend}>{backend}</option>)}</select>
                 </label>
                 {layerRow(backendLayer,layer=>setBackend(backendValue,layer),!!backendValue)}
               </div>

@@ -5,14 +5,16 @@ import hashlib
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from .adapters.claude import encode_cwd, is_conversation_transcript
 from .git_projects import ProjectIdentity, resolve_project
+from .harness import Backend
 from .history import HistoryIndex
 from .transcript_view import TRANSCRIPT_PARSER_VERSION
 
@@ -31,7 +33,7 @@ CLAUDE_CONTEXT_WINDOWS = {
 
 @dataclass(slots=True)
 class ExternalTranscript:
-    backend: str
+    backend: Backend
     native_id: str
     cwd: str
     created_at: float
@@ -194,13 +196,18 @@ def scan_external_transcripts(
     return found
 
 
-def summarize_transcript(path: Path, backend: str) -> dict[str, Any]:
+def summarize_transcript(path: Path, backend: Backend) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "context_window": None,
         "final_context_pct": None,
         "peak_context_pct": None,
         "tokens_in": 0,
         "tokens_out": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
+        "cost_usd": 0.0,
+        "provider": None,
+        "provider_account_hashes": {},
         "model": None,
         "measurement_source": None,
     }
@@ -221,7 +228,9 @@ def summarize_transcript(path: Path, backend: str) -> dict[str, Any]:
                 continue
             if not isinstance(event, dict):
                 continue
-            if backend == "claude" and event.get("type") == "assistant":
+            if backend == "claude":
+                if event.get("type") != "assistant":
+                    continue
                 message = event.get("message") or {}
                 usage = message.get("usage") or {}
                 model = str(message.get("model") or "")
@@ -260,6 +269,37 @@ def summarize_transcript(path: Path, backend: str) -> dict[str, Any]:
                         final = min(1.0, int(current.get("input_tokens") or 0) / window)
                         peak = max(peak, final)
                         summary["measurement_source"] = "codex-transcript-backfill"
+            elif backend == "shell":
+                continue
+            elif backend == "omp":
+                event_type = event.get("type")
+                if event_type == "credential_pin":
+                    provider = str(event.get("provider") or "").strip()
+                    account_hash = str(event.get("hash") or "").strip().lower()
+                    if provider and re.fullmatch(r"[0-9a-f]{64}", account_hash):
+                        summary["provider_account_hashes"][provider] = account_hash
+                    continue
+                if event_type != "message":
+                    continue
+                message = event.get("message") or {}
+                if message.get("role") != "assistant":
+                    continue
+                usage = message.get("usage") or {}
+                summary["tokens_in"] += int(usage.get("input") or 0)
+                summary["tokens_out"] += int(usage.get("output") or 0)
+                summary["tokens_cache_read"] += int(usage.get("cacheRead") or 0)
+                summary["tokens_cache_write"] += int(usage.get("cacheWrite") or 0)
+                cost = usage.get("cost") or {}
+                summary["cost_usd"] += float(cost.get("total") or 0.0)
+                provider = str(message.get("provider") or "").strip()
+                model = str(message.get("model") or "").strip()
+                if provider:
+                    summary["provider"] = provider
+                if model:
+                    summary["model"] = model
+                summary["measurement_source"] = "omp-transcript-backfill"
+            else:
+                assert_never(backend)
     summary["final_context_pct"] = final
     summary["peak_context_pct"] = peak if final is not None else None
     return summary

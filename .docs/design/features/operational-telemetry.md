@@ -103,7 +103,7 @@ translate transcript tokens into provider quota weighting.
 
 - Live normalized events enter through the persisted EventBus and deduplicate by native call
   identity/source identity.
-- A bounded background reconciliation scans recent Claude/Codex transcript tails, at most
+- A bounded background reconciliation scans recent Claude, Codex, and OMP transcript tails, at most
   32 MiB per file and 2,000 histories per pass. It runs after startup and hourly.
 - The event consumer and the hourly prune/reconcile loop both run under the shared
   background-task supervisor. A transient SQLite error costs one iteration, not the feature:
@@ -116,6 +116,12 @@ translate transcript tokens into provider quota weighting.
   terminal visibility/attachment while durable telemetry is queued.
 - Provider-specific parser versions prevent stale coverage from being treated as current.
   Unknown records/tools and truncated-tail diagnostics remain visible in the dashboard.
+- OMP reconciliation recognizes its versioned session-entry union, extracts assistant `toolCall`
+  blocks and matching `toolResult` messages, records an explicit skill only when the tool arguments
+  name one, and keys native compactions by their entry id.
+  The same compaction id is used by live hook and transcript ingestion, so reconciliation collapses
+  legacy cross-source duplicates only inside the measured 250 ms hook-to-transcript window.
+  A complete non-truncated scan republishes the repaired live and historical compaction summary.
 - If supervisor adoption repairs a session whose provider/transcript identity was
   misattributed, its tool/compaction rows and coverage cursor are deleted and rebuilt from the
   corrected native transcript. Process fingerprints are retained because they describe the
@@ -123,7 +129,7 @@ translate transcript tokens into provider quota weighting.
 - Historical collision repair is narrower: it removes tool/compaction rows only for the proven
   false run, clears the potentially borrowed per-session coverage row, and reassigns matching
   process evidence to the canonical root.
-- Claude and Codex versioned fixtures cover explicit tools, failures, skills, compactions,
+- Claude, Codex, and OMP versioned fixtures cover explicit tools, failures, skills, compactions,
   and unknown records.
 
 Authenticated Phase 2 canaries are opt-in because they consume real provider quota and

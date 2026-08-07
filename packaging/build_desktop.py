@@ -73,6 +73,17 @@ def build_frontend() -> None:
         cwd=frontend,
         check=True,
     )
+    node = shutil.which("node")
+    if node is None:
+        raise SystemExit("node is required to verify the bundled frontend")
+    # Refuse to ship a bundle carrying a dropped-declaration ReferenceError (the
+    # defect class that rendered every oh-my-pi pane black). This path bypasses
+    # `npm run build`, so the postbuild hook does not cover it.
+    subprocess.run(
+        [node, "scripts/verify-bundle.mjs", str(staging / "assets")],
+        cwd=frontend,
+        check=True,
+    )
     publish_frontend(staging, ROOT / "src" / "swe_mux" / "static")
 
 

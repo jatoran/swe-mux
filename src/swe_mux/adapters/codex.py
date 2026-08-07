@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..codex_tui import with_scrollback_safe_tui
+from ..harness import descriptor
 from .base import SpawnOptions, SpawnSpec
 
 # Shared across every live Codex session: they all scan the same tree on the same
@@ -18,22 +19,11 @@ from .base import SpawnOptions, SpawnSpec
 _ROLLOUT_CACHE_SECONDS = 2.0
 _ROLLOUT_CACHE: dict[str, tuple[float, list[tuple[float, Path]]]] = {}
 
-CODEX_LIFECYCLE_HOOK_EVENTS = (
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PermissionRequest",
-    "PostToolUse",
-    "SubagentStart",
-    "SubagentStop",
-    "Stop",
-    "SessionEnd",
-)
+CODEX_LIFECYCLE_HOOK_EVENTS = descriptor("codex").hook_events
 
 
 def codex_data_home() -> Path:
-    configured = os.environ.get("CODEX_HOME")
-    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+    return descriptor("codex").data_home()
 
 
 def _codex_hook_commands(event: str, executable: str | None = None) -> tuple[str, str]:
@@ -71,14 +61,14 @@ class CodexAdapter:
     # Lifecycle hooks are additive but user/admin policy can disable or leave them
     # untrusted, so `/new` retains the transcript-switch fallback. A resume reports
     # the id it already had, so it is not a rollover and nothing here fires for it.
-    reports_conversation_rollover = False
+    reports_conversation_rollover = descriptor(name).reports_conversation_rollover
     # Codex mints its own thread id, so a fresh session carries the mux session id
     # as a placeholder until SessionStart reports the real id. Transcript discovery
     # can then exact-match it; elimination remains the hookless fallback.
-    assigns_conversation_id = False
+    assigns_conversation_id = descriptor(name).assigns_conversation_id
     # Rollouts live in a date tree addressed by thread id, so a Codex conversation's
     # file never moves when the pane's working directory does.
-    resolves_transcript_by_cwd = False
+    resolves_transcript_by_cwd = descriptor(name).resolves_transcript_by_cwd
 
     def __init__(
         self,
@@ -87,7 +77,18 @@ class CodexAdapter:
         default_args: list[str] | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
         mcp_url: str | None = None,
+        *,
+        name: str = "codex",
+        data_home_resolver: Callable[[], Path] | None = None,
+        rollout_file_prefix: str = "rollout-",
     ) -> None:
+        self.name = name
+        self._data_home_resolver = data_home_resolver or descriptor(name).data_home
+        self.rollout_file_prefix = rollout_file_prefix
+        family = descriptor(name)
+        self.reports_conversation_rollover = family.reports_conversation_rollover
+        self.assigns_conversation_id = family.assigns_conversation_id
+        self.resolves_transcript_by_cwd = family.resolves_transcript_by_cwd
         self.default_exe = default_exe
         self.default_args = default_args or []
         self.command_resolver = command_resolver
@@ -180,7 +181,7 @@ class CodexAdapter:
         no truthful answer yet.
         """
         del cwd  # Rollouts live in a date tree, never under the session's cwd.
-        root = codex_data_home() / "sessions"
+        root = self._data_home_resolver() / "sessions"
         if not native_id or not root.exists():
             return None
         suffix = f"-{native_id}.jsonl".casefold()
@@ -199,6 +200,10 @@ class CodexAdapter:
         relocated Claude one does.
         """
         return self.transcript_path(native_id, Path())
+
+    def pending_transcript_path(self, session_id: str, current: Path) -> None:
+        del session_id, current
+        return None
 
     def graceful_exit_keys(self) -> str:
         return "/exit\r"
@@ -257,8 +262,9 @@ class CodexAdapter:
                         try:
                             if entry.is_dir(follow_symlinks=False):
                                 stack.append(entry.path)
-                            elif entry.name.startswith("rollout-") and entry.name.endswith(
-                                ".jsonl"
+                            elif (
+                                entry.name.startswith(self.rollout_file_prefix)
+                                and entry.name.endswith(".jsonl")
                             ):
                                 found.append(
                                     (entry.stat(follow_symlinks=False).st_mtime, Path(entry.path))
@@ -276,7 +282,7 @@ class CodexAdapter:
         return self._rollouts(root)[:20]
 
     def recent_transcripts(self, cwd: Path, created_at: float) -> list[tuple[float, Path, str]]:
-        root = codex_data_home() / "sessions"
+        root = self._data_home_resolver() / "sessions"
         if not root.exists():
             return []
         resolved = str(cwd.resolve()).casefold()
@@ -308,6 +314,10 @@ class CodexAdapter:
     def transcript_native_id(self, path: Path) -> str | None:
         association = self._association(path)
         return association[0] if association else None
+
+    def model_context_window(self, provider: str, model: str) -> int:
+        del provider, model
+        return 0
 
     def cleanup(self, session_id: str) -> None:
         del session_id

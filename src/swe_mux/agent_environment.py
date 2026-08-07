@@ -19,12 +19,13 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 from urllib.parse import urlsplit, urlunsplit
 
 from .adapters.claude import claude_data_home
 from .adapters.codex import codex_data_home
 from .agent_skills import discover_skills, parse_frontmatter
+from .harness import Backend, descriptor, is_agent_harness, require_backend
 from .subprocess_flags import background_creation_flags
 
 Scope = Literal["built_in", "managed", "user", "project", "local", "session", "unknown"]
@@ -428,7 +429,7 @@ def _probe_version(backend: str, executable: str, *, refresh: bool) -> str | Non
 
 
 def _config_sources(
-    backend: str, cwd: Path, args: list[str], loaded_at: float
+    backend: Backend, cwd: Path, args: list[str], loaded_at: float
 ) -> list[ConfigSource]:
     sources: list[ConfigSource] = []
     if backend == "claude":
@@ -458,7 +459,7 @@ def _config_sources(
                 sources,
                 _load_source(path, f"Session MCP config {index}", "session", "json", loaded_at),
             )
-    else:
+    elif backend == "codex":
         home = codex_data_home()
         user_config = _load_source(
             home / "config.toml", "~/.codex/config.toml", "user", "toml", loaded_at
@@ -490,11 +491,44 @@ def _config_sources(
         cli = _codex_cli_config(args)
         if cli:
             sources.append(_virtual_source("CLI overrides", "session", cli))
+    elif backend == "omp":
+        home = descriptor("omp").data_home()
+        omp_sources: tuple[tuple[Path, str, Scope], ...] = (
+            (home / "settings.json", "~/.omp/agent/settings.json", "user"),
+            (cwd / ".omp" / "settings.json", ".omp/settings.json", "project"),
+            (home / "mcp.json", "~/.omp/agent/mcp.json", "user"),
+            (home / ".mcp.json", "~/.omp/agent/.mcp.json", "user"),
+            (cwd / ".omp" / "mcp.json", ".omp/mcp.json", "project"),
+            (cwd / ".omp" / ".mcp.json", ".omp/.mcp.json", "project"),
+            (cwd / "mcp.json", "mcp.json", "project"),
+            (cwd / ".mcp.json", ".mcp.json", "project"),
+        )
+        for path, label, scope in omp_sources:
+            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+        for index, raw in enumerate(_values_after(args, "--extension"), start=1):
+            root = Path(raw)
+            if not root.is_absolute():
+                root = cwd / root
+            if root.is_dir():
+                _source_once(
+                    sources,
+                    _load_source(
+                        root / ".mcp.json",
+                        f"Session extension MCP config {index}",
+                        "session",
+                        "json",
+                        loaded_at,
+                    ),
+                )
+    elif backend == "shell":
+        raise ValueError("shell sessions do not have agent configuration")
+    else:
+        assert_never(backend)
     return sources
 
 
 def _plugin_inventory(
-    backend: str, cwd: Path, sources: list[ConfigSource], loaded_at: float
+    backend: Backend, cwd: Path, sources: list[ConfigSource], loaded_at: float
 ) -> tuple[list[dict[str, Any]], list[tuple[Path, str, Scope]]]:
     items: list[dict[str, Any]] = []
     roots: list[tuple[Path, str, Scope]] = []
@@ -567,7 +601,7 @@ def _plugin_inventory(
                 )
                 item["changed_after_start"] = item["changed_after_start"] or changed
                 items.append(item)
-    else:
+    elif backend == "codex":
         plugin_settings: dict[str, tuple[dict[str, Any], ConfigSource]] = {}
         for source in sources:
             table = source.data.get("plugins")
@@ -628,6 +662,12 @@ def _plugin_inventory(
             )
             item["changed_after_start"] = item["changed_after_start"] or changed
             items.append(item)
+    elif backend == "omp":
+        pass
+    elif backend == "shell":
+        raise ValueError("shell sessions do not have agent plugins")
+    else:
+        assert_never(backend)
     return items, roots
 
 
@@ -794,7 +834,7 @@ def _hook_inventory(
 
 
 def _mcp_from_data(
-    backend: str,
+    backend: Backend,
     data: dict[str, Any],
     source: ConfigSource,
     *,
@@ -802,7 +842,16 @@ def _mcp_from_data(
     cwd: Path,
 ) -> list[dict[str, Any]]:
     tables: list[tuple[dict[str, Any], Scope]] = []
-    key = "mcpServers" if backend == "claude" else "mcp_servers"
+    if backend == "claude":
+        key = "mcpServers"
+    elif backend == "codex":
+        key = "mcp_servers"
+    elif backend == "omp":
+        key = "mcpServers"
+    elif backend == "shell":
+        raise ValueError("shell sessions do not have agent MCP configuration")
+    else:
+        assert_never(backend)
     direct = data.get(key)
     if isinstance(direct, dict):
         tables.append((direct, source.scope))
@@ -862,7 +911,7 @@ def _mcp_from_data(
 
 
 def _mcp_inventory(
-    backend: str,
+    backend: Backend,
     cwd: Path,
     sources: list[ConfigSource],
     plugin_roots: list[tuple[Path, str, Scope]],
@@ -950,7 +999,7 @@ def _markdown_agents(
 
 
 def _agent_inventory(
-    backend: str,
+    backend: Backend,
     cwd: Path,
     sources: list[ConfigSource],
     plugin_roots: list[tuple[Path, str, Scope]],
@@ -987,7 +1036,7 @@ def _agent_inventory(
                     description=description,
                 )
             )
-    else:
+    elif backend == "codex":
         known = {
             "enabled",
             "max_threads",
@@ -1018,49 +1067,21 @@ def _agent_inventory(
                         meta=meta,
                     )
                 )
+    elif backend == "omp":
+        pass
+    elif backend == "shell":
+        raise ValueError("shell sessions do not have agent definitions")
+    else:
+        assert_never(backend)
     return items
 
 
-_CLAUDE_TOOLS = (
-    ("Agent", "Spawn a subagent with an isolated context"),
-    ("AskUserQuestion", "Request structured user input"),
-    ("Bash", "Run shell commands"),
-    ("Edit", "Apply exact text edits"),
-    ("EnterPlanMode", "Enter planning mode"),
-    ("ExitPlanMode", "Leave planning mode"),
-    ("Glob", "Find files by pattern"),
-    ("Grep", "Search file contents"),
-    ("LSP", "Query language servers"),
-    ("NotebookEdit", "Edit notebook cells"),
-    ("Read", "Read files"),
-    ("Skill", "Load an installed skill"),
-    ("TaskCreate", "Create tracked work"),
-    ("TaskGet", "Read tracked work"),
-    ("TaskList", "List tracked work"),
-    ("TaskOutput", "Read background task output"),
-    ("TaskStop", "Stop background work"),
-    ("TaskUpdate", "Update tracked work"),
-    ("WebFetch", "Fetch a web page"),
-    ("WebSearch", "Search the web"),
-    ("Write", "Write a file"),
-)
-
-_CODEX_CAPABILITIES = (
-    ("shell", "Run commands under the active sandbox and approval policy"),
-    ("apply_patch", "Apply structured workspace patches"),
-    ("plan", "Track multi-step work"),
-    ("skills", "Load installed skills"),
-    ("multi-agent", "Coordinate isolated agent threads"),
-    ("web", "Search or fetch when enabled"),
-    ("MCP", "Use tools exposed by configured MCP servers"),
-    ("apps", "Use enabled app and connector tools"),
-)
-
-
 def _tool_inventory(
-    backend: str, sources: list[ConfigSource], args: list[str]
+    backend: Backend, sources: list[ConfigSource], args: list[str]
 ) -> list[dict[str, Any]]:
-    catalog = _CLAUDE_TOOLS if backend == "claude" else _CODEX_CAPABILITIES
+    if backend == "shell":
+        raise ValueError("shell sessions do not have agent tools")
+    catalog = descriptor(backend).tool_catalog
     items = [
         _item(
             "built_in_tool",
@@ -1091,15 +1112,24 @@ def _tool_inventory(
                 for part in re.split(r"[, ]+", selected)
                 if part.strip()
             }
+    elif backend == "codex":
+        pass
+    elif backend == "omp":
+        pass
+    elif backend == "shell":
+        raise AssertionError("shell backend rejected before tool dispatch")
+    else:
+        assert_never(backend)
     for item in items:
         if item["name"] in denied or (allowed is not None and item["name"] not in allowed):
             item["state"] = "restricted"
     return items
 
 
-def _policy_inventory(backend: str, sources: list[ConfigSource]) -> list[dict[str, Any]]:
-    keys = (
-        (
+def _policy_inventory(backend: Backend, sources: list[ConfigSource]) -> list[dict[str, Any]]:
+    keys: tuple[str, ...]
+    if backend == "claude":
+        keys = (
             "model",
             "effortLevel",
             "permissions.defaultMode",
@@ -1111,8 +1141,8 @@ def _policy_inventory(backend: str, sources: list[ConfigSource]) -> list[dict[st
             "allowManagedMcpServersOnly",
             "agent",
         )
-        if backend == "claude"
-        else (
+    elif backend == "codex":
+        keys = (
             "model",
             "model_reasoning_effort",
             "approval_policy",
@@ -1123,7 +1153,12 @@ def _policy_inventory(backend: str, sources: list[ConfigSource]) -> list[dict[st
             "web_search",
             "agents.enabled",
         )
-    )
+    elif backend == "omp":
+        keys = ()
+    elif backend == "shell":
+        raise ValueError("shell sessions do not have agent policy")
+    else:
+        assert_never(backend)
     winners: dict[str, tuple[Any, ConfigSource]] = {}
     for source in sources:
         for key in keys:
@@ -1147,9 +1182,17 @@ def _policy_inventory(backend: str, sources: list[ConfigSource]) -> list[dict[st
     return items
 
 
-def _feature_inventory(backend: str, sources: list[ConfigSource]) -> list[dict[str, Any]]:
-    if backend != "codex":
+def _feature_inventory(backend: Backend, sources: list[ConfigSource]) -> list[dict[str, Any]]:
+    if backend == "claude":
         return []
+    if backend == "omp":
+        return []
+    if backend == "shell":
+        raise ValueError("shell sessions do not have agent features")
+    if backend == "codex":
+        pass
+    else:
+        assert_never(backend)
     winners: dict[str, tuple[Any, ConfigSource]] = {}
     for source in sources:
         table = source.data.get("features")
@@ -1173,7 +1216,7 @@ def _feature_inventory(backend: str, sources: list[ConfigSource]) -> list[dict[s
 
 
 def _skill_section(
-    backend: str, cwd: Path, loaded_at: float, refresh: bool
+    backend: Backend, cwd: Path, loaded_at: float, refresh: bool
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     inventory = discover_skills(backend, cwd, refresh=refresh)
     skills: list[dict[str, Any]] = []
@@ -1237,8 +1280,9 @@ def discover_agent_environment(
     This function performs bounded filesystem reads and one cached ``--version``
     probe.  Call it off the asyncio event loop.
     """
-    if backend not in {"claude", "codex"}:
-        raise ValueError("agent environment is available only for Claude and Codex sessions")
+    if not is_agent_harness(backend):
+        raise ValueError("agent environment is available only for registered agent sessions")
+    backend = require_backend(backend)
     root = Path(cwd).resolve()
     cache_key = (
         backend,
@@ -1248,7 +1292,7 @@ def discover_agent_environment(
         model,
         loaded_at,
         run_started_at,
-        str(claude_data_home() if backend == "claude" else codex_data_home()),
+        str(descriptor(backend).data_home()),
     )
     now = time.monotonic()
     with _CACHE_LOCK:
@@ -1303,7 +1347,7 @@ def discover_agent_environment(
             _section(
                 "tools",
                 "Built-in tools",
-                "documented_catalog" if backend == "claude" else "runtime_dependent",
+                descriptor(backend).tool_catalog_source,
                 tools,
                 "Documented core catalog. Restrictions are applied when they can be resolved "
                 "passively; host and runtime policy can narrow it further.",

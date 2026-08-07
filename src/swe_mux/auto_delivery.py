@@ -40,6 +40,7 @@ from typing import Any
 
 from .background_tasks import background
 from .config import Config
+from .harness import delivers_prompts_through_pty
 from .prompt_queue import (
     AUTO_POLICY_GLOBAL,
     HUMAN_SENDER_KINDS,
@@ -198,7 +199,7 @@ class AutoDeliveryController:
         if session is None:
             raise QueueError("unknown_target", "no such session", status=404)
         record = session.record
-        if record.backend not in {"claude", "codex"}:
+        if not delivers_prompts_through_pty(record.backend):
             raise QueueError(
                 "not_agent_target", "auto-delivery targets agent sessions only", status=400
             )
@@ -311,7 +312,7 @@ class AutoDeliveryController:
                 run_id = str(getattr(record, "agent_run_id", "") or "")
                 if (
                     record is None
-                    or record.backend not in {"claude", "codex"}
+                    or not delivers_prompts_through_pty(record.backend)
                     or record.state in {"exited", "crashed"}
                     or not run_id
                 ):

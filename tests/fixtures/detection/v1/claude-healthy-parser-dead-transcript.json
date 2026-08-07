@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "A parser can remain healthy after its followed transcript stops reporting. A newer transcript-backed hook then owns the next turn instead of being suppressed by the stale parser status.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "first"}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"},
+    {"kind": "timer", "seconds": 10},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"prompt": "second"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"},
+      {"type": "turn_started", "source": "hook", "scope": "root"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"},
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "root_agent_working"
+  }
+}

@@ -7,6 +7,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 OSC7_PATTERN = re.compile(rb"\x1b\]7;([^\x07\x1b]{1,8192})(?:\x07|\x1b\\)")
+OSC_SIGNAL_PATTERN = re.compile(
+    rb"\x1b\](0|2|4|9;4);([^\x07\x1b]{0,8192})(?:\x07|\x1b\\)"
+)
 
 
 class Osc7Parser:
@@ -34,6 +37,35 @@ class Osc7Parser:
                 ),
                 b"",
             )
+        return values
+
+
+class OscSignalParser:
+    """Incrementally extract bounded title and progress OSC values."""
+
+    def __init__(self) -> None:
+        self._tail = b""
+        self.title: str | None = None
+        self.progress: str | None = None
+
+    def feed(self, chunk: bytes) -> list[tuple[str, str]]:
+        data = self._tail + chunk
+        values: list[tuple[str, str]] = []
+        for match in OSC_SIGNAL_PATTERN.finditer(data):
+            code = match.group(1).decode("ascii")
+            value = match.group(2).decode("utf-8", "replace")
+            channel = "title" if code in {"0", "2"} else "progress"
+            values.append((channel, value))
+            if channel == "title":
+                self.title = value
+            else:
+                self.progress = value
+        marker = b"\x1b]"
+        start = data.rfind(marker)
+        if start >= 0 and not OSC_SIGNAL_PATTERN.search(data[start:]):
+            self._tail = data[start:][-8198:]
+        else:
+            self._tail = b"\x1b" if data.endswith(b"\x1b") else b""
         return values
 
 

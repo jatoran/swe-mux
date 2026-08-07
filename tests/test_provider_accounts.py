@@ -1100,7 +1100,9 @@ def test_provider_account_routes_are_registered(tmp_path: Path) -> None:
 def test_account_commands_resolve_npm_batch_shims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    manager = ProviderAccountManager(tmp_path, EventBus(), codex_exe="codex.exe")
+    manager = ProviderAccountManager(
+        tmp_path, EventBus(), executables={"codex": "codex.exe"}
+    )
     monkeypatch.setattr(
         "swe_mux.shim_paths.shutil.which",
         lambda command, path=None: r"C:\npm\codex.cmd" if command == "codex" else None,

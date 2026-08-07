@@ -16,6 +16,7 @@ from swe_mux.observation import (
     JsonlTailer,
     _claude,
     _codex,
+    _omp,
     _record_parser_observation,
     _remember_user_prompt,
     apply_hook_observation,
@@ -52,6 +53,258 @@ def drain(queue: asyncio.Queue[Any]) -> list[Any]:
     while not queue.empty():
         emitted.append(queue.get_nowait())
     return emitted
+
+
+async def test_omp_parser_tracks_exact_usage_context_cost_and_turns() -> None:
+    session = ReplaySession("omp")
+    events = EventBus()
+    queue = events.subscribe()
+    await _omp(
+        session,  # type: ignore[arg-type]
+        {
+            "type": "message",
+            "id": "user-1",
+            "parentId": None,
+            "timestamp": "2026-08-06T22:53:20Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+        },
+        events,
+    )
+    await _omp(
+        session,  # type: ignore[arg-type]
+        {
+            "type": "message",
+            "id": "assistant-1",
+            "parentId": "user-1",
+            "timestamp": "2026-08-06T22:53:21Z",
+            "message": {
+                "role": "assistant",
+                "provider": "anthropic",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "done"}],
+                "stopReason": "stop",
+                "usage": {
+                    "input": 4,
+                    "output": 9,
+                    "cacheRead": 29_248,
+                    "cacheWrite": 42_183,
+                    "cost": {"total": 0.436699},
+                },
+                "contextSnapshot": {"promptTokens": 35_493},
+            },
+        },
+        events,
+    )
+    await _omp(
+        session,  # type: ignore[arg-type]
+        {
+            "type": "credential_pin",
+            "id": "pin-1",
+            "parentId": "assistant-1",
+            "provider": "anthropic",
+            "hash": "a" * 64,
+        },
+        events,
+    )
+
+    assert session.record.state == "idle"
+    assert session.record.tokens_in == 4
+    assert session.record.tokens_out == 9
+    assert session.record.tokens_cache_read == 29_248
+    assert session.record.tokens_cache_write == 42_183
+    assert session.record.cost_usd == 0.436699
+    assert session.record.context_window == 1_000_000
+    assert session.record.context_pct == 0.035493
+    assert session.record.provider == "anthropic"
+    assert session.record.provider_account_hashes == {"anthropic": "a" * 64}
+    assert session.record.model == "claude-opus-4-8"
+    assert session.record.measurement_source == "omp-transcript"
+    assert [item.type for item in drain(queue)] == [
+        "state_changed",
+        "turn_started",
+        "transcript_message",
+        "state_changed",
+        "turn_ended",
+    ]
+
+
+async def test_omp_parser_maps_tools_standing_activity_and_interrupted_exit() -> None:
+    session = ReplaySession("omp")
+    events = EventBus()
+    queue = events.subscribe()
+    records = [
+        {
+            "type": "message",
+            "id": "u",
+            "parentId": None,
+            "message": {"role": "user", "content": "delegate"},
+        },
+        {
+            "type": "message",
+            "id": "a",
+            "parentId": "u",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "call-1",
+                        "name": "task",
+                        "arguments": {"prompt": "inspect"},
+                    }
+                ],
+                "stopReason": "toolUse",
+            },
+        },
+        {
+            "type": "custom",
+            "id": "start",
+            "parentId": "a",
+            "customType": "tool_execution_start",
+            "data": {"toolCallId": "call-1", "toolName": "task"},
+        },
+        {
+            "type": "custom",
+            "id": "exit",
+            "parentId": "start",
+            "customType": "session_exit",
+            "data": {
+                "reason": "process_exit",
+                "kind": "process_exit",
+                "pendingToolCalls": [{"toolCallId": "call-1", "toolName": "task"}],
+            },
+        },
+    ]
+    for item in records:
+        await _omp(session, item, events)  # type: ignore[arg-type]
+
+    emitted = drain(queue)
+    assert sum(item.type == "tool_use" for item in emitted) == 1
+    assert any(
+        item.type == "tool_result" and item.payload["success"] is False for item in emitted
+    )
+    assert any(item.type == "turn_aborted" for item in emitted)
+    assert session.record.state == "idle"
+    assert session.record.standing_activity == []
+
+
+async def test_omp_parser_follows_active_branch_and_clear_is_not_rollover() -> None:
+    session = ReplaySession("omp")
+    events = EventBus()
+    records = [
+        {"type": "message", "id": "u", "parentId": None, "message": {"role": "user"}},
+        {
+            "type": "message",
+            "id": "old",
+            "parentId": "u",
+            "message": {"role": "assistant", "content": "old", "stopReason": "stop"},
+        },
+        {
+            "type": "branch_summary",
+            "id": "branch",
+            "parentId": "u",
+            "fromId": "old",
+            "summary": "alternate path",
+        },
+    ]
+    for item in records:
+        await _omp(session, item, events)  # type: ignore[arg-type]
+    assert session.record.state == "working"
+
+    await _omp(
+        session,  # type: ignore[arg-type]
+        {"type": "reset_boundary", "id": "clear", "parentId": "branch"},
+        events,
+    )
+    assert session.record.state == "idle"
+    assert session.record.native_session_id == "native-replay"
+
+
+async def test_omp_parser_tracks_hub_background_jobs_until_explicit_stop() -> None:
+    session = ReplaySession("omp")
+    events = EventBus()
+    records = [
+        {
+            "type": "message",
+            "id": "u1",
+            "parentId": None,
+            "message": {"role": "user", "content": "start the server"},
+        },
+        {
+            "type": "message",
+            "id": "a1",
+            "parentId": "u1",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "hub-start",
+                        "name": "hub",
+                        "arguments": {
+                            "op": "start",
+                            "name": "dev-server",
+                            "command": "npm run dev",
+                        },
+                    }
+                ],
+                "stopReason": "toolUse",
+            },
+        },
+        {
+            "type": "message",
+            "id": "r1",
+            "parentId": "a1",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "hub-start",
+                "toolName": "hub",
+                "content": "started",
+            },
+        },
+        {
+            "type": "message",
+            "id": "done1",
+            "parentId": "r1",
+            "message": {"role": "assistant", "content": "running", "stopReason": "stop"},
+        },
+    ]
+    for item in records:
+        await _omp(session, item, events)  # type: ignore[arg-type]
+
+    assert [(item.kind, item.count) for item in session.record.standing_activity] == [
+        ("background_tasks", 1)
+    ]
+
+    stop_records = [
+        {
+            "type": "message",
+            "id": "u2",
+            "parentId": "done1",
+            "message": {"role": "user", "content": "stop it"},
+        },
+        {
+            "type": "message",
+            "id": "a2",
+            "parentId": "u2",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "toolCall",
+                        "id": "hub-stop",
+                        "name": "hub",
+                        "arguments": {"op": "stop", "name": "dev-server"},
+                    }
+                ],
+                "stopReason": "toolUse",
+            },
+        },
+    ]
+    for item in stop_records:
+        await _omp(session, item, events)  # type: ignore[arg-type]
+
+    assert session.record.standing_activity == []
 
 
 def test_first_root_prompt_is_pinned_and_later_ones_only_update_the_latest() -> None:
@@ -648,6 +901,7 @@ async def test_healthy_transcript_gates_late_tool_hooks_from_reopening_working()
     # cause of sessions stuck blinking after they finished.
     session = cast(Any, ReplaySession("claude"))
     session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
     events = EventBus()
     await _claude(session, {"type": "user", "message": {"content": "do it"}}, events)
     assert session.record.state == "working"
@@ -669,16 +923,42 @@ async def test_healthy_transcript_gates_late_tool_hooks_from_reopening_working()
         assert session.record.state == "idle", f"{event_type} reopened a finished turn"
 
 
-async def test_degraded_transcript_still_lets_hooks_drive_state() -> None:
-    # The gate is a fallback contract: when the parser is not authoritative,
-    # hooks must remain the source of truth so state never freezes.
+async def test_a_non_reporting_transcript_still_lets_hooks_drive_state() -> None:
+    # Measurement confidence does not grant state authority. With no observed
+    # transcript growth, hooks remain the source that keeps state moving.
     session = cast(Any, ReplaySession("claude"))
     session.record.parser_status = "degraded"
     events = EventBus()
     await apply_hook_observation(session, "UserPromptSubmit", {}, events)
     assert session.record.state == "working"
-    await apply_hook_observation(session, "PostToolUse", {"tool_name": "Bash"}, events)
-    assert session.record.state == "working"
+
+
+async def test_degraded_parser_withholds_new_measurements() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "degraded"
+    session.record.tokens_in = 7
+    session.record.tokens_out = 3
+    session.record.context_pct = 0.25
+    session.record.model = "previous"
+
+    await _claude(
+        session,
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "model": "new-model",
+                "usage": {"input_tokens": 900, "output_tokens": 100},
+            },
+        },
+        EventBus(),
+    )
+
+    assert session.record.tokens_in == 7
+    assert session.record.tokens_out == 3
+    assert session.record.context_pct == 0.25
+    assert session.record.model == "previous"
 
 
 async def test_transcript_close_latch_blocks_hook_reopen_until_new_transcript_turn() -> None:
@@ -689,6 +969,7 @@ async def test_transcript_close_latch_blocks_hook_reopen_until_new_transcript_tu
 
     session = cast(Any, ReplaySession("claude"))
     session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
     events = EventBus()
     await _begin_root_turn(session, events, source="transcript")
     assert session.record.state == "working"

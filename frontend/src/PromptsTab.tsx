@@ -9,6 +9,7 @@ import { sessionDotClass } from './sessionStatus'
 import type { PromptTemplate } from './PromptLibrary'
 import type { SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
+import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
 
 // Prompt templates, browse-and-insert only.
 //
@@ -168,7 +169,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
   }
 
   const targetLabel = (target: SendToAgentTarget) =>
-    target.kind === 'new' ? `new ${target.backend === 'codex' ? 'Codex' : 'Claude'}` : agentTargetName(target.session)
+    target.kind === 'new' ? `new ${harnessDisplayName(target.backend)}` : agentTargetName(target.session)
 
   const send = async (item: PromptTemplate, text: string, target: SendToAgentTarget) => {
     setBusy(true)
@@ -306,8 +307,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
       ><span class={sessionDotClass(session)} />{agentTargetName(session)}</button>)}
       {!targets.length && <button role="menuitem" disabled>{project ? 'No live agent session here' : 'Select a Project first'}</button>}
       <div class="context-subtitle">NEW SESSION</div>
-      <button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: 'claude', projectId: project.id })}>New Claude session</button>
-      <button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: 'codex', projectId: project.id })}>New Codex session</button>
+      {promptDeliveryHarnesses().map(harness=><button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: harness.name, projectId: project.id })}>New {harness.display_name} session</button>)}
       <div class="context-rule" />
       {/* A new session always submits (its prompt travels on the command line); this
           only governs the live-session writes, so the library's insert-never-send

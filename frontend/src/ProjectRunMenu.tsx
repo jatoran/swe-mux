@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { fitScrollingMenuInViewport } from './menuPosition'
 import type { Project, ProjectAction, ProjectActionCatalog, ProjectBackend, Session } from './types'
+import { promptDeliveryHarnesses } from './harnessRegistry'
 
 type Anchor={x:number;y:number}
 type Props={
@@ -78,8 +79,7 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
     <section ref={el=>{panel.current=el;fitScrollingMenuInViewport(el)}} class="project-run-menu" role="menu" aria-label={`Run in ${project.name}`} style={{left,top}}>
       <header><div><span>RUN</span><strong>{project.name}</strong></div><button aria-label="Close Run menu" onClick={onClose}>×</button></header>
       <div class="run-menu-section"><small>NEW SESSION</small>
-        <button role="menuitem" aria-label="Start Claude session" disabled={!!busy} onClick={()=>onLaunch('claude')}><span aria-hidden="true">▶</span><div><strong>Claude</strong></div></button>
-        <button role="menuitem" aria-label="Start Codex session" disabled={!!busy} onClick={()=>onLaunch('codex')}><span aria-hidden="true">▶</span><div><strong>Codex</strong></div></button>
+        {promptDeliveryHarnesses().map(harness=><button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span aria-hidden="true">▶</span><div><strong>{harness.display_name}</strong></div></button>)}
         <button data-tutorial="run-choice-shell" role="menuitem" aria-label="Start shell session" disabled={!!busy} onClick={()=>onLaunch('shell')}><span aria-hidden="true">&gt;_</span><div><strong>Shell</strong></div></button>
         <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>
       </div>

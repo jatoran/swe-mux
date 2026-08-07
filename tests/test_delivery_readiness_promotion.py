@@ -156,7 +156,7 @@ def test_the_reported_fixture_classes_match_what_is_checked_here() -> None:
     assert promotion_status({})["fixture_classes"] == list(PROVING_FIXTURE_CLASSES)
 
 
-async def test_the_replay_corpus_still_covers_every_promotion_class() -> None:
+async def test_the_replay_corpus_still_covers_every_promotion_class(tmp_path: Path) -> None:
     """The golden corpus must keep exercising each class end to end.
 
     The unit checks above pin the tracker; this pins that real transcript/hook
@@ -170,7 +170,9 @@ async def test_the_replay_corpus_still_covers_every_promotion_class() -> None:
         if path.name == INVENTORY:
             continue
         manifest = load_manifest(path)
-        result = await DetectionReplay(manifest["backend"]).run(manifest)
+        result = await DetectionReplay(
+            manifest["backend"], workspace=tmp_path / path.stem
+        ).run(manifest)
         steps = [str(step["kind"]) for step in manifest["steps"]]
         for item in result["events"]:
             if item["type"] == "approval_needed":

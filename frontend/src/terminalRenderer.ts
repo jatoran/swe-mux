@@ -1,6 +1,8 @@
+import { repaintsScrollback } from './harnessRegistry.ts'
+
 export type TerminalRendererPreference = 'auto' | 'dom' | 'webgl'
 export type ActiveTerminalRenderer = 'dom' | 'webgl'
-export type TerminalRendererBackend = 'shell' | 'claude' | 'codex'
+export type TerminalRendererBackend = string
 
 export function terminalCursorOptions(mobileInput: boolean) {
   return mobileInput
@@ -11,19 +13,19 @@ export function terminalCursorOptions(mobileInput: boolean) {
 /**
  * Whether this pane may run the WebGL renderer.
  *
- * Codex is excluded under `auto` because its full-screen redraws could corrupt WebGL
- * scrollback while the viewport was off-tail. That hazard is narrower than it was —
- * sessions now keep their transcript in scrollback (`tui.alternate_screen="never"`)
- * rather than repainting it — but it is not gone: Codex's rich renderer reflows the
- * transcript on resize, which is the same shape of redraw. So `auto` stays
- * conservative and keeps Codex on the DOM renderer.
+ * The `auto` preference excludes any harness whose TUI rewrites content already
+ * in scrollback (`repaints_scrollback` on its descriptor: Codex reflows its
+ * normal-screen transcript on resize, OMP repaints its tail continuously),
+ * because those full-screen redraws could corrupt WebGL scrollback while the
+ * viewport was off-tail. A trait rather than a name check, so a new harness
+ * defaults to the safe DOM renderer until its descriptor declares otherwise —
+ * alternate-screen TUIs (Claude) and shells never rewrite scrollback and stay
+ * WebGL-eligible.
  *
- * An *explicit* `webgl` preference now reaches Codex, which it previously did not.
- * That was a silent no-op: the setting existed, the user could select it, and the one
- * backend whose repaint cost makes the renderer worth choosing ignored it. Opting in
- * is a decision with a visible failure mode (blank or torn scrollback, repaired by
- * scrolling or switching back to `dom`), and it is the only way to measure whether
- * the exclusion is still earning its place.
+ * An *explicit* `webgl` preference reaches every backend. Opting in is a
+ * decision with a visible failure mode (blank or torn scrollback, repaired by
+ * scrolling or switching back to `dom`), and it is the only way to measure
+ * whether the exclusion is still earning its place.
  */
 export function shouldLoadWebgl(
   preference: TerminalRendererPreference,
@@ -31,7 +33,7 @@ export function shouldLoadWebgl(
   backend: TerminalRendererBackend,
 ): boolean {
   if (mobileViewport || preference === 'dom') return false
-  return backend !== 'codex' || preference === 'webgl'
+  return !repaintsScrollback(backend) || preference === 'webgl'
 }
 
 /**

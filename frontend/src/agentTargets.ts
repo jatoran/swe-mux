@@ -6,8 +6,9 @@
 // into a shell that would execute the prose as commands).
 
 import type { Project, Session } from './types'
+import { deliversHarnessPrompts, promptDeliveryHarnesses } from './harnessRegistry.ts'
 
-export type NewAgentBackend = 'claude' | 'codex'
+export type NewAgentBackend = string
 
 export const NEW_TARGET_PREFIX = 'new:'
 export const SESSION_TARGET_PREFIX = 'session:'
@@ -20,9 +21,10 @@ export function sessionIdFromTargetKey(key: string): string | null {
   return key.startsWith(SESSION_TARGET_PREFIX) ? key.slice(SESSION_TARGET_PREFIX.length) : null
 }
 
-/** The backend a "new session" key names; Claude is the fallback for any other key. */
+/** The backend a "new session" key names, falling back to the first deliverable harness. */
 export function backendFromTargetKey(key: string): NewAgentBackend {
-  return key === newTargetKey('codex') ? 'codex' : 'claude'
+  const candidate = key.startsWith(NEW_TARGET_PREFIX) ? key.slice(NEW_TARGET_PREFIX.length) : ''
+  return deliversHarnessPrompts(candidate) ? candidate : promptDeliveryHarnesses()[0]?.name || ''
 }
 
 /**
@@ -38,18 +40,19 @@ export function agentTargets(sessions: Session[], projectId: string): Session[] 
       session =>
         session.project_id === projectId &&
         !session.pending &&
-        (session.backend === 'claude' || session.backend === 'codex') &&
+        deliversHarnessPrompts(session.backend) &&
         session.state !== 'exited' &&
         session.state !== 'crashed',
     )
     .sort((a, b) => (b.last_activity_ts || 0) - (a.last_activity_ts || 0))
 }
 
-/** A new session follows the project's own backend, falling back to Claude: this dialog only
+/** A new session follows the project's own backend, falling back to the first harness: this dialog only
  *  ever starts agents, so a shell-defaulted project still gets an agent. */
 export function defaultNewTarget(project: Project | undefined): string {
   const backend = project?.effective_options?.backend || project?.default_backend
-  return newTargetKey(backend === 'codex' ? 'codex' : 'claude')
+  const selected = backend && deliversHarnessPrompts(backend) ? backend : promptDeliveryHarnesses()[0]?.name || ''
+  return newTargetKey(selected)
 }
 
 /**

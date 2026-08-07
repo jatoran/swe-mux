@@ -27,14 +27,16 @@ export interface StandingActivity {
 }
 
 export interface Session {
-  id: string; name: string; project_id: string; backend: 'shell' | 'claude' | 'codex'
+  id: string; name: string; project_id: string; backend: string
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
   created_at: number; state: SessionState; state_detail?: string; tokens_in: number
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]
   process_job_assignment:string
-  tokens_out: number; context_window: number; context_pct: number; last_activity_ts: number
+  tokens_out: number; tokens_cache_read:number; tokens_cache_write:number; cost_usd:number
+  provider?:string|null; provider_account_hashes?:Record<string,string>
+  context_window: number; context_pct: number; last_activity_ts: number
   git: { branch?: string; dirty: number; ahead: number; behind: number }
   pinned_attention: boolean; broadcast: boolean
   startup_timing_ms?: Record<string, number>
@@ -53,6 +55,7 @@ export interface Session {
   parser_status?:string;parser_diagnostic?:string;parser_events_seen?:number
   /** Set when the followed transcript is no longer this PTY's conversation. */
   observation_stale_since?:number
+  observation_diagnostic?:string
   delivery_readiness?:{state:'safe'|'blocked'|'unknown';reason:string;authorized:false}
   auto_named?:boolean;generated_title?:string
   generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
@@ -90,7 +93,7 @@ export interface VoiceStatus {
   wake_words?:string[];commands?:{action:string;phrases:string[]}[]
 }
 
-export type ProjectBackend='shell'|'claude'|'codex'
+export type ProjectBackend=string
 export type PromptLibraryScope='off'|'global'|'project'|'both'
 export interface Project {
   id:string;name:string;root:string;position:number;group_id?:string|null;layout:PaneLayout|unknown;layout_revision:number

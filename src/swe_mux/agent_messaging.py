@@ -35,6 +35,7 @@ import time
 from typing import Any
 
 from .config import Config
+from .harness import is_agent_harness
 from .prompt_queue import PromptQueueService, QueueError
 
 log = logging.getLogger("swe_mux.agent_messaging")
@@ -103,7 +104,7 @@ class AgentMessagingService:
                 "a session cannot notify itself; write to your own terminal instead",
                 status=400,
             )
-        if target.record.backend not in {"claude", "codex"}:
+        if not is_agent_harness(target.record.backend):
             raise QueueError(
                 "not_agent_target",
                 "messages target agent sessions only (a shell would execute a paste)",
@@ -277,8 +278,10 @@ class AgentMessagingService:
         text = str(prompt or "").strip()
         if not text:
             raise QueueError("invalid_body", "prompt must not be empty", status=400)
-        if backend and backend not in {"claude", "codex"}:
-            raise QueueError("invalid_backend", "backend must be claude or codex", status=400)
+        if backend and not is_agent_harness(backend):
+            raise QueueError(
+                "invalid_backend", "backend must be a registered agent", status=400
+            )
         record = caller.record
         project_id = str(record.project_id or "")
         project = self.projects.projects.get(project_id) if project_id else None

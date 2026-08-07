@@ -12,9 +12,10 @@
 // testable under the node type-stripping runner (no browser dependencies here).
 
 import { AGENT_NEWLINE } from './terminalKeys.ts'
+import { allBackendNames, isAgentBackend } from './harnessRegistry.ts'
 
 export type RailPlatform = 'desktop' | 'mobile'
-export type RailBackend = 'claude' | 'codex' | 'shell'
+export type RailBackend = string
 
 // 'key'   → inject a raw byte sequence (arrow keys, Esc, Ctrl-C, newline…)
 // 'action'→ invoke a named built-in handler (copy/paste/relaunch/toggle…)
@@ -57,6 +58,8 @@ export interface RailItem {
   className?: string
   /** Restrict to these backends; undefined = all. */
   backends?: RailBackend[]
+  /** Restrict a built-in to registered agent harnesses without freezing their names. */
+  agentOnly?: boolean
   /** Restrict to these platforms; undefined = both. */
   platforms?: RailPlatform[]
   /** User toggle; false hides the item everywhere (strip and drawer alike). */
@@ -66,7 +69,7 @@ export interface RailItem {
   placement?: RailPlacementSetting
 }
 
-export const ALL_BACKENDS: readonly RailBackend[] = ['claude', 'codex', 'shell']
+export const allRailBackends = (): readonly RailBackend[] => allBackendNames()
 export const ALL_PLATFORMS: readonly RailPlatform[] = ['desktop', 'mobile']
 
 /** Encode line breaks as the composer-newline key understood by both agent TUIs.
@@ -84,7 +87,7 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'relaunch', type: 'action', action: 'relaunch', label: 'Relaunch' },
   { id: 'copyReply', type: 'action', action: 'copyReply', label: 'Copy reply' },
   { id: 'copyResume', type: 'action', action: 'copyResume', label: 'Copy resume' },
-  { id: 'branch', type: 'action', action: 'branch', label: 'Branch', backends: ['claude', 'codex'] },
+  { id: 'branch', type: 'action', action: 'branch', label: 'Branch', agentOnly: true },
   { id: 'paste', type: 'action', action: 'paste', label: 'Paste' },
   // Clipboard history picker. Paired with Paste because it is the paste path on
   // touch, where reading the system clipboard is unreliable or refused outright.
@@ -96,8 +99,8 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)' },
   { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command' },
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command' },
-  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', backends: ['claude', 'codex'], title: 'Insert a Markdown divider with blank lines around it' },
-  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', backends: ['claude', 'codex'], title: 'Start a Markdown code fence after two newlines' },
+  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it' },
+  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines' },
   { id: 'clearInput', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Clear the current input (Ctrl+U)' },
   { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)' },
   { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left' },
@@ -119,7 +122,7 @@ export const BUILTIN_RAIL: RailItem[] = [
   // drawer rather than the strip — a kill button one mis-tap away from the arrow
   // keys is the wrong default even with the two-click confirm behind it.
   { id: 'endSession', type: 'action', action: 'endSession', label: 'End session', className: 'rail-danger', title: 'End this session (click twice to confirm)', placement: 'drawer' },
-  { id: 'attach', type: 'action', action: 'attach', label: 'Attach', backends: ['claude', 'codex'], title: 'Attach files to this chat without sending' },
+  { id: 'attach', type: 'action', action: 'attach', label: 'Attach', agentOnly: true, title: 'Attach files to this chat without sending' },
 ]
 
 const EDITING_CLUSTER_IDS = ['markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput'] as const
@@ -238,6 +241,7 @@ export interface RailContext {
 export function railItemVisible(item: RailItem, ctx: RailContext): boolean {
   if (item.enabled === false) return false
   if (item.platforms && !item.platforms.includes(ctx.platform)) return false
+  if (item.agentOnly && !isAgentBackend(ctx.backend)) return false
   if (item.backends && !item.backends.includes(ctx.backend)) return false
   return true
 }

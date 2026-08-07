@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "postinstall": "node scripts/patch-xterm-webgl.mjs",
-    "prebuild": "node scripts/patch-xterm-webgl.mjs --check",
+    "postinstall": "node scripts/patch-xterm-webgl.mjs && node scripts/patch-xterm-requestmode.mjs",
+    "prebuild": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "build": "tsc && vite build",
-    "precheck": "node scripts/patch-xterm-webgl.mjs --check",
+    "postbuild": "node scripts/verify-bundle.mjs",
+    "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "check": "tsc --noEmit",
-    "pretest": "node scripts/patch-xterm-webgl.mjs --check",
+    "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "test": "node --experimental-strip-types test/all.ts",
     "test:renderer": "playwright test --config playwright.renderer.config.ts"
   },

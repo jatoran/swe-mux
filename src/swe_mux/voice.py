@@ -33,6 +33,7 @@ from .automation import MAX_SLICE_BYTES, TranscriptSliceService
 from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
+from .harness import has_observable_transcript
 from .openrouter import OpenRouterClient, OpenRouterError
 from .sqlite_store import (
     connect_or_quarantine,
@@ -52,7 +53,6 @@ T = TypeVar("T")
 VOICE_RULE_ID = "builtin:voice-summary"
 VOICE_MODES = {"off", "on_demand", "auto"}
 VOICE_EVENT_LOOP = "voice-events"
-AGENT_BACKENDS = {"claude", "codex"}
 DEBOUNCE_SECONDS = 1.0
 ENGINE_TIMEOUT_SECONDS = 45.0
 STT_TIMEOUT_SECONDS = 60.0
@@ -512,7 +512,7 @@ class VoiceService:
         if not session_id:
             return
         session = self.sessions.sessions.get(session_id)
-        if not session or session.record.backend not in AGENT_BACKENDS:
+        if not session or not has_observable_transcript(session.record.backend):
             return
         if self.effective_mode(session.record) != "auto":
             return
@@ -539,8 +539,8 @@ class VoiceService:
         if not session:
             raise VoiceError("session is not live")
         record = session.record
-        if record.backend not in AGENT_BACKENDS:
-            raise VoiceError("read aloud requires a Claude or Codex session")
+        if not has_observable_transcript(record.backend):
+            raise VoiceError("read aloud requires an observable agent session")
         if not session.transcript_path or not session.transcript_path.exists():
             raise VoiceError("the agent transcript is not available yet")
         lock = self._locks.setdefault(session_id, asyncio.Lock())

@@ -4,6 +4,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from .harness import Backend
+
 SessionState = Literal["starting", "running", "working", "idle", "awaiting", "exited", "crashed"]
 
 # Typed sub-reason for the "awaiting" state: a blocking permission approval, a
@@ -61,7 +63,7 @@ class SessionRecord:
     id: str
     name: str
     project_id: str
-    backend: str
+    backend: Backend
     native_session_id: str
     cwd: str
     exe: str
@@ -92,6 +94,9 @@ class SessionRecord:
     standing_activity: list[StandingActivity] = field(default_factory=list)
     tokens_in: int = 0
     tokens_out: int = 0
+    tokens_cache_read: int = 0
+    tokens_cache_write: int = 0
+    cost_usd: float = 0.0
     context_window: int = 0
     context_pct: float = 0.0
     context_peak_pct: float = 0.0
@@ -99,6 +104,10 @@ class SessionRecord:
     last_compaction_at: float | None = None
     compaction_capability: str | None = None
     compaction_confidence: str | None = None
+    provider: str | None = None
+    # OMP can use more than one provider in one conversation. Values are the
+    # pseudonymous, linkable SHA-256 hashes OMP records, never raw account ids.
+    provider_account_hashes: dict[str, str] = field(default_factory=dict)
     model: str | None = None
     measurement_source: str | None = None
     parser_status: str = "not_applicable"
@@ -125,7 +134,7 @@ class SessionRecord:
     # hooks from nested child CLIs must never replace the provider that owns the
     # PTY itself. Optional defaults keep supervisor snapshots from older daemons
     # adoptable; SessionManager reconstructs them from the retained spawn argv.
-    spawn_backend: str | None = None
+    spawn_backend: Backend | None = None
     spawn_native_session_id: str | None = None
     # Set only when this PTY was spawned to continue a conversation that already
     # owns a history row: Claude's ``--resume`` appends to the same transcript
@@ -163,6 +172,7 @@ class SessionRecord:
     # driving state and delivery blocks — rather than reporting a dead
     # conversation's status as live.
     observation_stale_since: float | None = None
+    observation_diagnostic: str | None = None
     last_activity_ts: float = field(default_factory=time.time)
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False

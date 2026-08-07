@@ -76,7 +76,8 @@ automatic fallback whenever the supervisor is unreachable.
 - `sqlite_store.py`: process-wide per-database operation coordinator and failed-transaction
   rollback guard for History, Automation, Operational Telemetry, and Voice connections sharing
   one WAL database.
-- `adapters/`: backend executable flags, resume syntax, transcripts, and exit behavior.
+- `harness.py`: declared agent-harness identity, capability axes, delivery etiquette, tool catalogs, and hook events.
+- `adapters/`: backend spawn/resume syntax, transcript discovery, and exit behavior.
 - `processes.py`: descendant ownership, process actions, loopback previews.
 - `operational_telemetry.py`: durable bounded process, quota/reset, compaction, and tool
   evidence plus transcript reconciliation and retention.

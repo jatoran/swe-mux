@@ -40,6 +40,10 @@ class ShellAdapter:
         del native_id
         return None
 
+    def pending_transcript_path(self, session_id: str, current: Path) -> None:
+        del session_id, current
+        return None
+
     def graceful_exit_keys(self) -> str:
         return "exit\r"
 
@@ -57,6 +61,10 @@ class ShellAdapter:
         del path
         return None
 
+    def model_context_window(self, provider: str, model: str) -> int:
+        del provider, model
+        return 0
+
     def cleanup(self, session_id: str) -> None:
         del session_id
 
@@ -70,4 +78,4 @@ class ShellAdapter:
 
     def media_reference(self, path: Path) -> str:
         del path
-        raise ValueError("clipboard images are supported only in Claude and Codex sessions")
+        raise ValueError("clipboard images are supported only in registered agent sessions")

@@ -6,7 +6,10 @@ from PyInstaller.utils.hooks import collect_all
 ROOT = Path(SPECPATH)
 PROJECT = ROOT.parent
 
-datas = [(str(PROJECT / "src" / "swe_mux" / "static"), "swe_mux/static")]
+datas = [
+    (str(PROJECT / "src" / "swe_mux" / "static"), "swe_mux/static"),
+    (str(PROJECT / "src" / "swe_mux" / "assets"), "swe_mux/assets"),
+]
 binaries = []
 hiddenimports = []
 for package in ("PIL", "pystray", "webview", "winpty"):

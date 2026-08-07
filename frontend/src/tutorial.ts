@@ -3,7 +3,7 @@ export const TUTORIAL_VERSION='1'
 export const TUTORIAL_ACTION_EVENT='mux:tutorial-action'
 
 export type TutorialAction='project-created'|'account-saved'|'session-launched'|'tab-drag-started'|'tab-drag-cancelled'|'tab-dropped'
-export type TutorialActionDetail={action:TutorialAction;backend?:'shell'|'claude'|'codex';zone?:'tabs'|'left'|'right'|'top'|'bottom'}
+export type TutorialActionDetail={action:TutorialAction;backend?:string;zone?:'tabs'|'left'|'right'|'top'|'bottom'}
 export type TutorialActionGate={action:TutorialAction;backend?:TutorialActionDetail['backend'];zone?:'tabs'|'split'}
 
 export function emitTutorialAction(detail:TutorialActionDetail):void {

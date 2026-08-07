@@ -13,6 +13,7 @@ from typing import Any
 from .background_tasks import background
 from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
+from .harness import external_usage_harnesses
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
 USAGE_REFRESH_LOOP = "usage-refresh"
@@ -214,7 +215,9 @@ class UsageManager:
         self.events = events
         self.cache_path = config.data_dir / "usage-cache.json"
         self.cache: dict[str, Any] = self._load_cache()
-        self.states = {"claude": RefreshState(), "codex": RefreshState()}
+        self.states = {
+            provider: RefreshState() for provider in external_usage_harnesses()
+        }
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         if config.ccusage_enabled:
@@ -257,10 +260,11 @@ class UsageManager:
         if not self.config.ccusage_enabled:
             raise UsageAdapterError("usage analytics is disabled")
         if provider and provider not in self.states:
-            raise UsageAdapterError("provider must be claude or codex")
+            supported = ", ".join(external_usage_harnesses())
+            raise UsageAdapterError(f"provider must be one of: {supported}")
         if self._lock.locked():
             raise UsageAdapterError("a usage refresh is already running")
-        targets = [provider] if provider else ["claude", "codex"]
+        targets = [provider] if provider else list(external_usage_harnesses())
         async with self._lock:
             for target in targets:
                 await self._refresh_one(target)
@@ -270,11 +274,7 @@ class UsageManager:
         state = self.states[provider]
         state.status = "refreshing"
         state.error = None
-        command = (
-            self.config.ccusage_claude_command
-            if provider == "claude"
-            else self.config.ccusage_codex_command
-        )
+        command = self.config.usage_commands[provider]
         try:
             output = await self._invoke(command)
             payload = json.loads(output)

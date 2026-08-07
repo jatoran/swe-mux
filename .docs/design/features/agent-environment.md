@@ -88,5 +88,14 @@ Shell sessions render a typed ordinary empty state and the endpoint returns `409
 
 Agent Context owns Project/global instruction bodies, learned memory, and deliberate root-instruction synchronization.
 Agent skills owns the invocable skill inventory reused by Commands.
+
+For OMP, the passive configuration scan includes native user and project settings, all four native
+`.omp` MCP locations, optional root `mcp.json` files, and sibling `.mcp.json` files from explicit
+extension-package arguments.
+Its skill inventory mirrors the native, Claude, Codex, Agent Skills, GitHub, and managed-skill
+providers that OMP 17.2.10 actually registers.
+Cursor and Cline rule imports are not presented as skills.
+The tool section uses OMP's documented 31-tool catalog and marks the tools normally mounted below
+`xd://` in their descriptions, while still describing gated or conditional availability.
 Agent Environment composes that skill discovery with passive runtime and extension metadata but does not return skill filesystem paths in its own normalized sections.
 The provider CLI remains authoritative for actual runtime tool availability and connection health.

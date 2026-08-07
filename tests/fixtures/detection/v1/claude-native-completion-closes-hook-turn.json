@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "A provider-native completion record closes a turn whose Stop hook never fired (hooks are retried POSTs and can simply be lost). The transcript's end_turn is terminal evidence in its own right - the second of the three cross-source corrections the authority split deliberately keeps.",
+  "steps": [
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"prompt": "summarize the diff"}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 1, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

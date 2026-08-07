@@ -17,6 +17,7 @@ import aiohttp
 
 from .background_tasks import background
 from .event_bus import EventBus
+from .harness import descriptor, provider_account_harnesses
 from .models import MuxEvent
 from .shim_paths import which_real
 from .subprocess_flags import background_creation_flags, reap_process_tree
@@ -27,14 +28,14 @@ SELECTION_GUARD_LOOP = "provider-selection-guard"
 _REPLACE_RETRIES = 4
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
-Provider = Literal["claude", "codex"]
+Provider = str
 CurrentAccountState = Literal["saved", "external", "signed_out", "unreadable"]
 # How an identity was learned, weakest last. Only "token" is derived from the
 # credential itself and may therefore authorize a credential write.
 IdentitySource = Literal["token", "cli", "file"]
 MatchKind = Literal["digest", "verified_identity", "weak_identity"]
 
-PROVIDERS: tuple[Provider, ...] = ("claude", "codex")
+PROVIDERS: tuple[Provider, ...] = provider_account_harnesses()
 MANIFEST_VERSION = 2
 POLL_SECONDS = 15 * 60
 STALE_SECONDS = 30 * 60
@@ -106,7 +107,7 @@ def _merge_identity(*identities: dict[str, Any] | None) -> dict[str, Any]:
 
 def _provider(value: str) -> Provider:
     if value not in PROVIDERS:
-        raise ProviderAccountError("provider must be claude or codex")
+        raise ProviderAccountError("provider is not a managed harness")
     return value
 
 
@@ -260,8 +261,7 @@ class ProviderAccountManager:
         events: EventBus,
         *,
         home: Path | None = None,
-        claude_exe: str = "claude.exe",
-        codex_exe: str = "codex.exe",
+        executables: dict[str, str] | None = None,
         poll_seconds: float = POLL_SECONDS,
         telemetry: Any | None = None,
         sessions: Any | None = None,
@@ -271,9 +271,10 @@ class ProviderAccountManager:
         self.data_dir = data_dir
         self.home = home or Path.home()
         self.events = events
+        configured = executables or {}
         self.executables: dict[Provider, str] = {
-            "claude": claude_exe,
-            "codex": codex_exe,
+            provider: configured.get(provider, descriptor(provider).executable)
+            for provider in PROVIDERS
         }
         self.poll_seconds = poll_seconds
         self.telemetry = telemetry

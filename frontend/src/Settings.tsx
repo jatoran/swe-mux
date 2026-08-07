@@ -15,7 +15,8 @@ import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { clearProjectRail, loadRailItems, projectRailIsCustom, saveRailItems } from './deviceSettings'
-import { ALL_BACKENDS, ALL_PLATFORMS, DEFAULT_CUSTOM_PLACEMENT, isBuiltinRailId, railItemPlacement, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlacement, type RailPlacementSetting, type RailPlatform } from './commandRail'
+import { ALL_PLATFORMS, DEFAULT_CUSTOM_PLACEMENT, allRailBackends, isBuiltinRailId, railItemPlacement, railPayload, type RailBackend, type RailItem, type RailItemType, type RailPlacement, type RailPlacementSetting, type RailPlatform } from './commandRail'
+import { allBackendNames, harnessDisplayName, harnesses, promptDeliveryHarnesses } from './harnessRegistry'
 import { fetchPromptTemplates, promptItemSummary } from './promptRail'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import type { InitScript } from './projectCreate'
@@ -24,10 +25,10 @@ import type { ShellProfile, Project } from './types'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
-  startup_cwd:string; default_backend:string; shell_exe:string; claude_exe:string
-  codex_exe:string; scrollback_bytes:number; history_limit:number
+  startup_cwd:string; default_backend:string; shell_exe:string
+  harness_exe:Record<string,string>; scrollback_bytes:number; history_limit:number
   terminal_renderer:'auto'|'dom'|'webgl'
-  claude_args:string[]; codex_args:string[]
+  harness_args:Record<string,string[]>
   git_poll_seconds:number; reconcile_external_history:boolean; theme:ThemeName
   drawer_tab_display:'icon'|'title'
   utility_rail_display:'icon'|'title'
@@ -52,7 +53,7 @@ type Config = {
   ui_scale_desktop:UiScale;ui_scale_mobile:UiScale
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
-  ccusage_claude_command:string[]; ccusage_codex_command:string[]
+  usage_commands:Record<string,string[]>
   custom_theme:CustomTheme
   default_shell_profile:string; shell_profiles:ShellProfile[]
   project_ignore_patterns:string[]
@@ -192,6 +193,7 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
 export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
+  const railBackends=allRailBackends()
   // Command-rail editor state. The rail is its own device-settings domain, so
   // edits save immediately (like sounds/notifications) rather than via the
   // config draft's Save button.
@@ -253,7 +255,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     return next.length === all.length ? undefined : next
   }
   const railPlatform = (id: string, platform: RailPlatform) => commitRail(rail.map(item => item.id === id ? { ...item, platforms: railToggleIn(item.platforms, ALL_PLATFORMS, platform) } : item))
-  const railBackend = (id: string, backend: RailBackend) => commitRail(rail.map(item => item.id === id ? { ...item, backends: railToggleIn(item.backends, ALL_BACKENDS, backend) } : item))
+  const railBackend = (id: string, backend: RailBackend) => commitRail(rail.map(item => item.id === id ? { ...item, backends: railToggleIn(item.backends, railBackends, backend) } : item))
   const railDelete = (id: string) => commitRail(rail.filter(item => item.id !== id))
   const railAddItem = () => {
     const name = railAdd.name.trim()
@@ -266,7 +268,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       const id = `custom:prompt:${template.id}:${rail.length}`
       // Templates declare their compatible backends; carry that through instead of
       // making the user re-pick it, but only when it is actually a restriction.
-      const backends = template.backends.length === ALL_BACKENDS.length ? undefined : [...template.backends] as RailBackend[]
+      const backends = template.backends.length === railBackends.length ? undefined : [...template.backends] as RailBackend[]
       commitRail([...rail, { id, type: 'prompt', label: railAdd.label.trim() || template.title, promptKey: template.key, placement: railAdd.place, backends }])
       setRailAdd({ ...railAdd, name: '', label: '' })
       return
@@ -291,8 +293,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],desktop_only:[],terminal_reserved:[],rules:[]})
   const [capturingCommand, setCapturingCommand] = useState<string|null>(null)
   const [bindingError, setBindingError] = useState('')
-  const [claudeArgs, setClaudeArgs] = useState('[]')
-  const [codexArgs, setCodexArgs] = useState('[]')
+  const [harnessArgs, setHarnessArgs] = useState<Record<string,string>>({})
   const [detectedProfiles, setDetectedProfiles] = useState<ShellProfile[]>([])
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
@@ -333,7 +334,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         return
       }
       setConfig(next); setDraft(next); setRules(rulesData.text);setSavedRules(rulesData.text)
-      setClaudeArgs(JSON.stringify(next.claude_args)); setCodexArgs(JSON.stringify(next.codex_args))
+      setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)])))
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy({
         browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],
@@ -353,11 +354,10 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
 
   const dirty = useMemo(() => Boolean(config&&draft&&(
     !sameDraftValue(config,draft)
-    ||claudeArgs!==JSON.stringify(config.claude_args)
-    ||codexArgs!==JSON.stringify(config.codex_args)
+    ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==JSON.stringify(args))
     ||rules!==savedRules
     ||!sameDraftValue(bindings,savedBindings)
-  )),[config,draft,claudeArgs,codexArgs,rules,savedRules,bindings,savedBindings])
+  )),[config,draft,harnessArgs,rules,savedRules,bindings,savedBindings])
 
   const leaveSettings = useCallback((intent:CloseIntent) => {
     setCloseIntent(null)
@@ -521,10 +521,14 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     if (!draft || !config) return false
     let savingDraft: Config
     try {
+      const parsedHarnessArgs=Object.fromEntries(Object.entries(harnessArgs).map(([name,text])=>{
+        const args:unknown=JSON.parse(text)
+        if(!Array.isArray(args)||!args.every(value=>typeof value==='string'))throw new Error('invalid harness args')
+        return [name,args]
+      }))
       savingDraft = {
         ...draft,
-        claude_args:JSON.parse(claudeArgs),
-        codex_args:JSON.parse(codexArgs),
+        harness_args:parsedHarnessArgs,
         project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns),
       }
     } catch { setErrors({agent_args:'agent args must be JSON arrays of strings'}); return false }
@@ -543,7 +547,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         api('PUT','/api/automation/rules',{text:rules}),
         api('PUT','/api/keybindings',{bindings}),
       ])
-      setConfig(next); setDraft(next);setClaudeArgs(JSON.stringify(next.claude_args));setCodexArgs(JSON.stringify(next.codex_args));setErrors({})
+      setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)])));setErrors({})
       setSavedRules(rules);setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
       configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next)
@@ -556,7 +560,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
   const reset = async () => {
     const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next); setStatus('defaults restored')
+    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next); setStatus('defaults restored')
   }
   const exportConfig = () => {
     if (!draft) return
@@ -609,7 +613,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const moveProfile = (index:number,offset:number) => { const items=[...draft!.shell_profiles],target=index+offset;if(target<0||target>=items.length)return;[items[index],items[target]]=[items[target],items[index]];change('shell_profiles',items) }
   const restoreDetected = () => { const existing=new Set(draft!.shell_profiles.map(profile=>profile.id));change('shell_profiles',[...draft!.shell_profiles,...detectedProfiles.filter(profile=>!existing.has(profile.id)).map(profile=>({...profile,configured:undefined}))]) }
   const refreshUsage = async () => {
-    setUsageRefreshMessage('Refreshing Claude + Codex usage… this may take up to a minute.')
+    setUsageRefreshMessage('Refreshing agent usage… this may take up to a minute.')
     setErrors(current=>{const next={...current};delete next.ccusage;return next})
     try {
       const next=await api<UsageStatus>('POST','/api/usage/refresh',{})
@@ -676,7 +680,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const tabContent = (activeTab: SettingsTab) => <Fragment>
         {activeTab==='general'&&<section><h3>General</h3>
           <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
-          <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}><option value="shell">Shell</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
+          <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}>{allBackendNames().map(name=><option value={name}>{name==='shell'?'Shell':harnessDisplayName(name)}</option>)}</select></label>
           <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
           <label>History limit<input type="number" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
           {/* Setup commands offered when a Project is registered. They are yours, typed
@@ -792,8 +796,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>
         </Fragment>}
 
-        {activeTab==='agents'&&<section><h3>Agents</h3><label>Claude executable<input value={draft.claude_exe} onInput={e=>change('claude_exe',e.currentTarget.value)} /></label><label>Claude default args<input value={claudeArgs} onInput={e=>setClaudeArgs(e.currentTarget.value)} /></label><label>Codex executable<input value={draft.codex_exe} onInput={e=>change('codex_exe',e.currentTarget.value)} /></label><label>Codex default args<input value={codexArgs} onInput={e=>setCodexArgs(e.currentTarget.value)} /></label><label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
-          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new Claude/Codex conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant expires on its own.</p></div></div>
+        {activeTab==='agents'&&<section><h3>Agents</h3>{harnesses().map(harness=><Fragment key={harness.name}><label>{harness.display_name} executable<input value={draft.harness_exe[harness.name]||''} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label><label>{harness.display_name} default args<input value={harnessArgs[harness.name]||'[]'} onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label></Fragment>)}<label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
+          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant expires on its own.</p></div></div>
           <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
           <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
@@ -846,12 +850,13 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
               const regions=railRegions(item)
               const on=regions.strip||regions.drawer
               const platforms=item.platforms??[...ALL_PLATFORMS]
-              const backends=item.backends??[...ALL_BACKENDS]
+              const backends=item.backends??[...railBackends]
               const builtin=isBuiltinRailId(item.id)
-              const preview=item.type==='skill'?`${railPayload(item,'claude')} · ${railPayload(item,'codex')}`:item.type==='slash'?railPayload(item,'claude'):item.type==='text'?`"${(item.text||'').slice(0,24)}"`:item.type==='prompt'?promptItemSummary(item,railPrompts):''
+              const agentPayloads=promptDeliveryHarnesses().map(harness=>railPayload(item,harness.name))
+              const preview=item.type==='skill'?[...new Set(agentPayloads)].join(' · '):item.type==='slash'?agentPayloads[0]||'':item.type==='text'?`"${(item.text||'').slice(0,24)}"`:item.type==='prompt'?promptItemSummary(item,railPrompts):''
               const meta=`${builtin?item.type:`custom ${item.type}`}${preview?` · ${preview}`:''}${item.submit&&item.type!=='prompt'?' · ⏎':''}`
               const platformLabel:Record<RailPlatform,string>={desktop:'D',mobile:'M'}
-              const backendLabel:Record<RailBackend,string>={claude:'cld',codex:'cdx',shell:'sh'}
+              const backendLabel=(backend:RailBackend)=>backend==='shell'?'sh':backend.slice(0,3)
               const regionLabel:Record<RailPlacement,string>={strip:'Rail',drawer:'Panel'}
               const regionTitle:Record<RailPlacement,string>={strip:'Show on the strip under the terminal',drawer:"Show in the side panel's Commands tab"}
               return <article class={`rail-row ${on?'':'off'}`} key={item.id}>
@@ -863,7 +868,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
                   <div class="rail-tags" role="group" aria-label={`Where ${item.label||item.id} is available`}>
                     {ALL_PLATFORMS.map(p=><button type="button" class={platforms.includes(p)?'on':''} aria-pressed={platforms.includes(p)} title={`Show on ${p}`} onClick={()=>railPlatform(item.id,p)}>{platformLabel[p]}</button>)}
                     <i/>
-                    {ALL_BACKENDS.map(b=><button type="button" class={backends.includes(b)?'on':''} aria-pressed={backends.includes(b)} title={`Show for ${b}`} onClick={()=>railBackend(item.id,b)}>{backendLabel[b]}</button>)}
+                    {railBackends.map(b=><button type="button" class={backends.includes(b)?'on':''} aria-pressed={backends.includes(b)} title={`Show for ${b}`} onClick={()=>railBackend(item.id,b)}>{backendLabel(b)}</button>)}
                   </div>
                 </div>
                 <div class="rail-order">
@@ -893,7 +898,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           </details>
         </section>}
 
-        {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary><label>Claude command<textarea value={draft.ccusage_claude_command.join('\n')} onInput={e=>change('ccusage_claude_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label><label>Codex command<textarea value={draft.ccusage_codex_command.join('\n')} onInput={e=>change('ccusage_codex_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label></details></section>}
+        {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary>{Object.entries(draft.usage_commands).map(([name,command])=><label>{harnessDisplayName(name)} command<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section>}
 
         {activeTab==='automation'&&<section><h3>Automation</h3>
           <p>Observers watch Claude and Codex out of band. The Automation dashboard shows every system observer and custom rule together; these settings are global shortcuts for the same system observers.</p>
@@ -929,7 +934,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         {activeTab==='notifications'&&<><NotificationPushSettings/><NotificationSoundSettings/></>}
 
         {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
-          <p>Mark a Claude or Codex session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
+          <p>Mark an observed agent session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
           <p aria-live="polite"><span class={`state-dot ${voiceInfo?.engine_available?'idle':'running'}`}/> engine::{voiceInfo?.engine||draft.tts_engine} {voiceInfo?.engine_available?'available':'unavailable'}{voiceInfo?.diagnostic?` · ${voiceInfo.diagnostic}`:''} · clips::{voiceInfo?.clip_count??0} · cache::{Math.round((voiceInfo?.cache_bytes||0)/1048576)}/{Math.round((voiceInfo?.cache_limit_bytes||0)/1048576)} MB · summary spend today::${(voiceInfo?.spend_today.cost_usd||0).toFixed(3)}</p>
           <label class="check"><span>Enable read aloud</span><input type="checkbox" checked={draft.tts_enabled} onChange={e=>change('tts_enabled',e.currentTarget.checked)} /></label>
           <label>Default mode for agent sessions<select value={draft.tts_default_mode} onChange={e=>change('tts_default_mode',e.currentTarget.value as Config['tts_default_mode'])}><option value="off">Off until marked</option><option value="on_demand">On demand (speak button)</option><option value="auto">Auto on every reply</option></select></label>

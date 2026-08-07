@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "Before the OMP extension or breadcrumb binds, submitted input and the measured OMP screen affordances provide a conservative PTY-only first-turn fallback.",
+  "steps": [
+    {"kind": "pty_tail", "data": "pi shell\nπ > Opus (sub) ▶"},
+    {"kind": "watchdog", "expect_state": "idle"},
+    {"kind": "pty_tail", "data": "pi shell\nπ > Opus (sub) ▶\nWorking… esc to interrupt"},
+    {"kind": "watchdog", "expect_state": "idle"},
+    {"kind": "input", "submit": true},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "pty_tail", "data": "completed\nπ > Opus (sub) ▶"},
+    {"kind": "watchdog", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "terminal_input", "source": "daemon"},
+      {"type": "turn_started", "source": "watchdog-pty", "scope": "root"},
+      {"type": "turn_ended", "source": "watchdog-pty", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "watchdog-pty", "proof": "inferred"},
+      {"previous": "working", "state": "idle", "source": "watchdog-pty", "proof": "inferred"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "operator_recently_typed"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "An OMP session header and plain user-assistant exchange produce one complete root turn.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session", "version": 3, "id": "omp-native", "cwd": "."}},
+    {"kind": "transcript", "record": {"type": "model_change", "id": "m", "parentId": null, "model": "anthropic/claude-opus-4-8"}},
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": "m", "message": {"role": "user", "content": "hello"}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "a", "parentId": "u", "message": {"role": "assistant", "provider": "anthropic", "model": "claude-opus-4-8", "content": [{"type": "text", "text": "done"}], "stopReason": "stop", "usage": {"input": 2, "output": 4, "cacheRead": 0, "cacheWrite": 10, "cost": {"total": 0.01}}, "contextSnapshot": {"promptTokens": 12}}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from swe_mux.event_bus import EventBus
@@ -8,6 +9,46 @@ from swe_mux.git_projects import resolve_project
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
 from swe_mux.reconcile import summarize_transcript
+
+
+def test_omp_history_summary_reports_native_usage_and_pseudonymous_account(tmp_path: Path) -> None:
+    transcript = tmp_path / "omp.jsonl"
+    records = [
+        {
+            "type": "message",
+            "id": "assistant",
+            "parentId": None,
+            "message": {
+                "role": "assistant",
+                "provider": "anthropic",
+                "model": "claude-opus-4-8",
+                "usage": {
+                    "input": 4,
+                    "output": 9,
+                    "cacheRead": 29_248,
+                    "cacheWrite": 42_183,
+                    "cost": {"total": 0.436699},
+                },
+            },
+        },
+        {
+            "type": "credential_pin",
+            "id": "pin",
+            "parentId": "assistant",
+            "provider": "anthropic",
+            "hash": "a" * 64,
+        },
+    ]
+    transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+
+    summary = summarize_transcript(transcript, "omp")
+
+    assert summary["provider"] == "anthropic"
+    assert summary["model"] == "claude-opus-4-8"
+    assert summary["tokens_cache_read"] == 29_248
+    assert summary["tokens_cache_write"] == 42_183
+    assert summary["cost_usd"] == 0.436699
+    assert summary["provider_account_hashes"] == {"anthropic": "a" * 64}
 
 
 def agent(identity: str, backend: str, cwd: Path, *, project: str = "project") -> SessionRecord:

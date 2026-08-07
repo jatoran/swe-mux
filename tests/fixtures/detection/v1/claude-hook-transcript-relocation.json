@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "description": "A hook-reported transcript path outside the computed cwd directory is authoritative relocation evidence.",
+  "steps": [
+    {
+      "kind": "hook_transcript_path",
+      "expected": {
+        "followed_reported": true,
+        "stale": false
+      }
+    }
+  ],
+  "expected": {
+    "events": [],
+    "states": [],
+    "parser": {
+      "status": "watching",
+      "recognized": 0,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "unknown",
+    "delivery_reason": "no_root_lifecycle_evidence"
+  }
+}

@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal
 
+from .harness import AGENT_BACKENDS, agent_harnesses
 from .models import ProjectRecord
 from .project_files import parse_project_config
 
@@ -57,13 +58,13 @@ def _template_values(
         raise ValueError("prompt body contains terminal control characters")
     tags = _string_array(values.get("tags", []), "tags", maximum=20, item_limit=40)
     backends = _string_array(
-        values.get("backends", ["shell", "claude", "codex"]),
+        values.get("backends", ["shell", *agent_harnesses()]),
         "backends",
-        maximum=3,
+        maximum=len(AGENT_BACKENDS) + 1,
         item_limit=10,
     )
-    if not backends or not set(backends) <= {"shell", "claude", "codex"}:
-        raise ValueError("backends must contain shell, claude, and/or codex")
+    if not backends or not set(backends) <= {"shell", *AGENT_BACKENDS}:
+        raise ValueError("backends must contain shell and/or registered agents")
     now = time.time()
     return {
         "schema_version": PROMPT_SCHEMA_VERSION,

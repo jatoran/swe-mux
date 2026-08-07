@@ -12,6 +12,7 @@ import {
   type AgentEnvironmentItem,
 } from './agentEnvironment'
 import type { Session } from './types'
+import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 
 function itemTitle(item: AgentEnvironmentItem): string {
   const details = item.meta.map(meta => `${meta.label}: ${meta.value}`)
@@ -31,7 +32,7 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const generation = useRef(0)
-  const isAgent = session?.backend === 'claude' || session?.backend === 'codex'
+  const isAgent = isAgentBackend(session?.backend)
 
   const load = async (sessionId: string, refresh = false) => {
     const mine = ++generation.current
@@ -80,7 +81,7 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
   if (!isAgent) {
     return <>
       <p class="drawer-status">{session.name || session.id} · shell</p>
-      <p class="drawer-empty">The focused terminal is a shell, not a Claude or Codex agent.</p>
+      <p class="drawer-empty">The focused terminal is a shell, not an agent harness.</p>
     </>
   }
 
@@ -88,7 +89,7 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
     <header class="agent-environment-header">
       <div>
         <strong>{session.name || session.id}</strong>
-        <span>{inventory ? `${inventory.backend}${inventory.runtime.version ? ` · ${inventory.runtime.version}` : ''}` : session.backend}</span>
+        <span>{inventory ? `${harnessDisplayName(inventory.backend)}${inventory.runtime.version ? ` · ${inventory.runtime.version}` : ''}` : harnessDisplayName(session.backend)}</span>
       </div>
       <button
         disabled={loading}

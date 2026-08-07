@@ -10,6 +10,7 @@ import {
   type QueueAutoStatus, type QueueMessage, type QueueSendOutcome, type QueueTargetView,
 } from './queueApi'
 import type { Session } from './types'
+import { deliversHarnessPrompts } from './harnessRegistry'
 
 // The prompt queue's session-scoped surface, in two renderings.
 //
@@ -123,9 +124,9 @@ function describeAuto(status: QueueAutoStatus | null, sessionId: string): string
   return `on · ${parts.join(' · ')}`
 }
 
-/** Targets are Claude/Codex sessions only; a shell would execute a paste. */
+/** Targets are registered prompt-delivery harnesses only; a shell would execute a paste. */
 const isAgentSession = (session: Session | null): boolean =>
-  !!session && (session.backend === 'claude' || session.backend === 'codex')
+  !!session && deliversHarnessPrompts(session.backend)
 
 /** Terminal-state items are audit, not work: collapsed by default in the working view. */
 const isDoneState = (state: QueueMessage['state']): boolean =>
@@ -595,7 +596,7 @@ export function QueuePane({
           <li class="queue-empty">
             {targetable
               ? 'Nothing queued. Messages staged here wait for your explicit “Send now” — nothing is ever delivered on a timer.'
-              : 'Focus a Claude or Codex session to stage messages for it. Shells are never targets: a paste there would execute.'}
+              : 'Focus an agent session to stage messages for it. Shells are never targets: a paste there would execute.'}
           </li>
         )}
         {done.length > 0 && (

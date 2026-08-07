@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .background_tasks import background
 from .event_bus import EventBus
+from .harness import is_agent_harness
 from .operational_telemetry import command_hash, process_identity
 from .session import Session, SessionManager, clear_standing_activity
 
@@ -393,7 +394,7 @@ class ProcessInspector:
             # getattr-guarded like the rest of the inspector: tests drive it
             # with lightweight record stand-ins.
             record = session.record
-            if getattr(record, "backend", None) not in {"claude", "codex"}:
+            if not is_agent_harness(getattr(record, "backend", None)):
                 continue
             if getattr(record, "state", None) in {"exited", "crashed"}:
                 continue

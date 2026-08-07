@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "omp",
+  "description": "A resumed OMP session settles stale historical work before accepting and completing the next live turn.",
+  "steps": [
+    {"kind": "session", "record": {"state": "working"}},
+    {"kind": "catchup", "open_turn": true, "historical_seen": 6, "age_seconds": 120, "expect_state": "idle"},
+    {"kind": "transcript", "record": {"type": "message", "id": "u", "parentId": null, "message": {"role": "user", "content": "continue"}}},
+    {"kind": "transcript", "record": {"type": "message", "id": "a", "parentId": "u", "message": {"role": "assistant", "content": "continued", "stopReason": "stop"}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "root_turn_settled", "source": "transcript", "scope": "root"},
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"},
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 2, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

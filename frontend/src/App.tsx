@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket } from './api'
+import {
+  deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
+  isObservedHarness, type HarnessRegistryPayload,
+} from './harnessRegistry'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
 import { recordPaneVisits, warmPaneIds } from './warmPanes'
@@ -30,7 +34,7 @@ import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { UsageDashboard } from './UsageDashboard'
 import { HistoryBrowser } from './HistoryBrowser'
-import { AccountSwitcher, providerGlyph, type ProviderName } from './ProviderAccounts'
+import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
@@ -113,7 +117,7 @@ import {
   setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
 } from './projectSort'
 import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
-import { activityBadges, sessionDotClass, sessionStatus, stateDotClass } from './sessionStatus'
+import { activityBadges, sessionDotClass, sessionStatus } from './sessionStatus'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
@@ -128,9 +132,7 @@ const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitD
   {id:'down',glyph:'↓',direction:'vertical',position:'after'},
 ]
 
-function isAgent(session: Session) {
-  return session.backend === 'claude' || session.backend === 'codex'
-}
+const isAgent = (session: Session) => isAgentBackend(session.backend)
 
 function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
@@ -164,7 +166,12 @@ const activityGlyphs=(session:Session|undefined)=>{
 const sessionGlyph=(session:Session|undefined)=>{
   if(!session)return null
   if(!isAgent(session))return <span class="tab-session-glyph shell" title="shell">❯</span>
-  return <span class={`tab-session-glyph agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>
+  return <span class={`tab-session-glyph agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>
+}
+
+const sessionStateDot=(session:Session|undefined)=>{
+  if(!session||(isAgent(session)&&!isObservedHarness(session.backend)))return null
+  return <span class={sessionDotClass(session)}/>
 }
 
 function workingCwd(session:Session):string {
@@ -182,11 +189,12 @@ type HistoryEntry = {
   project_id?:string;project_label?:string;final_state?:string;external?:number
   project_scope_id?:string;repo_group_id?:string;project_root?:string
   context_window?: number; final_context_pct?: number; peak_context_pct?: number
-  tokens_in?: number; tokens_out?: number; model?: string; measurement_source?: string
+  tokens_in?: number; tokens_out?: number; tokens_cache_read?:number;tokens_cache_write?:number;cost_usd?:number
+  model?: string; measurement_source?: string
   compaction_count?:number;last_compaction_at?:number;compaction_capability?:string;compaction_confidence?:string
   auto_named?:number;generated_title?:string
 }
-type ReviewPreview={source_run_id:string;source_backend:string;backend:'claude'|'codex';cwd:string;worktree_context:string;prompt:string;relation:'review';preview_token:string}
+type ReviewPreview={source_run_id:string;source_backend:string;backend:string;cwd:string;worktree_context:string;prompt:string;relation:'review';preview_token:string}
 type ReviewState={entry:HistoryEntry;instructions:string;project:string;preview:ReviewPreview;dirty:boolean;loading:boolean;error:string}
 type HandoffState={entry:HistoryEntry;markdown:string;message:string}
 type ContextState = { session: Session; x: number; y: number; source: 'sidebar'|'tab'|'pane'|'mobile' } | null
@@ -213,12 +221,12 @@ function placePendingTerminal(layout:PaneLayout,id:string,placement:PendingSpawn
   return splitTerminal(layout,placement.targetId,id,placement.split as SplitDirection,placement.position)
 }
 
-function pendingTerminal(id:string,project:Project,backend:'shell'|'claude'|'codex'='shell'):Session {
+function pendingTerminal(id:string,project:Project,backend:string='shell'):Session {
   const now=Date.now()/1000
   return {
     id,name:`starting ${backend==='shell'?'terminal':backend}…`,project_id:project.id,backend,native_session_id:id,
     cwd:project.root,exe:'',args:[],pid:-1,created_at:now,state:'starting',tokens_in:0,
-    process_job_assignment:'pending',tokens_out:0,context_window:0,context_pct:0,last_activity_ts:now,
+    process_job_assignment:'pending',tokens_out:0,tokens_cache_read:0,tokens_cache_write:0,cost_usd:0,context_window:0,context_pct:0,last_activity_ts:now,
     git:{dirty:0,ahead:0,behind:0},pinned_attention:false,broadcast:false,context_peak_pct:0,
     compaction_count:0,runtime_cwd:project.root,runtime_cwd_live:false,runtime_cwd_source:'spawn',
     runtime_cwd_dropped:0,pending:true,
@@ -264,6 +272,7 @@ function historyName(entry:HistoryEntry):string {
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [, setHarnessRegistryRevision] = useState(0)
   const [projectId, setProjectId] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
   const [focusedViewId,setFocusedViewId]=useState<string|null>(null)
@@ -981,11 +990,14 @@ export function App() {
     }
     const operation = (async () => {
       try {
-      const [nextSessions, nextProjects, nextPreviews, nextGroups] = await Promise.all([
+      const [nextSessions, nextProjects, nextPreviews, nextGroups, nextHarnesses] = await Promise.all([
         api<Session[]>('GET', '/api/sessions'), api<Project[]>('GET', '/api/projects'),
         api<{items:Preview[]}>('GET', '/api/previews'),
         api<ProjectGroup[]>('GET','/api/project-groups'),
+        api<HarnessRegistryPayload>('GET','/api/harnesses'),
       ])
+      installHarnessRegistry(nextHarnesses)
+      setHarnessRegistryRevision(current=>current+1)
       setSessions(current => {
         const optimistic=current.filter(session=>session.pending&&pendingSpawns.current[session.id]&&!pendingSpawns.current[session.id].resolvedId)
         return reconcileSessionSnapshots(current,nextSessions,optimistic)
@@ -1854,7 +1866,7 @@ export function App() {
   // the cross-vendor review spawn does. That is deliberately not an inject-then-Enter dance: a
   // freshly spawned TUI is not ready for input for seconds, and anything written before it is
   // would be swallowed.
-  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:'shell'|'claude'|'codex'='shell', options?:{argv?:string[];seedText?:string}) => {
+  const spawnTerminal = async (targetProject = projectId, split: false | SplitDirection | 'stack' = false, profileId?: string, targetSessionId?: string, position:'before'|'after'='after', backend:string='shell', options?:{argv?:string[];seedText?:string}) => {
     if (spawning.current) return false
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target){setError('Project is not available yet.');return false}
@@ -1934,9 +1946,9 @@ export function App() {
 
   // Backend of the most recent launch, for the held-Run repeat. Anything other
   // than a known backend (absent, stale, hand-edited) falls back to a shell.
-  const lastLaunchBackend=():'shell'|'claude'|'codex'=>{
+  const lastLaunchBackend=():string=>{
     const stored=localStorage.getItem('mux.lastBackend')
-    return stored==='claude'||stored==='codex'?stored:'shell'
+    return stored&&isAgentBackend(stored)?stored:'shell'
   }
 
   const openProjectMenuAt=(project:Project,x:number,y:number)=>{
@@ -2847,7 +2859,7 @@ export function App() {
     // The emergency stop, reachable with nothing open. Its label names the act, not the
     // state, because a command list is read as a list of things you can do.
     { id:'autodelivery.pause',label:autoStatus?.paused?'Resume auto-delivery (install-wide)':'Pause all auto-delivery (install-wide)',category:'input',available:true,run:()=>void toggleAutoPaused() },
-    { id:'queue.open',label:'Open the prompt queue for the focused session',category:'input',available:!!active&&isAgent(active),disabledReason:'Focus a Claude or Codex session',run:()=>{if(active)void openQueueForSession(active.id)} },
+    { id:'queue.open',label:'Open the prompt queue for the focused session',category:'input',available:!!active&&deliversHarnessPrompts(active.backend),disabledReason:'Focus an agent session',run:()=>{if(active)void openQueueForSession(active.id)} },
     { id: 'session.spawnShell', label: 'New terminal in current project', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => void spawnTerminal() },
     { id: 'session.quickLaunch', label: 'New terminal custom…', category: 'session', available: !!activeProject, disabledReason:'Create or select a project first', run: () => openLauncher() },
     // `project.create` predates this and opens the registry; adding a Project is
@@ -2950,7 +2962,7 @@ export function App() {
     { id: 'session.reveal', label: 'Reveal selected working directory', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api('POST', '/api/reveal', { path: commandSession.cwd }); setContextMenu(null) } },
     { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.project_id, 'horizontal') } } },
     { id: 'session.broadcastMembership', label: commandSession?.broadcast ? 'Remove selected session from broadcast' : 'Add selected session to broadcast', category: 'input', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api<Session>('POST', `/api/sessions/${commandSession.id}/broadcast-set`, { include: !commandSession.broadcast }).then(updated => { updateSession(updated); setContextMenu(null) }) } },
-    { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited Claude or Codex session', run: () => commandSession && void resumeSession(commandSession) },
+    { id: 'session.resume', label: 'Resume selected agent as new', category: 'history', available: !!commandSession && isAgent(commandSession) && ['exited', 'crashed'].includes(commandSession.state), disabledReason: 'Select an exited agent session', run: () => commandSession && void resumeSession(commandSession) },
     { id: 'project.newTerminal', label: 'New terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void spawnTerminal(commandProject.id); setProjectMenu(null) } },
     { id: 'project.newTerminalCustom', label: 'New custom terminal in selected project', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) openLauncher(commandProject.id); setProjectMenu(null) } },
     { id: 'project.reveal', label: 'Reveal selected project in Explorer', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => { if (commandProject) void api('POST', '/api/reveal', { path: commandProject.root }); setProjectMenu(null) } },
@@ -3393,7 +3405,7 @@ export function App() {
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
-          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session?.state)}/>{sessionGlyph(session)}{activityGlyphs(session)}{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session)}{sessionGlyph(session)}{activityGlyphs(session)}{label}</button>{closeTab(child,label,session)}</div>
         })}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
@@ -3475,10 +3487,10 @@ export function App() {
             below is being read off a conversation this PTY may no longer be running (an
             unfollowable /clear or /new). Marked visibly, not just in the tooltip, because the
             whole failure mode is that nothing looks wrong. */}
-        <div><span class={`pane-state ${session.state}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
+        <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
         {!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools">{isAgent(session)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
+        <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
             on a phone it cost 40px of a bar that also has to fit the session name and path. What it
             opened is now the drawer's Processes tab, which pins this session's row first, and the
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
@@ -3488,7 +3500,7 @@ export function App() {
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}><span class={stateDotClass(session.state)}/>{sessionGlyph(session)}{activityGlyphs(session)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session)}{sessionGlyph(session)}{activityGlyphs(session)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -3580,8 +3592,8 @@ export function App() {
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,seenActivity)?'unread':'read'
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});if(!mobileWorkspace)beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
-      <span class={sessionDotClass(session)} />
-      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={session.backend}>{providerGlyph(session.backend as ProviderName)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isAgent(session) ? `agent-status ${session.state}` : ''}>{sessionStatus(session)}</small></span>
+      {sessionStateDot(session)}
+      <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isObservedHarness(session.backend) ? `agent-status ${session.state}` : 'agent-unobserved'}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
   }
@@ -3643,7 +3655,7 @@ export function App() {
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
     const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
-    const glyph=leaf.kind==='terminal'?<><span class={sessionDotClass(session)}/>{sessionGlyph(session)}{activityGlyphs(session)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
+    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session)}{sessionGlyph(session)}{activityGlyphs(session)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
     // hazard next to tab activation. Closing/killing lives in the long-press
     // menu (session menu for terminals, tab menu for resources), which is also
@@ -3902,7 +3914,7 @@ export function App() {
           discoverable without a menu or a chord. Mobile reaches the same tabs
           through the drawer's own tab strip after a two-finger swipe. */}
       {!mobileWorkspace&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
-        {drawerLauncherTabs.map(tab=>{
+        {drawerLauncherTabs.filter(tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
           const owner=drawerStackForTab(drawerLayout,tab.id)
           const visible=!!owner&&clipboardOpen&&activeDrawerPresentation.selected_tabs[owner.id]===tab.id
@@ -3962,7 +3974,7 @@ export function App() {
     </div>}
 
     {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
-      <div class="context-title"><span class={sessionDotClass(contextMenu.session)} /><strong>{sessionName(contextMenu.session)}</strong></div>
+      <div class="context-title">{sessionStateDot(contextMenu.session)}<strong>{sessionName(contextMenu.session)}</strong></div>
       <div class="context-session-info">
         <span title="Process ID of the session's root process">PID {contextMenu.session.pid}</span>
         {contextMenu.session.git.branch&&<span class="git-chip" title={`Git branch ${contextMenu.session.git.branch}${contextMenu.session.git.dirty?` · ${contextMenu.session.git.dirty} changed files`:' · clean'}`}>git:{contextMenu.session.git.branch}{contextMenu.session.git.dirty?` +${contextMenu.session.git.dirty}`:''}</span>}
@@ -4117,7 +4129,7 @@ export function App() {
       <button role="menuitem" onClick={() => { setEmptyMenu(null); void spawnTerminal() }}>New terminal</button>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); openLauncher() }}>New terminal custom…</button>
       {unpanned.length > 0 && <div class="context-subtitle">ATTACH LIVE SESSION</div>}
-      {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}><span class={stateDotClass(session.state)} />{sessionName(session)}</button>)}
+      {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}>{sessionStateDot(session)}{sessionName(session)}</button>)}
     </div>}
 
     {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-140))}}>

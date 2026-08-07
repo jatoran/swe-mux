@@ -5,6 +5,7 @@
 // screen, so the eye is only drawn to genuine, unseen activity. Kept free of
 // runtime imports so the logic can be unit tested under the node runner.
 import type { Session } from './types'
+import { isObservedHarness } from './harnessRegistry.ts'
 
 // Ended sessions carry their own muted styling (dimmed, red/grey dot) and a
 // last end-of-life last_activity_ts bump, so they never participate in unread.
@@ -20,7 +21,7 @@ export interface ProjectRailStatus {
 }
 
 function isAgentSession(session: Session): boolean {
-  return (session.backend === 'claude' || session.backend === 'codex') && !DEAD.includes(session.state)
+  return isObservedHarness(session.backend) && !DEAD.includes(session.state)
 }
 
 /**
