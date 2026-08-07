@@ -398,6 +398,17 @@ async def test_session_manager_reattaches_after_daemon_restart(
         spawned_env = harness.server.sessions[sid].host.env_extra or {}
         assert "CLAUDE_CODE_CHILD_SESSION" not in spawned_env
         assert "MUX_SESSION_ID" in spawned_env
+        # Colour capability reaches every harness, not just OMP: a plain shell
+        # session is spawned describing swe-mux's xterm.js PTY, so a CLI never
+        # falls back to monochrome because the frozen daemon inherited no TERM.
+        assert spawned_env["TERM"] == "xterm-256color"
+        assert spawned_env["COLORTERM"] == "truecolor"
+        # An inherited rich-emulator marker is shadowed, never forwarded.
+        assert spawned_env["WT_SESSION"] == ""
+        # ...but a shell keeps honouring pipe semantics: colour is not force-set,
+        # so `cmd > file` never gets ANSI. That forcing is scoped to agent panes.
+        assert "FORCE_COLOR" not in spawned_env
+        assert "CLICOLOR_FORCE" not in spawned_env
         if session.registration_task is not None:
             await session.registration_task
         session.observation_state["hook_sequences"] = {"omp-extension": 17}

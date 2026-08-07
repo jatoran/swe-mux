@@ -61,6 +61,117 @@ def scrub_claude_session_markers(environment: Mapping[str, str]) -> dict[str, st
     }
 
 
+# The terminal on the far side of swe-mux's retained-byte WebSocket is always the
+# browser's xterm.js client, never whatever launched the daemon. A frozen,
+# tray-launched daemon inherits no terminal-emulator capability variables at all
+# (so a spawned CLI sees neither TERM nor COLORTERM), while a daemon relaunched
+# from inside a rich terminal inherits the *wrong* ones (that emulator's markers,
+# describing a terminal the client is not). Either way, colour-capability
+# detection in the spawned CLI (Claude Code, Codex, and every chalk/supports-color
+# program) is left without a signal and prints monochrome — the whole pane renders
+# in the terminal's default foreground. Describing the real terminal is therefore a
+# property of the PTY, not of any one harness, so SessionManager applies it to
+# every session and a newly added harness cannot silently regress to no-colour.
+TERMINAL_CAPABILITY_ENV: Mapping[str, str] = {
+    "TERM": "xterm-256color",
+    "COLORTERM": "truecolor",
+    "TERM_PROGRAM": "swe-mux",
+    # Owned-but-empty rather than absent: a value we set shadows any inherited one,
+    # and no CLI should key behaviour off a version/feature string swe-mux does not
+    # advertise.
+    "TERM_PROGRAM_VERSION": "",
+    "TERM_FEATURES": "",
+}
+
+# Rich-emulator and terminal-multiplexer markers a frozen daemon may have inherited
+# from whatever launched it. They describe the daemon's parent, not the xterm.js
+# client, so a CLI must never conclude it is running under Windows Terminal, Kitty,
+# Ghostty, WezTerm, iTerm2, VS Code, Alacritty, tmux, screen, Zellij, or CMUX.
+# Empty values deliberately shadow any inherited marker.
+TERMINAL_MARKER_SHADOWS: Mapping[str, str] = {
+    "WT_SESSION": "",
+    "KITTY_WINDOW_ID": "",
+    "GHOSTTY_RESOURCES_DIR": "",
+    "WEZTERM_PANE": "",
+    "ITERM_SESSION_ID": "",
+    "VSCODE_PID": "",
+    "ALACRITTY_WINDOW_ID": "",
+    "TMUX": "",
+    "TMUX_PANE": "",
+    "STY": "",
+    "ZELLIJ": "",
+    "ZELLIJ_PANE_ID": "",
+    "ZELLIJ_SESSION_NAME": "",
+    "CMUX_WORKSPACE_ID": "",
+    "CMUX_SURFACE_ID": "",
+    "CMUX_REMOTE_TRANSPORT": "",
+}
+
+
+def terminal_env() -> dict[str, str]:
+    """Harness-agnostic environment describing swe-mux's xterm.js PTY.
+
+    Every session is spawned with this so a CLI's colour detection sees a 24-bit
+    xterm regardless of how (or from where) the daemon itself was launched. It is
+    the lowest-precedence layer of a session's environment: an adapter's own spawn
+    env, a user's shell profile, and a task's env all override it. Adapters add
+    only their own namespaced tuning (e.g. OMP's ``PI_*`` variables) on top.
+    """
+    return {**TERMINAL_CAPABILITY_ENV, **TERMINAL_MARKER_SHADOWS}
+
+
+# Colour capability alone is a signal a CLI may still ignore. Colour detection in
+# the Node ecosystem (Claude Code via chalk/supports-color) gates on the stream
+# being a TTY first — ``if (!isTTY && FORCE_COLOR === undefined) return 0`` — and
+# swe-mux launches agents through a shim -> windowed frozen ``swe-mux.exe`` ->
+# ``cmd.exe`` -> node chain that hides the ConPTY's TTY-ness from that check, so
+# TERM/COLORTERM never get consulted and the pane renders monochrome. Rust CLIs
+# (Codex, OMP) key off COLORTERM regardless and are unaffected, but the fix has to
+# hold for every agent harness, present and future. FORCE_COLOR (Node) and
+# CLICOLOR_FORCE (the BSD/Rust/Go convention) together force colour independent of
+# TTY detection. This is scoped to agent harnesses on purpose: they are
+# always-interactive TUIs that own the terminal, whereas a plain shell must keep
+# honouring pipe semantics (a forced flag would leak ANSI into ``cmd > file``).
+AGENT_FORCE_COLOR_ENV: Mapping[str, str] = {
+    "FORCE_COLOR": "3",
+    "CLICOLOR_FORCE": "1",
+}
+
+
+def session_terminal_env(backend: str) -> dict[str, str]:
+    """The terminal environment a session of ``backend`` is spawned with.
+
+    Every session gets :func:`terminal_env`; agent harnesses additionally get
+    :data:`AGENT_FORCE_COLOR_ENV` because their launch chain can hide the PTY from
+    a CLI's colour detection. This is the lowest-precedence layer of a session's
+    environment — adapter, shell-profile, and task env all override it.
+    """
+    env = terminal_env()
+    if is_agent_harness(backend):
+        env.update(AGENT_FORCE_COLOR_ENV)
+    return env
+
+
+def base_session_env(environment: Mapping[str, str], backend: str) -> dict[str, str]:
+    """The scrubbed daemon environment a session of ``backend`` inherits.
+
+    Always drops parent-Claude session markers (:func:`scrub_claude_session_markers`).
+    Agent harnesses additionally drop ``NO_COLOR``: those panes force colour
+    (:func:`session_terminal_env`), so an ambient ``NO_COLOR`` — inherited when the
+    daemon was (re)launched from inside an agent session, the designed redeploy
+    flow — only contradicts the force. Node then warns (``NO_COLOR ignored due to
+    FORCE_COLOR``) and a ``NO_COLOR``-first CLI (Codex strips colour while keeping
+    bold/dim) refuses colour outright despite ``CLICOLOR_FORCE``. A ``NO_COLOR``
+    override that a session's terminal env cannot add is instead removed here.
+    A deliberate per-session opt-out still works through shell-profile or task env,
+    which override this base. Shells keep an inherited ``NO_COLOR`` (no-color.org).
+    """
+    base = scrub_claude_session_markers(environment)
+    if is_agent_harness(backend):
+        base = {key: value for key, value in base.items() if key.upper() != "NO_COLOR"}
+    return base
+
+
 WORKTREE_CWD_REFUSAL = "cwd must stay inside the Project root, or be a git worktree of it"
 
 

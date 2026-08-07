@@ -119,7 +119,7 @@ class OmpAdapter:
         return SpawnSpec(
             opts.exe or self.default_exe,
             tuple(with_mux_hook([*self.default_args, *opts.args], extension)),
-            self._terminal_env(opts.session_id or sid),
+            self._omp_env(),
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
@@ -131,7 +131,7 @@ class OmpAdapter:
                     ["--resume", native_id, *self.default_args, *opts.args], extension
                 )
             ),
-            self._terminal_env(opts.session_id or native_id),
+            self._omp_env(),
         )
 
     def _session_extension(self, session_id: str, token: str | None) -> Path | None:
@@ -155,50 +155,22 @@ class OmpAdapter:
     def _term_session_value(session_id: str) -> str:
         return f"swe-mux-{session_id}"
 
-    @classmethod
-    def _terminal_env(cls, session_id: str) -> dict[str, str]:
-        """Describe the browser xterm that actually terminates this PTY.
+    @staticmethod
+    def _omp_env() -> dict[str, str]:
+        """OMP-specific spawn tuning, layered over the shared session terminal env.
 
-        A frozen daemon can inherit Windows Terminal, tmux, Kitty, WezTerm, or
-        CMUX markers from whichever terminal launched it. Those variables
-        describe the daemon's parent, not the xterm.js client on the far side of
-        swe-mux's retained-byte WebSocket. OMP treats them as capability proof:
-        in particular WT_SESSION enables DEC 2026 synchronized paints before a
-        runtime probe, and rich-emulator markers enable image protocols this
-        frontend does not implement. Synchronized paints are declined because a
-        bounded replay window can end on the open half of a paint bracket, which
-        a fresh client then withholds until the live stream closes it. (This is
-        a conservative posture, not the 2026-08-06 black-pane diagnosis - that
-        was xterm's DECRQM handler crashing, fixed in
-        frontend/scripts/patch-xterm-requestmode.mjs.)
-
-        Empty values deliberately shadow inherited markers. PI_NO_SYNC_OUTPUT
-        outranks both PI_FORCE_SYNC_OUTPUT and OMP's DECRQM probe, while the
-        image override preserves OMP's text fallback for attached files.
+        Colour capability, marker shadowing, and colour forcing are applied to
+        every session centrally (``spawn_contract.session_terminal_env``), and
+        OMP's per-pane ``TERM_SESSION_ID`` comes from :meth:`session_env`. What
+        remains here are two ``PI_*`` knobs. Synchronized paints (DEC 2026) are
+        declined because a bounded replay window can end on the open half of a
+        paint bracket, which a fresh client then withholds until the live stream
+        closes it; ``PI_FORCE_IMAGE_PROTOCOL=off`` keeps OMP's text fallback for
+        attached files, as this frontend implements no image protocol. (Not the
+        2026-08-06 black-pane diagnosis — that was xterm's DECRQM handler crashing,
+        fixed in frontend/scripts/patch-xterm-requestmode.mjs.)
         """
         return {
-            "TERM_SESSION_ID": cls._term_session_value(session_id),
-            "TERM": "xterm-256color",
-            "COLORTERM": "truecolor",
-            "TERM_PROGRAM": "swe-mux",
-            "TERM_PROGRAM_VERSION": "",
-            "TERM_FEATURES": "",
-            "WT_SESSION": "",
-            "KITTY_WINDOW_ID": "",
-            "GHOSTTY_RESOURCES_DIR": "",
-            "WEZTERM_PANE": "",
-            "ITERM_SESSION_ID": "",
-            "VSCODE_PID": "",
-            "ALACRITTY_WINDOW_ID": "",
-            "TMUX": "",
-            "TMUX_PANE": "",
-            "STY": "",
-            "ZELLIJ": "",
-            "ZELLIJ_PANE_ID": "",
-            "ZELLIJ_SESSION_NAME": "",
-            "CMUX_WORKSPACE_ID": "",
-            "CMUX_SURFACE_ID": "",
-            "CMUX_REMOTE_TRANSPORT": "",
             "PI_NO_SYNC_OUTPUT": "1",
             "PI_FORCE_IMAGE_PROTOCOL": "off",
         }

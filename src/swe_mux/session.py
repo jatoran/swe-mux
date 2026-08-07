@@ -53,7 +53,11 @@ from .screen_mode import (
     ScreenModeParser,
 )
 from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
-from .spawn_contract import infer_agent_executable_backend, scrub_claude_session_markers
+from .spawn_contract import (
+    base_session_env,
+    infer_agent_executable_backend,
+    session_terminal_env,
+)
 from .status_timeline import LedgerRing, StatusTimelineStore, note_layer_reading
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
@@ -2144,6 +2148,11 @@ class SessionManager:
             record.run_project_scope_id = project.id
             record.run_repo_group_id = project.repo_group_id
         env_extra = {
+            # Terminal capability, lowest precedence: colour never depends on how
+            # the daemon was launched, and agent harnesses also get colour forced
+            # past their TTY-hiding launch chain (see spawn_contract). Central here
+            # so no harness can be forgotten. Everything below overrides it.
+            **session_terminal_env(backend),
             **self.child_env,
             **{
                 key: value
@@ -2171,8 +2180,10 @@ class SessionManager:
         }
         pty_started_at = time.perf_counter()
         # Scrubbed base environment: a daemon (re)launched from inside an agent
-        # session must not pass parent-Claude session markers to terminals.
-        env_base = scrub_claude_session_markers(os.environ)
+        # session must not pass parent-Claude markers to terminals, and an agent
+        # pane additionally drops any inherited NO_COLOR that would fight the colour
+        # it forces (see spawn_contract.base_session_env).
+        env_base = base_session_env(os.environ, backend)
         pty: PtyHost | RemotePtyHost | None = None
         if self.supervisor is not None and self.supervisor.connected:
             remote = RemotePtyHost(

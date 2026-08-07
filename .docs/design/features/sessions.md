@@ -93,12 +93,33 @@ and reattachable browser viewports.
   Notes are created and managed through the owning Project's flat Notes collection.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
-- Terminal environments are built from a scrubbed base: parent-Claude session markers
-  (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, session id/entrypoint/pid/effort) are dropped at
-  spawn (`spawn_contract.scrub_claude_session_markers`) because a daemon relaunched from inside
-  an agent session would otherwise mark every nested `claude` as a child session — disabling
-  its transcript saving and with it swe-mux's observation. Deliberate user configuration
-  (feature flags, `ANTHROPIC_*`) passes through untouched.
+- Terminal environments are built from a scrubbed base (`spawn_contract.base_session_env`):
+  parent-Claude session markers (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, session
+  id/entrypoint/pid/effort) are dropped at spawn for every session because a daemon relaunched
+  from inside an agent session would otherwise mark every nested `claude` as a child session —
+  disabling its transcript saving and with it swe-mux's observation. Deliberate user
+  configuration (feature flags, `ANTHROPIC_*`) passes through untouched.
+- Every session is spawned describing the terminal that actually terminates its PTY — the
+  browser's xterm.js client, not whatever launched the daemon (`spawn_contract.terminal_env`,
+  applied centrally in `SessionManager.spawn`). It forces an xterm-256color / truecolor
+  capability and shadows inherited emulator and multiplexer markers (Windows Terminal, Kitty,
+  WezTerm, iTerm2, VS Code, tmux, screen, Zellij, CMUX) so a CLI never mistakes the daemon's
+  launch context for its own terminal. Without it a frozen, tray-launched daemon inherits no
+  `TERM`/`COLORTERM` at all and every pane renders monochrome. This is the lowest-precedence
+  layer: an adapter's own env, a shell profile, and a task's env all override it.
+- Agent harnesses additionally get colour forced (`FORCE_COLOR`, `CLICOLOR_FORCE`;
+  `spawn_contract.session_terminal_env` gated on `is_agent_harness`). Node-based CLIs (Claude
+  Code via chalk/supports-color) refuse colour unless stdout is detected as a TTY, and swe-mux
+  launches agents through a shim → windowed frozen `swe-mux.exe` → `cmd.exe` → CLI chain that
+  hides the ConPTY's TTY-ness from that check; Rust CLIs (Codex, OMP) key off `COLORTERM` and
+  are unaffected by the TTY gate, but the forcing keeps every agent harness coloured regardless.
+  The same base (`base_session_env`) also drops an inherited `NO_COLOR` for agents: it is the
+  one launch-context pollutant a session's terminal env cannot override (a merge can add but not
+  remove a key), and Codex obeys `NO_COLOR` over `CLICOLOR_FORCE` — so without the drop a daemon
+  redeployed from inside an agent session leaves Codex monochrome and makes Node warn `NO_COLOR
+  ignored due to FORCE_COLOR`. All of this is scoped to agents on purpose: a plain shell keeps
+  honouring pipe semantics (no forced flag leaks ANSI into `cmd > file`) and an inherited
+  `NO_COLOR` (no-color.org).
 - Session-preserving reload (`pty_supervisor_enabled`): PTYs spawn inside the standalone PTY
   supervisor through a `RemotePtyHost` with the same host contract (spawn/write/resize/
   isalive/exit_status/release/stop). The supervisor keeps the authoritative scrollback and the

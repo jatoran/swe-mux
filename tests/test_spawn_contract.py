@@ -7,6 +7,7 @@ import pytest
 from swe_mux.spawn_contract import (
     MAX_SPAWN_ENV,
     SpawnRequest,
+    base_session_env,
     resolve_contained_cwd,
     resolve_listed_cwd,
     scrub_claude_session_markers,
@@ -101,6 +102,25 @@ def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> Non
     assert scrubbed["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] == "1"
     assert scrubbed["ANTHROPIC_API_KEY"] == "secret"
     assert scrubbed["PATH"] == r"C:\Windows"
+
+
+def test_base_session_env_drops_no_color_for_agents_but_keeps_it_for_shells() -> None:
+    environment = {
+        "NO_COLOR": "1",  # ambient pollution: daemon relaunched inside an agent session
+        "CLAUDECODE": "1",  # always scrubbed, regardless of backend
+        "PATH": r"C:\Windows",
+    }
+    # Agent panes force colour, so an inherited NO_COLOR (which Codex obeys over
+    # CLICOLOR_FORCE) is removed; parent-Claude markers go too.
+    for agent in ("claude", "codex", "omp"):
+        env = base_session_env(environment, agent)
+        assert "NO_COLOR" not in env
+        assert "CLAUDECODE" not in env
+        assert env["PATH"] == r"C:\Windows"
+    # A plain shell keeps honouring an inherited NO_COLOR (no-color.org).
+    shell = base_session_env(environment, "shell")
+    assert shell["NO_COLOR"] == "1"
+    assert "CLAUDECODE" not in shell
 
 
 def test_spawn_contract_normalizes_structured_fields() -> None:

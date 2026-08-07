@@ -21,6 +21,7 @@ from swe_mux.adapters.claude import _hook_command, encode_cwd
 from swe_mux.adapters.codex import CODEX_LIFECYCLE_HOOK_EVENTS, codex_lifecycle_hook_args
 from swe_mux.adapters.omp import materialize_mux_extension, omp_hook_path
 from swe_mux.reconcile import inspect_claude, inspect_codex
+from swe_mux.spawn_contract import session_terminal_env, terminal_env
 
 
 def test_spawn_spec_defaults_are_safe() -> None:
@@ -39,7 +40,7 @@ def test_omp_launch_and_resume_specs_preserve_structured_arguments(tmp_path: Pat
     assert adapter.spawn_spec("mux-id", options) == SpawnSpec(
         "custom-omp",
         ("--extension", str(omp_hook_path()), "--theme", "dark", "--model", "fast"),
-        adapter._terminal_env("mux-id"),
+        adapter._omp_env(),
     )
     assert adapter.resume_spec("native-id", options) == SpawnSpec(
         "custom-omp",
@@ -53,11 +54,45 @@ def test_omp_launch_and_resume_specs_preserve_structured_arguments(tmp_path: Pat
             "--model",
             "fast",
         ),
-        adapter._terminal_env("native-id"),
+        adapter._omp_env(),
     )
     assert adapter.graceful_exit_keys() == "\x03\x04"
     assert adapter.reports_conversation_rollover is True
     assert omp_hook_path().is_file()
+
+
+def test_terminal_env_forces_truecolor_and_shadows_emulator_markers() -> None:
+    env = terminal_env()
+    assert env["TERM"] == "xterm-256color"
+    assert env["COLORTERM"] == "truecolor"
+    assert env["TERM_PROGRAM"] == "swe-mux"
+    # Inherited rich-emulator / multiplexer markers are shadowed, never forwarded.
+    assert env["WT_SESSION"] == ""
+    assert env["TMUX"] == ""
+
+
+def test_omp_env_is_only_pi_tuning_now_that_terminal_env_is_central() -> None:
+    # OMP no longer carries terminal capability in its spawn env; the shared
+    # session terminal env (applied centrally) owns that. OMP declares only its
+    # own PI_* knobs, so a new agent harness cannot forget colour by copying OMP.
+    env = OmpAdapter("omp")._omp_env()
+    assert env == {"PI_NO_SYNC_OUTPUT": "1", "PI_FORCE_IMAGE_PROTOCOL": "off"}
+
+
+def test_session_terminal_env_forces_colour_for_agents_but_not_shells() -> None:
+    shell = session_terminal_env("shell")
+    assert shell["TERM"] == "xterm-256color"
+    assert shell["COLORTERM"] == "truecolor"
+    # A shell must keep honouring pipe semantics: no forced-colour flags that would
+    # leak ANSI into `cmd > file`.
+    assert "FORCE_COLOR" not in shell
+    assert "CLICOLOR_FORCE" not in shell
+    for agent in ("claude", "codex", "omp"):
+        env = session_terminal_env(agent)
+        # Shared capability plus colour forced past the TTY-hiding launch chain.
+        assert env["COLORTERM"] == "truecolor"
+        assert env["FORCE_COLOR"] == "3"
+        assert env["CLICOLOR_FORCE"] == "1"
 
 
 def test_omp_session_extension_registers_mux_mcp_without_touching_user_config(

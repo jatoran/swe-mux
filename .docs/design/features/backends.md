@@ -140,12 +140,15 @@ The descriptor is the source of truth for all generic surfaces.
   used by newly materialized packages.
   Existing PTYs retain their original argv and require a fresh omp process to load a changed
   extension.
-  Mux sets `TERM_SESSION_ID=swe-mux-<mux-id>` for each OMP process.
-  Direct OMP launches also receive an explicit xterm-compatible capability environment instead
-  of inheriting emulator and multiplexer markers from the terminal that launched the daemon.
-  DEC 2026 synchronized output is disabled because a retained byte replay can cross a paint
-  transaction boundary, and native image protocols are disabled because mux exposes OMP's text
-  fallback rather than an inline-image terminal addon.
+  Mux sets `TERM_SESSION_ID=swe-mux-<mux-id>` for each OMP process (its `session_env`).
+  The xterm-compatible capability environment and emulator/multiplexer marker shadowing that
+  keep a CLI from inheriting the daemon's launch context are not OMP-specific: every session
+  gets them centrally (`spawn_contract.terminal_env`; see `sessions.md`), and agent harnesses
+  also get colour forced past their TTY-hiding launch chain. OMP's adapter therefore contributes
+  only its own `PI_*` tuning (`OmpAdapter._omp_env`): DEC 2026 synchronized output is disabled
+  because a retained byte replay can cross a paint transaction boundary, and native image
+  protocols are disabled because mux exposes OMP's text fallback rather than an inline-image
+  terminal addon.
   OMP normalizes that value to `apple-swe-mux-<mux-id>` and writes
   `~/.omp/agent/terminal-sessions/<terminal-id>` with the cwd, exact session file, and optional
   `fresh` boundary marker.
