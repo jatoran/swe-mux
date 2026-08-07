@@ -166,7 +166,13 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
                 {
                     "id": "generation-1",
                     "model": "vendor/exact",
-                    "choices": [{"message": {"content": '{"summary":"done"}'}}],
+                    "provider": "Provider A",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": '{"summary":"done"}'},
+                        }
+                    ],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 3, "cost": 0.01},
                 },
             )
@@ -186,11 +192,13 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
         schema_name="summary_v1",
         schema=schema,
         max_tokens=64,
+        reasoning_enabled=False,
     )
 
     body = session.requests[0][2]["json"]
     assert body["model"] == "vendor/exact"
     assert body["stream"] is False
+    assert body["reasoning"] == {"effort": "none"}
     # `require_parameters` is the guarantee (a provider that honours the schema);
     # pinning to one provider on top of it is not, and cost a whole day of titles.
     assert body["provider"] == {"require_parameters": True, "allow_fallbacks": True}
@@ -202,6 +210,54 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
     assert result.value == {"summary": "done"}
     assert result.input_tokens == 10
     assert result.output_tokens == 3
+    assert result.provider_name == "Provider A"
+    assert result.finish_reason == "stop"
+    assert result.response_content_type == "string"
+    assert result.response_content_length == 18
+
+
+@pytest.mark.parametrize("content", [None, [], "not json"])
+async def test_malformed_structured_response_is_retryable_and_keeps_safe_diagnostics(
+    content: object,
+) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "id": "generation-bad",
+                    "model": "vendor/exact",
+                    "provider": "Provider B",
+                    "choices": [
+                        {"finish_reason": "length", "message": {"content": content}}
+                    ],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 64, "cost": 0.02},
+                },
+            )
+        ]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.complete_json(
+            model="vendor/exact",
+            messages=[{"role": "user", "content": "bounded transcript"}],
+            schema_name="summary_v1",
+            schema={"type": "object"},
+            max_tokens=64,
+        )
+
+    error = captured.value
+    assert error.retryable is True
+    assert error.status == 200
+    assert error.generation_id == "generation-bad"
+    assert error.resolved_model == "vendor/exact"
+    assert error.provider_name == "Provider B"
+    assert error.finish_reason == "length"
+    assert error.input_tokens == 12
+    assert error.output_tokens == 64
+    assert error.cost_usd == 0.02
+    assert error.response_content_type in {"null", "array", "string"}
 
 
 async def test_rate_limit_names_the_upstream_provider_and_marks_itself_retryable() -> None:

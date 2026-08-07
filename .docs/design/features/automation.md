@@ -41,11 +41,15 @@ and the declared minimum observation capability.
 ## OpenRouter and economics
 
 - Only `https://openrouter.ai/api/v1` is accepted; redirects and caller URLs are impossible.
-- Requests are non-streaming, strict JSON-schema, parameter-required, no-provider-fallback,
-  bounded, timed out, cancellable, retried only for transient status, and locally validated.
+- Requests are non-streaming, strict JSON-schema, parameter-required, bounded, timed out,
+  cancellable, retried for transient transport failures, and locally validated.
+- Routing may fall back between providers for the exact requested model when the provider
+  supports the required schema parameters.
 - Settings provides write-only set/replace/test/clear key controls, exact cheap/standard
   model IDs, explicit model refresh, global/per-rule token+dollar budgets, hourly caps,
   concurrency, input/output limits, retention, and independent observer toggles.
+- Cheap and standard model controls are searchable comboboxes whose result popovers have a
+  bounded scroll height on desktop and mobile.
 - Windows persistent keys use current-user DPAPI in `automation.secrets.json`;
   `OPENROUTER_API_KEY` is the headless override. The key is never returned.
 - The Automation dashboard exposes rules/shadow state, firings, traces, action/call results,
@@ -86,7 +90,8 @@ Built-ins are an explicit-name-preserving session titler, one-line turn summariz
 triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
 completion evidence is coalesced before completion-triggered calls.
 `builtin.session-titler-initial` fires on an observed user request (`turn_started` or
-`transcript_message`). Its `title_v2` result includes `stability=provisional|settled`. A concrete
+`transcript_message`) and gets a repair opportunity at `turn_ended` if the prompt arrived after
+the opening trigger. Its `title_v2` result includes `stability=provisional|settled`. A concrete
 request settles immediately. A setup-only opener such as “review/learn this repository” may be
 provisional, then recomputed when a later request reveals the real task. Automatic work is bounded
 to the first three distinct requests and at most three provider calls; a settled result freezes.
@@ -122,7 +127,8 @@ observation. The action declares `minimum_capability = "telemetry"`; every other
 
 **A title lost to the provider is retried in the background**, at 30s / 2min / 5min / 15min /
 45min / 90min (`TITLE_RETRY_DELAYS_SECONDS`), a horizon of a little over two hours. Only a
-*retryable* `OpenRouterError` qualifies — a rate limit or an upstream fault, per `error.retryable`.
+*retryable* `OpenRouterError` qualifies, including a rate limit, an upstream fault, or a malformed
+HTTP 200 structured response that may succeed on another provider attempt.
 A rejected key fails identically forever, and budget exhaustion, a degraded transcript, and a
 missing prompt are decisions a retry would reach again unchanged. Each retry re-enters `evaluate`
 through the normal guards, so a run that ended, rolled over, or got titled by the other stage
@@ -158,6 +164,13 @@ model while five other providers served it. There is no fallback to a different 
 layer, so the answer's quality cannot silently change — only which host produced it. The layers
 are complements: jittered backoff absorbs a burst, fallbacks route around one sick provider, the
 scheduled retry covers an outage that outlasts both, and the model switch covers a pool-wide one.
+
+Title actions send `reasoning.effort=none` so the bounded completion budget is reserved for the
+small JSON title rather than hidden reasoning output.
+Malformed, empty, non-object, and schema-invalid structured responses are retryable title faults.
+Observer-call rows retain only safe response diagnostics: generation and resolved model, provider,
+finish reason, HTTP status, token and cost usage, response content type and length, and retryability.
+The response content itself is not retained.
 
 **Observer input is scrubbed before it is hashed, measured, or sent.** Slice construction
 and `complete_json` both run text through `text_safety.utf8_safe`, because a lone surrogate

@@ -1062,6 +1062,12 @@ invisible by construction: getting it wrong shows up as a notification that neve
 status, usage, and — when `cwd` is supplied — project config) into one response. `config`
 failing fails the request; any other part degrades to `null` with its reason keyed under
 `errors`. The individual endpoints remain authoritative and unchanged.
+The provider section supplies the cached structured-output model catalog used by the Automation
+tab's live-filtered cheap and standard model pickers.
+
+`GET /api/automation/dashboard` includes recent observer-call diagnostics without response
+content: requested and resolved model, generation, provider, finish reason, HTTP status,
+retryability, token and cost usage, latency, and response content type and length.
 
 ## CLI
 

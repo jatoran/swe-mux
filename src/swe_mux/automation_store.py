@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 3
+AUTOMATION_SCHEMA_VERSION = 4
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS automation_observer_calls (
   status TEXT NOT NULL, requested_model TEXT, resolved_model TEXT,
   generation_id TEXT, input_hash TEXT NOT NULL, input_bytes INTEGER NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL, latency_ms INTEGER, error TEXT, created_at REAL NOT NULL,
+  cost_usd REAL, latency_ms INTEGER, provider_name TEXT, finish_reason TEXT,
+  response_content_type TEXT, response_content_length INTEGER,
+  http_status INTEGER, retryable INTEGER, error TEXT, created_at REAL NOT NULL,
   completed_at REAL
 );
 CREATE TABLE IF NOT EXISTS automation_checkpoints (
@@ -229,6 +231,20 @@ class AutomationStore:
                 "FROM annotations_legacy"
             )
             self._db.execute("DROP TABLE annotations_legacy")
+        observer_calls = self._columns("automation_observer_calls")
+        observer_diagnostics = {
+            "provider_name": "TEXT",
+            "finish_reason": "TEXT",
+            "response_content_type": "TEXT",
+            "response_content_length": "INTEGER",
+            "http_status": "INTEGER",
+            "retryable": "INTEGER",
+        }
+        for column, sql_type in observer_diagnostics.items():
+            if observer_calls and column not in observer_calls:
+                self._db.execute(
+                    f"ALTER TABLE automation_observer_calls ADD COLUMN {column} {sql_type}"
+                )
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -515,12 +531,20 @@ class AutomationStore:
         output_tokens: int = 0,
         cost_usd: float | None = None,
         latency_ms: int | None = None,
+        provider_name: str | None = None,
+        finish_reason: str | None = None,
+        response_content_type: str | None = None,
+        response_content_length: int | None = None,
+        http_status: int | None = None,
+        retryable: bool | None = None,
         error: str | None = None,
     ) -> None:
         def op() -> None:
             self._db.execute(
                 "UPDATE automation_observer_calls SET status=?,resolved_model=?,generation_id=?,"
-                "input_tokens=?,output_tokens=?,cost_usd=?,latency_ms=?,error=?,completed_at=? "
+                "input_tokens=?,output_tokens=?,cost_usd=?,latency_ms=?,provider_name=?,"
+                "finish_reason=?,response_content_type=?,response_content_length=?,"
+                "http_status=?,retryable=?,error=?,completed_at=? "
                 "WHERE id=?",
                 (
                     status,
@@ -530,6 +554,12 @@ class AutomationStore:
                     output_tokens,
                     cost_usd,
                     latency_ms,
+                    provider_name,
+                    finish_reason,
+                    response_content_type,
+                    response_content_length,
+                    http_status,
+                    None if retryable is None else int(retryable),
                     error,
                     time.time(),
                     call_id,

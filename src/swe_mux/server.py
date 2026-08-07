@@ -2725,6 +2725,11 @@ async def _run_observer_batch(
                     output_tokens=completion.output_tokens,
                     cost_usd=completion.cost_usd,
                     latency_ms=completion.latency_ms,
+                    provider_name=completion.provider_name,
+                    finish_reason=completion.finish_reason,
+                    response_content_type=completion.response_content_type,
+                    response_content_length=completion.response_content_length,
+                    http_status=200,
                 )
                 await store.add_spend(
                     rule_id=rule_id,
@@ -2735,7 +2740,28 @@ async def _run_observer_batch(
                     call_id=call_id,
                 )
             except Exception as exc:
-                await store.observer_finished(call_id, status="failed", error=str(exc)[:1000])
+                if isinstance(exc, OpenRouterError):
+                    await store.observer_finished(
+                        call_id,
+                        status="failed",
+                        resolved_model=exc.resolved_model,
+                        generation_id=exc.generation_id,
+                        input_tokens=exc.input_tokens,
+                        output_tokens=exc.output_tokens,
+                        cost_usd=exc.cost_usd,
+                        latency_ms=exc.latency_ms,
+                        provider_name=exc.provider_name,
+                        finish_reason=exc.finish_reason,
+                        response_content_type=exc.response_content_type,
+                        response_content_length=exc.response_content_length,
+                        http_status=exc.status,
+                        retryable=exc.retryable,
+                        error=str(exc)[:1000],
+                    )
+                else:
+                    await store.observer_finished(
+                        call_id, status="failed", error=str(exc)[:1000]
+                    )
                 results.append({"run_id": row["id"], "error": str(exc)})
                 continue
             calls += 1

@@ -503,7 +503,7 @@ async def test_builtin_titler_reserves_one_paid_call_per_agent_run(tmp_path: Pat
     assert len(await store.annotations(agent_run_id="run-1", tag="title")) == 1
     assert len(await store.observer_calls()) == 1
     assert first_reports[0]["matched"] is True
-    assert second_reports[0]["guarded"] is True
+    assert any(report.get("guarded") for report in second_reports)
     store.close()
 
 
@@ -512,9 +512,11 @@ class InstantTitleProvider(FakeProvider):
 
     def __init__(self) -> None:
         self.calls = 0
+        self.reasoning: list[bool | None] = []
 
     async def complete_json(self, **values: Any) -> OpenRouterResult:
         self.calls += 1
+        self.reasoning.append(values.get("reasoning_enabled"))
         payload: dict[str, Any] = {"title": "Login Test Fix", "confidence": 0.95}
         if values.get("schema_name") == "title_v2":
             payload["stability"] = "settled"
@@ -760,9 +762,35 @@ async def test_turn_ended_titles_a_run_whose_request_was_never_captured(
 
     reports = await engine.evaluate(normalized_event(item, 10, source="native_hook"))
 
-    assert reports and reports[0]["matched"] is True
+    assert reports and reports[-1]["matched"] is True
     rows = await store.annotations(agent_run_id="run-1", tag="title")
     assert [row["rule_id"] for row in rows] == ["builtin.session-titler"]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_end_repairs_a_prompt_that_arrived_after_the_opening_title_trigger(
+    tmp_path: Path,
+) -> None:
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item,
+        transcript_path=None,
+        first_user_prompt=None,
+        last_user_prompt="fix the title generation race",
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = InstantTitleProvider()
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+
+    reports = await engine.evaluate(normalized_event(item, 10, source="native_hook"))
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["rule_id"] for row in rows] == ["builtin.session-titler-initial"]
+    assert provider.calls == 1
+    assert provider.reasoning == [False]
+    assert reports[0]["matched"] is True
+    assert reports[1]["guarded"] is True
     store.close()
 
 
@@ -815,6 +843,53 @@ class RateLimitedThenTitleProvider(FakeProvider):
         )
 
 
+class SchemaInvalidThenTitleProvider(RateLimitedThenTitleProvider):
+    def __init__(self) -> None:
+        super().__init__(failures=0)
+        self.invalid = True
+
+    async def complete_json(self, **values: Any) -> OpenRouterResult:
+        result = await super().complete_json(**values)
+        if not self.invalid:
+            return result
+        self.invalid = False
+        return OpenRouterResult(
+            result.generation_id,
+            result.requested_model,
+            result.resolved_model,
+            {**result.value, "unexpected": "field"},
+            result.input_tokens,
+            result.output_tokens,
+            result.cost_usd,
+            result.latency_ms,
+        )
+
+
+@pytest.mark.asyncio
+async def test_schema_invalid_title_retries_instead_of_becoming_permanent(
+    tmp_path: Path,
+) -> None:
+    item = record(tmp_path)
+    session = SimpleNamespace(
+        record=item, transcript_path=None, first_user_prompt="fix the flaky login test"
+    )
+    store = AutomationStore(tmp_path / "mux.db")
+    provider = SchemaInvalidThenTitleProvider()
+    engine = _titler_engine(tmp_path, session, store, provider=provider)
+
+    reports = await engine.evaluate(normalized_event(item, 10, event_type="turn_started"))
+    assert reports[0]["retry_scheduled"] is True
+    await _run_due_retries(engine)
+
+    rows = await store.annotations(agent_run_id="run-1", tag="title")
+    assert [row["content"] for row in rows] == ["Login Test Fix"]
+    calls = await store.observer_calls(limit=10)
+    failed = next(call for call in calls if call["status"] == "failed")
+    assert failed["http_status"] == 200
+    assert failed["retryable"] == 1
+    store.close()
+
+
 @pytest.mark.asyncio
 async def test_rate_limited_title_retries_in_the_background_off_the_first_request(
     tmp_path: Path,
@@ -842,6 +917,10 @@ async def test_rate_limited_title_retries_in_the_background_off_the_first_reques
 
     rows = await store.annotations(agent_run_id="run-1", tag="title")
     assert [row["content"] for row in rows] == ["Login Test Fix"]
+    calls = await store.observer_calls(limit=10)
+    failed = next(call for call in calls if call["status"] == "failed")
+    assert failed["http_status"] == 429
+    assert failed["retryable"] == 1
     assert provider.prompts[0] == provider.prompts[1]
     assert "flaky login test" in provider.prompts[1]
     # The landed title takes its pending retry with it, rather than leaving a row the
@@ -1045,7 +1124,7 @@ async def test_a_spent_prompt_ladder_hands_the_run_to_the_last_turn_fallback(
     await _run_due_retries(engine)
     allowed = await engine.evaluate(normalized_event(item, 12, source="native_hook"))
 
-    assert blocked[0]["guarded"] is True
+    assert any(report.get("guarded") for report in blocked)
     assert allowed[0]["matched"] is True
     rows = await store.annotations(agent_run_id="run-1", tag="title")
     assert [row["rule_id"] for row in rows] == ["builtin.session-titler"]
@@ -1817,6 +1896,53 @@ async def test_legacy_annotation_schema_is_migrated_in_place(tmp_path: Path) -> 
             project_id="project-1", tag="doc-debt", content="c", provenance="detector"
         )
         assert project_scoped["project_id"] == "project-1"
+        assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_observer_calls_gain_safe_response_diagnostics(tmp_path: Path) -> None:
+    path = tmp_path / "mux.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE automation_observer_calls ("
+        "id TEXT PRIMARY KEY, firing_id TEXT NOT NULL, rule_id TEXT NOT NULL,"
+        "status TEXT NOT NULL, requested_model TEXT, resolved_model TEXT,"
+        "generation_id TEXT, input_hash TEXT NOT NULL, input_bytes INTEGER NOT NULL,"
+        "input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,"
+        "cost_usd REAL, latency_ms INTEGER, error TEXT, created_at REAL NOT NULL,"
+        "completed_at REAL)"
+    )
+    legacy.execute(
+        "INSERT INTO automation_observer_calls"
+        "(id,firing_id,rule_id,status,input_hash,input_bytes,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        ("call-1", "firing-1", "rule-1", "running", "hash", 12, time.time()),
+    )
+    legacy.commit()
+    legacy.close()
+
+    store = AutomationStore(path)
+    try:
+        await store.observer_finished(
+            "call-1",
+            status="failed",
+            provider_name="Provider A",
+            finish_reason="length",
+            response_content_type="null",
+            response_content_length=0,
+            http_status=200,
+            retryable=True,
+            error="malformed response",
+        )
+        row = (await store.observer_calls(limit=1))[0]
+        assert row["provider_name"] == "Provider A"
+        assert row["finish_reason"] == "length"
+        assert row["response_content_type"] == "null"
+        assert row["response_content_length"] == 0
+        assert row["http_status"] == 200
+        assert row["retryable"] == 1
         assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
     finally:
         store.close()

@@ -22,6 +22,8 @@ import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, ta
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './PromptLibrary'
 import type { ShellProfile, Project } from './types'
+import { ModelPicker } from './ModelPicker'
+import { includeSelectedModel } from './modelFilter'
 
 type Config = {
   revision:number; host:string; port:number; data_dir:string; requires_auth:boolean; access_mode:string; tailnet_enabled:boolean
@@ -670,7 +672,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     </main>
     <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
   </section></div>
-  const modelOptions=(selected:string)=>{const items=[...(provider?.models.models||[])];if(selected&&!items.some(item=>item.id===selected))items.unshift({id:selected,name:'Configured model (catalog unavailable)'});return items}
+  const modelOptions=(selected:string)=>includeSelectedModel(provider?.models.models||[],selected)
   // One function renders every tab, and it takes the tab id as an argument
   // instead of reading `activeTab` from state, so the search index can build the
   // vnode tree of a tab that is not mounted. Building vnodes only allocates plain
@@ -914,8 +916,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
           <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
           <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
-          <label>Cheap model<select value={draft.openrouter_cheap_model} onChange={event=>change('openrouter_cheap_model',event.currentTarget.value)}><option value="">Select exact model…</option>{modelOptions(draft.openrouter_cheap_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
-          <label>Standard model<select value={draft.openrouter_standard_model} onChange={event=>change('openrouter_standard_model',event.currentTarget.value)}><option value="">Select exact model…</option>{modelOptions(draft.openrouter_standard_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
+          <label for="cheap-model-picker">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/></label>
+          <label for="standard-model-picker">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
           <h3>Budgets + execution</h3>
           <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>

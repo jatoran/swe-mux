@@ -51,11 +51,31 @@ class OpenRouterError(RuntimeError):
         status: int | None = None,
         retryable: bool = False,
         retry_after: float | None = None,
+        generation_id: str | None = None,
+        resolved_model: str | None = None,
+        provider_name: str | None = None,
+        finish_reason: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float | None = None,
+        latency_ms: int | None = None,
+        response_content_type: str | None = None,
+        response_content_length: int | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.retry_after = retry_after
+        self.generation_id = generation_id
+        self.resolved_model = resolved_model
+        self.provider_name = provider_name
+        self.finish_reason = finish_reason
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cost_usd = cost_usd
+        self.latency_ms = latency_ms
+        self.response_content_type = response_content_type
+        self.response_content_length = response_content_length
 
 
 @dataclass(slots=True, frozen=True)
@@ -68,6 +88,10 @@ class OpenRouterResult:
     output_tokens: int
     cost_usd: float | None
     latency_ms: int
+    provider_name: str | None = None
+    finish_reason: str | None = None
+    response_content_type: str | None = None
+    response_content_length: int | None = None
 
 
 class OpenRouterClient:
@@ -153,9 +177,17 @@ class OpenRouterClient:
                     try:
                         value = json.loads(body)
                     except json.JSONDecodeError as exc:
-                        raise OpenRouterError("OpenRouter returned invalid JSON") from exc
+                        raise OpenRouterError(
+                            "OpenRouter returned invalid JSON",
+                            status=response.status,
+                            retryable=True,
+                        ) from exc
                     if not isinstance(value, dict):
-                        raise OpenRouterError("OpenRouter returned an invalid response envelope")
+                        raise OpenRouterError(
+                            "OpenRouter returned an invalid response envelope",
+                            status=response.status,
+                            retryable=True,
+                        )
                     return value
             except (aiohttp.ClientError, TimeoutError) as exc:
                 if attempt < last_attempt:
@@ -221,6 +253,7 @@ class OpenRouterClient:
         schema_name: str,
         schema: dict[str, Any],
         max_tokens: int,
+        reasoning_enabled: bool | None = None,
     ) -> OpenRouterResult:
         if not model:
             raise OpenRouterError("an exact OpenRouter model id is required")
@@ -230,48 +263,90 @@ class OpenRouterClient:
         # unserializable, and the resulting `UnicodeEncodeError` surfaces as the
         # caller's failure rather than as bad input — see `text_safety`.
         safe_messages = cast(list[dict[str, str]], utf8_safe_value(messages))
+        request_body: dict[str, Any] = {
+            "model": model,
+            "messages": safe_messages,
+            "stream": False,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+            # `require_parameters` is the guarantee that matters: it restricts
+            # routing to providers that actually honour `response_format`, so a
+            # fallback still returns the schema rather than prose. Pinning to the
+            # single top-ranked provider on top of that bought nothing and made
+            # one provider's bad hour a total outage - every title on
+            # 2026-07-31 failed with "temporarily rate-limited upstream" from
+            # DeepInfra while five other providers served the same model. There
+            # is no fallback to a *different model* here, so the answer cannot
+            # silently change quality; only which host produced it.
+            "provider": {"require_parameters": True, "allow_fallbacks": True},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+            },
+        }
+        if reasoning_enabled is not None:
+            request_body["reasoning"] = (
+                {"enabled": True} if reasoning_enabled else {"effort": "none"}
+            )
         payload = await self._request(
             "POST",
             "/chat/completions",
-            json_body={
-                "model": model,
-                "messages": safe_messages,
-                "stream": False,
-                "temperature": 0,
-                "max_tokens": max_tokens,
-                # `require_parameters` is the guarantee that matters: it restricts
-                # routing to providers that actually honour `response_format`, so a
-                # fallback still returns the schema rather than prose. Pinning to the
-                # single top-ranked provider on top of that bought nothing and made
-                # one provider's bad hour a total outage — every title on
-                # 2026-07-31 failed with "temporarily rate-limited upstream" from
-                # DeepInfra while five other providers served the same model. There
-                # is no fallback to a *different model* here, so the answer cannot
-                # silently change quality; only which host produced it.
-                "provider": {"require_parameters": True, "allow_fallbacks": True},
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-                },
-            },
+            json_body=request_body,
         )
-        try:
-            choice = payload["choices"][0]["message"]["content"]
-            value = json.loads(choice) if isinstance(choice, str) else choice
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise OpenRouterError("OpenRouter structured response was missing or invalid") from exc
-        if not isinstance(value, dict):
-            raise OpenRouterError("OpenRouter structured response must be an object")
+        choices = payload.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        message = choice.get("message") if isinstance(choice, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
         usage = payload.get("usage") or {}
+        content_type, content_length = _content_shape(content)
+        generation_id = str(payload.get("id")) if payload.get("id") else None
+        resolved_model = str(payload.get("model") or model)
+        provider_name = str(payload.get("provider")) if payload.get("provider") else None
+        finish_reason = (
+            str(choice.get("finish_reason"))
+            if isinstance(choice, dict) and choice.get("finish_reason")
+            else None
+        )
+        input_tokens = int(usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or 0)
+        cost_usd = _number(usage.get("cost"))
+        latency_ms = int((time.monotonic() - started) * 1000)
+
+        def malformed(message_text: str) -> OpenRouterError:
+            return OpenRouterError(
+                message_text,
+                status=200,
+                retryable=True,
+                generation_id=generation_id,
+                resolved_model=resolved_model,
+                provider_name=provider_name,
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                latency_ms=latency_ms,
+                response_content_type=content_type,
+                response_content_length=content_length,
+            )
+        try:
+            value = json.loads(content) if isinstance(content, str) else content
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise malformed("OpenRouter structured response was missing or invalid") from exc
+        if not isinstance(value, dict):
+            raise malformed("OpenRouter structured response must be an object")
         return OpenRouterResult(
-            generation_id=str(payload.get("id")) if payload.get("id") else None,
+            generation_id=generation_id,
             requested_model=model,
-            resolved_model=str(payload.get("model") or model),
+            resolved_model=resolved_model,
             value=value,
-            input_tokens=int(usage.get("prompt_tokens") or 0),
-            output_tokens=int(usage.get("completion_tokens") or 0),
-            cost_usd=_number(usage.get("cost")),
-            latency_ms=int((time.monotonic() - started) * 1000),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            provider_name=provider_name,
+            finish_reason=finish_reason,
+            response_content_type=content_type,
+            response_content_length=content_length,
         )
 
     async def generation_cost(self, generation_id: str) -> float | None:
@@ -325,6 +400,19 @@ def _provider_error(body: bytes | bytearray) -> str:
         parts.append(f"(provider: {provider})")
     text = " ".join(part for part in parts if part)[:MAX_PROVIDER_ERROR_CHARS]
     return SECRET_SHAPED.sub("[redacted]", text)
+
+
+def _content_shape(value: Any) -> tuple[str, int]:
+    """Return safe response diagnostics without retaining provider output."""
+    if value is None:
+        return "null", 0
+    if isinstance(value, str):
+        return "string", len(value.encode("utf-8", errors="replace"))
+    if isinstance(value, dict):
+        return "object", len(value)
+    if isinstance(value, list):
+        return "array", len(value)
+    return type(value).__name__, 1
 
 
 def _number(value: Any) -> float | None:

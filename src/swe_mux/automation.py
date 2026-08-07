@@ -90,6 +90,7 @@ ACTION_FIELDS = {
         "schema",
         "on_result",
         "minimum_capability",
+        "reasoning",
     },
 }
 SLICE_KINDS = {
@@ -709,6 +710,8 @@ def _validate_action(rule_id: str, action: dict[str, Any], *, result_mapping: bo
     minimum = str(action.get("minimum_capability") or "semantic")
     if minimum not in {"telemetry", "semantic", "trusted"}:
         raise RuleValidationError(f"rule {rule_id} llm minimum_capability is invalid")
+    if "reasoning" in action and not isinstance(action["reasoning"], bool):
+        raise RuleValidationError(f"rule {rule_id} llm reasoning must be a boolean")
 
 
 def _encodable_messages(
@@ -1195,10 +1198,10 @@ class AutomationEngine:
         than this daemon's uptime between reloads. `_sweep_title_retries` is what
         fires it, here or in the successor process.
 
-        Only *retryable* provider failures qualify. A refused key or a malformed
-        schema fails identically forever, and everything else an observer raises —
-        budget exhausted, degraded observation, no prompt captured — is a decision,
-        not a fault. Retrying those only spends calls.
+        Only *retryable* provider failures qualify. A refused key fails identically
+        forever. Everything else an observer raises, including budget exhaustion,
+        degraded observation, or a missing prompt, is a decision, not a fault.
+        Retrying those only spends calls.
         """
         if rule.id not in TITLE_RULE_IDS or not event.agent_run_id:
             return False
@@ -1249,6 +1252,15 @@ class AutomationEngine:
                 "updated_at": time.time(),
                 "event": _serializable_event(replace(event, payload=payload)),
             },
+        )
+        log.warning(
+            "title retry scheduled rule=%s run=%s session=%s attempt=%s delay_s=%s error=%s",
+            rule.id,
+            event.agent_run_id,
+            event.session_id,
+            attempt + 1,
+            delay,
+            str(error)[:200],
         )
         return True
 
@@ -1507,6 +1519,15 @@ class AutomationEngine:
                 # title is frozen. This keeps a later explicit regenerate action useful
                 # without adding transcript polling or a separate classifier call.
                 await self._run_prompt(event, pin=not dry_run)
+                retry_state = await self.store.checkpoint(
+                    self._title_retry_key(rule.id, event.agent_run_id)
+                )
+                if retry_state and event.seq >= 0 and not event.payload.get("force_title"):
+                    # A turn-end repair event must not start a second ladder while
+                    # the opening attempt is pending or after it has exhausted.
+                    # Pending retries keep their pinned prompt; exhausted retries
+                    # hand the run to the weaker completed-turn fallback.
+                    return False
                 if title is not None and not event.payload.get("force_title"):
                     state = await self.store.checkpoint(
                         f"{TITLE_STATE_CHECKPOINT_PREFIX}{event.agent_run_id}"
@@ -1921,20 +1942,75 @@ class AutomationEngine:
                 schema_name=schema_name,
                 schema=OBSERVER_SCHEMAS[schema_name],
                 max_tokens=self.config.automation_max_output_tokens,
+                reasoning_enabled=cast(bool | None, action.get("reasoning")),
             )
         except asyncio.CancelledError:
             await self.store.observer_finished(call_id, status="cancelled", error="cancelled")
             raise
-        except (OpenRouterError, ValueError) as exc:
+        except OpenRouterError as exc:
+            await self.store.observer_finished(
+                call_id,
+                status="failed",
+                resolved_model=exc.resolved_model,
+                generation_id=exc.generation_id,
+                input_tokens=exc.input_tokens,
+                output_tokens=exc.output_tokens,
+                cost_usd=exc.cost_usd,
+                latency_ms=exc.latency_ms,
+                provider_name=exc.provider_name,
+                finish_reason=exc.finish_reason,
+                response_content_type=exc.response_content_type,
+                response_content_length=exc.response_content_length,
+                http_status=exc.status,
+                retryable=exc.retryable,
+                error=str(exc)[:1000],
+            )
+            if (
+                exc.generation_id
+                or exc.input_tokens
+                or exc.output_tokens
+                or exc.cost_usd is not None
+            ):
+                await self.store.add_spend(
+                    rule_id=rule.id,
+                    model=exc.resolved_model or model,
+                    input_tokens=exc.input_tokens,
+                    output_tokens=exc.output_tokens,
+                    cost_usd=exc.cost_usd or 0,
+                    call_id=call_id,
+                )
+                if exc.cost_usd is None and exc.generation_id:
+                    self._schedule_cost_reconcile(call_id, exc.generation_id)
+            raise
+        except ValueError as exc:
             await self.store.observer_finished(call_id, status="failed", error=str(exc)[:1000])
             raise
         try:
             _validate_result(completion.value, OBSERVER_SCHEMAS[schema_name])
         except ValueError as exc:
             await self._record_observer_usage(
-                call_id, rule, completion, status="failed", error=str(exc)[:1000]
+                call_id,
+                rule,
+                completion,
+                status="failed",
+                error=str(exc)[:1000],
+                retryable=True,
             )
-            raise
+            raise OpenRouterError(
+                f"OpenRouter structured response failed schema validation: {exc}",
+                status=200,
+                retryable=True,
+                generation_id=completion.generation_id,
+                resolved_model=completion.resolved_model,
+                provider_name=completion.provider_name,
+                finish_reason=completion.finish_reason,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                cost_usd=completion.cost_usd,
+                latency_ms=completion.latency_ms,
+                response_content_type=completion.response_content_type,
+                response_content_length=completion.response_content_length,
+            ) from exc
         await self._record_observer_usage(call_id, rule, completion, status="completed")
         return await self._observer_result(rule, event, action, completion, call_id)
 
@@ -1946,6 +2022,7 @@ class AutomationEngine:
         *,
         status: str,
         error: str | None = None,
+        retryable: bool | None = None,
     ) -> None:
         await self.store.observer_finished(
             call_id,
@@ -1956,6 +2033,12 @@ class AutomationEngine:
             output_tokens=completion.output_tokens,
             cost_usd=completion.cost_usd,
             latency_ms=completion.latency_ms,
+            provider_name=completion.provider_name,
+            finish_reason=completion.finish_reason,
+            response_content_type=completion.response_content_type,
+            response_content_length=completion.response_content_length,
+            http_status=200,
+            retryable=retryable,
             error=error,
         )
         await self.store.add_spend(
@@ -1967,12 +2050,15 @@ class AutomationEngine:
             call_id=call_id,
         )
         if completion.cost_usd is None and completion.generation_id:
-            task = asyncio.create_task(
-                self._reconcile_cost(call_id, completion.generation_id),
-                name=f"openrouter-cost-{call_id}",
-            )
-            self._background.add(task)
-            task.add_done_callback(self._background.discard)
+            self._schedule_cost_reconcile(call_id, completion.generation_id)
+
+    def _schedule_cost_reconcile(self, call_id: str, generation_id: str) -> None:
+        task = asyncio.create_task(
+            self._reconcile_cost(call_id, generation_id),
+            name=f"openrouter-cost-{call_id}",
+        )
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     async def _reconcile_cost(self, call_id: str, generation_id: str) -> None:
         """Land a call's real cost in the ledger, or record that it never landed.
@@ -2131,6 +2217,7 @@ class AutomationEngine:
         raw: list[dict[str, Any]] = []
         if event.type in {
             "turn_started",
+            "turn_ended",
             "transcript_message",
             "title_regenerate_requested",
         } and self.config.observer_titler_enabled:
@@ -2148,6 +2235,7 @@ class AutomationEngine:
                         {
                             "kind": "llm",
                             "model": "cheap",
+                            "reasoning": False,
                             # Reads no transcript, so it works before one exists and
                             # keeps working when observation has degraded to inferred.
                             "input": {"slice": "prompt_text"},
@@ -2191,6 +2279,7 @@ class AutomationEngine:
                         {
                             "kind": "llm",
                             "model": "cheap",
+                            "reasoning": False,
                             "input": {"slice": "last_turn"},
                             "prompt": (
                                 "Create a compact task-oriented title for a terminal tab and "

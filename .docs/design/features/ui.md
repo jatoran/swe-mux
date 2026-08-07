@@ -258,6 +258,10 @@ responsive controls.
   goes missing entirely. Labels, headings, buttons, option labels, placeholders, and the help
   paragraph following a control are all matched on; the index is rebuilt when a search begins
   or when the config it came from changes, never per keystroke.
+- Automation's cheap and standard model controls accept typed queries and filter the cached
+  OpenRouter catalog live by model name or exact ID.
+  Their listboxes scroll inside a bounded desktop or mobile height instead of expanding to the
+  height of the catalog.
 - The footer carries only draft state: status, Cancel, Save. Whole-config actions — reveal the
   config directory, export a sanitized copy, restore defaults — live in a General-tab block,
   because a footer repeats under every tab and so implied a per-tab scope none of them have

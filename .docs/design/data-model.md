@@ -132,6 +132,10 @@
   `evidence_json`, the *set* of Tier 0 facts a finding rests on: a loop's case is "this
   fingerprint repeated three times", which one pointer cannot express. `dedupe_key` makes a
   re-running detector idempotent — a conflicting write returns the existing row.
+- `automation_observer_calls`: bounded provider-call audit records with requested and resolved
+  model, generation, token and cost usage, latency, provider, finish reason, HTTP status,
+  retryability, and response content type and length.
+  Provider response content is not stored.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
   feature-specific contracts. `AutomationStore` has an additive migration path; the
   annotations rebuild that relaxed `agent_run_id` to nullable is gated on the new column
