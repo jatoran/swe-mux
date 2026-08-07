@@ -86,6 +86,29 @@ export function terminalFitDrifted(
 }
 
 /**
+ * Whether a freshly replayed pane is missing the transcript its harness keeps in
+ * scrollback, and should ask the daemon for a repaint pulse.
+ *
+ * A repaint-heavy TUI (OMP's spinner emits kilobytes per second) wraps the daemon's
+ * retained ring until a bounded replay holds only live-region repaint traffic, which
+ * parses to roughly one screen with zero scrollback — the "no scrollbar until I jiggle
+ * the divider" state. Only this client can see that outcome: the daemon sees bytes,
+ * not what they parsed to. A healthy transcript replay yields many screens of
+ * scrollback, so "less than one screenful" cleanly separates the wrapped case; a
+ * genuinely short transcript also passes, and the pulse it triggers restates those
+ * few lines harmlessly. Alternate-screen TUIs (Claude) are excluded by the buffer
+ * type: their active buffer never has scrollback, so the signal would fire forever.
+ */
+export function scrollbackRepaintNeeded(
+  repaintsScrollback: boolean,
+  bufferType: string,
+  baseY: number,
+  rows: number,
+): boolean {
+  return repaintsScrollback && bufferType === 'normal' && baseY < Math.max(1, rows)
+}
+
+/**
  * Whether a dead pane may rebuild itself, and the attempt ledger after asking.
  * Bounded so a poison byte sequence in the retained buffer (which every rebuild
  * replays) degrades into one visible error instead of a remount loop.

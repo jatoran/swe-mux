@@ -92,6 +92,31 @@ test('an unstyled Codex composer resolves against xterm buffer cells',async({pag
   expect(result.target).toEqual({column:4,row:result.current!.row})
 })
 
+test('a warm pane keeps rendering under visibility:hidden; display:none pauses it',async({page})=>{
+  // Pins the deliberate cost of the `.pane-warm` CSS: xterm's render pause is driven
+  // by an IntersectionObserver, which is geometric, so a measurable hidden box keeps
+  // the renderer live for every write while a zero-sized one pauses it. If a future
+  // xterm gains real visibility awareness, this test failing is the signal that the
+  // warm-pane render cost has disappeared and any mitigation can be removed.
+  await page.goto('/renderer-harness.html')
+  const result=await page.evaluate(()=>window.runWarmPaneRenderCost())
+
+  expect(result.writes).toBeGreaterThan(0)
+  expect(result.warmRenders,'visibility:hidden warm pane must keep rendering').toBeGreaterThan(0)
+  expect(result.displayNoneRenders,'display:none must pause the renderer').toBe(0)
+})
+
+test('repeated active/warm cycling with streaming output converges on a correct pane',async({page})=>{
+  await page.goto('/renderer-harness.html')
+  const result=await page.evaluate(()=>window.runWarmPaneCycleSoak())
+
+  expect(result.cols,'grid must match a fresh fit of the final box').toBe(result.proposedCols)
+  expect(result.rows).toBe(result.proposedRows)
+  expect(result.renderedRowElements,'DOM renderer must carry exactly the viewport rows').toBe(result.rows)
+  expect(result.viewportY,'the tail must be reachable after the last reveal').toBe(result.baseY)
+  expect(result.scrollbackLines,'output written while warm must be in scrollback').toBeGreaterThan(200)
+})
+
 test('agent width policies keep Codex above 80 columns and Claude near 120',async({page})=>{
   await page.goto('/renderer-harness.html')
   const result=await page.evaluate(()=>window.runTerminalWidthPolicies())

@@ -76,6 +76,7 @@ from .harness import (
     has_observable_transcript,
     is_agent_harness,
     public_harness_registry,
+    repaints_scrollback,
 )
 from .history import HistoryIndex
 from .history_backfill import HistoryBackfillManager
@@ -7804,27 +7805,15 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                 initial_frame = json.loads(initial_message.data)
                 if initial_frame.get("type") in {"attach_ready", "resize"}:
                     geometry_queued = _apply_client_viewport(session, connection_id, initial_frame)
-                    # OMP continuously rewrites a small live region. A deep session's
-                    # bounded replay can therefore contain only repaint traffic, and
-                    # a same-size cold attach gives the child no SIGWINCH with which
-                    # to restate its complete screen. This is the exact condition in
-                    # which a one-pixel divider resize repairs the pane. Pulse only a
-                    # visible OMP attach whose real geometry did not already change;
-                    # normal resize frames and other backends retain the no-op gate.
-                    if (
-                        initial_frame.get("type") == "attach_ready"
-                        and session.record.backend == "omp"
-                        and not bool(initial_frame.get("hidden"))
-                        and not geometry_queued
-                    ):
-                        repainted = await session.repaint_current_geometry()
-                        if repainted:
-                            request.app["events"].emit_background(
-                                "terminal_repaint_requested",
-                                session_id=session.record.id,
-                                source="daemon",
-                                reason="same_geometry_attach",
-                            )
+                    # A repaint-heavy TUI can wrap the retained ring until this
+                    # attach's replay holds no transcript at all. The recovery is
+                    # client-requested (a `repaint` frame once the parsed replay
+                    # provably produced no scrollback, `_handle_client_repaint`)
+                    # rather than pulsed here: only the client can see whether the
+                    # replay was sufficient, and an unconditional attach pulse made
+                    # the child restate its whole transcript on every healthy
+                    # cold attach too — while covering neither hidden warm-mount
+                    # attaches nor their later reveal, the path users actually hit.
                     break
                 pending_messages.append(initial_message)
             elif initial_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
@@ -8184,6 +8173,88 @@ async def _handle_terminal_input(
         )
 
 
+# A `repaint` frame makes the child restate its whole transcript (~100 KB+ for a deep
+# session), so back-to-back requests — several panes of one session finishing replay
+# together, or a reconnect storm — collapse into one restatement they all receive.
+CLIENT_REPAINT_MIN_INTERVAL_SECONDS = 2.0
+
+# Client repair events persisted to the durable event log. An allowlist rather than a
+# free phase field: the browser page is same-user but still untrusted input, and the
+# log must stay enumerable for the "which repairs still fire in production" question.
+CLIENT_REPAIR_PHASES = frozenset(
+    {
+        "write_pipeline_dead",
+        "surface_drift_repair",
+        "viewport_fit_drift_repair",
+        "viewport_fit_resumed",
+        "surface_repair_resumed",
+        "scrollback_repaint_requested",
+        "webgl_render_error",
+    }
+)
+CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS = 1.0
+CLIENT_DIAGNOSTIC_DETAIL_LIMIT = 512
+
+
+async def _handle_client_repaint(request: web.Request, session: Session) -> None:
+    """A client whose parsed replay produced no scrollback asks the child to restate it.
+
+    Only the client can make that judgement: the daemon sees bytes, not what they parse
+    to. Gated on the harness trait rather than the session name — a transcript-in-
+    scrollback TUI that repaints its live region is both the only case that can wrap
+    the ring into an empty-looking replay and the only one that answers a width pulse
+    by re-rendering its transcript. Alternate-screen TUIs (Claude) never qualify:
+    their buffer has no scrollback by design, so a client-side request keyed on
+    missing scrollback would fire forever.
+    """
+    if not repaints_scrollback(session.record.backend):
+        return
+    now = time.monotonic()
+    if now - session.last_client_repaint_ts < CLIENT_REPAINT_MIN_INTERVAL_SECONDS:
+        return
+    # Stamped before the await so concurrent requests cannot interleave two pulses.
+    session.last_client_repaint_ts = now
+    repainted = await session.repaint_current_geometry()
+    if repainted:
+        request.app["events"].emit_background(
+            "terminal_repaint_requested",
+            session_id=session.record.id,
+            source="browser",
+            reason="missing_scrollback",
+        )
+
+
+def _handle_client_diagnostic(
+    request: web.Request, session: Session, frame: dict[str, Any]
+) -> None:
+    """Persist a client-side terminal repair to the durable event log.
+
+    The repair layers (terminalHealth.ts and TerminalPane's fit/surface debt) fire in
+    production browsers, where the opt-in in-page ring buffer is invisible and lost on
+    reload. Recording each firing durably is what makes the layers individually
+    auditable — a layer that never fires in months of logs is a removal candidate,
+    one that fires daily is load-bearing. Rate-limited per session because the log is
+    SQLite-backed; the question this answers needs existence and rough frequency, not
+    an exact count.
+    """
+    phase = frame.get("phase")
+    if not isinstance(phase, str) or phase not in CLIENT_REPAIR_PHASES:
+        return
+    now = time.monotonic()
+    if now - session.last_client_diagnostic_ts < CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS:
+        return
+    session.last_client_diagnostic_ts = now
+    detail = frame.get("detail")
+    payload = json.dumps(detail) if isinstance(detail, dict) else ""
+    request.app["events"].emit_background(
+        "terminal_client_repair",
+        session_id=session.record.id,
+        source="browser",
+        phase=phase,
+        detail=payload[:CLIENT_DIAGNOSTIC_DETAIL_LIMIT],
+    )
+
+
 async def _handle_pty_client_message(
     request: web.Request,
     ws: web.WebSocketResponse,
@@ -8233,6 +8304,10 @@ async def _handle_pty_client_message(
                 )
         elif frame.get("type") in {"attach_ready", "resize"}:
             _apply_client_viewport(session, connection_id, frame)
+        elif frame.get("type") == "repaint":
+            await _handle_client_repaint(request, session)
+        elif frame.get("type") == "client_diagnostic":
+            _handle_client_diagnostic(request, session, frame)
 
 
 async def events_ws(request: web.Request) -> web.WebSocketResponse:

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
+import { railPayload, resolveRailRows, type RailBackend, type RailItem } from './commandRail'
 import { activatePromptRailItem } from './promptRail'
-import { currentProfile, loadRailItems } from './deviceSettings'
+import { currentProfile, loadRailConfig } from './deviceSettings'
 import { api } from './api'
 import {
   filterSkills, groupSkills, inventoryNote, skillLabel, skillTitle,
@@ -16,6 +16,12 @@ import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 // horizontally scarce, which is why several built-ins used to ship switched off.
 // Everything else — extra keys, skills, slash commands, literal text snippets —
 // lives here, where room is not the constraint and items can carry full labels.
+//
+// This is the `panel` surface of the rail layout, and like the strip it is
+// arranged per device: the rows below come from the desktop or mobile layout,
+// whichever this browser is. Rows are the user's own grouping; within each one
+// the terminal keys still split into their own dense grid, because a 44px key and
+// a labelled command want different cell sizes.
 //
 // Below the configured items sits the *discovered* half: the skills the focused
 // session's CLI can actually see, read off disk by the daemon from the same
@@ -60,8 +66,8 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   const [query, setQuery] = useState('')
   const backend = (session?.backend || 'shell') as RailBackend
   const isAgent = isAgentBackend(backend)
-  const items = useMemo(
-    () => resolveRail(loadRailItems(session?.project_id), { platform: currentProfile(), backend }, 'drawer'),
+  const rows = useMemo(
+    () => resolveRailRows(loadRailConfig(session?.project_id), 'panel', { device: currentProfile(), backend }),
     [session?.project_id, backend],
   )
   useEffect(() => {
@@ -137,9 +143,15 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
     onDone()
   }
 
-  const visible = items.filter(item => item.id !== 'clipboardHistory' && (item.action !== 'attach' || isAgent))
-  const keys = visible.filter(item => item.type === 'key')
-  const rest = visible.filter(item => item.type !== 'key')
+  // `clipboardHistory` opens this drawer, so running it from inside the drawer
+  // would be a no-op; it is filtered out of every row entirely.
+  const visibleRows = rows
+    .map(row => ({
+      ...row,
+      entries: row.entries.filter(entry => entry.item.id !== 'clipboardHistory' && (entry.item.action !== 'attach' || isAgent)),
+    }))
+    .filter(row => row.entries.length)
+  const anyVisible = visibleRows.some(row => row.entries.length)
   const actionDisabled = (item: RailItem) => item.action === 'attach' && (session.state === 'exited' || session.state === 'crashed')
   const label = (item: RailItem) =>
     item.action === 'endSession' && killArmed ? 'Confirm ✓'
@@ -150,16 +162,23 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
 
   return <>
     <p class="drawer-status">{session.name || session.id} · {backend}</p>
-    {rest.length > 0 && <div class="drawer-grid" role="group" aria-label="Session commands">
-      {rest.map(item => <button key={item.id} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} disabled={actionDisabled(item)} title={actionDisabled(item)?'Files cannot be attached to an ended session':item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
-        <span>{label(item)}</span>
-        {item.type !== 'action' && <small>{item.type === 'skill' ? 'skill' : item.type === 'slash' ? 'command' : item.type === 'prompt' ? 'prompt' : 'text'}{item.type !== 'prompt' && item.submit ? ' · sends' : ''}</small>}
-      </button>)}
-    </div>}
-    {keys.length > 0 && <div class="drawer-grid keys" role="group" aria-label="Terminal keys">
-      {keys.map(item => <button key={item.id} title={item.title || item.label} onClick={() => run(item)}><span>{item.label}</span></button>)}
-    </div>}
-    {!visible.length && <p class="drawer-empty">Nothing is assigned to the drawer for this session. Move rail items here from Settings → Command rail.</p>}
+    {visibleRows.map(row => {
+      const keys = row.entries.filter(entry => entry.item.type === 'key')
+      const rest = row.entries.filter(entry => entry.item.type !== 'key')
+      return <section class="drawer-command-row" key={row.id}>
+        {row.label && <h4 class="drawer-command-row-label">{row.label}</h4>}
+        {rest.length > 0 && <div class="drawer-grid" role="group" aria-label={row.label ? `${row.label} commands` : 'Session commands'}>
+          {rest.map(({ item, key }) => <button key={key} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} disabled={actionDisabled(item)} title={actionDisabled(item)?'Files cannot be attached to an ended session':item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
+            <span>{label(item)}</span>
+            {item.type !== 'action' && <small>{item.type === 'skill' ? 'skill' : item.type === 'slash' ? 'command' : item.type === 'prompt' ? 'prompt' : 'text'}{item.type !== 'prompt' && item.submit ? ' · sends' : ''}</small>}
+          </button>)}
+        </div>}
+        {keys.length > 0 && <div class="drawer-grid keys" role="group" aria-label={row.label ? `${row.label} keys` : 'Terminal keys'}>
+          {keys.map(({ item, key }) => <button key={key} title={item.title || item.label} onClick={() => run(item)}><span>{item.label}</span></button>)}
+        </div>}
+      </section>
+    })}
+    {!anyVisible && <p class="drawer-empty">Nothing is assigned to this device’s panel for this session. Move rail items here from Settings → Command rail.</p>}
     {isAgent && <section class="drawer-skills">
       <header>
         <h4>{harnessDisplayName(backend)} skills</h4>

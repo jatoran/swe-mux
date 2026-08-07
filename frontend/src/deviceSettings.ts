@@ -12,7 +12,7 @@
 // are synchronous against the cache so hot paths like handleSessionSound stay
 // sync; an unloaded cache simply yields defaults.
 import { api } from './api.ts'
-import { clearProjectRailBlob, railHasProjectOverride, railItemsFromBlob, writeRailBlob, type RailBlob, type RailItem } from './commandRail.ts'
+import { clearProjectRailBlob, railConfigFromBlob, railHasProjectOverride, writeRailConfigBlob, type RailBlob, type RailConfig } from './commandRail.ts'
 
 export type SettingsProfile = 'desktop' | 'mobile'
 export type SettingsDomain = 'sounds' | 'notifications' | 'commandRail' | 'fileTree' | 'drawerTabs'
@@ -74,10 +74,12 @@ export async function saveDomain(
   await api('PUT', `/api/settings/${profile}`, { [domain]: value })
 }
 
-// The command rail is a single shared configuration (per-item platform/backend
-// tags handle device differences, so adding an item lands on both desktop and
-// mobile by default). It is stored under one canonical profile bucket rather
-// than duplicated per device class.
+// The command rail carries its *own* desktop/mobile split inside one blob
+// (`RailConfig.layouts`), because the catalog of commands is shared while the
+// arrangements are not. Splitting the layouts across this store's two profile
+// buckets would make a save two writes, with a window where one device's layout
+// references a command the catalog has not got yet — so the rail deliberately
+// stays in one canonical bucket and does its own device split.
 const RAIL_PROFILE: SettingsProfile = 'desktop'
 
 function railBlob(): RailBlob | undefined {
@@ -85,15 +87,15 @@ function railBlob(): RailBlob | undefined {
   return raw && typeof raw === 'object' ? (raw as RailBlob) : undefined
 }
 
-/** Effective rail items for a project (falls back to the global list). */
-export function loadRailItems(projectId?: string): RailItem[] {
-  return railItemsFromBlob(railBlob(), projectId)
+/** Effective rail configuration for a project (falls back to the global one). */
+export function loadRailConfig(projectId?: string): RailConfig {
+  return railConfigFromBlob(railBlob(), projectId)
 }
 
-/** Persist an edited item list to the global list or a project override. */
-export async function saveRailItems(items: RailItem[], projectId?: string): Promise<void> {
-  const next = writeRailBlob(railBlob(), items, projectId)
-  await saveDomain(RAIL_PROFILE, 'commandRail', next as Record<string, unknown>)
+/** Persist an edited configuration to the global scope or a project override. */
+export async function saveRailConfig(config: RailConfig, projectId?: string): Promise<void> {
+  const next = writeRailConfigBlob(railBlob(), config, projectId)
+  await saveDomain(RAIL_PROFILE, 'commandRail', next as unknown as Record<string, unknown>)
 }
 
 export function projectRailIsCustom(projectId: string): boolean {

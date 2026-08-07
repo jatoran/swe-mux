@@ -140,17 +140,23 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
     assert session.input_owner is None
 
 
-@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
-async def test_omp_same_geometry_attach_pulses_a_repaint_behind_replay() -> None:
-    resizes: list[tuple[int, int]] = []
+async def _next_event_of(queue: Any, wanted: str) -> Any:
+    """Next bus event of the wanted type, stepping over attach/telemetry chatter."""
+    while True:
+        event = await asyncio.wait_for(queue.get(), timeout=2)
+        if event.type == wanted:
+            return event
+
+
+def _repaint_test_session(backend: str, resizes: list[tuple[int, int]]) -> Session:
     record = SessionRecord(
-        "omp-id",
+        f"{backend}-id",
         "agent",
         "default",
-        "omp",
+        backend,
         "native-id",
         ".",
-        "omp.exe",
+        f"{backend}.exe",
         [],
         state="working",
     )
@@ -167,25 +173,115 @@ async def test_omp_same_geometry_attach_pulses_a_repaint_behind_replay() -> None
     session.set_viewport("existing", 80, 24, hidden=False)
     assert session.apply_geometry() is True
     resizes.clear()
+    return session
 
+
+def _repaint_test_app(session: Session) -> web.Application:
     app = web.Application()
     app["sessions"] = SimpleNamespace(
         resolve=lambda _identity: session,
-        sessions={record.id: session},
+        sessions={session.record.id: session},
     )
     app["events"] = EventBus()
     app.router.add_get("/pty/{sid}", pty_ws)
+    return app
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_client_repaint_request_pulses_one_rate_limited_restatement() -> None:
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("omp", resizes)
+    app = _repaint_test_app(session)
+    events = app["events"].subscribe(name="test")
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
         assert (await ws.receive_json())["type"] == "state"
-        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        # A hidden warm-mount attach: no viewport registered, and — unlike the
+        # retired attach-time pulse — no unconditional restatement either.
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
+        assert resizes == []
+
+        # The client judged its parsed replay scrollback-free and asks for the pulse.
+        await ws.send_json({"type": "repaint"})
+        event = await _next_event_of(events, "terminal_repaint_requested")
+        assert event.payload["reason"] == "missing_scrollback"
         assert resizes == [(79, 24), (80, 24)]
         assert session.geometry == (80, 24)
+
+        # Immediately asking again is absorbed by the per-session rate limit.
+        await ws.send_json({"type": "repaint"})
+        await asyncio.sleep(0.1)
+        assert resizes == [(79, 24), (80, 24)]
         await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_client_repaint_request_ignored_for_alternate_screen_harness() -> None:
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        await ws.send_json({"type": "repaint"})
+        await asyncio.sleep(0.1)
+        assert resizes == []
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> None:
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("omp", resizes)
+    app = _repaint_test_app(session)
+    events = app["events"].subscribe(name="test")
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/omp-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+
+        await ws.send_json(
+            {"type": "client_diagnostic", "phase": "surface_drift_repair", "detail": {"cols": 80}}
+        )
+        event = await _next_event_of(events, "terminal_client_repair")
+        assert event.payload["phase"] == "surface_drift_repair"
+        assert json.loads(event.payload["detail"]) == {"cols": 80}
+
+        # A phase outside the allowlist is dropped, and an allowed phase inside the
+        # rate window is absorbed; neither reaches the durable log.
+        await ws.send_json({"type": "client_diagnostic", "phase": "made_up_phase"})
+        await ws.send_json({"type": "client_diagnostic", "phase": "viewport_fit_resumed"})
+        await asyncio.sleep(0.1)
+        while not events.empty():
+            assert events.get_nowait().type != "terminal_client_repair"
+        await ws.close()
+
+
+async def test_repaint_pulse_never_restores_over_a_concurrent_resize() -> None:
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("omp", resizes)
+
+    task = asyncio.create_task(session.repaint_current_geometry())
+    # Runs the pulse synchronously to its yield: the off-by-one resize is out.
+    await asyncio.sleep(0)
+    assert resizes == [(79, 24)]
+    # Another client wins arbitration during the yield; its geometry must survive.
+    session.geometry = (100, 30)
+    assert await task is False
+    assert resizes == [(79, 24)]
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")

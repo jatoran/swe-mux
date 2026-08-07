@@ -1242,6 +1242,14 @@ body {
    Overflow belongs only to the inner strip so Send never moves with its siblings. */
 .terminal-action-rail{grid-row:2;grid-column:1;min-width:0;min-height:34px;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;border-top:1px solid var(--line);background:var(--panel)}
 .terminal-action-rail.mobile-pinned-send{grid-template-columns:minmax(0,1fr) auto}
+/* The rail's configured rows, stacked. Each is its own horizontal scroller, so a
+   row that overflows pages independently of the others. The rail's grid track is
+   `auto`, so adding a row grows the rail and shrinks the terminal by exactly one
+   row height - a layout change, never a measured-then-adjusted one. */
+.terminal-action-rows{grid-row:1;grid-column:1;min-width:0;display:flex;flex-direction:column}
+.terminal-action-rows>.overflow-rail{display:flex;min-height:34px}
+.terminal-action-rows>.overflow-rail>.terminal-action-scroll{flex:1 1 auto}
+.terminal-action-rows>.overflow-rail+.overflow-rail{border-top:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
 .overflow-rail{position:relative;min-width:0;overflow:hidden}
 .overflow-rail-strip{scrollbar-width:none}
 .overflow-rail-strip::-webkit-scrollbar{display:none}
@@ -1272,23 +1280,59 @@ body {
 .commandrail-settings .rail-scope{display:flex;align-items:center;gap:8px;margin:0;padding:0;grid-template-columns:none}
 .commandrail-settings .rail-scope select{flex:0 0 auto;min-width:200px}
 .commandrail-settings .rail-scope-note{margin:2px 0 0;color:var(--muted);font-size:9px}
-.commandrail-settings .rail-editor{display:flex;flex-direction:column;gap:3px;margin:8px 0}
-/* Name column first and elastic, every control auto-sized on the right. The name used to share
-   a fixed column with the placement <select>, which clipped it to an ellipsis at ~60px; it now
-   owns the flexible column and wraps instead of truncating, because the item label is the one
-   thing in the row you cannot guess from context. */
-.commandrail-settings .rail-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:4px 10px;padding:4px 8px;border:1px solid var(--line);background:var(--panel2)}
-.commandrail-settings .rail-row.off{opacity:.55}
+/* --- layout editor -------------------------------------------------------
+   Two device columns side by side where there is room, one plus a switch where
+   there is not. Each column holds the two surfaces (strip, panel), each surface
+   holds its rows, and each row holds draggable chips. */
+.commandrail-settings .rail-devices{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:8px 0}
+.commandrail-settings .rail-devices.two-up{grid-template-columns:repeat(2,minmax(0,1fr))}
+.commandrail-settings .rail-device{min-width:0;display:flex;flex-direction:column;gap:8px}
+.commandrail-settings .rail-device-name{margin:0;color:var(--text);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+.commandrail-settings .rail-device-switch{display:flex;gap:3px;margin-left:auto}
+.commandrail-settings .rail-device-switch button{min-width:64px;height:calc(24px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
+.commandrail-settings .rail-device-switch button.on{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
+.commandrail-settings .rail-surface{min-width:0;display:flex;flex-direction:column;gap:4px;padding:6px 7px;border:1px solid var(--line);background:var(--panel2)}
+.commandrail-settings .rail-surface-head{display:flex;align-items:baseline;gap:6px}
+.commandrail-settings .rail-surface-head h5{flex:1 1 auto;min-width:0;margin:0;color:var(--text);font-size:10px}
+.commandrail-settings .rail-surface-head h5 small{margin-left:6px;color:var(--muted);font-weight:400;font-size:9px}
+.commandrail-settings .rail-surface-head button{height:calc(22px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;white-space:nowrap;cursor:pointer}
+.commandrail-settings .rail-row-editor{display:flex;flex-direction:column;gap:3px;padding:4px 5px;border:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.commandrail-settings .rail-row-head{display:flex;align-items:center;gap:3px}
+.commandrail-settings .rail-row-head input{flex:1 1 auto;min-width:0;height:calc(22px*var(--ui-scale));padding:0 6px;border:1px solid transparent;background:transparent;color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace}
+.commandrail-settings .rail-row-head input:hover,.commandrail-settings .rail-row-head input:focus{border-color:var(--line);background:var(--panel)}
+.commandrail-settings .rail-row-head button{min-width:24px;height:calc(22px*var(--ui-scale));padding:0 4px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
+.commandrail-settings .rail-row-head button:disabled{opacity:.35;cursor:not-allowed}
+/* The drop target. It keeps a floor height so an emptied row stays aimable, and
+   `touch-action:pan-y` lets a finger scroll the settings pane off a chip while a
+   held press still becomes a drag (see the hold activation in RailEditor). */
+.commandrail-settings .rail-chips{min-height:calc(30px*var(--ui-scale));display:flex;flex-wrap:wrap;align-content:flex-start;gap:3px;padding:3px;background:var(--panel)}
+.commandrail-settings .rail-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:0 2px 0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;line-height:calc(24px*var(--ui-scale));cursor:grab;user-select:none;touch-action:pan-y}
+.commandrail-settings .rail-chip:focus-visible{outline:1px solid var(--blue);outline-offset:-2px}
+.commandrail-settings .rail-chip.dragging{opacity:.32}
+.commandrail-settings .rail-chip.missing{border-style:dashed;color:var(--muted)}
+.commandrail-settings .rail-chip-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commandrail-settings .rail-chip-remove{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:11px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.commandrail-settings .rail-chip-remove:hover{color:var(--red,#f07178)}}
+.commandrail-settings .rail-chips-empty{align-self:center;padding:0 6px;color:var(--muted);font-size:9px;pointer-events:none}
+/* --- catalog -------------------------------------------------------------
+   Name and metadata first, then the four placement badges (desktop/mobile x
+   rail/panel), then the backend filters. The badges are the index that keeps two
+   independent layouts manageable: they say where a command actually is. */
+.commandrail-settings .rail-catalog{margin-top:12px;padding-top:8px;border-top:1px solid var(--line)}
+.commandrail-settings .rail-catalog h4{margin:0;color:var(--text);font-size:10px}
+.commandrail-settings .rail-catalog-list{display:flex;flex-direction:column;gap:3px;margin:8px 0}
+.commandrail-settings .rail-catalog-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:4px 10px;padding:4px 8px;border:1px solid var(--line);background:var(--panel2);cursor:grab;user-select:none;touch-action:pan-y}
+.commandrail-settings .rail-catalog-row.off{opacity:.55}
+.commandrail-settings .rail-catalog-row.dragging{opacity:.32}
 .commandrail-settings .rail-id{min-width:0;display:flex;flex-direction:column;gap:1px}
 .commandrail-settings .rail-name{color:var(--text);overflow-wrap:anywhere}
 .commandrail-settings .rail-meta{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
-.commandrail-settings .rail-controls{display:flex;align-items:center;gap:10px}
 .commandrail-settings .rail-where,.commandrail-settings .rail-tags{display:flex;align-items:center;gap:3px}
-.commandrail-settings .rail-tags i{width:6px;display:inline-block}
 .commandrail-settings .rail-where button,.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{min-width:28px;height:calc(22px*var(--ui-scale));padding:0 5px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
-/* Two accents, two meanings: blue says "this region renders it", green says "this
-   device/backend is allowed to". Sharing one colour made the row read as one long toggle set. */
+/* Two accents, two meanings: blue says "placed here", green says "this backend is
+   allowed to see it". Sharing one colour made the row read as one long toggle set. */
 .commandrail-settings .rail-where button.on{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
+.commandrail-settings .rail-where button sup{margin-left:1px;font-size:7px}
 .commandrail-settings .rail-tags button.on{border-color:var(--green);color:var(--green)}
 .commandrail-settings .rail-tags button:disabled,.commandrail-settings .rail-order button:disabled{opacity:.35;cursor:not-allowed}
 .commandrail-settings .rail-order{display:flex;gap:3px}
@@ -1303,20 +1347,27 @@ body {
 .commandrail-settings .rail-add-form label.check>input{margin:0}
 .commandrail-settings .rail-add-form input,.commandrail-settings .rail-add-form select{min-width:calc(130px*var(--ui-scale))}
 .commandrail-settings .rail-add-note{margin:8px 0 0;color:var(--muted);font-size:9px}
-/* Two rows per item on a phone: name/meta + reorder on the first, the placement and filter
-   toggles on the second. Every cell is placed explicitly. Spanning cells across `1/-1` and
-   letting the rest auto-place was what produced four full-width rows and 157px per item: grid
-   auto-placement never backtracks, so once a full-width item consumed row 1, the reorder
-   buttons could not return to the free cell beside the name and landed on a row of their own.
-   With 22 items that was ~3,500px of scrolling to reach the bottom. */
+.commandrail-settings .rail-add-note b{color:var(--text);font-weight:600}
+/* Phone: one device column at a time (the switch in the toolbar picks it), and
+   every drag/tap target grows to a real touch size. The catalog keeps two rows
+   per command - name and delete on the first, badges and filters on the second -
+   with each cell placed explicitly. Spanning cells across `1/-1` and letting the
+   rest auto-place is what once produced four full-width rows per item: grid
+   auto-placement never backtracks, so a full-width item in row 1 pushed the
+   remaining controls onto rows of their own. */
 @media(max-width:760px){
-  .commandrail-settings .rail-row{grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px;row-gap:4px;padding:5px 8px}
+  .commandrail-settings .rail-devices{gap:8px}
+  .commandrail-settings .rail-catalog-row{grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px;row-gap:4px;padding:5px 8px}
   .commandrail-settings .rail-id{grid-area:1/1}
   .commandrail-settings .rail-order{grid-area:1/2}
-  /* nowrap, not wrap: two placement chips plus five filter chips fit the width, and wrapping
-     is what would silently reintroduce a third row. */
-  .commandrail-settings .rail-controls{grid-area:2/1/3/3;flex-wrap:nowrap;justify-content:space-between;gap:8px}
+  /* nowrap, not wrap: four placement badges plus the backend filters fit the width,
+     and wrapping is what would silently reintroduce a third row. */
+  .commandrail-settings .rail-where{grid-area:2/1;flex-wrap:nowrap}
+  .commandrail-settings .rail-tags{grid-area:2/2;flex-wrap:nowrap;justify-content:flex-end}
   .commandrail-settings .rail-where button,.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{height:calc(30px*var(--ui-scale));min-width:30px}
+  .commandrail-settings .rail-chip{line-height:calc(32px*var(--ui-scale))}
+  .commandrail-settings .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
+  .commandrail-settings .rail-row-head button,.commandrail-settings .rail-surface-head button{height:calc(30px*var(--ui-scale))}
   .commandrail-settings .rail-add-form input,.commandrail-settings .rail-add-form select{min-width:0;width:100%}
   .commandrail-settings .rail-add-form label{flex:1 1 140px}
 }
@@ -1493,7 +1544,7 @@ body {
   .mobile-unified-active .terminal-host{height:auto;min-height:0}
   .terminal-host .xterm{touch-action:none}
   .prepared-clipboard{top:5px;grid-template-columns:minmax(0,1fr) auto auto}.prepared-clipboard button{min-height:44px}.prepared-clipboard textarea{display:block;min-height:96px;padding:10px;font-size:16px;line-height:1.4;user-select:text;-webkit-user-select:text;touch-action:auto}
-  .terminal-action-rail{min-height:52px}.terminal-action-scroll{gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail.mobile-pinned-send .terminal-action-scroll{padding-right:7px}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .terminal-mobile-send{min-width:56px;margin:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) 0}.terminal-action-rail .terminal-mobile-send svg{width:20px;height:20px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
+  .terminal-action-rail{min-height:52px}.terminal-action-rows>.overflow-rail{min-height:52px}.terminal-action-scroll{gap:7px;padding:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) max(7px,env(safe-area-inset-left))}.terminal-action-rail.mobile-pinned-send .terminal-action-scroll{padding-right:7px}.terminal-action-rail button{min-width:96px;height:44px;font-size:11px}.terminal-action-rail .term-key,.terminal-action-rail .rail-icon{min-width:44px;padding:0 8px}.terminal-action-rail .terminal-mobile-send{min-width:56px;margin:4px max(7px,env(safe-area-inset-right)) max(4px,env(safe-area-inset-bottom)) 0}.terminal-action-rail .terminal-mobile-send svg{width:20px;height:20px}.terminal-action-rail .rail-icon svg{width:19px;height:19px}.terminal-action-rail span{font-size:9px}.manual-terminal-paste{bottom:58px}.manual-terminal-paste textarea{min-height:92px}
   .context-menu{z-index:49}
   /* Status rows are taps here, not hover targets, so they take the 44px floor the rest of
      the mobile chrome uses. The drawer is 285px at most and these rows already ellipsize,
@@ -2093,8 +2144,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .agent-context-sync-card>p{margin:0;color:var(--muted);font-size:8px;line-height:1.45}
 .agent-context-sync-modal .agent-context-confirm{border:1px solid color-mix(in srgb,var(--amber) 55%,var(--line))}
 /* Command grid: labelled buttons, unlike the strip's abbreviated keys. */
+/* One section per configured panel row. A row's optional name becomes a heading;
+   an unnamed row is just a visual break, so it gets a rule rather than a label. */
+.drawer-command-row+.drawer-command-row{border-top:1px solid var(--line)}
+.drawer-command-row-label{margin:8px 9px 0;color:var(--muted);font-size:9px;letter-spacing:.06em;text-transform:uppercase}
+.drawer-command-row-label+.drawer-grid{padding-top:5px}
 .drawer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:5px;padding:8px 9px}
 .drawer-grid.keys{grid-template-columns:repeat(auto-fill,minmax(58px,1fr));border-top:1px solid var(--line)}
+/* The keys grid's rule separates it from the commands above it in the same row;
+   a row that is only keys already has the section's own rule. */
+.drawer-command-row>.drawer-grid.keys:first-child{border-top:0}
 .drawer-grid button{min-height:38px;display:grid;align-content:center;gap:2px;padding:5px 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .drawer-grid.keys button{place-items:center;text-align:center}
 .drawer-grid button:hover{border-color:var(--accent)}

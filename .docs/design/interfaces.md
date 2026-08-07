@@ -555,6 +555,12 @@ the same bound applies to a resync, which resets the client's terminal and so re
 replay into an empty buffer rather than a patch. A pane the client is keeping mounted but not
 showing reports `hidden:true` exactly as a backgrounded browser tab does, which deregisters its
 viewport from geometry arbitration.
+Any client may send `{type:"repaint"}` after judging its parsed replay scrollback-free
+(`features/sessions.md`); the daemon honors it only for `repaints_scrollback` harnesses,
+rate-limited per session, by pulsing the PTY one column and back so the child restates its
+transcript. `{type:"client_diagnostic", phase, detail}` persists a client-side terminal repair
+to the durable event log as `terminal_client_repair`; phases outside the server's allowlist are
+dropped, `detail` is clamped, and emission is rate-limited per session.
 
 ### Multi-device arbitration
 

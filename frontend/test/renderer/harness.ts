@@ -55,6 +55,23 @@ type TerminalWidthPolicyResult = {
   claude: { cols: number; hostWidth: number; repeatedCols: number[]; repeatedWidths: number[] }
 }
 
+type WarmPaneRenderCostResult = {
+  writes: number
+  warmRenders: number
+  displayNoneRenders: number
+}
+
+type WarmPaneCycleSoakResult = {
+  cols: number
+  rows: number
+  proposedCols: number
+  proposedRows: number
+  renderedRowElements: number
+  baseY: number
+  viewportY: number
+  scrollbackLines: number
+}
+
 declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
@@ -65,6 +82,8 @@ declare global {
     runUnstyledCodexCaretResolution: () => Promise<UnstyledCodexCaretResult>
     runDecrqmProbe: () => Promise<DecrqmProbeResult>
     runTerminalWidthPolicies: () => Promise<TerminalWidthPolicyResult>
+    runWarmPaneRenderCost: () => Promise<WarmPaneRenderCostResult>
+    runWarmPaneCycleSoak: () => Promise<WarmPaneCycleSoakResult>
   }
 }
 
@@ -381,6 +400,138 @@ window.runTerminalWidthPolicies = async () => {
   claudeTerm.dispose()
   claudeGrid.replaceWith(domHost)
   return {codex,claude}
+}
+
+// Production `.pane-warm` CSS (style.css): measurable box, no paint, no interaction.
+const applyWarmPaneCss = (element: HTMLElement) => {
+  element.style.position = 'absolute'
+  element.style.inset = '0'
+  element.style.width = '100%'
+  element.style.height = '100%'
+  element.style.visibility = 'hidden'
+  element.style.pointerEvents = 'none'
+}
+
+const clearWarmPaneCss = (element: HTMLElement) => {
+  element.style.position = ''
+  element.style.inset = ''
+  element.style.visibility = ''
+  element.style.pointerEvents = ''
+  element.style.width = '100%'
+  element.style.height = '100%'
+}
+
+const makeStack = (): HTMLDivElement => {
+  const stack = document.createElement('div')
+  stack.style.position = 'relative'
+  stack.style.width = '640px'
+  stack.style.height = '384px'
+  document.body.append(stack)
+  return stack
+}
+
+window.runWarmPaneRenderCost = async () => {
+  // xterm pauses its render service from an IntersectionObserver, which is geometric:
+  // a `visibility:hidden` box with real dimensions still intersects, while
+  // `display:none` does not. This measures what that difference costs a warm pane
+  // that keeps receiving live output — the deliberate price of keeping cell metrics
+  // valid so the terminal model never parses against a zero-sized renderer.
+  host.style.display = 'none'
+  const stack = makeStack()
+  const makePane = () => {
+    const paneHost = document.createElement('div')
+    paneHost.style.width = '100%'
+    paneHost.style.height = '100%'
+    stack.append(paneHost)
+    const paneTerm = new Terminal({ fontFamily: 'Consolas, monospace', fontSize: 12, scrollback: 300 })
+    const paneFit = new FitAddon()
+    paneTerm.loadAddon(paneFit)
+    paneTerm.open(paneHost)
+    paneFit.fit()
+    return { paneHost, paneTerm }
+  }
+  const warm = makePane()
+  const none = makePane()
+  applyWarmPaneCss(warm.paneHost)
+  none.paneHost.style.display = 'none'
+  // Let the IntersectionObserver deliver the styled states before streaming.
+  await frame()
+  await frame()
+
+  let warmRenders = 0
+  let displayNoneRenders = 0
+  const warmRender = warm.paneTerm.onRender(() => { warmRenders += 1 })
+  const noneRender = none.paneTerm.onRender(() => { displayNoneRenders += 1 })
+  let writes = 0
+  // An OMP-style live region: rewrite one line per tick, no committed newlines.
+  for (let tick = 0; tick < 45; tick += 1) {
+    const line = `\r\x1b[K spinner ${tick.toString().padStart(3, '0')} waiting`
+    warm.paneTerm.write(line)
+    none.paneTerm.write(line)
+    writes += 1
+    await frame()
+  }
+  await new Promise<void>(resolve => warm.paneTerm.write('', resolve))
+  await new Promise<void>(resolve => none.paneTerm.write('', resolve))
+  await frame()
+  warmRender.dispose()
+  noneRender.dispose()
+  warm.paneTerm.dispose()
+  none.paneTerm.dispose()
+  stack.remove()
+  return { writes, warmRenders, displayNoneRenders }
+}
+
+window.runWarmPaneCycleSoak = async () => {
+  // Repeated active↔warm cycling with output arriving while warm: the regression
+  // class the retained-measurable-warm-pane work exists for. After the final reveal
+  // and fit, the grid, the rendered DOM rows, and the tail must all agree.
+  host.style.display = 'none'
+  const stack = makeStack()
+  const paneHost = document.createElement('div')
+  paneHost.style.width = '100%'
+  paneHost.style.height = '100%'
+  stack.append(paneHost)
+  const paneTerm = new Terminal({ fontFamily: 'Consolas, monospace', fontSize: 12, scrollback: 500 })
+  const paneFit = new FitAddon()
+  paneTerm.loadAddon(paneFit)
+  paneTerm.open(paneHost)
+  paneFit.fit()
+  const writeLines = async (label: string) => {
+    for (let line = 0; line < 30; line += 1) {
+      paneTerm.write(`${label} line ${line.toString().padStart(3, '0')} ${'content '.repeat(8)}\r\n`)
+    }
+    await new Promise<void>(resolve => paneTerm.write('', resolve))
+  }
+  await writeLines('seed')
+  for (let cycle = 0; cycle < 10; cycle += 1) {
+    applyWarmPaneCss(paneHost)
+    await frame()
+    await writeLines(`warm-${cycle}`)
+    clearWarmPaneCss(paneHost)
+    // The active pane also changes size while this one is warm; production repairs
+    // that with a reveal-time fit, mirrored here.
+    stack.style.width = `${560 + (cycle % 4) * 40}px`
+    paneFit.fit()
+    await frame()
+    paneTerm.scrollToBottom()
+  }
+  await frame()
+  const proposed = paneFit.proposeDimensions()!
+  const buffer = paneTerm.buffer.active
+  const result = {
+    cols: paneTerm.cols,
+    rows: paneTerm.rows,
+    proposedCols: proposed.cols,
+    proposedRows: proposed.rows,
+    renderedRowElements: paneHost.querySelectorAll('.xterm-rows > div').length,
+    baseY: buffer.baseY,
+    viewportY: buffer.viewportY,
+    scrollbackLines: buffer.length - paneTerm.rows,
+  }
+  paneTerm.dispose()
+  stack.remove()
+  return result
 }
 
 function caretSnapshot(target:Terminal):TerminalCaretSnapshot {

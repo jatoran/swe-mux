@@ -753,7 +753,7 @@ responsive controls.
   Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout follows the configured items.
+  A status readout and the settings gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into settings.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is
   removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate
   grid column. The end-cap draws a right-arrow icon rather than the word: it is the one control on
@@ -764,18 +764,29 @@ responsive controls.
   an arrow steers the terminal rather than horizontally scrolling the rail.
   The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be
   reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only. Shell and
-  desktop Enter behavior is unchanged. Rail items now carry a **placement**: `strip` (here), `drawer` (the
-  utility drawer's Commands tab), or `both`. That replaces the old enabled/disabled toggle, which
-  was a bad model — the strip is horizontally scarce, so "off" was the only way to get an item out
-  of it, and several useful built-ins (Home/End, ^Home/^End, newline, `/rewind`)
-  shipped hidden for want of room. Those now ship *on*, in the drawer, and custom skills and slash
-  commands default there too rather than crowding the arrows off the strip. The two regions are
-  independent surfaces, not one slot: an item you hammer under the terminal can also carry its
-  full label in the drawer, so the settings row edits them as two toggles (`Rail`, `Panel`) rather
-  than a three-way select. Clearing both is what hides an item (`enabled: false`); the settings
-  row is what dims. Saves predating placement are migrated on read: `enabled: false` meant "not on
-  the strip", so it becomes a drawer item. Saves predating the editing-helper cluster receive the
-  four helpers after Down and Attach at the end once; saving that merged catalog makes later user ordering authoritative.
+  desktop Enter behavior is unchanged.
+- The rail configuration separates **what a command is** from **where it appears**, and the second half is per device.
+  The *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
+  The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` (under the terminal) and the `panel` (the utility drawer's Commands tab).
+  Desktop and mobile therefore have genuinely independent arrangements — their own rows, their own order, their own membership — and there is no shared row and no "applies to both" switch.
+  A shared row would be the trap the split exists to avoid: the two devices want different rails, so anything that live-links them is something you would immediately disable.
+- Row membership subsumes three older mechanisms and replaces all of them.
+  A per-item `platforms` tag, a per-item `strip`/`drawer`/`both` placement, and an `enabled` flag all said "not here" in different vocabularies; a command in no row on a device is now the single way to say it.
+  Nothing else dims or hides.
+  The one filter that stays on the item is `backends` (plus `agentOnly`), because that is a property of the command itself: `/rewind` means nothing outside Claude regardless of where it is placed.
+- The strip renders **one horizontal scroller per configured row**, so a row that overflows pages independently of the others.
+  Each row costs the terminal one row of height, which is why the practical ceiling is around three; the editor treats that as a soft guide, not a data constraint.
+  Row count comes from configuration and is fixed for the render, never measured and then adjusted, which keeps it clear of the geometry-echo resize loop.
+  The panel renders each row as an optionally captioned section, and within a section terminal keys still split into their own dense grid — a 44px key and a labelled command want different cell sizes.
+- An item id may appear in several rows and more than once within a row, so a rendered entry carries a `key` of its own (`rowId:index:itemId`) rather than reusing the item id.
+  Anything keyed by item id — render keys, focus, key-repeat — must key by the entry instead.
+- Layouts always keep at least one row per surface, so the editor always has a drop target and a newly shipped built-in always has somewhere to land.
+  Deleting the last row of a surface empties it instead of removing it.
+  A built-in introduced after a config was saved is appended to the first row of its `defaultSurface` on both devices; cataloguing it without placing it would leave it permanently invisible to anyone with an existing layout.
+- Saves predating the layout model are migrated on read, per scope and by shape rather than by a version field, so a rewritten global scope and a still-legacy project override coexist.
+  The old list is resolved once for each device/surface combination and each result becomes a row, so an upgrade renders identically on both devices and only then diverges by hand.
+  Legacy semantics are preserved through that resolution: `enabled: false` on an entry that predates `placement` meant "not on the strip", so it keeps rendering in the panel, while `enabled: false` alongside an explicit placement was a genuine hide and lands in no row.
+  Saves predating the editing-helper cluster still receive the four helpers after Down and Attach at the end once.
 - Rail items come in six kinds: terminal `key`, built-in `action`, literal `text`, `slash`
   command, `skill`, and `prompt`. A `prompt` item is a *pointer* at a prompt-library template
   (`prompt-library.md`) — it stores the `scope:id` key, never the body, so the button always
@@ -785,17 +796,30 @@ responsive controls.
   inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
   rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
   over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
-- The command-rail settings rows are a name-first grid: the item name owns the elastic column and
-  wraps rather than truncating (it used to share a fixed column with the placement select and
-  clipped to an ellipsis), with type/payload preview beneath it and the toggles auto-sized on the
-  right. Placement chips are blue ("this region renders it") and the device/backend filter chips
-  green ("this context is allowed to"), because one accent across seven chips read as a single
-  toggle set. Phones keep two grid rows per item: name + reorder, then the toggles.
+- The command-rail editor (`RailEditor.tsx`) shows the two device layouts as columns above a catalog of every command.
+  Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
+  Each column holds its two surfaces, each surface its rows, each row its draggable chips.
+- Four affordances are what keep two independent layouts manageable, and none of them is a shared row.
+  Adding a command places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone.
+  The catalog's four placement badges (desktop rail, desktop panel, mobile rail, mobile panel) are the index: they say at a glance that a command is on desktop and was never put on mobile, and clicking one places or unplaces it.
+  A per-surface "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
+  Dragging a catalog row into a layout places it exactly.
+- Chips drag within a row, between rows, between surfaces, and between device columns, on mouse and on touch.
+  Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers, a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the settings pane instead of dragging.
+  The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.
+  Pointer capture is taken on the editor root, not on the chip: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
+- The drop index is measured against the row **without** the dragged chip.
+  That exclusion is what makes it a fixed point — re-measuring after the preview moves the chip gives the same answer, so a chip hovering over its own new home does not oscillate.
+  The hit test is two-dimensional because the editor wraps a row's chips over several visual lines; a horizontal-only comparison would put every drop on the second line into the middle of the first.
+- Keyboard placement is the equivalent path and the only one available without a pointer: arrows move a focused chip along its row and between rows, Delete unplaces it, and focus follows the chip so a run of presses keeps moving the same one.
+- Catalog rows are a name-first grid: the command name owns the elastic column and wraps rather than truncating, with type/payload preview beneath it and the toggles auto-sized on the right.
+  Placement badges are blue ("placed here") and the backend filter chips green ("this backend is allowed to see it"), because one accent across the whole set read as a single toggle set.
+  Phones keep two grid rows per command: name + delete, then badges and filters.
 - The Commands tab is session-scoped but renders outside the terminal pane, so it activates items
   over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`,
   `branch`, `relaunch`, `endSession`): the pane stays the single owner of terminal writes, so
   broadcast, replay, and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
-  dead buttons. Keys inject
+  dead buttons. It renders the `panel` surface of *this device's* layout, so its grouping and order are arranged independently of the desktop's. Keys inject
   raw bytes on the normal input path. The built-in newline uses `ESC+CR`, the legacy sequence both
   Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
   The rail overflows on narrow panes and scrolls horizontally; it never wraps.
@@ -1391,10 +1415,18 @@ phase, detail}`); `mux:terminal-render-diagnostic` fires on every append. Phases
 `preconnect_fit`, `attach_ready_sent`, `full_redraw_requested`, `full_redraw_issued`,
 `full_redraw_rendered`, `viewport_fit_deferred`, `viewport_fit_resumed`,
 `viewport_fit_drift_repair`, `surface_redraw_deferred`, `surface_repair_resumed`,
-`surface_redraw_confirmed`, `webgl_context_lost`, `webgl_load_failed`, `webgl_render_error`.
+`surface_redraw_confirmed`, `scrollback_repaint_requested`, `webgl_context_lost`,
+`webgl_load_failed`, `webgl_render_error`.
 Note that `full_redraw_rendered` proves only that xterm's `RenderService`
 fired `onRender`, which it does whether or not the renderer painted — it is not evidence that
 pixels changed.
+
+Repair-class phases additionally reach the daemon unconditionally — no opt-in — as
+`client_diagnostic` PTY frames persisted to the durable event log as `terminal_client_repair`
+(allowlist and rate limits: `design/interfaces.md`). This is what makes each repair layer
+individually auditable in production: a layer that never fires in months of logs is a removal
+candidate, one that fires daily is load-bearing. Alongside them, every honored transcript
+restatement is logged as `terminal_repaint_requested` with its trigger reason.
 
 ## Key files
 

@@ -206,7 +206,8 @@ work, while a claim that changes owners must use the freshly registered viewport
 
 PTY WebSocket frames, typed in `design/interfaces.md`: `claim_input`, `input_owner`,
 `input_owner_released`, `input_rejected`, `resize`/`attach_ready` (with `hidden`),
-`geometry`.
+`geometry`, `repaint` (client-requested transcript restatement, `features/sessions.md`),
+`client_diagnostic` (durable client repair telemetry).
 
 ## Diagnostics
 

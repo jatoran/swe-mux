@@ -48,7 +48,7 @@ The frontend replaces its startup compatibility seed with that response and gate
 | Does the harness report lifecycle hooks? | `reports_lifecycle_hooks(name)` | Hook identity binding, rollover decisions, hook-reported transcript relocation |
 | Which harnesses need an external usage command? | `external_usage_harnesses()` | Usage polling and provider-state creation |
 | Which harnesses expose mux-managed accounts? | `provider_account_harnesses()` | Credential inventory, swapping, and quota polling |
-| Does the TUI rewrite content already in scrollback? | `repaints_scrollback` (published capability; frontend `repaintsScrollback(name)`) | Terminal renderer selection: repainting harnesses stay on the DOM renderer under the `auto` preference |
+| Does the TUI rewrite content already in scrollback? | `repaints_scrollback` (backend `repaints_scrollback(name)`; published capability; frontend `repaintsScrollback(name)`) | Terminal renderer selection (repainting harnesses stay on the DOM renderer under `auto`); client-requested transcript restatement after a wrapped-ring replay (`features/sessions.md`) |
 
 `AGENT_BACKENDS` is derived once in `harness.py`; session and voice code do not declare local backend sets.
 Provider-account and external-usage iteration derives from independent descriptor capabilities, because a managed harness can report both through its native transcript without exposing mux-managed accounts.
@@ -67,6 +67,7 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares PTY delivery etiquette: `submission`, `root_completion`, and `screen`.
 - Every harness declares `repaints_scrollback`, and a new harness should declare it `true` unless its TUI provably never rewrites scrollback: the flag decides whether `auto` may give the pane the WebGL renderer, and the safe default is the DOM renderer.
   This capability is not a general WebGL-safety claim: Claude does not repaint scrollback but remains DOM-only because its retained alternate-screen surface has a separate live-context corruption mode.
+  The same flag gates the daemon's answer to a client `repaint` frame, because a harness that floods the ring with live-region repaint traffic is both the only one whose replay can parse to nothing and the only one that restates its transcript when pulsed (`features/sessions.md`).
 - Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.
 - Every hooked harness declares `native_hooks`, its `hook_events`, a hook installer, and replay hook-step coverage.
 - Every transcript-capable harness declares its transcript semantics and measurement parser.

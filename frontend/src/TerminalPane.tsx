@@ -10,7 +10,7 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import type { Session } from './types'
-import { harnessDisplayName, isAgentBackend } from './harnessRegistry.ts'
+import { harnessDisplayName, isAgentBackend, repaintsScrollback } from './harnessRegistry.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
@@ -33,12 +33,12 @@ import { clipboardImage, copyPreparedText, pasteNeedsManualBracketing, Resilient
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
-import { railPayload, resolveRail, type RailBackend, type RailItem } from './commandRail'
+import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
 import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
 import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
-import { currentProfile, loadRailItems } from './deviceSettings'
+import { currentProfile, loadRailConfig } from './deviceSettings'
 import { APP_TAIL_KEY, CLAUDE_MAX_DESKTOP_COLUMNS, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
@@ -81,7 +81,7 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
-import { remountDecision, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
+import { remountDecision, scrollbackRepaintNeeded, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
 import { reportPromptSubmitted } from './projectRecency'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
@@ -777,6 +777,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let replayEndReceived = false
     let replayAllowsTerminalResponses = false
     let pendingReplayWrites = 0
+    // One transcript restatement per parsed buffer: set when this pane asks the daemon
+    // for a repaint pulse, cleared only where `term.reset()` discards what was parsed
+    // (a reconnect or resync replay), so a short transcript cannot re-request forever.
+    let scrollbackRepaintRequested = false
     // Write-pipeline liveness: byte arrival vs parse progress. A parser exception
     // kills xterm's write loop without any event this pane could subscribe to, so
     // the health sweep compares these two clocks instead (`writePipelineStalled`).
@@ -804,6 +808,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const diagnoseRender = terminalRenderDiagnosticsEnabled
       ? (phase: string, detail?: Record<string, unknown>) => recordTerminalRenderDiagnostic(session.id, phase, detail)
       : undefined
+    // Repairs are the one diagnostic class that must reach the daemon even when the
+    // opt-in in-page ring buffer is off: they happen in production browsers, and
+    // whether each repair layer still fires is what decides its future. The daemon
+    // allowlists the phases and rate-limits per session; the local throttle only
+    // keeps a pathological repair loop from flooding the socket.
+    let lastRepairReportAt = 0
+    const reportRepair = (phase: string, detail?: Record<string, unknown>) => {
+      diagnoseRender?.(phase, detail)
+      if (socket?.readyState !== WebSocket.OPEN) return
+      const now = performance.now()
+      if (now - lastRepairReportAt < 1000) return
+      lastRepairReportAt = now
+      socket.send(JSON.stringify({ type: 'client_diagnostic', phase, detail }))
+    }
     const renderDiagnostic = terminalRenderDiagnosticsEnabled ? term.onRender(event => {
       if (!awaitingFullRedraw) return
       awaitingFullRedraw = false
@@ -815,11 +833,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         renderer: activeRenderer,
       })
     }) : null
-    const onRenderError = terminalRenderDiagnosticsEnabled ? (event: ErrorEvent) => {
+    // Always registered, not diagnostics-gated: a WebGL renderer failure in a
+    // production browser is precisely the event the durable repair log exists for.
+    const onRenderError = (event: ErrorEvent) => {
       if (!isWebglRenderError(event)) return
-      diagnoseRender?.('webgl_render_error', { message: event.message, renderer: activeRenderer })
-    } : null
-    if (onRenderError) window.addEventListener('error', onRenderError)
+      reportRepair('webgl_render_error', { message: event.message, renderer: activeRenderer })
+    }
+    window.addEventListener('error', onRenderError)
     const loadLatestReply=()=>{
       if(!isAgentBackend(session.backend))return
       void api<{text:string}>('GET',`/api/sessions/${session.id}/last-reply`).then(result=>{
@@ -870,7 +890,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         socket?.readyState === WebSocket.OPEN
         && writePipelineStalled(lastBytesAt, lastParsedAt, performance.now())
       ) {
-        diagnoseRender?.('write_pipeline_dead', {
+        reportRepair('write_pipeline_dead', {
           lastBytesAt,
           lastParsedAt,
           replaying,
@@ -886,7 +906,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         replaying,
         paneIsHidden(),
       )) {
-        diagnoseRender?.('surface_drift_repair', {
+        reportRepair('surface_drift_repair', {
           confirmed: confirmedSurface,
           cols: term.cols,
           rows: term.rows,
@@ -902,7 +922,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         paneIsHidden(),
         letterboxed,
       )) {
-        diagnoseRender?.('viewport_fit_drift_repair', {
+        reportRepair('viewport_fit_drift_repair', {
           current: { cols: term.cols, rows: term.rows },
           proposed: proposedFit,
           host: { width: host.current?.clientWidth ?? 0, height: host.current?.clientHeight ?? 0 },
@@ -911,7 +931,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if (viewportFitOwed && !paneIsHidden() && terminalHostIsVisible(host.current)) {
-        diagnoseRender?.('viewport_fit_resumed', {
+        reportRepair('viewport_fit_resumed', {
           cols: term.cols,
           rows: term.rows,
           host: { width: host.current?.clientWidth ?? 0, height: host.current?.clientHeight ?? 0 },
@@ -920,7 +940,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if (surfaceRepair?.owed && !paneIsHidden() && terminalHostIsVisible(host.current)) {
-        diagnoseRender?.('surface_repair_resumed', {
+        reportRepair('surface_repair_resumed', {
           cols: term.cols,
           rows: term.rows,
           renderer: activeRenderer,
@@ -1293,6 +1313,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // the host still measures zero and is resumed by the first successful measurement.
       surfaceRepair?.markOwed()
       scheduleFullRedraw()
+      // A warm pane attaches hidden, so its replay finished with the repaint request
+      // suppressed. First reveal is when the missing transcript would become visible.
+      maybeRequestScrollbackRepaint()
       visibilityFrame = window.requestAnimationFrame(() => {
         if (paneIsHidden()) return
         surfaceRepair?.resume()
@@ -1485,6 +1508,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       claimInput('gesture')
       sendInput(String(frame.data), false, frame.broadcast === true, true)
     }
+    // A wrapped ring replays only live-region repaint traffic, and only this client can
+    // see that its parse produced no scrollback (`scrollbackRepaintNeeded`). Asking the
+    // daemon for a pulse makes the child restate its transcript, which both fills this
+    // pane and repopulates the ring for every later attach. Checked when a replay
+    // finishes on a visible pane and again when a hidden-attached warm pane is first
+    // revealed — the path the attach-time pulse never covered.
+    const maybeRequestScrollbackRepaint = () => {
+      if (scrollbackRepaintRequested || replaying || paneIsHidden()) return
+      if (socket?.readyState !== WebSocket.OPEN) return
+      const buffer = term.buffer.active
+      if (!scrollbackRepaintNeeded(repaintsScrollback(session.backend), buffer.type, buffer.baseY, term.rows)) return
+      scrollbackRepaintRequested = true
+      socket.send(JSON.stringify({ type: 'repaint' }))
+      reportRepair('scrollback_repaint_requested', { baseY: buffer.baseY, rows: term.rows })
+    }
     const finishReplay = () => {
       replaying = false
       replayAllowsTerminalResponses = false
@@ -1494,6 +1532,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       pendingUserInputLength = 0
       for (const item of queued) sendInput(item.data, false, item.broadcast)
       scheduleFullRedraw()
+      maybeRequestScrollbackRepaint()
     }
     const handleMessage=(event:MessageEvent)=>{
       if (event.data instanceof ArrayBuffer) {
@@ -1528,7 +1567,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           attachmentReadyRef.current=false
           setAttachmentReady(false)
           cancelCaretPlacement()
-          if (frame.reason === 'resync' || reconnectReplay) term.reset()
+          if (frame.reason === 'resync' || reconnectReplay) {
+            term.reset()
+            // The buffer this flag described no longer exists; the fresh replay
+            // earns its own missing-scrollback judgement.
+            scrollbackRepaintRequested = false
+          }
           reconnectReplay=false
           replaying = true
           replayEndReceived = false
@@ -2325,7 +2369,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
@@ -2556,25 +2600,30 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // The rail region after the leading voice chips is data-driven so it can be
   // reordered/extended from settings; built-in ids keep their exact dynamic
   // markup (disabled states, tooltips), generic types render uniformly.
-  // Strip placement only: the long tail lives in the utility drawer's Commands
-  // tab, where a full-width grid can show it with labels.
+  //
+  // Strip surface only, and one scroller per configured row: the rows come from
+  // *this device's* layout, so a phone's rail is arranged independently of the
+  // desktop's rather than sharing one order. The long tail lives in the utility
+  // drawer's Commands tab, where a full-width grid can show it with labels.
   const mobilePinnedSend=isMobileTerminalInput()&&mobileEnterNeedsPinnedSend(session.backend)
-  const railItems=resolveRail(loadRailItems(session.project_id),{platform:currentProfile(),backend:session.backend as RailBackend},'strip')
+  const railRows=resolveRailRows(loadRailConfig(session.project_id),'strip',{device:currentProfile(),backend:session.backend as RailBackend})
   // Mobile agent Enter is reserved for composing a newline. The ordinary Enter
   // item therefore moves to the fixed end-cap instead of remaining as a second,
   // scrollable submit target. The fixed action is intentionally not configurable:
   // removing it would strand a phone whose soft-keyboard Enter cannot submit.
-  const scrollingRailItems=mobilePinnedSend?railItems.filter(item=>item.id!=='enter'):railItems
-  const renderRailItem=(item:RailItem)=>{
+  const scrollingRailRows=mobilePinnedSend
+    ?railRows.map(row=>({...row,entries:row.entries.filter(entry=>entry.item.id!=='enter')})).filter(row=>row.entries.length)
+    :railRows
+  const renderRailItem=({item,key}:RailEntry)=>{
     switch(item.id){
-      case 'attach':return acceptsTerminalAttachments(session)?<button key={item.id} class="rail-icon" disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
-      case 'relaunch':return isTask?<button key={item.id} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
+      case 'attach':return acceptsTerminalAttachments(session)?<button key={key} class="rail-icon" disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
+      case 'relaunch':return isTask?<button key={key} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
       // Attach / Copy reply / Branch / Paste are icon-only: their marks are conventional enough to read
       // without a word, and dropping four rail-widths of text is what keeps the terminal keys
       // reachable without scrolling. Copy resume deliberately keeps its label — a copy glyph
       // alone cannot distinguish it from Copy reply, and the two sit side by side.
-      case 'copyReply':return isTask?null:<button key={item.id} class="rail-icon" disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
-      case 'copyResume':return isTask?null:<button key={item.id} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&session.backend!=='claude'?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
+      case 'copyReply':return isTask?null:<button key={key} class="rail-icon" disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
+      case 'copyResume':return isTask?null:<button key={key} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&session.backend!=='claude'?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
       case 'branch':{
         if(!onBranch)return null
         // Mirrors the server's implemented branch strategies (Claude native fork,
@@ -2583,36 +2632,48 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // `branch_unsupported`; this gate just says so before the click.
         const branchable=session.backend==='claude'||session.backend==='codex'
         const ready=session.backend==='claude'||(branchable&&!!session.native_session_id&&session.native_session_id!==session.id)
-        return <button key={item.id} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet — branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}><BranchIcon/></button>
+        return <button key={key} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet — branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}><BranchIcon/></button>
       }
-      case 'paste':return <button key={item.id} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
-      case 'clipboardHistory':return <button key={item.id} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>
+      case 'paste':return <button key={key} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
+      case 'clipboardHistory':return <button key={key} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>
       case 'endSession':{
         // Ended sessions keep the button: the same command removes their row from the
         // sidebar, which is the only remaining thing left to do with them.
         const ended=session.state==='exited'||session.state==='crashed'
         const verb=ended?'Remove':'End session'
-        return <button key={item.id} class={`rail-danger ${killArmed?'confirming':''}`} aria-label={killArmed?`Confirm ${verb.toLowerCase()}`:verb} title={killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'} onClick={()=>runCommand('session.kill')}>{killArmed?'Confirm ✓':verb}</button>
+        return <button key={key} class={`rail-danger ${killArmed?'confirming':''}`} aria-label={killArmed?`Confirm ${verb.toLowerCase()}`:verb} title={killArmed?'Click again to confirm':ended?'Remove this ended session from the sidebar (click twice to confirm)':'End this session (click twice to confirm)'} onClick={()=>runCommand('session.kill')}>{killArmed?'Confirm ✓':verb}</button>
       }
-      case 'kbdToggle':return <button key={item.id} class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button>
+      case 'kbdToggle':return <button key={key} class={`term-key kbd-toggle ${keyboardOff?'active':''}`} aria-pressed={keyboardOff} title={keyboardOff?'Read mode: tap the terminal to select/scroll without the keyboard. Click to type again.':'Hide the on-screen keyboard so you can select, scroll, and paste'} onClick={toggleKeyboard}>⌨</button>
     }
     if(item.type==='key'){
       const sequence=item.bytes||''
-      if(isRepeatableRailKey(item.id))return <button key={item.id} class={`${item.className||'term-key'} rail-key-repeat`} title={`${item.title||item.label} (hold to repeat)`} onPointerDown={event=>{
+      if(isRepeatableRailKey(item.id))return <button key={key} class={`${item.className||'term-key'} rail-key-repeat`} title={`${item.title||item.label} (hold to repeat)`} onPointerDown={event=>{
         if(!event.isPrimary||event.button!==0)return
         event.preventDefault()
         event.currentTarget.setPointerCapture?.(event.pointerId)
         railKeyRepeater.press(event.pointerId,sequence)
       }} onPointerUp={event=>railKeyRepeater.release(event.pointerId)} onPointerCancel={event=>railKeyRepeater.release(event.pointerId)} onLostPointerCapture={event=>railKeyRepeater.release(event.pointerId)} onContextMenu={event=>event.preventDefault()} onClick={event=>{if(event.detail===0)sendKey(sequence)}}>{item.label}</button>
-      return <button key={item.id} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
+      return <button key={key} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
     }
     if(item.type==='action')return null
     // Prompt templates resolve over the network at click time (see promptRail.ts), so
     // they cannot go through the synchronous payload path below.
-    if(item.type==='prompt')return <button key={item.id} class={item.className||''} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{item.label}</button>
+    if(item.type==='prompt')return <button key={key} class={item.className||''} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{item.label}</button>
     const payload=railPayload(item,session.backend as RailBackend)
-    return <button key={item.id} class={item.className||''} title={item.title||payload} onClick={()=>injectText(payload,item.submit)}>{item.label}</button>
+    return <button key={key} class={item.className||''} title={item.title||payload} onClick={()=>injectText(payload,item.submit)}>{item.label}</button>
   }
+  // Rows are rendered first and *then* filtered on what actually produced a button.
+  // Backend filtering alone is not enough: the mutually exclusive built-ins
+  // (Relaunch versus Copy reply / Copy resume, Attach on a backend that takes no
+  // files) decide at render time and return null, so a row holding only those
+  // would otherwise stand as a full-height empty strip.
+  const builtRailRows=scrollingRailRows
+    .map(row=>({id:row.id,nodes:row.entries.map(renderRailItem).filter(Boolean)}))
+    .filter(row=>row.nodes.length)
+  // The status readout and the settings gear ride the last surviving row, so they
+  // stay put as rows are added and a rail configured down to nothing still has a
+  // way back into settings.
+  const renderedRailRows=builtRailRows.length?builtRailRows:[{id:'rail-empty',nodes:[]}]
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
   const claudeHostStyle=session.backend==='claude'?{
@@ -2626,7 +2687,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     fontSize:`${baseFont}px`,
     fontWeight:'600',
   }:undefined
-  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(keyboardInset,peekTop,offTail,appOffTail)&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailScroller key={row.id}>{row.nodes}{index===renderedRailRows.length-1&&<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>}{index===renderedRailRows.length-1&&onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, rows, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(keyboardInset,peekTop,offTail,appOffTail)&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

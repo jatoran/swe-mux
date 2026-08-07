@@ -95,6 +95,7 @@ without changing the cell grid or reporting a PTY resize. Output that arrived wh
 hidden moved `baseY` with no viewport following it, so the tail repair remains separate.
 The fit itself is also persistent debt: a newly visible host can still produce no FitAddon dimensions while layout and xterm cell metrics settle, and that pass is not considered successful.
 The slow health sweep independently compares the current grid with a fresh fit proposal, excluding intentional letterboxes, so stale half-height grids recover even if every event signal was missed.
+Reveal is also when a warm pane that attached hidden judges its replayed transcript: if the parse left less than one screen of scrollback on a normal-screen `repaintsScrollback` harness, the pane sends one `repaint` frame per parsed buffer and the daemon makes the child restate its transcript (`scrollbackRepaintNeeded` in `terminalHealth.ts`; the same check runs when a visible pane finishes replay).
 
 Viewport measurement also owns the agent width envelope.
 Claude's host is centered and capped at 120 columns, so parent growth beyond that width does not emit another PTY resize.

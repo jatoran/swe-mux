@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { findPromptTemplate, promptItemSummary, splitPromptKey } from '../src/promptRail.ts'
-import { mergeRail, railPayload, type RailItem } from '../src/commandRail.ts'
+import { normalizeRailConfig, railPayload, type RailItem } from '../src/commandRail.ts'
 
 // The library's own identity is `scope:id`; template ids are UUIDs, so the first
 // colon is the seam and the rest is the id verbatim.
@@ -38,10 +38,14 @@ test('a dangling prompt item is described as dangling, not as blank', () => {
 })
 
 test('prompt items survive a save round-trip and carry no local payload', () => {
-  const saved: RailItem[] = [{ id: 'custom:prompt:abc:0', type: 'prompt', label: 'Ship it', promptKey: 'global:abc', placement: 'both' }]
-  const merged = mergeRail(saved).find(item => item.id === 'custom:prompt:abc:0')
+  const saved: RailItem[] = [{ id: 'custom:prompt:abc:0', type: 'prompt', label: 'Ship it', promptKey: 'global:abc' }]
+  const config = normalizeRailConfig({
+    items: saved,
+    layouts: { desktop: { strip: [{ id: 'r1', items: ['custom:prompt:abc:0'] }] } },
+  })
+  const merged = config.items.find(item => item.id === 'custom:prompt:abc:0')
   assert.equal(merged?.promptKey, 'global:abc')
-  assert.equal(merged?.placement, 'both')
+  assert.equal(config.layouts.desktop.strip[0].items[0], 'custom:prompt:abc:0')
   // The body lives in the library and is fetched on click, so there is nothing to
   // inject synchronously — a caller that ignored the type would inject nothing.
   assert.equal(railPayload(saved[0], 'claude'), '')

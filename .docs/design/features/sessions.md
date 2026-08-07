@@ -58,10 +58,11 @@ and reattachable browser viewports.
   OMP continuously repaints its tail, and deep sessions are repeatedly reconstructed
   from bounded replay as panes leave the warm cache, so a stale WebGL surface looks
   exactly like missing replay until a real resize repairs it.
-  On a visible cold attach at unchanged geometry, the daemon also pulses OMP by one
-  column and restores the canonical size before live delivery starts.
-  This queues a fresh application repaint behind the bounded replay without changing
-  the session's final dimensions or sending application input.
+  A repaint-heavy TUI also wraps the retained ring itself: OMP's spinner alone emits kilobytes per second, so within minutes a bounded replay holds only live-region repaint traffic that parses to a single screen with no scrollback (measured 2026-08-07: 512 KiB of replay from a working OMP session contained zero newlines).
+  Recovery is client-requested, because only the client can see what its replay parsed to.
+  A pane whose finished replay left less than one screen of scrollback on a normal-screen `repaints_scrollback` harness sends a `repaint` frame; the daemon pulses the PTY one column and restores it (`Session.repaint_current_geometry`), and the child answers by restating its transcript (measured: one pulse elicited a ~460-line re-render), which also repopulates the ring for every later attach.
+  The request fires when replay completes on a visible pane and at first reveal for a warm pane that attached hidden, at most once per parsed buffer, and the daemon rate-limits it per session and ignores it for alternate-screen harnesses, whose buffers never hold scrollback.
+  A concurrent client resize during the pulse wins: the pulse never restores a stale size over newly arbitrated geometry.
   The pinned xterm 6 WebGL addon carries the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race from aborting a model update and leaving stale glyphs.
   Mobile remains DOM-only.
 - Agent startup state uses semantic evidence first. Claude and trusted Codex lifecycle hooks

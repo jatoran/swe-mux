@@ -1502,6 +1502,12 @@ class Session:
         # missing characters by feel.
         self.input_rejections = 0
         self.last_input_reject_report_ts = 0.0
+        # Monotonic stamps bounding client-requested work: a `repaint` frame makes the
+        # child restate its whole transcript, and `client_diagnostic` frames are
+        # persisted to the durable event log, so neither may be driven at frame rate
+        # by a misbehaving or malicious page.
+        self.last_client_repaint_ts = 0.0
+        self.last_client_diagnostic_ts = 0.0
         # Passive claims refused because another device is actively being typed into:
         # the direct measure of how often a background pane tried to steal the keyboard.
         self.input_claim_denials = 0
@@ -1825,11 +1831,14 @@ class Session:
     async def repaint_current_geometry(self) -> bool:
         """Make a full-screen child repaint without changing canonical geometry.
 
-        A bounded replay can contain only the tail of a repaint-heavy TUI. If a new
-        client attaches at the PTY's existing dimensions, normal arbitration skips
-        the resize and the child has no reason to restate the screen. Pulse one
-        column and restore it after the child has had a scheduler turn. Output from
-        both resizes is queued behind the replay snapshot for the new subscriber.
+        A repaint-heavy TUI (OMP's spinner alone emits kilobytes per second) wraps the
+        retained ring until a bounded replay holds only live-region repaint traffic,
+        which parses to a single screen with no scrollback. The child holds the full
+        transcript and restates it in response to a real width change (measured
+        2026-08-07: one pulse elicited a ~460-line transcript re-render), so pulse one
+        column and restore it after the child has had a scheduler turn. Triggered by a
+        client `repaint` frame when its parsed replay produced no scrollback; the
+        restated bytes also repopulate the ring for every later attach.
 
         Another client may resize during the yield. In that case its new canonical
         geometry has already won, so never restore the stale size over it.

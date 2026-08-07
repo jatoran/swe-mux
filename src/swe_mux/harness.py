@@ -396,6 +396,17 @@ def reports_lifecycle_hooks(name: object) -> bool:
     return isinstance(name, str) and name in HARNESSES and HARNESSES[name].native_hooks
 
 
+def repaints_scrollback(name: object) -> bool:
+    """Whether this harness's TUI rewrites content already committed to scrollback.
+
+    Doubles as the gate for client-requested repaints: only a harness that keeps its
+    transcript on the normal screen and floods the retained ring with live-region
+    repaint traffic can leave a fresh attach with no scrollback to show, and only
+    such a harness restates its transcript in response to a width pulse.
+    """
+    return isinstance(name, str) and name in HARNESSES and HARNESSES[name].repaints_scrollback
+
+
 def external_usage_harnesses() -> tuple[str, ...]:
     return tuple(name for name, harness in HARNESSES.items() if harness.external_usage_command)
 
