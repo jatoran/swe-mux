@@ -77,10 +77,10 @@ import {
 import { remountDecision, surfaceDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
+  caretResolverForBackend,
   caretSteerCommand,
   dispatchTerminalMouseTap,
-  resolveAnchoredCodexCaretTarget,
-  resolveCodexCaretTarget,
+  resolveAnchoredCaretTarget,
   terminalCaretAtPoint,
   terminalTapAction,
   type CaretPointerType,
@@ -1640,7 +1640,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const runCaretPlacement=()=>{
       const placement=caretPlacement
       if(!placement||placement.pendingFrom)return
-      if(replaying||paneIsHidden()||backendRef.current!=='codex'){
+      const resolveCaret=caretResolverForBackend(backendRef.current)
+      if(replaying||paneIsHidden()||!resolveCaret){
         finishCaretPlacement('unavailable')
         return
       }
@@ -1649,7 +1650,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       const snapshot=terminalCaretSnapshot(term)
-      const resolved=resolveAnchoredCodexCaretTarget(snapshot,{
+      const resolved=resolveAnchoredCaretTarget(resolveCaret,snapshot,{
         column:placement.targetColumn,
         rowOffset:placement.targetRowOffset,
       })
@@ -1697,10 +1698,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const caretCursorMove=term.onCursorMove(scheduleCaretPlacementCheck)
     const caretWriteParsed=term.onWriteParsed(scheduleCaretPlacementCheck)
     const caretResize=term.onResize(()=>finishCaretPlacement('resized'))
-    const startCodexCaretPlacement=(requested:TerminalCaretPosition)=>{
+    const startCaretPlacement=(requested:TerminalCaretPosition)=>{
       finishCaretPlacement('replaced')
-      if(replaying||paneIsHidden()||backendRef.current!=='codex')return false
-      const resolved=resolveCodexCaretTarget(terminalCaretSnapshot(term),requested)
+      const resolveCaret=caretResolverForBackend(backendRef.current)
+      if(replaying||paneIsHidden()||!resolveCaret)return false
+      const resolved=resolveCaret(terminalCaretSnapshot(term),requested)
       if(!resolved)return false
       if(sameCaretPosition(resolved.current,resolved.target))return true
       // Like an explicit mobile Arrow key, placement invalidates the IME's textual
@@ -2045,13 +2047,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           mouseTracking:term.modes.mouseTrackingMode!=='none',
         })
         if(action==='forward-mouse')forwardTerminalMouseTap(endedTap.px,endedTap.py)
-        if(action==='steer-codex-caret'){
+        if(action==='steer-caret'){
           const screen=term.element?.querySelector<HTMLElement>('.xterm-screen')
           if(screen){
             const requested=terminalCaretAtPoint(
               endedTap.px,endedTap.py,screen.getBoundingClientRect(),term.cols,term.rows,term.buffer.active.viewportY,
             )
-            startCodexCaretPlacement(requested)
+            startCaretPlacement(requested)
           }
         }
       }

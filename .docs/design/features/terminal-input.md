@@ -54,11 +54,13 @@ Claude owns a real terminal mouse protocol.
 Desktop mouse events already enter xterm directly; touch release synthesizes the matching `mousedown`/`mouseup` pair so xterm encodes the coordinates in the protocol Claude negotiated.
 The later browser compatibility mouse event remains suppressed, so one tap produces one press/release pair.
 
-Codex enables no terminal mouse mode, so its path is bounded cursor steering rather than a fabricated mouse sequence.
-The client recognizes the bottom composer from Codex's `›`/`!`/`»` prefix, two-column text inset, visible hardware cursor, tail position, and either its background block or its blank-row textarea frame, then sends unicast Left/Right batches through xterm's ordinary input path.
+Codex and OMP enable no terminal mouse mode, so their path is bounded cursor steering rather than a fabricated mouse sequence, dispatched per backend by `caretResolverForBackend`.
+The client recognizes the Codex composer from its `›`/`!`/`»` prefix, two-column text inset, visible hardware cursor, tail position, and either its background block or its blank-row textarea frame, then sends unicast Left/Right batches through xterm's ordinary input path.
 The frame fallback is required because Codex deliberately uses the terminal's default background when its palette probe is unavailable.
-Each batch waits for Codex's redraw and re-reads the hardware cursor before continuing.
-If the movement crosses the target it switches to single-key precision; popup height changes are handled by anchoring the target row to the live prefix.
+The OMP composer is its measured 17.2.10 box: a top border embedding the status line that reads `╭── π` at columns 0-4, `│` interior draft rows, the final draft line fused into the `╰─ … ─╯` bottom border, and text starting at column 3 on every draft row.
+The `π` brand cell is the discriminator against OMP's other bordered surfaces - a model picker or dialog carries a title there instead, and refusing those matters because arrows sent into a picker move its selection.
+Each batch waits for the CLI's redraw and re-reads the hardware cursor before continuing.
+If the movement crosses the target it switches to single-key precision; popup height changes are handled by anchoring the target row to the composer's own anchor row.
 The operation stops on user input, selection, resize, replay, ownership loss, buffer changes, hidden panes, missing progress, or a changed composer.
 The hidden mobile textarea is not used as a document mirror: it remains an end-pinned IME delta bridge and cannot represent the agent's whole draft.
 
@@ -191,7 +193,7 @@ work, while a claim that changes owners must use the freshly registered viewport
 - File/image attachment references are unicast regardless of the pane's broadcast membership.
   They still travel through xterm's paste/input path so replay bounds and bracketed-paste rules
   apply; only the broadcast bit is forced off for the synchronous attachment insertion.
-- Pointer-generated mouse reports and Codex caret-steering keys are unicast regardless of broadcast membership.
+- Pointer-generated mouse reports and caret-steering keys (Codex, OMP) are unicast regardless of broadcast membership.
   A pointer target belongs only to the pane in which it was chosen.
 
 ## API surface
