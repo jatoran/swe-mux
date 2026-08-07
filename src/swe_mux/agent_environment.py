@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, assert_never
@@ -833,6 +834,61 @@ def _hook_inventory(
     return items
 
 
+def _omp_extension_hook_items(args: Sequence[str]) -> list[dict[str, Any]]:
+    """Represent OMP's in-process extensions in the Hooks section.
+
+    OMP has no Claude-style hooks table for the config scan to find: its
+    lifecycle reporting is an extension package mux injects per session via
+    ``--extension``. Without this row an OMP session reports "Hooks: 0" while
+    every status transition the UI shows is hook-sourced, which reads as "mux
+    is not wired in" - the exact question this section exists to answer. Any
+    user-supplied ``--extension`` arguments are listed too, without the
+    swe-mux owner chip.
+    """
+    items: list[dict[str, Any]] = []
+    paths: list[str] = []
+    for index, token in enumerate(args):
+        if token == "--extension" and index + 1 < len(args):
+            paths.append(str(args[index + 1]))
+        elif token.startswith("--extension="):
+            paths.append(token.split("=", 1)[1])
+    for path_text in paths:
+        package = Path(path_text)
+        entry = package / "index.ts" if package.is_dir() else package
+        # Provenance by content marker, like shim_paths.is_mux_shim: the mux
+        # hook is the one extension that posts through MUX_HOOK_URL. Path
+        # shapes vary across data dirs and tests; the marker does not.
+        try:
+            with entry.open("r", encoding="utf-8", errors="replace") as handle:
+                provisioned = "MUX_HOOK_URL" in handle.read(MAX_CONFIG_BYTES)
+        except OSError:
+            provisioned = False
+        meta: list[tuple[str, str]] = [("Runs", str(entry))]
+        if provisioned:
+            meta.append(
+                (
+                    "Reports",
+                    "turn, tool, approval, compaction, and session lifecycle, "
+                    "with an ordered per-session sequence",
+                )
+            )
+        items.append(
+            _item(
+                "hook",
+                entry.name if provisioned else package.name,
+                scope="session",
+                origin="launch argument",
+                state="configured" if entry.is_file() else "missing",
+                description="",
+                meta=meta,
+                unique=path_text,
+                group="Extension (in-process)",
+                owner="swe_mux" if provisioned else "",
+            )
+        )
+    return items
+
+
 def _mcp_from_data(
     backend: Backend,
     data: dict[str, Any],
@@ -1305,6 +1361,10 @@ def discover_agent_environment(
     skill_section, skill_inventory = _skill_section(backend, root, loaded_at, refresh)
     tools = _tool_inventory(backend, sources, args)
     hooks = _hook_inventory(sources, plugin_roots, loaded_at)
+    # OMP's lifecycle wiring is an in-process extension in argv, not a hooks
+    # table; it leads the section because for OMP it is the section.
+    if backend == "omp":
+        hooks = _omp_extension_hook_items(args) + hooks
     mcp_servers = _mcp_inventory(backend, root, sources, plugin_roots, loaded_at)
     agents = _agent_inventory(backend, root, sources, plugin_roots, loaded_at)
     policies = _policy_inventory(backend, sources)

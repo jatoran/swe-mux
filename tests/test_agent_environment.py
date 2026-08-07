@@ -238,6 +238,49 @@ def test_omp_inventory_reads_native_mcp_and_documents_xdev_tools(
     assert "[xd://]" not in tools["read"]["description"]
 
 
+def test_omp_hooks_section_lists_the_injected_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OMP has no hooks table for the config scan; its lifecycle wiring is the
+    ``--extension`` package mux injects. "Hooks: 0" for a session whose every
+    status transition is hook-sourced reads as "mux is not wired in", so the
+    section must surface the extension, owner-chipped by content marker."""
+    home = tmp_path / "omp-home"
+    cwd = tmp_path / "repo"
+    mux_extension = tmp_path / "omp-data" / "omp-extensions" / "session-1"
+    user_extension = tmp_path / "my-extension"
+    home.mkdir()
+    (cwd / ".omp").mkdir(parents=True)
+    mux_extension.mkdir(parents=True)
+    user_extension.mkdir()
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(home))
+    (mux_extension / "index.ts").write_text(
+        'const url = process.env.MUX_HOOK_URL;\nexport default function () {}\n',
+        encoding="utf-8",
+    )
+    (user_extension / "index.ts").write_text(
+        "export default function () {}\n", encoding="utf-8"
+    )
+
+    payload = _discover(
+        "omp",
+        cwd,
+        args=["--extension", str(mux_extension), "--extension", str(user_extension)],
+    )
+
+    hooks = _section(payload, "hooks")["items"]
+    assert [item["owner"] for item in hooks[:2]] == ["swe_mux", ""]
+    mine, theirs = hooks[0], hooks[1]
+    assert mine["name"] == "index.ts"
+    assert mine["state"] == "configured"
+    assert mine["scope"] == "session"
+    assert mine["group"] == "Extension (in-process)"
+    assert any(meta["label"] == "Reports" for meta in mine["meta"])
+    assert theirs["name"] == "my-extension"
+    assert theirs["state"] == "configured"
+    assert not any(meta["label"] == "Reports" for meta in theirs["meta"])
+
+
 def test_hooks_group_by_event_and_mark_the_ones_swe_mux_installs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
