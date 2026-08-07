@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { CLAUDE_MAX_DESKTOP_COLUMNS, reflowVisibleTerminalRenderer, terminalWidthPolicyFontSize } from '../../src/terminalViewport'
+import { terminalRenderControl } from '../../src/terminalRenderPause'
 import {
   dispatchTerminalMouseTap,
   resolveCodexCaretTarget,
@@ -59,6 +60,10 @@ type WarmPaneRenderCostResult = {
   writes: number
   warmRenders: number
   displayNoneRenders: number
+  pauseAvailable: boolean
+  pausedRenders: number
+  resumedRenders: number
+  resumedRowText: string
 }
 
 type WarmPaneCycleSoakResult = {
@@ -452,34 +457,64 @@ window.runWarmPaneRenderCost = async () => {
   }
   const warm = makePane()
   const none = makePane()
+  const paused = makePane()
   applyWarmPaneCss(warm.paneHost)
   none.paneHost.style.display = 'none'
+  // The production warm pane: measurable box, renderer explicitly paused.
+  applyWarmPaneCss(paused.paneHost)
+  const pausedControl = terminalRenderControl(paused.paneTerm)
+  const pauseAvailable = pausedControl.available && pausedControl.pause()
   // Let the IntersectionObserver deliver the styled states before streaming.
   await frame()
   await frame()
 
   let warmRenders = 0
   let displayNoneRenders = 0
+  let pausedRenders = 0
   const warmRender = warm.paneTerm.onRender(() => { warmRenders += 1 })
   const noneRender = none.paneTerm.onRender(() => { displayNoneRenders += 1 })
+  const pausedRender = paused.paneTerm.onRender(() => { pausedRenders += 1 })
   let writes = 0
   // An OMP-style live region: rewrite one line per tick, no committed newlines.
   for (let tick = 0; tick < 45; tick += 1) {
     const line = `\r\x1b[K spinner ${tick.toString().padStart(3, '0')} waiting`
     warm.paneTerm.write(line)
     none.paneTerm.write(line)
+    paused.paneTerm.write(line)
     writes += 1
     await frame()
   }
   await new Promise<void>(resolve => warm.paneTerm.write('', resolve))
   await new Promise<void>(resolve => none.paneTerm.write('', resolve))
+  await new Promise<void>(resolve => paused.paneTerm.write('', resolve))
   await frame()
+  const pausedRendersWhileHidden = pausedRenders
+  // Reveal the paused pane the way production does: clear the CSS, resume, and the
+  // renderer's own recovery repaints everything parsed while paused.
+  clearWarmPaneCss(paused.paneHost)
+  pausedControl.resume()
+  await frame()
+  await frame()
+  const resumedRenders = pausedRenders - pausedRendersWhileHidden
+  const buffer = paused.paneTerm.buffer.active
+  const activeRow = buffer.getLine(buffer.viewportY + buffer.cursorY)
+  const resumedRowText = activeRow?.translateToString(true) ?? ''
   warmRender.dispose()
   noneRender.dispose()
+  pausedRender.dispose()
   warm.paneTerm.dispose()
   none.paneTerm.dispose()
+  paused.paneTerm.dispose()
   stack.remove()
-  return { writes, warmRenders, displayNoneRenders }
+  return {
+    writes,
+    warmRenders,
+    displayNoneRenders,
+    pauseAvailable,
+    pausedRenders: pausedRendersWhileHidden,
+    resumedRenders,
+    resumedRowText,
+  }
 }
 
 window.runWarmPaneCycleSoak = async () => {

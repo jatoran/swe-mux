@@ -104,6 +104,13 @@ test('a warm pane keeps rendering under visibility:hidden; display:none pauses i
   expect(result.writes).toBeGreaterThan(0)
   expect(result.warmRenders,'visibility:hidden warm pane must keep rendering').toBeGreaterThan(0)
   expect(result.displayNoneRenders,'display:none must pause the renderer').toBe(0)
+  // The production mitigation: warm panes are explicitly paused through xterm's own
+  // intersection handler. If `pauseAvailable` goes false, an xterm upgrade moved the
+  // pinned internals and warm panes silently pay the render cost again.
+  expect(result.pauseAvailable,'terminalRenderControl must find the pinned internals').toBe(true)
+  expect(result.pausedRenders,'a paused warm pane must not render while streaming').toBe(0)
+  expect(result.resumedRenders,'resuming must repaint what was parsed while paused').toBeGreaterThan(0)
+  expect(result.resumedRowText,'the paused pane must have kept parsing').toContain('spinner 044')
 })
 
 test('repeated active/warm cycling with streaming output converges on a correct pane',async({page})=>{

@@ -59,7 +59,10 @@ test('one request per parsed buffer: the flag resets only where the buffer does'
     source.indexOf("if (frame.type === 'replay_end')"),
   )
   assert.match(replayStart, /term\.reset\(\)[\s\S]*scrollbackRepaintRequested = false/)
-  assert.equal(source.split('scrollbackRepaintRequested = false').length, 2, 'exactly one reset site')
+  const assignments = source.split('scrollbackRepaintRequested = false').length - 1
+  const declarations = source.split('let scrollbackRepaintRequested = false').length - 1
+  assert.equal(declarations, 1, 'exactly one declaration')
+  assert.equal(assignments - declarations, 1, 'exactly one reset site')
 })
 
 test('repair events reach the daemon durably, not only the opt-in ring buffer', () => {

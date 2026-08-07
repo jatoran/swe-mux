@@ -41,6 +41,7 @@ import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailConfig } from './deviceSettings'
 import { APP_TAIL_KEY, CLAUDE_MAX_DESKTOP_COLUMNS, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
+import { terminalRenderControl } from './terminalRenderPause'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import { scaledFontSize } from './uiScale'
 import {
@@ -649,6 +650,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     termRef.current = term
     searchRef.current = search
     term.open(host.current)
+    // Warm panes keep parsing but must not keep rendering: see terminalRenderPause.ts.
+    // Created once — renderer swaps (WebGL load, DOM fallback) replace the renderer
+    // inside the same RenderService, so the control stays valid across them.
+    const renderControl = terminalRenderControl(term)
     let normalFontSize = baseFontRef.current
     const proposeNormalDimensions = (restoreFont: boolean) => {
       const previousFont = term.options.fontSize ?? baseFontRef.current
@@ -1288,6 +1293,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // never have taken (a reconnect nulls it) is what let a registration outlive the
         // pane's own visibility and hold the PTY at a size nobody was looking at.
         sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
+        // Stop rendering while retained: the model keeps parsing, renders defer, and
+        // the reveal below resumes with xterm's own remeasure-and-repaint recovery.
+        renderControl.pause()
         return
       }
       // Back on screen. The pane may have missed geometry changes while hidden, and
@@ -1309,6 +1317,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // real measurement of the box the user is now looking at instead of a cache hit
       // on `localFitBox`, which is what let a stale grid survive the whole transition.
       localFitBox = null
+      // Resume rendering first: everything scheduled below paints through the
+      // RenderService, and a still-paused service would defer it all into a flag
+      // nobody flushes until the next resize.
+      renderControl.resume()
       // Record this before scheduling either frame. The debt survives if both land while
       // the host still measures zero and is resumed by the first successful measurement.
       surfaceRepair?.markOwed()
@@ -1372,6 +1384,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // Establish final geometry after the selected renderer is active and before
     // the socket can start replaying the terminal buffer.
     const preconnectFit = fitVisiblePane()
+    // A pane mounted warm (a reload's warm-mount) never receives a visibility
+    // transition, so the render pause has to start here. The pane axis, not
+    // `paneIsHidden()`: a hidden *document* still resumes through rAF throttling,
+    // and only the reveal path below knows how to undo this pause.
+    if (!visibleRef.current) renderControl.pause()
     diagnoseRender?.('preconnect_fit', {
       fitted: preconnectFit,
       cols: term.cols,

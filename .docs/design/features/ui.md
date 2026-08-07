@@ -398,6 +398,8 @@ responsive controls.
 - Viewport fitting has separate persistent debt.
   A nonzero host is not sufficient evidence of a fit because FitAddon can still lack usable cell metrics while layout settles; only a finite dimensions proposal followed by geometry application clears the debt.
   Renderer recovery resumes pending fit debt, and the health sweep compares the current grid with a fresh FitAddon proposal so a faithfully rendered 20-row surface inside a host that now fits 40 rows cannot be mistaken for healthy.
+- A retained warm pane keeps parsing but not rendering.
+  Its renderer is explicitly paused while hidden and resumed on reveal ahead of the reveal's redraw, because xterm's own pause is geometric and never triggers for a measurable `visibility:hidden` box (`terminalRenderPause.ts`, `technical/frontend/workspace-state.md`).
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
   Claude's terminal body stops at 120 columns and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
   The centered grid item retains an explicit `width:100%` before its maximum is applied.
@@ -662,7 +664,14 @@ responsive controls.
   has always avoided by sending the key on its way past the local scroll. `appOwnsTail` is the
   rule: any backend but `shell`, when it is Claude or is being handed this pane's scrolls. A
   shell is excluded because it owns no viewport and the bytes would land in a half-typed
-  command line. The key is sent off the broadcast path: a viewport gesture belongs to the pane
+  command line.
+- An alternate-screen session (Claude Code enables `?1049h`, verified against v2.1.224)
+  shows no vertical scrollbar by construction: the alternate buffer has no scrollback, the
+  transcript lives in Claude's own internal viewport, and mux can steer that viewport (wheel
+  forwarding, `^End`, the jump chip) but cannot read its position or length, so there is no
+  scroll range to draw a thumb for. Codex and OMP show a scrollbar because mux keeps their
+  transcripts in real xterm scrollback. This is a structural limitation until Claude Code
+  offers an inline (non-alternate-screen) mode. The key is sent off the broadcast path: a viewport gesture belongs to the pane
   that was tapped, and it is dropped rather than queued during replay, since a jump that
   arrives seconds late moves the user somewhere they stopped asking for.
 - Every in-flow child of `.terminal-surface` names `grid-column:1`, and the surface declares a

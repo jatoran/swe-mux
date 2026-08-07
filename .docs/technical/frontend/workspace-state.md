@@ -81,6 +81,10 @@ switch back to.
 A warm pane is live but not being looked at, so `TerminalPane` treats it exactly as it treats a backgrounded browser tab.
 `paneIsHidden()` is `document.hidden || !visible`, and it gates viewport registration, input-ownership focus, and OSC 52 clipboard writes.
 A warm pane deregisters immediately, so its measurable retained box cannot reshape the shared PTY.
+A warm pane also pauses its renderer (`terminalRenderPause.ts`): xterm's own pause is IntersectionObserver-driven and intersection is geometric, so the measurable `visibility:hidden` box would otherwise render every frame with pending writes - continuous invisible main-thread DOM work multiplied by the warm-cache size, paid while a visible pane competes for input latency.
+The pause drives xterm's own intersection handler and shadows it while paused, because the observer's asynchronous deliveries would otherwise silently unpause the pane; parsing continues throughout, so the model a reveal repaints is always current.
+The pane axis owns both transitions: hide and warm-mount pause, and the reveal resumes before scheduling its redraw.
+The internals are pinned to the vendored xterm 6.0.0; if an upgrade moves them the control degrades to a no-op (warm panes simply render again) and the renderer Playwright suite fails loudly.
 The hidden viewport pass returns after deregistration and cannot refit the local xterm model while its PTY retains the last visible geometry.
 `visible` is read through a ref and is deliberately **not** a mount-effect dependency because listing it would dispose and rebuild the terminal on every switch, which is the cost warm panes remove.
 It is, however, part of `TerminalPane`'s custom memo comparator; without that comparison a visibility-only render is discarded before the lightweight effect can update the ref, withdraw the hidden viewport, or redraw the shown surface.

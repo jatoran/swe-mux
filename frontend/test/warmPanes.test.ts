@@ -122,6 +122,30 @@ test('restoring a warm pane keeps same-grid renderer repair owed until after fit
   assert.match(action, /if \(paneIsHidden\(\)\) return/)
 })
 
+test('a warm pane pauses its renderer and the reveal resumes it before repainting', () => {
+  // Parsing continues while warm (the model is the point of keeping the pane), but
+  // rendering pauses: xterm's IntersectionObserver never pauses a measurable
+  // visibility:hidden box, so without this every warm pane paid a render per frame
+  // with pending writes. The resume must precede the scheduled redraw or the reveal
+  // paints into a paused service.
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  const handler = source.slice(
+    source.indexOf('paneVisibilityRef.current = (nowVisible: boolean) => {'),
+    source.indexOf('// Chromium device emulation', source.indexOf('paneVisibilityRef.current = (nowVisible: boolean) => {')),
+  )
+  const hidePause = handler.indexOf('renderControl.pause()')
+  const hideReturn = handler.indexOf('return', hidePause)
+  const resume = handler.indexOf('renderControl.resume()')
+  const redraw = handler.indexOf('scheduleFullRedraw()')
+  assert.ok(hidePause >= 0, 'hiding must pause the renderer')
+  assert.ok(hideReturn > hidePause, 'the pause belongs to the hidden branch')
+  assert.ok(resume > hideReturn, 'the reveal must resume the renderer')
+  assert.ok(redraw > resume, 'resume must precede the scheduled repaint')
+  // A pane mounted warm never receives a visibility transition, so the pause must
+  // also start at mount, keyed on the pane axis rather than paneIsHidden().
+  assert.match(source, /if \(!visibleRef\.current\) renderControl\.pause\(\)/)
+})
+
 test('a visible viewport fit remains owed until FitAddon returns dimensions', () => {
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
   const start = source.indexOf('const runViewportPass = () => {')
