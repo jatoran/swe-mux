@@ -4,6 +4,7 @@ import {
   SOFT_KEYBOARD_MIN_INSET_PX,
   deepActiveElement,
   nextPeekState,
+  peekToggleVisible,
   raisesSoftKeyboard,
   softKeyboardInset,
   softKeyboardLost,
@@ -154,6 +155,22 @@ test('peeking at the top of a grid survives output and ends on input', () => {
   // Without the keyboard the whole grid fits, so there is no slice left to move.
   assert.equal(nextPeekState(true, 'keyboardClosed'), false)
   assert.equal(nextPeekState(false, 'keyboardClosed'), false)
+})
+
+test('the peek toggle appears for a reader, not for every raised keyboard', () => {
+  // At the composer of a conversation with any length the button is clutter:
+  // everything the slide hides is reachable by scrolling.
+  assert.equal(peekToggleVisible(415, false, false, false), false)
+  // Scrolled off the tail on either axis means reading, and reading is when
+  // the hidden top matters. The app-held viewport's estimate counts forwarded
+  // drags even when the app moved nothing, so a fresh session's first swipe
+  // up toward a reply trapped under the keyboard summons the control.
+  assert.equal(peekToggleVisible(415, false, true, false), true)
+  assert.equal(peekToggleVisible(415, false, false, true), true)
+  // An active peek always keeps its toggle: it is the way back down.
+  assert.equal(peekToggleVisible(415, true, false, false), true)
+  // No keyboard, no slide, no button — whatever the scroll state says.
+  assert.equal(peekToggleVisible(0, true, true, true), false)
 })
 
 test('a cyclic shadow tree terminates', () => {

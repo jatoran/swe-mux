@@ -1214,6 +1214,14 @@ responsive controls.
   top, so a first message and its reply land in the hidden region. Nothing could reach them — the
   alternate screen has no scrollback, so a scroll gesture has nothing to move, and the rows are
   clipped by a transform rather than scrolled away.
+- The toggle is offered to a reader, not to every raised keyboard (`peekToggleVisible`). At the
+  composer of a conversation with any length it is clutter over content, so it appears only while
+  the viewport is off the tail on either axis — xterm scrollback, or the app-held estimate that
+  counts forwarded drags. The fresh-session case above still summons it: the estimate grows on a
+  forwarded swipe even when the application moved nothing, so the first swipe up toward a trapped
+  reply is itself the signal. An active peek always keeps its toggle, because it is the way back
+  down. It sits at the bottom-right beside jump-to-latest with a fixed one-button offset, so
+  neither control moves under a thumb when the other appears.
 - The toggle pushes the terminal host back down *inside* the already-slid surface, so the command
   rail and the chips stay where the slide put them. That is what makes it a toggle rather than a
   trapdoor: the control that reveals the top is still on screen and still takes you back.

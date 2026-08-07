@@ -162,6 +162,29 @@ export function nextPeekState(peeking:boolean, trigger:PeekTrigger):boolean {
 }
 
 /**
+ * Whether the peek toggle is offered at all.
+ *
+ * Not merely "the keyboard is up": at the composer of a conversation with any
+ * length the button is clutter over content, and everything hidden by the
+ * slide is reachable by scrolling anyway. It appears when the reader is
+ * actually reading — scrolled off the tail on either axis, including the
+ * app-held viewport whose forwarded drags are only an estimate — which also
+ * covers the fresh-session case the toggle exists for: the first swipe up
+ * toward a reply trapped under the keyboard is itself the off-tail signal
+ * that summons the control. While a peek is active the toggle always shows,
+ * because it is the way back down and must not vanish mid-peek.
+ */
+export function peekToggleVisible(
+  keyboardInset:number,
+  peeking:boolean,
+  offTail:boolean,
+  appOffTail:boolean,
+):boolean {
+  if(keyboardInset<=0)return false
+  return peeking||offTail||appOffTail
+}
+
+/**
  * Whether a gesture cost the keyboard that was up when it started.
  *
  * Both halves are load-bearing, and the second is what keeps this from being a
