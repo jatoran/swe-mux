@@ -165,9 +165,12 @@ idle Codex agent refused its armed queue message, and the operator's forced send
 across five Codex rollouts, every one reported an mtime frozen at the file's *creation* while
 its content ran 290 s to 3.5 h ahead, and every Win32 timestamp API agreed. The affected
 session's ledger held 30+ `observation_stale` events, all citing one unmoving
-`transcript_mtime`. The fix is in `backends.md`: the daemon dates writes from its own tailer's
-size polling rather than from the filesystem, and a stale claim is retracted when the followed
-file is written again.
+`transcript_mtime`.
+The first correction was to date live writes from the daemon tailer's size polling rather than from the filesystem and retract a stale claim when the followed file is written again.
+The remaining late-bind race was measured on 2026-08-07: the first observer could attach after Codex had already written the whole turn, so every byte was correctly historical, `transcript_growth_ts` stayed zero, and the frozen creation mtime again won.
+The observer now also retains the newest valid provider timestamp carried by a record in the followed transcript.
+That timestamp preserves its original age across daemon replay, but a catch-up containing `task_complete` within the hook quiet window corroborates the completed turn and retracts an earlier inferred `transcript_stale` claim.
+Explicit conversation mismatch claims are not retractable through this path.
 
 This is the failure mode the four corrections above share, in its most damaging form. A hard
 block with no softer degradation, raised by evidence that is silently wrong, presents to the

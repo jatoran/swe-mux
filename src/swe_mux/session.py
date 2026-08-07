@@ -1552,6 +1552,22 @@ class Session:
         #
         # Reset whenever the followed path changes, because it describes one file.
         self.transcript_growth_ts = 0.0
+        # Provider timestamp carried by the newest valid record read from the
+        # followed transcript. This covers the bind race where the first observer
+        # attaches after a complete turn is already in the file: those bytes are
+        # historical to the tailer, but their timestamp still proves when this
+        # exact conversation wrote them. Kept separate from growth so a daemon
+        # restart never invents a fresh write merely by replaying old bytes.
+        self.transcript_record_ts = 0.0
+        diagnostic = record.observation_diagnostic or ""
+        if " last written " in diagnostic:
+            self.observation_stale_reason: str | None = "transcript_stale"
+        elif " is missing " in diagnostic:
+            self.observation_stale_reason = "transcript_missing"
+        elif record.observation_stale_since is not None:
+            self.observation_stale_reason = "explicit_conversation_mismatch"
+        else:
+            self.observation_stale_reason = None
         # The transition ledger is a LedgerRing rather than a plain deque: each
         # append is stamped with a monotonic seq and the run id current at that
         # moment, and nudges the durable status-timeline sink when the manager
@@ -3709,6 +3725,7 @@ class SessionManager:
             # writing somewhere else now, so our view of it is no longer true:
             # fail closed the same way an unfollowable rollover does.
             record.observation_stale_since = time.time()
+            session.observation_stale_reason = "conversation_owned_elsewhere"
             record.observation_diagnostic = (
                 f"the CLI moved to conversation {native_id}, which live session "
                 f"{owner.record.id} owns; refusing to follow it"
@@ -3763,13 +3780,15 @@ class SessionManager:
         if confirmed or backend != "claude":
             session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
-        # Growth evidence belongs to the file it was observed on.
+        # Transcript liveness evidence belongs to the file it was observed on.
         session.transcript_growth_ts = 0.0
+        session.transcript_record_ts = 0.0
         # The retired conversation's prompts must not title the new one.
         session.first_user_prompt = None
         session.last_user_prompt = None
         record.observation_stale_since = None
         record.observation_diagnostic = None
+        session.observation_stale_reason = None
         record.tokens_in = 0
         record.tokens_out = 0
         record.tokens_cache_read = 0
@@ -4230,14 +4249,15 @@ class SessionManager:
     def _aim_observer(session: Session, path: Path) -> None:
         """Point the session at `path`, discarding growth evidence if it moved.
 
-        `transcript_growth_ts` describes one file, so re-aiming has to invalidate
-        it. Re-tailing the *same* file after an observer fault must not: the
+        Transcript growth and record timestamps describe one file, so re-aiming
+        has to invalidate them. Re-tailing the *same* file after an observer fault must not: the
         observer loop runs this on every restart, and clearing there would drop the
         session back onto the filesystem timestamp this evidence exists to replace
         — silently, and for as long as the agent then stayed quiet.
         """
         if session.transcript_path != path:
             session.transcript_growth_ts = 0.0
+            session.transcript_record_ts = 0.0
         session.transcript_path = path
 
     @staticmethod
@@ -4259,17 +4279,22 @@ class SessionManager:
         past its attach snapshot. That is a first-hand observation of a write rather
         than the filesystem's opinion about one.
 
-        Both are lower bounds on "this file was alive at T" and neither can run
-        ahead of reality, so the later one is the better answer. mtime is kept as
-        the floor because it covers the window before the tailer has attached, and
-        because a session adopted across a daemon restart has no growth of its own
-        to point at yet.
+        The newest valid provider record timestamp covers the remaining bind race:
+        the observer can attach after a complete first turn is already present, so
+        the tailer correctly labels those bytes historical and reports no growth.
+        Replaying an old file does not make this value fresh because it retains the
+        record's original wall time. All three readings are lower bounds on "this
+        file was alive at T", so the later one is the better answer.
         """
         try:
             mtime = current.stat().st_mtime
         except OSError:
             return None
-        return max(mtime, float(getattr(session, "transcript_growth_ts", 0.0)))
+        return max(
+            mtime,
+            float(getattr(session, "transcript_growth_ts", 0.0)),
+            float(getattr(session, "transcript_record_ts", 0.0)),
+        )
 
     async def _clear_transcript_staleness(self, session: Session, evidence: str) -> None:
         """Retract the staleness claim once the followed file proves itself alive.
@@ -4285,6 +4310,7 @@ class SessionManager:
             return
         record.observation_stale_since = None
         record.observation_diagnostic = None
+        session.observation_stale_reason = None
         session.state_transitions.append(
             {
                 "ts": time.time(),
@@ -4357,6 +4383,7 @@ class SessionManager:
             if now - session.last_turn_hook_ts > TRANSCRIPT_STALE_SECONDS:
                 return
             record.observation_stale_since = now
+            session.observation_stale_reason = "transcript_missing"
             record.observation_diagnostic = (
                 f"transcript {current.name} is missing while the CLI kept reporting "
                 "activity; the conversation may have moved"
@@ -4397,7 +4424,18 @@ class SessionManager:
             # owns the conversation, a CLI-reported rollover that could not be
             # adopted) know the CLI is elsewhere, and quiet on the abandoned file is
             # not permission to forget that.
-            if last_write > record.observation_stale_since:
+            corroborates_latest_turn = (
+                getattr(session, "observation_stale_reason", None)
+                in {"transcript_stale", "transcript_missing"}
+                and session.last_turn_hook_ts > 0.0
+                and session.last_turn_hook_ts
+                <= last_write + TRANSCRIPT_SWITCH_QUIET_SECONDS
+            )
+            if corroborates_latest_turn:
+                await self._clear_transcript_staleness(
+                    session, "transcript_record_corroborated_turn"
+                )
+            elif last_write > record.observation_stale_since:
                 await self._clear_transcript_staleness(session, "transcript_written_again")
             return
         stale = (
@@ -4407,6 +4445,7 @@ class SessionManager:
         if not stale:
             return
         record.observation_stale_since = now
+        session.observation_stale_reason = "transcript_stale"
         record.observation_diagnostic = (
             f"transcript {current.name} last written "
             f"{int(now - last_write)}s ago while the CLI kept reporting activity; "
@@ -4427,12 +4466,13 @@ class SessionManager:
         # distinguishes a dead file from a filesystem that stopped dating a live one.
         log.warning(
             "session %s observation stale: transcript %s last written %.0fs ago "
-            "(mtime %.0fs ago, growth %.0fs ago) with a turn hook %.0fs ago",
+            "(mtime %.0fs ago, growth %.0fs ago, record %.0fs ago) with a turn hook %.0fs ago",
             record.id,
             current.name,
             now - last_write,
             now - (_safe_mtime(current) or now),
             now - (getattr(session, "transcript_growth_ts", 0.0) or now),
+            now - (getattr(session, "transcript_record_ts", 0.0) or now),
             now - (session.last_turn_hook_ts or now),
         )
         session.publish_update()
@@ -4447,6 +4487,7 @@ class SessionManager:
             # filesystem that stopped dating a live one.
             transcript_mtime=_safe_mtime(current),
             transcript_growth_ts=float(getattr(session, "transcript_growth_ts", 0.0)),
+            transcript_record_ts=float(getattr(session, "transcript_record_ts", 0.0)),
             last_turn_hook_ts=session.last_turn_hook_ts,
         )
 

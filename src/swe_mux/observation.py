@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -801,6 +802,15 @@ async def observe_transcript(
                     )
                 continue
             ts = _event_timestamp(event)
+            observed_at = time.time()
+            if (
+                ts is not None
+                and math.isfinite(ts)
+                and 0.0 < ts <= observed_at + HISTORICAL_TIMESTAMP_SLACK_SECONDS
+            ):
+                session.transcript_record_ts = max(
+                    float(getattr(session, "transcript_record_ts", 0.0)), ts
+                )
             historical = byte_historical or (
                 ts is not None and ts < attach_ts - HISTORICAL_TIMESTAMP_SLACK_SECONDS
             )
@@ -1164,11 +1174,18 @@ async def _record_parser_observation(
 ) -> None:
     record = session.record
     previous_status = record.parser_status
-    if record.observation_stale_since is not None:
+    stale_reason = getattr(session, "observation_stale_reason", None)
+    if record.observation_stale_since is not None and stale_reason in {
+        None,
+        "transcript_stale",
+        "transcript_missing",
+    }:
         # A record read from the followed transcript is proof it is the live
-        # conversation after all: whatever made it look abandoned has resolved.
+        # conversation after an inferred liveness failure. Explicit conversation
+        # mismatches are not retractable through the file the CLI abandoned.
         record.observation_stale_since = None
         record.observation_diagnostic = None
+        session.observation_stale_reason = None
         ledger = getattr(session, "state_transitions", None)
         if ledger is not None:
             ledger.append(

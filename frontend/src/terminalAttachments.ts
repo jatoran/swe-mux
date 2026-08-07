@@ -24,3 +24,15 @@ export function attachmentReferenceText(paths: string[]): string {
 export function attachmentSafeBroadcast(configured: boolean, attachmentPasteDepth: number): boolean {
   return configured && attachmentPasteDepth === 0
 }
+
+export function canInsertTerminalAttachment(state: string, replayReady: boolean): boolean {
+  return replayReady && !['starting', 'exited', 'crashed'].includes(state)
+}
+
+export function attachmentNeedsManualBracketing(
+  nativeImage: boolean,
+  agentBackend: boolean,
+  bracketedPasteMode: boolean,
+): boolean {
+  return nativeImage && agentBackend && !bracketedPasteMode
+}

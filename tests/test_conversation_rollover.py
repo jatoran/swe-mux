@@ -542,7 +542,11 @@ def test_an_unpromoted_shell_launching_an_agent_still_blocks_everything(
 
 
 def stale_manager(
-    tmp_path: Path, *, last_turn_hook_ts: float, transcript_growth_ts: float = 0.0
+    tmp_path: Path,
+    *,
+    last_turn_hook_ts: float,
+    transcript_growth_ts: float = 0.0,
+    transcript_record_ts: float = 0.0,
 ) -> tuple[Any, Any, Path]:
     transcript = tmp_path / "dead.jsonl"
     transcript.write_text("{}\n", encoding="utf-8")
@@ -563,6 +567,8 @@ def stale_manager(
             # The tailer's own reading of the followed file. Zero means "no growth
             # observed", which is what an actually-dead transcript looks like.
             transcript_growth_ts=transcript_growth_ts,
+            transcript_record_ts=transcript_record_ts,
+            observation_stale_reason=None,
             state_transitions=[],
             publish_update=lambda: None,
         ),
@@ -909,6 +915,42 @@ async def test_a_live_transcript_whose_mtime_is_frozen_is_never_stale(
     manager.events.emit.assert_not_awaited()
 
 
+async def test_a_late_observer_uses_the_completed_record_time_not_the_frozen_mtime(
+    tmp_path: Path,
+) -> None:
+    """The first observer can attach after Codex has already written task_complete."""
+    completed = time.time() - 120
+    manager, session, transcript = stale_manager(
+        tmp_path,
+        last_turn_hook_ts=completed + 0.5,
+        transcript_record_ts=completed,
+    )
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    manager.events.emit.assert_not_awaited()
+
+
+async def test_corroborating_catchup_retracts_the_existing_false_stale_claim(
+    tmp_path: Path,
+) -> None:
+    completed = time.time() - 120
+    manager, session, transcript = stale_manager(
+        tmp_path,
+        last_turn_hook_ts=completed + 0.5,
+        transcript_record_ts=completed,
+    )
+    session.record.observation_stale_since = time.time()
+    session.record.observation_diagnostic = "transcript rollout.jsonl last written 90s ago"
+    session.observation_stale_reason = "transcript_stale"
+
+    await SessionManager._note_transcript_staleness(manager, session, transcript)
+
+    assert session.record.observation_stale_since is None
+    assert manager.events.emit.await_args.args[0] == "observation_stale_cleared"
+
+
 async def test_growth_older_than_the_turn_hook_still_marks_a_session_stale(
     tmp_path: Path,
 ) -> None:
@@ -939,6 +981,7 @@ async def test_the_stale_event_carries_both_readings(tmp_path: Path) -> None:
     payload = manager.events.emit.await_args.kwargs
     assert payload["transcript_mtime"] == pytest.approx(transcript.stat().st_mtime)
     assert payload["transcript_growth_ts"] == pytest.approx(session.transcript_growth_ts)
+    assert payload["transcript_record_ts"] == pytest.approx(session.transcript_record_ts)
     assert payload["transcript_last_write"] == pytest.approx(session.transcript_growth_ts)
 
 
@@ -1018,18 +1061,24 @@ def test_re_tailing_the_same_transcript_keeps_its_growth_evidence(
     # onto the filesystem timestamp after each fault — silently, and for as long as
     # the agent then stayed quiet.
     session = cast(
-        Any, SimpleNamespace(transcript_path=None, transcript_growth_ts=0.0)
+        Any,
+        SimpleNamespace(
+            transcript_path=None, transcript_growth_ts=0.0, transcript_record_ts=0.0
+        ),
     )
     first = tmp_path / "one.jsonl"
     second = tmp_path / "two.jsonl"
 
     SessionManager._aim_observer(session, first)
     session.transcript_growth_ts = time.time()
+    session.transcript_record_ts = time.time()
     SessionManager._aim_observer(session, first)
     assert session.transcript_growth_ts > 0.0
+    assert session.transcript_record_ts > 0.0
 
     SessionManager._aim_observer(session, second)
     assert session.transcript_growth_ts == 0.0
+    assert session.transcript_record_ts == 0.0
     assert session.transcript_path == second
 
 
@@ -1039,6 +1088,7 @@ async def test_a_rollover_discards_the_retired_transcripts_growth(
     record = agent_record(cwd=str(tmp_path))
     manager, session = rollover_manager(record)
     session.transcript_growth_ts = time.time()
+    session.transcript_record_ts = time.time()
 
     rolled = await manager._apply_conversation_rollover(
         session,
@@ -1050,6 +1100,7 @@ async def test_a_rollover_discards_the_retired_transcripts_growth(
 
     assert rolled is True
     assert session.transcript_growth_ts == 0.0
+    assert session.transcript_record_ts == 0.0
 
 
 def test_no_liveness_rule_reads_the_filesystem_timestamp_on_its_own() -> None:
@@ -1154,6 +1205,7 @@ async def test_a_record_on_the_followed_transcript_clears_staleness() -> None:
             record=agent_record(),
             subscribers=(),
             meta_sink=None,
+            observation_stale_reason="transcript_stale",
         ),
     )
     session.record.parser_status = "ready"
@@ -1163,6 +1215,26 @@ async def test_a_record_on_the_followed_transcript_clears_staleness() -> None:
         patch.setattr("swe_mux.observation._publish_update", lambda _session: None)
         await _record_parser_observation(session, cast(Any, events), True, "sig")
     assert session.record.observation_stale_since is None
+
+
+async def test_a_record_cannot_clear_an_explicit_conversation_mismatch() -> None:
+    session = cast(
+        Any,
+        SimpleNamespace(
+            record=agent_record(),
+            subscribers=(),
+            meta_sink=None,
+            observation_stale_reason="conversation_owned_elsewhere",
+        ),
+    )
+    session.record.parser_status = "ready"
+    marked = time.time()
+    session.record.observation_stale_since = marked
+    events = SimpleNamespace(emit=AsyncMock())
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("swe_mux.observation._publish_update", lambda _session: None)
+        await _record_parser_observation(session, cast(Any, events), True, "sig")
+    assert session.record.observation_stale_since == marked
 
 
 def test_delivery_hard_blocks_on_a_stale_transcript() -> None:

@@ -58,7 +58,14 @@ import {
 import { pendingInputDecision } from './pendingInput'
 import { pastePayload } from './noteSelection'
 import { deviceIsFocused, PRESENCE_REPORTED_EVENT } from './devicePresence'
-import { attachmentReferenceText, attachmentSafeBroadcast, MAX_ATTACHMENTS_PER_ACTION, type UploadedTerminalAttachment } from './terminalAttachments'
+import {
+  attachmentNeedsManualBracketing,
+  attachmentReferenceText,
+  attachmentSafeBroadcast,
+  canInsertTerminalAttachment,
+  MAX_ATTACHMENTS_PER_ACTION,
+  type UploadedTerminalAttachment,
+} from './terminalAttachments'
 import { localPreviewUrl } from './previewLinks'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, terminalAttachAllowed, watchLiveness, type ConnectionPhase } from './liveness'
 import {
@@ -279,6 +286,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const [manualPaste,setManualPaste]=useState(false)
   const [fileDropActive,setFileDropActive]=useState(false)
   const [attachmentBusy,setAttachmentBusy]=useState(false)
+  const [attachmentReady,setAttachmentReady]=useState(false)
   // True while the viewport sits above the newest line. Mirrored in a ref so the
   // per-render tail check can bail without touching component state.
   const [offTail,setOffTail]=useState(false)
@@ -351,6 +359,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setManualPaste(false)
     setFileDropActive(false)
     setAttachmentBusy(false)
+    setAttachmentReady(false)
     setFindOpen(false)
     setFindQuery('')
     setFindResult('')
@@ -372,12 +381,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const pasteAttachmentRef=useRef<(text:string,nativeImage:boolean)=>void>(()=>{})
   const attachFilesRef=useRef<(files:Blob[])=>Promise<void>>(async()=>{})
   const attachmentBusyRef=useRef(false)
+  const attachmentReadyRef=useRef(false)
   const attachmentOperationRef=useRef(0)
   const activeSessionIdRef=useRef(session.id)
   activeSessionIdRef.current=session.id
   useEffect(()=>{
     attachmentOperationRef.current+=1
     attachmentBusyRef.current=false
+    attachmentReadyRef.current=false
   },[session.id])
   // Read/select mode: when on (touch only), tapping the terminal no longer raises the soft
   // keyboard, so you can select, scroll, and paste without it. The ref is what the pointer
@@ -475,8 +486,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       reportError('Files cannot be attached to an ended session.')
       return
     }
-    if(session.backend==='codex'&&!termRef.current?.modes.bracketedPasteMode){
-      reportError('Codex is not ready for attachments yet. Wait for its chat prompt and try again.')
+    if(!canInsertTerminalAttachment(session.state,attachmentReadyRef.current)||!termRef.current){
+      reportError('The terminal is still restoring. Wait for it to reconnect and try again.')
       return
     }
     if(!files.length)return
@@ -705,7 +716,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     pasteAttachmentRef.current=(text,nativeImage)=>{
       attachmentPasteDepth+=1
       try{
-        if(nativeImage)term.paste(text)
+        if(attachmentNeedsManualBracketing(nativeImage,acceptsTerminalAttachments(session),term.modes.bracketedPasteMode))term.input(pastePayload(text),true)
+        else if(nativeImage)term.paste(text)
         else pasteIntoTerminal(term,session,text)
       }finally{
         attachmentPasteDepth-=1
@@ -1472,6 +1484,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const finishReplay = () => {
       replaying = false
       replayAllowsTerminalResponses = false
+      attachmentReadyRef.current = true
+      setAttachmentReady(true)
       const queued = pendingUserInput.splice(0, pendingUserInput.length)
       pendingUserInputLength = 0
       for (const item of queued) sendInput(item.data, false, item.broadcast)
@@ -1507,6 +1521,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           onState(frame.snapshot)
         }
         if (frame.type === 'replay_start') {
+          attachmentReadyRef.current=false
+          setAttachmentReady(false)
           cancelCaretPlacement()
           if (frame.reason === 'resync' || reconnectReplay) term.reset()
           reconnectReplay=false
@@ -1561,6 +1577,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           }
         }
         if (frame.type === 'exit') {
+          attachmentReadyRef.current=false
+          setAttachmentReady(false)
           setConnectionState('ended')
           const exitGeneration=String(frame.snapshot?._snapshot_generation||'')
           if(exitGeneration&&exitGeneration!==currentGeneration){currentGeneration=exitGeneration;currentRevision=-1}
@@ -1577,6 +1595,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const connect=(reconnecting:boolean)=>{
       if(disposed||!terminalAttachAllowed(['exited','crashed'].includes(stateRef.current),reconnecting))return
+      attachmentReadyRef.current=false
+      setAttachmentReady(false)
       if(reconnectTimer!==undefined){clearTimeout(reconnectTimer);reconnectTimer=undefined}
       nextAttemptAt=null
       clearHandshakeWatchdog()
@@ -1642,7 +1662,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if(!reconnecting&&!mobileLiveInput)term.focus()
       }
       next.onmessage=event=>{if(socket===next)handleMessage(event)}
-      next.onclose=()=>{if(socket!==next)return;socket=null;scheduleReconnect()}
+      next.onclose=()=>{if(socket!==next)return;socket=null;attachmentReadyRef.current=false;setAttachmentReady(false);scheduleReconnect()}
       next.onerror=()=>{if(socket===next)next.close()}
     }
     const reconnect=()=>{
@@ -2543,7 +2563,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const scrollingRailItems=mobilePinnedSend?railItems.filter(item=>item.id!=='enter'):railItems
   const renderRailItem=(item:RailItem)=>{
     switch(item.id){
-      case 'attach':return acceptsTerminalAttachments(session)?<button key={item.id} class="rail-icon" disabled={attachmentBusy||['exited','crashed'].includes(session.state)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
+      case 'attach':return acceptsTerminalAttachments(session)?<button key={item.id} class="rail-icon" disabled={attachmentBusy||!canInsertTerminalAttachment(session.state,attachmentReady)} aria-label={attachmentBusy?'Attaching files':'Attach files'} title={attachmentBusy?'Attaching files…':!attachmentReady?'Terminal restoring…':item.title||'Attach files to this chat without sending'} onClick={()=>attachmentInputRef.current?.click()}><AttachIcon/></button>:null
       case 'relaunch':return isTask?<button key={item.id} class="term-relaunch" title="Relaunch this task terminal — stops it and re-runs the same command" onClick={()=>runCommand('session.relaunch')}>Relaunch</button>:null
       // Attach / Copy reply / Branch / Paste are icon-only: their marks are conventional enough to read
       // without a word, and dropping four rail-widths of text is what keeps the terminal keys

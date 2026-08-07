@@ -425,9 +425,10 @@ include a registered Project nested below another Git root.
   accepted, but swe-mux does not parse or convert them. The terminal draft receives the absolute
   path and the agent decides which reader or tool to use. The insertion never presses Enter.
 - PNG, JPEG, WebP, and GIF are content-sniffed and keep the native Claude/Codex image-paste path.
-  An empty browser MIME type is accepted when the bytes identify the format; misleading image
-  MIME/extension data is refused. Codex attachments are held until its bracketed-paste mode says
-  the chat prompt is ready, so a file cannot be uploaded and then lost during CLI startup.
+  An empty browser MIME type is accepted when the bytes identify the format; misleading image MIME/extension data is refused.
+  Attachment insertion waits for the PTY replay to finish and refuses a session still in `starting`, so a file cannot be uploaded and then lost during CLI startup or reconnect.
+  xterm's local bracketed-paste flag is not a readiness signal because it can be stale after reconnect.
+  If that mirror is false for a native image, the browser emits one explicit bracketed-paste payload around the image reference instead of refusing an otherwise ready session.
 - Attachment insertion is always unicast, even when the source pane has terminal broadcast on.
   Files are capped at 25 MiB each; native images retain the tighter 10 MiB cap. A session may own
   at most 32 attachments and 100 MiB total. Files persist across daemon restarts and session

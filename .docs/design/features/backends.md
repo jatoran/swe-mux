@@ -365,20 +365,14 @@ The descriptor is the source of truth for all generic surfaces.
   is what re-binds a moved session at spawn-discovery time and across a daemon restart. Claude
   probes each project slug for `<native id>.jsonl`; Codex answers from the same id-keyed lookup
   its `transcript_path` already performs.
-- **"Dead" is measured by observed growth, never by the file's timestamp**
-  (`_transcript_last_write_ts`). Windows does not keep a live file's last-write time current:
-  measured 2026-08-06, every long-running Codex rollout on the machine reported an mtime frozen
-  at the file's *creation* — 290 s to 3.5 h behind content that had grown to 5 MB — with
-  `os.stat`, `GetFileAttributesExW`, `FindFirstFileW`, and `GetFileInformationByHandle` all
-  returning that same frozen value, so no alternative call exists. `st_size` stayed accurate,
-  and Claude transcripts were unaffected in the same survey. The daemon therefore dates writes
-  from its own tailer, which already polls the size every 250 ms and stamps
-  `Session.transcript_growth_ts` when bytes appear past its attach snapshot; the timestamp
-  survives only as a floor for the window before the tailer attached. Trusting the timestamp
-  made this guard fire on healthy Codex sessions roughly 90 s into their life and flap from
-  then on, which is a **false-safe inversion**: the operator sees `idle · turn complete`
-  everywhere while the prompt queue refuses to deliver, and learns to click through the one
-  confirmation meant to stop them.
+- **"Dead" is measured by observed transcript evidence, never by the file's timestamp alone** (`_transcript_last_write_ts`).
+  Windows does not keep a live file's last-write time current: measured 2026-08-06, every long-running Codex rollout on the machine reported an mtime frozen at the file's *creation*, 290 s to 3.5 h behind content that had grown to 5 MB, with every Win32 timestamp API returning that same frozen value.
+  `st_size` stayed accurate, and Claude transcripts were unaffected in the same survey.
+  The daemon dates live writes from its own tailer, which polls the size every 250 ms and stamps `Session.transcript_growth_ts` when bytes appear past its attach snapshot.
+  It also retains `Session.transcript_record_ts`, the newest valid provider timestamp carried by a record in the followed file.
+  The record timestamp closes the late-bind race where the first observer attaches after a complete turn is already present and therefore sees no post-attach growth.
+  Replaying old bytes does not make the record timestamp fresh, so a new turn hook against an abandoned file still trips staleness.
+  Trusting mtime alone made this guard fire on healthy Codex sessions roughly 90 s into their life, which is a **false-safe inversion**: the operator sees `idle · turn complete` everywhere while the prompt queue refuses to deliver and learns to click through the confirmation meant to stop them.
 - Growth is tracked separately from record reads because it covers what reads cannot: a partial
   line, or one the parser rejects, is still proof the file is alive, and
   `_record_parser_observation` never fires for it. Bytes already present when the tailer
@@ -386,11 +380,10 @@ The descriptor is the source of truth for all generic surfaces.
   staleness detection after every daemon restart, on exactly the sessions this guard exists
   for. The stamp describes one file and is discarded when the observer is re-aimed at another
   (`_aim_observer`), but **not** when it re-tails the same file after a fault.
-- Retraction is evidence-based, not the negation of the staleness predicate: the claim is
-  dropped only when the followed transcript is written *after* the moment it was marked. The
-  other two paths that set `observation_stale_since` — a rollover refused because a live sibling
-  owns the conversation, and a CLI-reported rollover that could not be adopted — already know
-  the CLI is elsewhere, so quiet on the file they abandoned must not clear them.
+- Retraction is evidence-based, not the negation of the staleness predicate.
+  An inferred `transcript_stale` or `transcript_missing` claim is dropped when the followed transcript is written after the mark, or when a timestamped catch-up record corroborates the latest transcript-backed turn hook within the quiet window.
+  A rollover refused because a live sibling owns the conversation and a CLI-reported rollover that could not be adopted are explicit mismatch claims.
+  Those claims are never cleared by quiet or replayed content from the file the CLI abandoned.
 - The set is matched against the **raw** hook event type, so it must retain Codex's turn notify
   (`agent-turn-complete`) and not only Claude's `Stop` or the normalized `turn_ended`, because it
   is the compatibility path when lifecycle hooks are absent. Claude reports its own rollovers,

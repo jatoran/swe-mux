@@ -138,6 +138,8 @@ class ReplaySession:
         self.last_hook_ts = 0.0
         self.last_turn_hook_ts = 0.0
         self.transcript_growth_ts = 0.0
+        self.transcript_record_ts = 0.0
+        self.observation_stale_reason: str | None = None
         self.tool_names: dict[str, str] = {}
         self.observation_state: dict[str, Any] = {
             "root_turn_active": False,

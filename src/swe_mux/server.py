@@ -3877,6 +3877,7 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         # any more. Paired with the run counter, because "which conversation
         # am I looking at" is the question this endpoint exists to answer.
         "observation_stale_since": session.record.observation_stale_since,
+        "observation_stale_reason": getattr(session, "observation_stale_reason", None),
         "observation_diagnostic": session.record.observation_diagnostic,
         # When the tailer last saw that file grow, which is what staleness is
         # actually decided on. Reported beside `transcript_mtime` because the pair
@@ -3884,6 +3885,9 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         # `transcript_growth_ts` is a filesystem that stopped dating a live file
         # (routine for Codex rollouts on Windows), not a replaced conversation.
         "transcript_growth_ts": session.transcript_growth_ts or None,
+        # Newest trustworthy timestamp carried by a record in the followed file.
+        # This stays old across replay, unlike an observer-attach timestamp.
+        "transcript_record_ts": getattr(session, "transcript_record_ts", 0.0) or None,
         "agent_run_id": session.record.agent_run_id,
         "agent_run_seq": session.record.agent_run_seq,
         "native_session_id": session.record.native_session_id,
@@ -7439,6 +7443,7 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 session.record.id,
             )
             session.record.observation_stale_since = time.time()
+            session.observation_stale_reason = "rollover_adoption_failed"
             session.record.observation_diagnostic = (
                 "the CLI reported a new conversation that could not be adopted"
             )

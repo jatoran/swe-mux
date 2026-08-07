@@ -1245,6 +1245,35 @@ async def test_observe_transcript_resumes_working_for_recent_open_turn(tmp_path:
     await asyncio.wait_for(task, timeout=2)
 
 
+async def test_historical_catchup_retains_the_newest_record_timestamp(tmp_path: Path) -> None:
+    """A late first attach must retain when the completed turn was written."""
+    import datetime as dt
+
+    path = tmp_path / "rollout.jsonl"
+    completed = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=1)
+    path.write_text(
+        json.dumps(
+            {
+                "timestamp": completed.isoformat().replace("+00:00", "Z"),
+                "type": "event_msg",
+                "payload": {"type": "task_complete"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session = ReplaySession("codex")
+    events = EventBus()
+    stop = asyncio.Event()
+    task = asyncio.create_task(observe_transcript(session, path, events, stop))
+
+    await asyncio.sleep(0.6)
+    assert session.transcript_growth_ts == 0.0
+    assert abs(session.transcript_record_ts - completed.timestamp()) < 0.01
+    stop.set()
+    await asyncio.wait_for(task, timeout=2)
+
+
 async def test_jsonl_tailer_waits_for_complete_lines_and_clears_partial_on_truncate(
     tmp_path: Path,
 ) -> None:
