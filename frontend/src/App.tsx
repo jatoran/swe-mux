@@ -32,6 +32,7 @@ import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
 import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
+import { notificationPreferences, setNotificationPreferencesFor } from './notificationPrefs'
 import { UsageDashboard } from './UsageDashboard'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
@@ -406,6 +407,10 @@ export function App() {
   const [notificationData, setNotificationData] = useState<NotificationData>({notifications:[],deliveries:[]})
   const [notificationUnread, setNotificationUnread] = useState(0)
   const [notificationToast, setNotificationToast] = useState<UiNotification | null>(null)
+  // Quick sidebar bell mirrors this device profile's push-notification master switch
+  // (Settings → Notifications → "Enable notifications"). Kept in sync with remote edits
+  // through the `mux:settings-changed` event the device-settings cache emits.
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => notificationPreferences().enabled)
   const [usageOpen, setUsageOpen] = useState(false)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
@@ -1416,6 +1421,14 @@ export function App() {
 
   useEffect(()=>{if(!notificationToast)return;const timer=window.setTimeout(()=>setNotificationToast(null),5000);return()=>clearTimeout(timer)},[notificationToast])
 
+  // Keep the sidebar bell in step with the device-settings cache: a local toggle, a
+  // remote edit replayed over the /events socket, or a device-class switch all land here.
+  useEffect(()=>{
+    const sync=()=>setNotificationsEnabled(notificationPreferences().enabled)
+    window.addEventListener('mux:settings-changed',sync)
+    return ()=>window.removeEventListener('mux:settings-changed',sync)
+  },[])
+
   useEffect(()=>{
     const query=window.matchMedia('(max-width:760px)')
     // Responsive transitions never turn a remembered desktop column into an unsolicited
@@ -1611,6 +1624,14 @@ export function App() {
   // Notifications are a drawer tab, not a modal: checking what fired should not be
   // a full-screen interruption. Opening the tab is what marks them read.
   const openNotifications = () => { showDrawerTab('notifications');setNotificationUnread(0);void loadNotifications() }
+  // Flip the device profile's notification master switch. `setNotificationPreferencesFor`
+  // updates the cache and emits `mux:settings-changed`, so local state re-syncs through the
+  // same listener a remote edit would.
+  const toggleNotifications = () => {
+    const profile = currentProfile()
+    const prefs = notificationPreferences()
+    setNotificationPreferencesFor(profile, { ...prefs, enabled: !prefs.enabled })
+  }
 
   // The sort button stops its own pointer-down so the header drag never starts under
   // it, which also keeps that event from reaching the document's dismiss handler —
@@ -3788,7 +3809,7 @@ export function App() {
           <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} projects={projects} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
-        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button data-tutorial="projects" class="project-trigger" onClick={()=>openProjectsManager()}><span>◇</span> projects</button></div>
+        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${notificationsEnabled?'':'off'}`} aria-pressed={notificationsEnabled} title={notificationsEnabled?'Notifications on - click to mute':'Notifications muted - click to enable'} aria-label={notificationsEnabled?'Mute notifications':'Enable notifications'} onClick={toggleNotifications}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!notificationsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button data-tutorial="projects" class="project-trigger" onClick={()=>openProjectsManager()}><span>◇</span> projects</button></div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}
