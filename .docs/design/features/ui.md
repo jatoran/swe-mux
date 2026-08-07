@@ -670,8 +670,13 @@ responsive controls.
   transcript lives in Claude's own internal viewport, and mux can steer that viewport (wheel
   forwarding, `^End`, the jump chip) but cannot read its position or length, so there is no
   scroll range to draw a thumb for. Codex and OMP show a scrollbar because mux keeps their
-  transcripts in real xterm scrollback. This is a structural limitation until Claude Code
-  offers an inline (non-alternate-screen) mode. The key is sent off the broadcast path: a viewport gesture belongs to the pane
+  transcripts in real xterm scrollback.
+  Claude Code does support an inline mode (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` at
+  launch, `/tui default` mid-session, `"tui": "default"` in settings.json), which mux
+  deliberately does not enable yet: the Claude descriptor's `screen`, `repaints_scrollback`,
+  the `appOwnsTail` scroll-forwarding rule, and touch caret placement all assume the
+  alternate screen, so adopting it is a mode migration to be done as its own change, not a
+  launch-flag tweak. The key is sent off the broadcast path: a viewport gesture belongs to the pane
   that was tapped, and it is dropped rather than queued during replay, since a jump that
   arrives seconds late moves the user somewhere they stopped asking for.
 - Every in-flow child of `.terminal-surface` names `grid-column:1`, and the surface declares a
