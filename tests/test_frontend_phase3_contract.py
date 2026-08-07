@@ -119,13 +119,13 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert "{node.children.map(child=>" in app
     assert "dragProjectRef.current" in app
     assert "dragStackTabRef.current" in app
-    assert "reorderTargetFromContainer(bucket,current.id,'vertical',pointer.clientY)" in app
+    assert "reorderTargetFromContainer(projectList,current.id,'vertical',pointer.clientY)" in app
     assert (
         "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)" in app
     )
-    # The bucket id rides along so a hand-placed Project can drop that section's
-    # sort back to Manual instead of being re-sorted away on the next render.
-    assert "beginProjectPointerDrag(event,project,bucket.id,peerIds)" in app
+    # Each root or Group list supplies its own peers, so drag cannot cross the
+    # explicit Group-assignment boundary.
+    assert "beginProjectPointerDrag(event,project,peerIds)" in app
     assert "showPointerDropIndicator(targetElement,`insert-${target.side}`)" in app
     assert "data-reorder-id={project.id}" in app
     assert "data-reorder-id={child.id}" in app
@@ -141,8 +141,8 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert ".drop-zone-tabs" in css
 
 
-def test_the_sidebar_toolbar_owns_sort_and_fold_for_the_whole_tree() -> None:
-    """One sort and one fold control, above the tree, not per section.
+def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
+    """One title, one sort, and one fold control above the tree.
 
     Sort was per bucket (a ⇅ on every Group header) on the theory that a hand-arranged
     shortlist and an alphabetical pile should coexist; nobody varied it, so it became a
@@ -161,15 +161,22 @@ def test_the_sidebar_toolbar_owns_sort_and_fold_for_the_whole_tree() -> None:
     assert "bucketSortMode" not in sort
     # Placing a Project by hand is what returns Projects to Manual order.
     assert "setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))" in app
-    # The controls live in a toolbar above the scrolling tree, not inside it.
-    assert 'class="sidebar-tools"' in app
-    assert app.index('class="sidebar-tools"') < app.index('class="project-tree"')
+    # PROJECTS names the whole tree and owns its controls; it is not a Group header.
+    assert 'class="sidebar-tools sidebar-projects-header"' in app
+    assert '<strong>PROJECTS</strong>' in app
+    assert app.index('class="sidebar-tools sidebar-projects-header"') < app.index(
+        'class="project-tree"'
+    )
+    assert 'class="sidebar-project-list sidebar-ungrouped-projects"' in app
     assert "setAllFolded(!allFolded)" in app
     assert "setAllCollapsed(displayProjects.map(project=>project.id),folded)" in app
-    assert "setAllBucketsCollapsed(sidebarOrder,displayBucketIds,folded)" in app
+    assert (
+        "setAllBucketsCollapsed(sidebarOrder,projectBuckets.map(bucket=>bucket.id),folded)"
+        in app
+    )
     # Fold-all flips to Expand only once nothing on screen is left to collapse.
     assert "displayProjects.every(project=>collapsedProjects.has(project.id))" in app
-    assert "displayBucketIds.every(bucketId=>isBucketCollapsed(sidebarOrder,bucketId))" in app
+    assert "projectBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))" in app
     # The header doubles as the section's drag handle; its buttons keep the pointer.
     assert "beginBucketPointerDrag(event,bucket.id,bucket.name)" in app
     assert "data-reorder-id={bucket.id}" in app
@@ -199,23 +206,26 @@ def test_a_group_can_be_renamed_from_the_sidebar_but_not_deleted() -> None:
     assert "Remove group (projects become ungrouped)" not in app
 
 
-def test_sections_sort_from_the_toolbar_and_collapse_from_their_header() -> None:
+def test_groups_sort_from_the_projects_header_and_collapse_from_their_header() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
     css = (root / "style.css").read_text(encoding="utf-8")
     sort = (root / "projectSort.ts").read_text(encoding="utf-8")
 
-    # Section ordering rides the toolbar's ⇅, one level up, behind a MenuGroup.
+    # Group ordering rides the PROJECTS header's ⇅, one level up, behind a MenuGroup.
     assert 'MenuGroup id="sections"' in app or "MenuGroup id='sections'" in app
     assert "sortBuckets(allBuckets,sidebarOrder.sectionSort,activityStamps)" in app
     assert "setSidebarOrder({...sidebarOrder,sectionSort:option.id})" in app
-    # Dragging a section header is what returns the sections to Manual order.
+    # Dragging a Group header is what returns Groups to Manual order.
     assert "sectionSort:'custom'" in app
     # Click folds, drag reorders; the drag swallows the click it ends with.
     assert "suppressDragClickRef.current===`bucket:${bucket.id}`" in app
     assert "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))" in app
-    assert "{!bucketCollapsed&&bucket.items.map(project =>" in app
-    # A folded section reports live count *and* the strongest agent state, or an
+    assert (
+        "{!bucketCollapsed&&bucket.items.map(project=>sidebarProjectRow(project,peerIds))}"
+        in app
+    )
+    # A folded Group reports live count *and* the strongest agent state, or an
     # approval waiting inside it would be invisible.
     assert "projectSetRailStatus(sessions,peerIds,seenActivity)" in app
     assert ".bucket-collapsed-badge.activity-attention" in css

@@ -1,13 +1,12 @@
-// Sidebar ordering: how Projects are sorted inside their sections, and where the
-// sections themselves sit. Pure so the guard logic can be unit tested under the node
-// type-stripping runner; the caller supplies the records and the activity map.
+// Sidebar ordering: how Projects are sorted at the root and inside Groups, and how
+// the Groups themselves sit. Pure so the guard logic can be unit tested under the
+// node type-stripping runner; the caller supplies the records and the activity map.
 //
-// A "bucket" is one sidebar section: a Project Group, or the `ungrouped` remainder
-// that the sidebar labels PROJECTS. Project sort is **one global mode** applied to
-// every bucket. It used to be per bucket, on the theory that a hand-arranged
+// Project sort is **one global mode** applied to the ungrouped root and every Group.
+// It used to be per section, on the theory that a hand-arranged
 // shortlist and an alphabetical pile should coexist; in practice that put a ⇅ on
 // every section header for a preference nobody varied, so the control moved to a
-// single sidebar toolbar and the modes collapsed with it. Section order is a
+// single PROJECTS header and the modes collapsed with it. Group order is a
 // separate mode because it sorts different things (see SectionSortMode), but it is
 // set from the same control.
 import type { Project, Session } from './types'
@@ -20,8 +19,8 @@ export type ProjectSortMode =
   | 'created-desc'
   | 'created'
 
-export const UNGROUPED_BUCKET_ID = 'ungrouped'
 export const SIDEBAR_ORDER_KEY = 'mux.sidebar.order.v1'
+const LEGACY_UNGROUPED_BUCKET_ID = 'ungrouped'
 
 export interface ProjectSortOption {
   id: ProjectSortMode
@@ -49,15 +48,14 @@ export function projectSortLabel(mode: ProjectSortMode): string {
   return PROJECT_SORT_OPTIONS.find(option => option.id === mode)?.label || 'Manual order'
 }
 
-/** How the sections themselves are ordered. No date modes: neither a Group record
- *  nor the synthetic ungrouped remainder is dated, and "newest Group first" does
- *  not earn a column on a table that holds a name and a position. */
+/** How Groups are ordered. No date modes: a Group record is not dated, and "newest
+ *  Group first" does not earn a column on a table that holds a name and a position. */
 export type SectionSortMode = 'custom' | 'activity' | 'name' | 'name-desc'
 
 export const SECTION_SORT_OPTIONS: { id: SectionSortMode; label: string; hint: string }[] = [
-  { id: 'custom', label: 'Manual order', hint: 'The order you dragged the sections into' },
-  { id: 'activity', label: 'Recently active', hint: 'Section holding the latest activity first' },
-  { id: 'name', label: 'Name (A→Z)', hint: 'Alphabetical, PROJECTS sorted under its own name' },
+  { id: 'custom', label: 'Manual order', hint: 'The order you dragged the Groups into' },
+  { id: 'activity', label: 'Recently active', hint: 'Group holding the latest activity first' },
+  { id: 'name', label: 'Name (A→Z)', hint: 'Alphabetical Group names' },
   { id: 'name-desc', label: 'Name (Z→A)', hint: 'Reverse alphabetical' },
 ]
 
@@ -72,16 +70,11 @@ export function sectionSortLabel(mode: SectionSortMode): string {
 }
 
 export interface SidebarOrderPrefs {
-  /** How Projects are ordered inside every bucket. */
+  /** How Projects are ordered at the root and inside every Group. */
   projectSort: ProjectSortMode
-  /** How the buckets themselves are ordered. */
+  /** How Groups are ordered. */
   sectionSort: SectionSortMode
-  /** Slot the ungrouped bucket occupies among the Groups; null pins it last.
-   *  Device-local because the remainder has no record to hang a position on —
-   *  Group order itself is server-side, on `ProjectGroup.position`. Only consulted
-   *  while `sectionSort` is `custom`, exactly as Project positions are. */
-  ungroupedIndex: number | null
-  /** Bucket ids folded shut. Presentation only: a collapsed section's Projects
+  /** Group ids folded shut. Presentation only: a collapsed Group's Projects
    *  keep their slot in the rail, the numbered shortcuts, and every order. */
   collapsed: string[]
 }
@@ -89,7 +82,6 @@ export interface SidebarOrderPrefs {
 export const EMPTY_SIDEBAR_ORDER: SidebarOrderPrefs = {
   projectSort: 'custom',
   sectionSort: 'custom',
-  ungroupedIndex: null,
   collapsed: [],
 }
 
@@ -112,19 +104,16 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return EMPTY_SIDEBAR_ORDER
     const record = parsed as {
       projectSort?: unknown; sort?: unknown
-      sectionSort?: unknown; ungroupedIndex?: unknown; collapsed?: unknown
+      sectionSort?: unknown; collapsed?: unknown
     }
-    const index = record.ungroupedIndex
     return {
       projectSort: isProjectSortMode(record.projectSort)
         ? record.projectSort
         : migrateBucketSort(record.sort) || 'custom',
       sectionSort: isSectionSortMode(record.sectionSort) ? record.sectionSort : 'custom',
-      ungroupedIndex: typeof index === 'number' && Number.isInteger(index) && index >= 0
-        ? index
-        : null,
       collapsed: Array.isArray(record.collapsed)
-        ? record.collapsed.filter((id): id is string => typeof id === 'string')
+        ? record.collapsed.filter((id): id is string =>
+          typeof id === 'string' && id !== LEGACY_UNGROUPED_BUCKET_ID)
         : [],
     }
   } catch {
@@ -138,12 +127,11 @@ export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
   return JSON.stringify({
     projectSort: prefs.projectSort,
     sectionSort: prefs.sectionSort,
-    ungroupedIndex: prefs.ungroupedIndex,
     collapsed: prefs.collapsed,
   })
 }
 
-/** Drop per-bucket state for buckets that no longer exist (deleted Groups). */
+/** Drop per-Group state for Groups that no longer exist. */
 export function pruneSidebarOrder(prefs: SidebarOrderPrefs, bucketIds: string[]): SidebarOrderPrefs {
   const live = new Set(bucketIds)
   const collapsed = prefs.collapsed.filter(bucketId => live.has(bucketId))
@@ -243,16 +231,16 @@ export interface SidebarBucket {
   items: Project[]
 }
 
-/** A section is as recent as the most recent thing in it, so a Group ranks on the
+/** A Group is as active as the most recent thing in it, so it ranks on the
  *  work inside it rather than on when it was made. An empty one reads as 0 and
  *  lands last, which is also where a Group nobody has used belongs. */
 export function bucketActivity(bucket: SidebarBucket, activity: Map<string, number>): number {
   return bucket.items.reduce((latest, item) => Math.max(latest, activity.get(item.id) || 0), 0)
 }
 
-/** Sort the sections. `buckets` must already be in manual order (Group position
- *  with the ungrouped remainder in its slot), which is the stable tie-break and
- *  makes `custom` a pass-through — same contract as `sortProjects`. */
+/** Sort the Groups. `buckets` must already be in manual Group position order,
+ *  which is the stable tie-break and makes `custom` a pass-through - the same
+ *  contract as `sortProjects`. */
 export function sortBuckets(
   buckets: SidebarBucket[],
   mode: SectionSortMode,
@@ -260,9 +248,6 @@ export function sortBuckets(
 ): SidebarBucket[] {
   if (mode === 'custom') return buckets
   const sorted = [...buckets]
-  // The ungrouped remainder competes on its visible name like any other section;
-  // being unnamed in the database is not a reason to exempt it from the ordering
-  // the user asked for.
   const byBucketName = (a: SidebarBucket, b: SidebarBucket) =>
     a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) ||
     a.id.localeCompare(b.id)
@@ -270,16 +255,6 @@ export function sortBuckets(
   if (mode === 'name-desc') return sorted.sort((a, b) => byBucketName(b, a))
   return sorted.sort((a, b) =>
     byStamp(bucketActivity(a, activity), bucketActivity(b, activity), true))
-}
-
-/** Bucket order: Groups by their server-side position, with the ungrouped remainder
- *  spliced into its device-local slot (clamped, so adding or deleting Groups can
- *  never strand it off the end). */
-export function placeUngrouped(groupIds: string[], ungroupedIndex: number | null): string[] {
-  const ids = [...groupIds]
-  const at = ungroupedIndex === null ? ids.length : Math.max(0, Math.min(ungroupedIndex, ids.length))
-  ids.splice(at, 0, UNGROUPED_BUCKET_ID)
-  return ids
 }
 
 /** Fold a permutation of the *rendered* subset back into the full list, leaving

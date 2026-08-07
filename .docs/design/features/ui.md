@@ -31,24 +31,22 @@ responsive controls.
   A Project row is followed directly by its layout/session rows; notes do not appear in the tree.
 - **Project rows carry no `Note` / `Files` chips.**
   Both surfaces live in the utility drawer and the Project context menu exposes `Notes…` and `Browse files…` for another Project.
-- Projects sit in sections: one per Group, plus the ungrouped remainder headed `PROJECTS`, which behaves as a section in every respect rather than as a pinned leftover.
-  On desktop, a section header reorders on press-and-move and folds on press-and-release; the drag swallows its ending click.
-  On mobile, a section header only folds because Project rows are the sidebar's sole reorder target.
-  The header's only button is `✎`, which renames the Group.
-- **A sidebar toolbar above the tree owns sort and fold-everything**, because both act on the
-  whole tree rather than on one section, and because a control inside a scrolling list is a
-  control you have to scroll back to. It holds two buttons:
-  - `⊟`/`⊞` folds or unfolds **every Project row and every section** in one click. It offers
-    Expand only once nothing on screen is left to collapse — a half-folded tree still reads as
-    untidy, so the next click should finish the job rather than undo it.
+- The global `PROJECTS` header is navigation chrome rather than a Group.
+  Ungrouped Projects render as root rows immediately after it, followed by optional named Group sections.
+  On desktop, a Group header reorders on press-and-move and folds on press-and-release; the drag swallows its ending click.
+  On mobile, a Group header only folds because Project rows are the sidebar's sole reorder target.
+  The Group header's only button is `✎`, which renames the Group.
+- **The `PROJECTS` header owns sort and fold-everything**, because both act on the whole tree and must remain outside the scrolling list.
+  It holds two buttons:
+  - `⊟`/`⊞` folds or unfolds **every Project row and every Group** in one click.
+    It offers Expand only once nothing on screen is left to collapse, so the next click finishes a half-folded tree instead of undoing it.
   - `⇅` sorts, covering both levels: flat items sort the Projects (Manual, Recently active, Name
-    A→Z / Z→A, Newest / Oldest first), and a `Sort Groups` group sorts the sections themselves
-    (Manual, Recently active, Name A→Z / Z→A). It is labelled for Groups because that is the word
-    the rest of the app uses; PROJECTS is ordered alongside them, which the item's tooltip says
-    outright since the label cannot. A `MenuGroup` because the common case should not pay for the
-    rarer one. The button highlights while either level is sorted, and its tooltip carries both
+    A→Z / Z→A, Newest / Oldest first), and a `Sort Groups` group sorts only explicit Groups
+    (Manual, Recently active, Name A→Z / Z→A).
+    A `MenuGroup` keeps the common case from paying for the rarer one.
+    The button highlights while either level is sorted, and its tooltip carries both
     modes, which otherwise have no always-visible cue.
-- Project sort is one global mode, applied inside every section. It was per section once, on the
+- Project sort is one global mode, applied to root Projects and inside every Group. It was per section once, on the
   theory that a Group might be a hand-arranged shortlist while another is a long alphabetical
   pile; in practice it was set the same everywhere and cost a `⇅` on every header. Placing
   anything by hand puts that level back on Manual, because a hand-placed row that the next render
@@ -57,12 +55,13 @@ responsive controls.
   dissolved a Group on a stray click; a Group is emptied instead — reassign its Projects (Projects
   registry, or a Project menu's Group select) and it stops rendering, since a Group with no
   Projects in it is not a section.
-- A folded section shows a live-session count and a state dot for the strongest agent state
+- A folded Group shows a live-session count and a state dot for the strongest agent state
   inside it, in the collapsed rail's colours so one folded thing never speaks a different visual
   language from another. The dot exists because a count alone would let an agent waiting on
   approval vanish behind the fold.
-- Sort modes, fold state (Projects and sections), and the ungrouped section's slot among the
-  Groups are device-local; Group order itself is shared. Behavior detail lives in `projects.md`.
+- Sort modes and fold state (Projects and Groups) are device-local; Group order itself is shared.
+  Root Projects always precede Groups.
+  Behavior detail lives in `projects.md`.
 - Only a tabbed pane indents its sessions in the sidebar, and it does so because it draws the
   bracket that explains the indent. Split branches are siblings at the same depth: the sidebar is
   a session list, not a pane-geometry diagram, and indenting per split produced unexplained

@@ -37,32 +37,26 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   home for it, never a layer to hunt through.
 - Hiding a Project removes it from desktop/mobile navigation and numeric Project shortcuts. It
   preserves the registration, `.swe-mux/` content, layout, history, settings, and live sessions.
-- The sidebar renders only visible Projects, grouped into sections: one per Group, plus the
-  ungrouped remainder labelled `PROJECTS`. The remainder is a section like any other — it
-  sorts, reorders, and folds on the same terms, and orders by its visible name.
-- A toolbar above the tree carries a sort control (`⇅`) covering **two levels**. Flat, and acting
-  on Projects in every section: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest
-  first. Behind a `Sort Groups` group, acting on the sections themselves: Manual order, Recently
-  active, Name A→Z / Z→A. Both live on one control because `⇅` already means "how is this list
-  ordered"; the submenu keeps the common case one click deep and carries its current mode in its
-  label, since section order has no always-visible indicator of its own. The submenu is named for
-  Groups, the app's own word for these, even though it also orders the ungrouped remainder — its
-  tooltip carries that, and "sections" was jargon nothing else in the UI used.
-- Project sorting is **one global mode**, applied inside every section. It was per section
-  originally, on the argument that a hand-arranged shortlist and a long alphabetical pile are both
-  legitimate; that put a `⇅` on every section header for a preference set the same everywhere, so
-  the modes collapsed into one and the control moved off the headers. A device upgrading from the
-  per-section format keeps whichever mode it had actually set (see `loadSidebarOrder`), rather
-  than being silently reset to Manual. Section sorting is necessarily one setting. Both are
-  device-local.
-- The same toolbar carries `⊟`/`⊞`, which folds or unfolds **every Project row and every section**
+- The sidebar renders only visible Projects.
+  Ungrouped Projects are root rows immediately under the global `PROJECTS` header; explicit Groups render afterward as named sections.
+  `PROJECTS` is navigation chrome, not a synthetic Group, and cannot fold or move among Groups.
+- The `PROJECTS` header carries a sort control (`⇅`) covering **two levels**.
+  Flat options act on root Projects and Projects inside every Group: Manual order, Recently active, Name A→Z / Z→A, Newest / Oldest first.
+  A `Sort Groups` submenu acts only on explicit Groups: Manual order, Recently active, Name A→Z / Z→A.
+  Both live on one control because `⇅` already means "how is this list ordered"; the submenu keeps the common case one click deep and carries its current mode in its label, since Group order has no always-visible indicator of its own.
+- Project sorting is **one global mode**, applied to root Projects and inside every Group.
+  It was per section originally, on the argument that a hand-arranged shortlist and a long alphabetical pile are both legitimate; that put a `⇅` on every Group header for a preference set the same everywhere, so the modes collapsed into one and the control moved off the headers.
+  A device upgrading from the per-section format keeps whichever mode it had actually set (see `loadSidebarOrder`), rather than being silently reset to Manual.
+  Group sorting is necessarily one setting.
+  Both are device-local.
+- The same header carries `⊟`/`⊞`, which folds or unfolds **every Project row and every Group**
   at once, so tidying a long sidebar is one click rather than one per row. It offers Expand only
   once nothing on screen is folded open; expanding clears the stored fold lists outright rather
   than subtracting the visible ids, so an id left behind by something hidden or deleted while
   folded cannot survive and re-fold it later. Only what is on screen is folded — a Project hidden
   from the sidebar has no row to collapse.
-- Sections have no date modes: neither a Group record nor the synthetic remainder is dated, and
-  "newest Group first" does not earn a column. A section's "Recently active" is the latest
+- Groups have no date modes: a Group record is not dated, and "newest Group first" does not earn
+  a column. A Group's "Recently active" is the latest
   activity of any Project in it, so a Group ranks on the work inside it rather than its age; an
   empty Group reads as unmeasured and sorts last.
 - Manual order is the default and the tie-break at both levels, so a sort never discards the
@@ -70,21 +64,21 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Placing something by hand returns *that level* to Manual and writes the order that was on screen, so the move survives instead of being re-sorted away.
   Desktop pointer dragging and Project-menu Move up/down use the same persisted reorder contract.
   Mobile Project rows require a 325 ms hold before pickup; movement beyond the 8 px hold slop remains sidebar scrolling and never previews a reorder.
-- Desktop section headers combine collapse and reorder: press and move reorders, while press and release folds.
-  Mobile section headers only fold because Project rows are the sidebar's sole mobile reorder target.
+- Desktop Group headers combine collapse and reorder: press and move reorders, while press and release folds.
+  Mobile Group headers only fold because Project rows are the sidebar's sole mobile reorder target.
   The desktop drag swallows the click it ends with.
   Collapsing is presentation only: the folded Projects keep their place in the collapsed rail, numbered shortcuts, and every order.
-- Mobile Project pickup closes open menus, gives short haptic feedback, previews one insertion inside the current section, and edge-scrolls the tree until release.
+- Mobile Project pickup closes open menus, gives short haptic feedback, previews one insertion inside the current root list or Group, and edge-scrolls the tree until release.
   Releasing commits one order write; cancellation preserves the original order.
-  Project Group assignment remains an explicit Project-menu or registry action rather than a cross-section drop side effect.
+  Project Group assignment remains an explicit Project-menu or registry action rather than a cross-Group drop side effect.
 - Mobile Project rows expose `⋮` immediately left of Run for the Project context menu.
   Project long-press is reserved for reorder; desktop right-click remains the pointer context-menu route.
   Mobile session long-press remains context-menu-only and never starts sidebar grouping or reorder.
-- A section header's only button is `✎` (rename). It carried a `×` that deleted the Group and
+- A Group header's only button is `✎` (rename). It carried a `×` that deleted the Group and
   ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
   click, so the sidebar no longer deletes Groups at all. Emptying one has the same visible effect,
   since a Group with no Projects in it is not rendered as a section.
-- A folded section reports both a live-session count and the strongest agent state inside it,
+- A folded Group reports both a live-session count and the strongest agent state inside it,
   in the collapsed rail's colours. A count alone would let an agent waiting for approval
   disappear behind the fold, which is the one thing collapsing must not hide.
 - A drag only ever permutes the rows on screen; hidden Projects and empty Groups keep the slots
