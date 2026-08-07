@@ -65,6 +65,7 @@ from .device_presence import DevicePresenceStore, parse_device_report
 from .event_bus import EventBus
 from .file_manager import open_in_file_manager
 from .fleet_intelligence import FleetIntelligence
+from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor, _git
 from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
@@ -958,6 +959,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         telemetry=telemetry,
         orphan_grace_seconds=config.process_orphan_grace_seconds,
     )
+    ghost_windows = GhostWindowSweeper(
+        cadence=config.ghost_window_poll_seconds,
+        enabled=config.ghost_window_sweep_enabled,
+    )
     previews = PreviewRegistry(process_inspector, sessions)
     fleet = FleetIntelligence(
         sessions, events, automation_store, process_inspector, previews, config
@@ -1114,6 +1119,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     provider_accounts.start()
     await process_inspector.restore()
     process_inspector.start()
+    ghost_windows.start()
     fleet.start()
     voice.start()
     # After supervisor adoption: the startup reconcile strands queue items
@@ -1173,6 +1179,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         project_cards=project_cards,
         provider_accounts=provider_accounts,
         process_inspector=process_inspector,
+        ghost_windows=ghost_windows,
         previews=previews,
         fleet=fleet,
         voice=voice,
@@ -1229,6 +1236,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await provider_accounts.stop()
     await fleet.stop()
     await process_inspector.stop()
+    await ghost_windows.stop()
     await git_monitor.stop()
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
     # (today's behavior, and always the case without a supervisor); "detach"
@@ -1358,6 +1366,14 @@ def _apply_runtime_config(app: web.Application, changed: set[str]) -> None:
             process_inspector.cadence = config.process_poll_seconds
         if "process_orphan_grace_seconds" in changed:
             process_inspector.orphan_grace_seconds = config.process_orphan_grace_seconds
+    ghost_windows: GhostWindowSweeper | None = app.get("ghost_windows")
+    if ghost_windows:
+        if "ghost_window_poll_seconds" in changed:
+            ghost_windows.cadence = config.ghost_window_poll_seconds
+        if "ghost_window_sweep_enabled" in changed:
+            # The loop reads `enabled` each tick, so a live toggle takes effect
+            # without restarting the task.
+            ghost_windows.enabled = config.ghost_window_sweep_enabled
     provider_accounts: ProviderAccountManager | None = app.get("provider_accounts")
     if provider_accounts:
         if "provider_quota_poll_minutes" in changed:

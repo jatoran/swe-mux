@@ -115,6 +115,8 @@
 - Changing processes, listeners, Preview ownership/proxying, or Preview tab lifetime:
   `design/features/processes-and-previews.md`, `design/features/remote-access.md`,
   `technical/backend/packages.md`, `technical/frontend/workspace-state.md`
+- Changing headless-browser ghost-window detection, the sweep predicate, or its remediation:
+  `design/features/ghost-windows.md`, `technical/backend/packages.md`
 - Changing durable process/quota/reset/compaction/tool evidence or retention:
   `design/features/operational-telemetry.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing shell/profile creation: `design/features/shell-profiles.md`

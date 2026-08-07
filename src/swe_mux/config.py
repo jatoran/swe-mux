@@ -290,6 +290,11 @@ class Config:
     git_poll_seconds: float = 5.0
     process_poll_seconds: float = 5.0
     process_orphan_grace_seconds: float = 15.0
+    # Windows-only sweep for headless-browser windows that DWM composites even
+    # though Win32 reports them hidden (ghost_windows.py). Off by config only
+    # when an operator deliberately wants such a window left on screen.
+    ghost_window_sweep_enabled: bool = True
+    ghost_window_poll_seconds: float = 5.0
     process_evidence_retention_days: int = 30
     operational_telemetry_retention_days: int = 180
     # Durable per-session detection timeline (status_timeline.py): chattier
@@ -691,6 +696,8 @@ def _validate(config: Config) -> None:
         errors["process_poll_seconds"] = "must be between 0.5 and 60 seconds"
     if not 1 <= config.process_orphan_grace_seconds <= 3600:
         errors["process_orphan_grace_seconds"] = "must be between 1 and 3600 seconds"
+    if not 0.5 <= config.ghost_window_poll_seconds <= 60:
+        errors["ghost_window_poll_seconds"] = "must be between 0.5 and 60 seconds"
     if not 1 <= config.process_evidence_retention_days <= 3650:
         errors["process_evidence_retention_days"] = "must be between 1 and 3650"
     if not 1 <= config.operational_telemetry_retention_days <= 3650:
