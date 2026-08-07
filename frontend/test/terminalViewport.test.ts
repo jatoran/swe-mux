@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import {
   APP_TAIL_KEY,
+  CLAUDE_MAX_DESKTOP_COLUMNS,
+  CODEX_MIN_DESKTOP_COLUMNS,
+  CODEX_MIN_DESKTOP_FONT_PX,
   EXPENSIVE_VIEWPORT_PASS_MS,
   VIEWPORT_SETTLE_MAX_MS,
   VIEWPORT_SETTLE_MS,
   appOffTailByDistance,
   appOwnsTail,
   attachRegistersViewport,
+  createSurfaceRepairScheduler,
   createViewportScheduler,
   effectiveViewportCost,
   redrawVisibleTerminal,
@@ -19,6 +26,7 @@ import {
   terminalRowsAboveTail,
   terminalSurface,
   terminalSurfaceChanged,
+  terminalWidthPolicyFontSize,
   trackAppTailDistance,
 } from '../src/terminalViewport.ts'
 
@@ -184,6 +192,104 @@ test('a restored pane forces renderer dimensions even when its grid is unchanged
   assert.deepEqual(calls, [false, true])
 
   assert.equal(reflowVisibleTerminalRenderer({ options: {} }, visible), false)
+})
+
+test('desktop Codex preserves its documented 80-column composer floor by reducing type', () => {
+  assert.equal(CODEX_MIN_DESKTOP_COLUMNS, 80)
+  assert.equal(terminalWidthPolicyFontSize('codex', false, 72, 11), 9)
+  assert.equal(terminalWidthPolicyFontSize('codex', false, 40, 11), CODEX_MIN_DESKTOP_FONT_PX)
+  assert.equal(terminalWidthPolicyFontSize('codex', false, 80, 11), 11)
+  assert.equal(terminalWidthPolicyFontSize('codex', false, 120, 11), 11)
+  // The unified mobile terminal is intentionally narrow and keeps the readable base type.
+  assert.equal(terminalWidthPolicyFontSize('codex', true, 40, 11), 11)
+  assert.equal(terminalWidthPolicyFontSize('claude', false, 40, 11), 11)
+})
+
+test('Claude panes stop expanding before its resize-corruption range', () => {
+  assert.equal(CLAUDE_MAX_DESKTOP_COLUMNS, 120)
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'TerminalPane.tsx'), 'utf8')
+  assert.match(source, /width:'100%'/)
+  assert.match(source, /maxWidth:`calc\(\$\{CLAUDE_MAX_DESKTOP_COLUMNS\}ch \+ 11px\)`/)
+  assert.match(source, /justifySelf:'center'/)
+})
+
+test('surface repair debt survives zero-sized frames and completes once measurable', () => {
+  let measurable = false
+  let attempts = 0
+  let nextFrame = 1
+  const frames = new Map<number, () => void>()
+  const scheduler = createSurfaceRepairScheduler(
+    () => {
+      attempts += 1
+      return measurable
+    },
+    () => true,
+    {
+      requestFrame: fn => {
+        const id = nextFrame
+        nextFrame += 1
+        frames.set(id, fn)
+        return id
+      },
+      cancelFrame: id => { frames.delete(id) },
+    },
+    2,
+  )
+  const flushFrame = () => {
+    const entry = frames.entries().next().value as [number, () => void] | undefined
+    assert.ok(entry, 'expected a scheduled surface repair frame')
+    frames.delete(entry[0])
+    entry[1]()
+  }
+
+  scheduler.request()
+  flushFrame()
+  flushFrame()
+  flushFrame()
+  assert.equal(attempts, 3)
+  assert.equal(frames.size, 0, 'bounded retries must stop spinning')
+  assert.equal(scheduler.owed, true, 'an unmeasurable attempt must not clear repair debt')
+
+  measurable = true
+  scheduler.resume()
+  flushFrame()
+  assert.equal(attempts, 4)
+  assert.equal(scheduler.owed, false)
+})
+
+test('surface confirmation debt defers while hidden and resumes on reveal', () => {
+  let visible = false
+  let attempts = 0
+  let pending: (() => void) | null = null
+  const scheduler = createSurfaceRepairScheduler(
+    () => {
+      attempts += 1
+      return visible
+    },
+    () => visible,
+    {
+      requestFrame: fn => { pending = fn; return 1 },
+      cancelFrame: () => { pending = null },
+    },
+  )
+  const flushFrame = () => {
+    assert.ok(pending, 'expected a scheduled surface repair frame')
+    const frame = pending
+    pending = null
+    frame()
+  }
+
+  scheduler.request()
+  flushFrame()
+  assert.equal(attempts, 1)
+  assert.equal(pending, null, 'a hidden pane must not spin animation frames')
+  assert.equal(scheduler.owed, true)
+
+  visible = true
+  scheduler.resume()
+  flushFrame()
+  assert.equal(attempts, 2)
+  assert.equal(scheduler.owed, false)
 })
 
 // The soft keyboard opening refits the pane, which pushes rows into scrollback and moves

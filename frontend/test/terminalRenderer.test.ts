@@ -13,10 +13,22 @@ test('the mobile IME bridge keeps a visible terminal caret while it owns DOM foc
   })
 })
 
-test('desktop auto and webgl preferences keep accelerated rendering enabled', () => {
+test('desktop shells keep accelerated rendering enabled', () => {
   assert.equal(shouldLoadWebgl('auto', false, 'shell'), true)
-  assert.equal(shouldLoadWebgl('webgl', false, 'claude'), true)
+  assert.equal(shouldLoadWebgl('webgl', false, 'shell'), true)
   assert.equal(shouldLoadWebgl('dom', false, 'shell'), false)
+})
+
+test('Claude stays on DOM even when WebGL is explicitly preferred', () => {
+  assert.equal(shouldLoadWebgl('auto', false, 'claude'), false)
+  assert.equal(shouldLoadWebgl('webgl', false, 'claude'), false)
+  assert.equal(shouldLoadWebgl('dom', false, 'claude'), false)
+})
+
+test('OMP stays on DOM even when WebGL is explicitly preferred', () => {
+  assert.equal(shouldLoadWebgl('auto', false, 'omp'), false)
+  assert.equal(shouldLoadWebgl('webgl', false, 'omp'), false)
+  assert.equal(shouldLoadWebgl('dom', false, 'omp'), false)
 })
 
 test('mobile viewports always use the built-in DOM renderer', () => {
@@ -34,18 +46,16 @@ test('scrollback-repainting harnesses stay on the DOM renderer under auto', () =
   assert.equal(shouldLoadWebgl('dom', false, 'codex'), false)
   assert.equal(shouldLoadWebgl('auto', false, 'omp'), false)
   assert.equal(shouldLoadWebgl('dom', false, 'omp'), false)
-  // Claude paints on the alternate screen and never rewrites scrollback.
-  assert.equal(shouldLoadWebgl('auto', false, 'claude'), true)
   // An agent name the registry does not know defaults to the safe renderer.
   assert.equal(shouldLoadWebgl('auto', false, 'shell'), true)
 })
 
-test('an explicit webgl preference reaches repainting harnesses, which auto silently skips', () => {
+test('an explicit webgl preference reaches Codex, which auto silently skips', () => {
   // The setting existed and the user could select it, but the backends whose repaint
   // cost makes the renderer worth choosing ignored it. Opting in has a visible failure
   // mode and is the only way to find out whether the exclusion still earns its place.
   assert.equal(shouldLoadWebgl('webgl', false, 'codex'), true)
-  assert.equal(shouldLoadWebgl('webgl', false, 'omp'), true)
+  assert.equal(shouldLoadWebgl('webgl', false, 'omp'), false)
   // Never on a phone, whatever the preference says: Chromium device emulation can keep
   // a live context while changing pixel ratio and leave the pane blank.
   assert.equal(shouldLoadWebgl('webgl', true, 'codex'), false)

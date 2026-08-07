@@ -65,7 +65,8 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares both capability axes: `state_sources` and `measurement_source`.
 - Every harness declares conversation behavior: `reports_conversation_rollover`, `assigns_conversation_id`, `resolves_transcript_by_cwd`, `reports_transcript_path`, and any rollout-file prefix.
 - Every harness declares PTY delivery etiquette: `submission`, `root_completion`, and `screen`.
-- Every harness declares `repaints_scrollback`, and a new harness should declare it `true` unless its TUI provably never rewrites scrollback (alternate-screen TUIs): the flag decides whether `auto` may give the pane the WebGL renderer, and the safe default is the DOM renderer.
+- Every harness declares `repaints_scrollback`, and a new harness should declare it `true` unless its TUI provably never rewrites scrollback: the flag decides whether `auto` may give the pane the WebGL renderer, and the safe default is the DOM renderer.
+  This capability is not a general WebGL-safety claim: Claude does not repaint scrollback but remains DOM-only because its retained alternate-screen surface has a separate live-context corruption mode.
 - Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.
 - Every hooked harness declares `native_hooks`, its `hook_events`, a hook installer, and replay hook-step coverage.
 - Every transcript-capable harness declares its transcript semantics and measurement parser.

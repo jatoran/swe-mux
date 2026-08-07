@@ -1806,6 +1806,30 @@ class Session:
         self.publish_control(self.geometry_frame())
         return True
 
+    async def repaint_current_geometry(self) -> bool:
+        """Make a full-screen child repaint without changing canonical geometry.
+
+        A bounded replay can contain only the tail of a repaint-heavy TUI. If a new
+        client attaches at the PTY's existing dimensions, normal arbitration skips
+        the resize and the child has no reason to restate the screen. Pulse one
+        column and restore it after the child has had a scheduler turn. Output from
+        both resizes is queued behind the replay snapshot for the new subscriber.
+
+        Another client may resize during the yield. In that case its new canonical
+        geometry has already won, so never restore the stale size over it.
+        """
+        size = self.geometry
+        if size is None or self.record.state in {"exited", "crashed"}:
+            return False
+        cols, rows = size
+        pulse_cols = cols - 1 if cols > 2 else cols + 1
+        self.pty.resize(pulse_cols, rows)
+        await asyncio.sleep(0.02)
+        if self.geometry != size:
+            return False
+        self.pty.resize(cols, rows)
+        return True
+
     def geometry_frame(self) -> dict[str, Any]:
         # getattr-guarded for the lightweight PTY stubs used by protocol tests, which
         # implement resize/write but carry no dimensions of their own.

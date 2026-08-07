@@ -441,12 +441,21 @@ body {
   grid-template-rows:calc(34px*var(--ui-scale)) auto minmax(0,1fr);
 }
 /* A recently-viewed terminal kept mounted behind the active tab (warmPanes.ts), so
-   returning to it costs no buffer replay. `display:none` rather than a transparent
-   overlay: it must take no layout (its host measures zero, which is what stops it
-   refitting and reshaping the shared PTY) and must not be reachable by pointer,
-   focus, or a screen reader while another tab is on screen. */
+   returning to it costs no buffer replay. Keep its box measurable while removing it
+   from the stack's flex layout: xterm renderers do not reliably survive a zero-sized
+   `display:none` interval, and no amount of later redraw can repair terminal model
+   state parsed while its cell metrics were unavailable. TerminalPane's logical
+   visibility gate still deregisters this viewport from shared PTY geometry. */
+.stack-active {
+  position:relative;
+}
 .terminal-pane.pane-warm {
-  display:none;
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  visibility:hidden;
+  pointer-events:none;
 }
 .pane-bar {
   height:calc(34px*var(--ui-scale));

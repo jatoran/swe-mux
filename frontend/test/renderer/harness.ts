@@ -2,7 +2,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
-import { reflowVisibleTerminalRenderer } from '../../src/terminalViewport'
+import { CLAUDE_MAX_DESKTOP_COLUMNS, reflowVisibleTerminalRenderer, terminalWidthPolicyFontSize } from '../../src/terminalViewport'
 import {
   dispatchTerminalMouseTap,
   resolveCodexCaretTarget,
@@ -50,6 +50,11 @@ type DecrqmProbeResult = {
   writeCompleted: boolean
 }
 
+type TerminalWidthPolicyResult = {
+  codex: { initialCols: number; finalCols: number; fontSize: number }
+  claude: { cols: number; hostWidth: number; repeatedCols: number[]; repeatedWidths: number[] }
+}
+
 declare global {
   interface Window {
     runTerminalRendererStress: () => Promise<{ renderer: 'dom' | 'webgl'; cols: number; rows: number }>
@@ -59,6 +64,7 @@ declare global {
     runTerminalSyntheticMouseTap: () => Promise<SyntheticMouseTapResult>
     runUnstyledCodexCaretResolution: () => Promise<UnstyledCodexCaretResult>
     runDecrqmProbe: () => Promise<DecrqmProbeResult>
+    runTerminalWidthPolicies: () => Promise<TerminalWidthPolicyResult>
   }
 }
 
@@ -324,6 +330,57 @@ window.runUnstyledCodexCaretResolution = async () => {
   const prefixBgMode=snapshot.lines[promptRow-snapshot.viewportY]?.cells[0]?.bgMode??-1
   domTerm.dispose()
   return {prefixBgMode,current:result?.current??null,target:result?.target??null}
+}
+
+window.runTerminalWidthPolicies = async () => {
+  host.style.display = 'none'
+  const domHost = document.querySelector<HTMLDivElement>('#dom-terminal')!
+  domHost.style.display = 'block'
+  domHost.style.width = '460px'
+  domHost.style.height = '420px'
+  domHost.style.maxWidth = 'none'
+  const codexTerm = new Terminal({fontFamily:'Consolas, monospace',fontSize:11})
+  const codexFit = new FitAddon()
+  codexTerm.loadAddon(codexFit)
+  codexTerm.open(domHost)
+  const initial = codexFit.proposeDimensions()!
+  const fontSize = terminalWidthPolicyFontSize('codex', false, initial.cols, 11)
+  codexTerm.options.fontSize = fontSize
+  const final = codexFit.proposeDimensions()!
+  codexTerm.resize(final.cols, final.rows)
+  const codex = {initialCols:initial.cols,finalCols:codexTerm.cols,fontSize}
+  codexTerm.dispose()
+
+  const claudeGrid = document.createElement('div')
+  claudeGrid.style.display = 'grid'
+  claudeGrid.style.width = '1800px'
+  claudeGrid.style.height = '420px'
+  domHost.parentElement!.insertBefore(claudeGrid, domHost)
+  claudeGrid.append(domHost)
+  domHost.style.width = '100%'
+  domHost.style.height = '420px'
+  domHost.style.maxWidth = `calc(${CLAUDE_MAX_DESKTOP_COLUMNS}ch + 11px)`
+  domHost.style.justifySelf = 'center'
+  domHost.style.fontFamily = 'Consolas, monospace'
+  domHost.style.fontSize = '11px'
+  domHost.style.fontWeight = '600'
+  const claudeTerm = new Terminal({fontFamily:'Consolas, monospace',fontSize:11,fontWeight:'600'})
+  const claudeFit = new FitAddon()
+  claudeTerm.loadAddon(claudeFit)
+  claudeTerm.open(domHost)
+  claudeFit.fit()
+  const repeatedCols = [claudeTerm.cols]
+  const repeatedWidths = [domHost.clientWidth]
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    claudeFit.fit()
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    repeatedCols.push(claudeTerm.cols)
+    repeatedWidths.push(domHost.clientWidth)
+  }
+  const claude = {cols:claudeTerm.cols,hostWidth:domHost.clientWidth,repeatedCols,repeatedWidths}
+  claudeTerm.dispose()
+  claudeGrid.replaceWith(domHost)
+  return {codex,claude}
 }
 
 function caretSnapshot(target:Terminal):TerminalCaretSnapshot {

@@ -67,6 +67,25 @@ export function surfaceDrifted(
 }
 
 /**
+ * Whether xterm's current grid differs from a fresh fit of its visible host.
+ *
+ * Surface dimensions alone cannot detect a stale grid: a half-height 20-row terminal
+ * can be faithfully rendered and confirmed inside a host that now fits 40 rows. A
+ * letterboxed pane is deliberately showing the shared grid instead of its local fit.
+ */
+export function terminalFitDrifted(
+  current: { cols: number; rows: number },
+  proposed: { cols: number; rows: number } | undefined,
+  replaying: boolean,
+  hidden: boolean,
+  letterboxed: boolean,
+): boolean {
+  if (replaying || hidden || letterboxed || !proposed) return false
+  if (!Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return false
+  return current.cols !== proposed.cols || current.rows !== proposed.rows
+}
+
+/**
  * Whether a dead pane may rebuild itself, and the attempt ledger after asking.
  * Bounded so a poison byte sequence in the retained buffer (which every rebuild
  * replays) degrades into one visible error instead of a remount loop.

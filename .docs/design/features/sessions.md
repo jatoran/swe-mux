@@ -51,14 +51,19 @@ and reattachable browser viewports.
   reconnect never change process state, and neither does losing an ownership race: refused
   input is echoed back for one replay instead of dropped. Rules, frames and diagnostics:
   `features/terminal-input.md`.
-- Desktop shell and Claude terminals default to WebGL with DOM fallback. Codex terminals use the
-  built-in DOM renderer under the `auto` preference, because its full-screen redraws can corrupt
-  off-tail WebGL scrollback, and its rich renderer still reflows the transcript on resize. An
-  explicit `webgl` preference now reaches Codex, which it previously did not: the setting was a
-  silent no-op for the one backend whose repaint cost makes the renderer worth choosing. The
-  pinned xterm 6 WebGL addon carries
-  the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race
-  from aborting a model update and leaving stale glyphs. Mobile remains DOM-only.
+- Desktop shell terminals default to WebGL with DOM fallback.
+  Claude terminals are DOM-only because retained alternate-screen panes can return from a hidden compositing interval with a live but corrupt WebGL surface and no context-loss event.
+  Codex terminals use the built-in DOM renderer under the `auto` preference, because its full-screen redraws can corrupt off-tail WebGL scrollback, and its rich renderer still reflows the transcript on resize.
+  An explicit `webgl` preference reaches Codex, but not Claude or OMP.
+  OMP continuously repaints its tail, and deep sessions are repeatedly reconstructed
+  from bounded replay as panes leave the warm cache, so a stale WebGL surface looks
+  exactly like missing replay until a real resize repairs it.
+  On a visible cold attach at unchanged geometry, the daemon also pulses OMP by one
+  column and restores the canonical size before live delivery starts.
+  This queues a fresh application repaint behind the bounded replay without changing
+  the session's final dimensions or sending application input.
+  The pinned xterm 6 WebGL addon carries the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race from aborting a model update and leaving stale glyphs.
+  Mobile remains DOM-only.
 - Agent startup state uses semantic evidence first. Claude and trusted Codex lifecycle hooks
   normally report `SessionStart`; Codex with disabled/untrusted hooks (or a degraded Claude hook
   path) may use settled live PTY output as a startup-only, lowest-priority readiness signal until

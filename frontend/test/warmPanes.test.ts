@@ -70,12 +70,17 @@ test('recency is capped so a long session cannot grow it without bound', () => {
   assert.equal(history[0], 'p499')
 })
 
-test('a warm pane is hidden from layout, pointer, and assistive tech', () => {
-  // The whole point is that it stays live while another tab is on screen, so a
-  // partial hide (opacity, z-index) would leave a background session focusable and
-  // still measuring layout — which is what lets it reshape the shared PTY.
+test('a warm pane keeps measurable geometry without entering layout or interaction', () => {
+  // The xterm host must not collapse to zero while retained. Absolute positioning
+  // removes it from the active pane's flex layout, visibility removes descendants
+  // from focus/paint, and TerminalPane's logical gate keeps it out of PTY geometry.
   const css = readFileSync(join(SRC, 'style.css'), 'utf8')
-  assert.match(css, /\.terminal-pane\.pane-warm\s*\{[^}]*display:\s*none/)
+  const rule = css.match(/\.terminal-pane\.pane-warm\s*\{([^}]*)\}/)?.[1] || ''
+  assert.match(rule, /position:\s*absolute/)
+  assert.match(rule, /inset:\s*0/)
+  assert.match(rule, /visibility:\s*hidden/)
+  assert.match(rule, /pointer-events:\s*none/)
+  assert.doesNotMatch(rule, /display:\s*none/)
   const app = readFileSync(join(SRC, 'App.tsx'), 'utf8')
   assert.match(app, /aria-hidden=\{paneVisible\?undefined:'true'\}/)
 })
@@ -99,19 +104,52 @@ test('terminal memoization delivers every pane visibility transition', () => {
   assert.match(comparator, /a\.visible === b\.visible/)
 })
 
-test('restoring a warm pane reflows same-grid renderer dimensions after fitting', () => {
+test('restoring a warm pane keeps same-grid renderer repair owed until after fitting', () => {
   // FitAddon skips `term.resize` when cols/rows match. That is insufficient after
-  // `display:none`: the renderer surface can still occupy the old upper-left area.
+  // a retained hidden interval: the renderer surface can still occupy the old upper-left area.
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
   const start = source.indexOf('paneVisibilityRef.current = (nowVisible: boolean) => {')
   const end = source.indexOf('// Chromium device emulation', start)
   assert.ok(start >= 0 && end > start, 'pane visibility handler not found')
   const action = source.slice(start, end)
+  const owed = action.indexOf('surfaceRepair?.markOwed()')
   const fit = action.indexOf('scheduleFullRedraw()')
-  const reflow = action.indexOf('reflowVisibleTerminalRenderer(term, host.current)')
+  const resume = action.indexOf('surfaceRepair?.resume()')
+  assert.ok(owed >= 0, 'restored pane must retain renderer repair debt')
+  assert.ok(fit > owed, 'renderer repair debt must be recorded before fitting')
   assert.ok(fit >= 0, 'restored pane must fit and redraw')
-  assert.ok(reflow > fit, 'same-grid renderer reflow must follow the scheduled fit')
+  assert.ok(resume > fit, 'same-grid renderer repair must resume after the scheduled fit')
   assert.match(action, /if \(paneIsHidden\(\)\) return/)
+})
+
+test('a visible viewport fit remains owed until FitAddon returns dimensions', () => {
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  const start = source.indexOf('const runViewportPass = () => {')
+  const end = source.indexOf('// The chrome scale moved', start)
+  assert.ok(start >= 0 && end > start, 'viewport pass not found')
+  const pass = source.slice(start, end)
+  const owed = pass.indexOf('viewportFitOwed = true')
+  const measured = pass.indexOf('if (!measureFit())')
+  const applied = pass.indexOf('applyGeometry()')
+  const settled = pass.indexOf('viewportFitOwed = false', applied)
+  assert.ok(owed >= 0, 'viewport pass must record fit debt before scheduling')
+  assert.ok(measured > owed, 'FitAddon dimensions must be checked before applying geometry')
+  assert.ok(applied > measured, 'geometry must not be applied without a valid fit')
+  assert.ok(settled > applied, 'fit debt must clear only after geometry was applied')
+})
+
+test('a measurable hidden pane deregisters without fitting its local model', () => {
+  const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
+  const start = source.indexOf('const runViewportPass = () => {')
+  const end = source.indexOf('const viewportBox = host.current', start)
+  assert.ok(start >= 0 && end > start, 'hidden viewport branch not found')
+  const setup = source.slice(start, end)
+  const hidden = setup.indexOf('if (paneIsHidden()) {')
+  const deregister = setup.indexOf('sendViewport(', hidden)
+  const stop = setup.indexOf('return', deregister)
+  assert.ok(hidden >= 0, 'viewport pass must gate on logical pane visibility')
+  assert.ok(deregister > hidden, 'hidden viewport must deregister before stopping')
+  assert.ok(stop > deregister, 'hidden viewport must stop before measuring or fitting')
 })
 
 test('the visible Resize action measures and registers before claiming input', () => {
@@ -124,7 +162,7 @@ test('the visible Resize action measures and registers before claiming input', (
   const action = source.slice(start, end)
   const register = action.indexOf('sendViewport(localFit.cols, localFit.rows, true)')
   const claim = action.indexOf("claimInput('gesture')")
-  assert.match(action, /refitVisibleTerminal\(fit, box\)/)
+  assert.match(action, /fitVisiblePane\(\)/)
   assert.match(action, /reflowVisibleTerminalRenderer\(term, box\)/)
   assert.ok(register >= 0, 'Resize must force-register the measured viewport')
   assert.ok(claim > register, 'Resize must register the viewport before claiming input')
@@ -138,7 +176,7 @@ test('everything that gates on being looked at asks paneIsHidden, not the docume
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
   for (const marker of [
     '() => replaying || paneIsHidden()',
-    'if (paneIsHidden()) sendViewport(',
+    'if (paneIsHidden()) {',
     'const hidden = paneIsHidden()',
     'visible: !paneIsHidden(),',
     'paneHidden: paneIsHidden(),',

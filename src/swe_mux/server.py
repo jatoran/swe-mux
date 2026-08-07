@@ -7757,6 +7757,27 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                 initial_frame = json.loads(initial_message.data)
                 if initial_frame.get("type") in {"attach_ready", "resize"}:
                     geometry_queued = _apply_client_viewport(session, connection_id, initial_frame)
+                    # OMP continuously rewrites a small live region. A deep session's
+                    # bounded replay can therefore contain only repaint traffic, and
+                    # a same-size cold attach gives the child no SIGWINCH with which
+                    # to restate its complete screen. This is the exact condition in
+                    # which a one-pixel divider resize repairs the pane. Pulse only a
+                    # visible OMP attach whose real geometry did not already change;
+                    # normal resize frames and other backends retain the no-op gate.
+                    if (
+                        initial_frame.get("type") == "attach_ready"
+                        and session.record.backend == "omp"
+                        and not bool(initial_frame.get("hidden"))
+                        and not geometry_queued
+                    ):
+                        repainted = await session.repaint_current_geometry()
+                        if repainted:
+                            request.app["events"].emit_background(
+                                "terminal_repaint_requested",
+                                session_id=session.record.id,
+                                source="daemon",
+                                reason="same_geometry_attach",
+                            )
                     break
                 pending_messages.append(initial_message)
             elif initial_message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:

@@ -92,6 +92,20 @@ test('an unstyled Codex composer resolves against xterm buffer cells',async({pag
   expect(result.target).toEqual({column:4,row:result.current!.row})
 })
 
+test('agent width policies keep Codex above 80 columns and Claude near 120',async({page})=>{
+  await page.goto('/renderer-harness.html')
+  const result=await page.evaluate(()=>window.runTerminalWidthPolicies())
+
+  expect(result.codex.initialCols).toBeLessThan(80)
+  expect(result.codex.fontSize).toBeLessThan(11)
+  expect(result.codex.finalCols).toBeGreaterThanOrEqual(80)
+  expect(result.claude.cols).toBeGreaterThanOrEqual(118)
+  expect(result.claude.cols).toBeLessThanOrEqual(121)
+  expect(result.claude.hostWidth).toBeLessThan(1000)
+  expect(new Set(result.claude.repeatedCols).size, 'repeated fits must not consume Claude columns').toBe(1)
+  expect(new Set(result.claude.repeatedWidths).size, 'the centered Claude host must keep a definite width').toBe(1)
+})
+
 test('restoring the font is enough to leave a letterbox; no renderer reflow is needed', async ({ page }) => {
   // Pins the reason `applyGeometry` does not call `reflowVisibleTerminalRenderer` when it
   // drops a letterbox. The stale-surface repair above is real, but it is for a surface

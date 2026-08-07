@@ -37,8 +37,8 @@ test('the webgl drawing buffer is preserved, because the renderer only repaints 
   // WebglRenderer._updateModel skips every cell whose code/fg/bg/ext match its model, so a
   // frame re-uploads only what changed and the rest is expected to still be in the drawing
   // buffer. With preserveDrawingBuffer false the browser may discard that buffer once the
-  // canvas stops being composited — which is what `.pane-warm` (display:none) makes every
-  // background tab — and the pane comes back with only the changed cells drawn. Selecting
+  // canvas stops being composited, which can happen to every retained background tab, and
+  // the pane comes back with only the changed cells drawn. Selecting
   // text repaints the cells under it, which is how this presents: "it draws once I
   // highlight it". No event reports a discarded buffer, so no repair can be keyed on one.
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
@@ -53,12 +53,21 @@ test('the surface confirmation repaints without re-running the fit', () => {
   // put pixels back are worth repeating.
   const source = readFileSync(join(SRC, 'TerminalPane.tsx'), 'utf8')
   const body = source.slice(
-    source.indexOf('const runSurfaceRedraw'),
+    source.indexOf('surfaceRepair = createSurfaceRepairScheduler'),
     source.indexOf('const armSurfaceConfirmation'),
   )
-  assert.ok(body.length > 0, 'runSurfaceRedraw not found')
+  assert.ok(body.length > 0, 'surface repair callback not found')
   assert.match(body, /clearTextureAtlas\(\)/)
-  assert.match(body, /redrawVisibleTerminal\(term, host\.current\)/)
+  assert.match(body, /redrawVisibleTerminal\(term, box\)/)
   assert.ok(!body.includes('measureFit('), 'the confirmation must not refit')
   assert.ok(!body.includes('applyGeometry('), 'the confirmation must not resize the PTY')
+
+  const arm = source.slice(
+    source.indexOf('const armSurfaceConfirmation'),
+    source.indexOf('const viewportScheduler'),
+  )
+  const owed = arm.indexOf('surfaceRepair?.markOwed()')
+  const timer = arm.indexOf('window.setTimeout')
+  assert.ok(owed >= 0 && timer > owed, 'confirmation debt must be recorded before its timer')
+  assert.match(arm, /surfaceRepair\?\.request\(\)/)
 })

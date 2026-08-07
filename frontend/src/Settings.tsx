@@ -712,7 +712,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
 
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
           <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
-          <p>Mobile viewports and Codex sessions always use the built-in DOM renderer for reliable scrollback rendering.</p>
+        <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback.</p>
           <label>Global default profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured terminal profiles">

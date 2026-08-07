@@ -344,19 +344,18 @@ responsive controls.
     (`features/terminal-input.md`) — but leaving the largest surface in the window at a fixed
     size while everything around it grew is not what the setting is asked for, and the
     arbitration consequence turned out to be the correct behaviour rather than the objection.
-- Terminals exposes `auto | webgl | dom` renderer selection. `auto` preserves accelerated WebGL
-  on desktop with automatic DOM fallback, and keeps Codex on DOM so its scrollback remains
-  stable. Mobile is DOM-only regardless of the preference, because Chromium device emulation can
-  keep a live context across a pixel-ratio change and leave the pane blank. An explicit `webgl`
-  preference does reach Codex: the exclusion belongs to the default, not to a user who has
-  chosen otherwise, and opting in is the only way to measure whether it still earns its place.
+- Terminals exposes `auto | webgl | dom` renderer selection.
+  `auto` preserves accelerated WebGL for desktop shells with automatic DOM fallback, and keeps scrollback-repainting harnesses on DOM.
+  Claude and OMP are also DOM-only, including under an explicit `webgl` preference: their repainting surfaces can return from a retained hidden interval or deep replay with a live but intermittently mangled WebGL context, no context-loss event, and no reliable recovery short of a real resize.
+  Mobile is DOM-only regardless of the preference, because Chromium device emulation can keep a live context across a pixel-ratio change and leave the pane blank.
+  An explicit `webgl` preference still reaches Codex: its exclusion belongs to the default, while OMP's continuous repaint makes the unsafe override look like incomplete replay and is not exposed.
   Its failure mode is visible (torn or blank scrollback) and reversible by selecting `dom`.
 - The WebGL addon is constructed with `preserveDrawingBuffer: true`, and that is load-bearing
   rather than a tuning choice. `WebglRenderer._updateModel` skips any cell whose code, fg, bg
   and ext match its model, so a frame re-uploads only what changed and every other pixel is
   assumed to still be in the drawing buffer. Under the default `false` the browser may discard
-  that buffer as soon as the canvas stops being composited, which is what a warm pane behind
-  another tab is (`.pane-warm` is `display:none`). The pane then returns with only the changed
+  that buffer as soon as the canvas stops being composited, which can happen to a warm pane behind
+  another tab. The pane then returns with only the changed
   cells drawn, and dragging a selection over the gaps repaints them — the "it draws once I
   highlight it" symptom. Nothing fires when a compositor drops a buffer, so an event-driven
   repair cannot cover this and the assumption is what has to go.
@@ -366,7 +365,7 @@ responsive controls.
   transition cannot swallow the show event before it reaches the retained xterm instance.
   Pane restoration also forces xterm's renderer-dimension path after the fit: both FitAddon and
   public `term.resize` return early when the cell grid is unchanged, even though a renderer
-  returning from `display:none` can still hold a stale pixel surface in the upper-left part of
+  returning from a retained hidden interval can still hold a stale pixel surface in the upper-left part of
   its host. `reflowVisibleTerminalRenderer` temporarily toggles and restores the public,
   non-geometric `customGlyphs` option; xterm treats that option as renderer-invalidating and
   invokes `handleResize` without changing the grid or sending a PTY resize frame. The explicit
@@ -389,6 +388,19 @@ responsive controls.
   pane restoration does: a box that changed while the grid did not leaves the renderer sized for
   the old box, and refreshing rows into a stale surface repaints only the region that was already
   correct.
+- Surface repair is persistent debt rather than a one-shot animation frame.
+  A reveal or confirmation that lands before a logically visible host becomes measurable keeps the debt, retries for a bounded number of frames, and stops without spinning if the pane remains hidden.
+  The first later successful viewport measurement resumes it, and the terminal health sweep is the final recovery path if no resize or intersection event follows.
+  Only a successful renderer reflow and row redraw clears the debt or advances `confirmedSurface`.
+- Viewport fitting has separate persistent debt.
+  A nonzero host is not sufficient evidence of a fit because FitAddon can still lack usable cell metrics while layout settles; only a finite dimensions proposal followed by geometry application clears the debt.
+  Renderer recovery resumes pending fit debt, and the health sweep compares the current grid with a fresh FitAddon proposal so a faithfully rendered 20-row surface inside a host that now fits 40 rows cannot be mistaken for healthy.
+- Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
+  Claude's terminal body stops at 120 columns and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  The centered grid item retains an explicit `width:100%` before its maximum is applied.
+  Centering without that definite width makes CSS Grid intrinsically size the host from xterm's own fitted child, creating a repeated shrink-and-refit loop.
+  Codex panes that would fit fewer than 80 columns reduce their font, down to 8 px, and fit again before attach or resize; this preserves Codex's documented 80-column composer floor for ordinary narrow desktop panes.
+  The compact mobile workspace keeps its normal readable font and native narrow geometry.
 - The daemon reports the host PTY to the browser as `pty_windows` in `/api/config`, and every
   terminal is constructed with it as xterm's `windowsPty`. A browser cannot detect ConPTY, and
   xterm needs it to know that lines are hard-wrapped without a wrap flag: below ConPTY build
@@ -639,7 +651,7 @@ responsive controls.
   visible result was a session walking toward the top of its transcript when the keyboard opened
   or closed — only ever in a session whose history lives in scrollback, since an alternate-screen
   application has no scrollback for a viewport to walk through.
-- Returning from `display:none` restores the tail only for a viewport that was on it. A reader
+- Returning from a retained hidden interval restores the tail only for a viewport that was on it. A reader
   who had scrolled up keeps their place across a tab switch; the pass that runs on reveal has
   already restored their anchor.
 - Reaching the tail likewise means the *application's* viewport, not only xterm's: scrolling
@@ -1374,8 +1386,10 @@ any client with `localStorage.setItem('mux:terminal-render-diagnostics', '1')` a
 read the last 100 entries from `window.__muxTerminalRenderDiagnostics` (each is `{at, sessionId,
 phase, detail}`); `mux:terminal-render-diagnostic` fires on every append. Phases: `pane_mounted`,
 `preconnect_fit`, `attach_ready_sent`, `full_redraw_requested`, `full_redraw_issued`,
-`full_redraw_rendered`, `surface_redraw_confirmed`, `webgl_context_lost`, `webgl_load_failed`,
-`webgl_render_error`. Note that `full_redraw_rendered` proves only that xterm's `RenderService`
+`full_redraw_rendered`, `viewport_fit_deferred`, `viewport_fit_resumed`,
+`viewport_fit_drift_repair`, `surface_redraw_deferred`, `surface_repair_resumed`,
+`surface_redraw_confirmed`, `webgl_context_lost`, `webgl_load_failed`, `webgl_render_error`.
+Note that `full_redraw_rendered` proves only that xterm's `RenderService`
 fired `onRender`, which it does whether or not the renderer painted — it is not evidence that
 pixels changed.
 

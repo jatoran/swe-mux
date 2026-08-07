@@ -61,13 +61,11 @@ Editor ownership is derived from that selection plus drawer visibility, so closi
 
 ## Warm terminal panes
 
-A stack renders its active child **plus** its most recently shown terminal siblings, hidden with
-`display:none` (`.terminal-pane.pane-warm`). Unmounting them instead made every tab switch a cold
-attach: xterm disposed, the PTY socket dropped, and on return the daemon replays the retained
-buffer while xterm parses it in time-sliced chunks, so a long session is watched redrawing. Worst
-for Codex, whose transcript lives in scrollback (`tui.alternate_screen="never"`, `codex_tui.py`)
-and whose retained bytes are therefore real lines that each allocate and scroll rather than
-repaints of one alternate screen.
+A stack renders its active child **plus** its most recently shown terminal siblings.
+`.terminal-pane.pane-warm` removes a hidden sibling from flex layout with absolute positioning and makes it non-interactive with `visibility:hidden` and `pointer-events:none`, but preserves a measurable host box.
+Collapsing that box with `display:none` left xterm without cell metrics and produced intermittent stale or mangled terminal surfaces that browser-only redraws could not reliably reconstruct.
+Unmounting warm panes instead made every tab switch a cold attach: xterm disposed, the PTY socket dropped, and on return the daemon replays the retained buffer while xterm parses it in time-sliced chunks, so a long session is watched redrawing.
+This is worst for Codex, whose transcript lives in scrollback (`tui.alternate_screen="never"`, `codex_tui.py`) and whose retained bytes are therefore real lines that each allocate and scroll rather than repaints of one alternate screen.
 
 `warmPanes.ts` owns the policy, pure and unit-tested: `recordPaneVisits` moves the currently
 shown panes to the front of a capped recency list, and `warmPaneIds` returns the hidden set —
@@ -80,20 +78,28 @@ The mobile projection deliberately keeps none. It renders one selected pane with
 worth more there than the reattach it saves, and the unified rail has no second pane on screen to
 switch back to.
 
-A warm pane is live but not being looked at, so `TerminalPane` treats it exactly as it treats a
-backgrounded browser tab: `paneIsHidden()` is `document.hidden || !visible`, and it gates viewport
-registration (a warm pane deregisters, so it cannot reshape the shared PTY), input-ownership
-focus, and OSC 52 clipboard writes. `visible` is read through a ref and is deliberately **not** a
-mount-effect dependency — listing it would dispose and rebuild the terminal on every switch, which
-is the cost warm panes remove. It is, however, part of `TerminalPane`'s custom memo comparator;
-without that comparison a visibility-only render is discarded before the lightweight effect can
-update the ref, withdraw the hidden viewport, or redraw the shown surface. Becoming visible again
-schedules a fit, same-grid renderer reflow, full redraw, and tail scroll. The reflow is distinct
+A warm pane is live but not being looked at, so `TerminalPane` treats it exactly as it treats a backgrounded browser tab.
+`paneIsHidden()` is `document.hidden || !visible`, and it gates viewport registration, input-ownership focus, and OSC 52 clipboard writes.
+A warm pane deregisters immediately, so its measurable retained box cannot reshape the shared PTY.
+The hidden viewport pass returns after deregistration and cannot refit the local xterm model while its PTY retains the last visible geometry.
+`visible` is read through a ref and is deliberately **not** a mount-effect dependency because listing it would dispose and rebuild the terminal on every switch, which is the cost warm panes remove.
+It is, however, part of `TerminalPane`'s custom memo comparator; without that comparison a visibility-only render is discarded before the lightweight effect can update the ref, withdraw the hidden viewport, or redraw the shown surface.
+Becoming visible again schedules a fit, persistent same-grid renderer repair, full redraw, and tail scroll.
+The repair is recorded before either reveal frame and is cleared only after a measurable host successfully reflows and redraws.
+Zero-sized frames retain it for the next successful viewport measurement, reveal signal, or health sweep.
+The reflow is distinct
 from fitting: FitAddon and public `term.resize` both short-circuit when cols/rows match, while the
-DOM or canvas surface can still retain stale pixel dimensions after `display:none`. Toggling and
+DOM or canvas surface can still retain stale pixel dimensions after a retained hidden interval. Toggling and
 immediately restoring xterm's public `customGlyphs` option reaches `RenderService.handleResize`
 without changing the cell grid or reporting a PTY resize. Output that arrived while the pane was
 hidden moved `baseY` with no viewport following it, so the tail repair remains separate.
+The fit itself is also persistent debt: a newly visible host can still produce no FitAddon dimensions while layout and xterm cell metrics settle, and that pass is not considered successful.
+The slow health sweep independently compares the current grid with a fresh fit proposal, excluding intentional letterboxes, so stale half-height grids recover even if every event signal was missed.
+
+Viewport measurement also owns the agent width envelope.
+Claude's host is centered and capped at 120 columns, so parent growth beyond that width does not emit another PTY resize.
+For narrow desktop Codex panes, the measurement first proposes at the configured base font, derives a smaller font when the proposal is below 80 columns, and proposes again before changing xterm or sending the viewport frame.
+The policy runs on pre-connect attach, ordinary resize, reconnect, explicit Resize, and health repair through the same `fitVisiblePane` path, so replay bytes cannot be parsed at a different width from the one registered with ConPTY.
 
 ## Viewport passes are coalesced once they get expensive
 

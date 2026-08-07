@@ -178,7 +178,9 @@ is bounded and recency-ordered (`WARM_TERMINAL_PANES`), and a hidden pane behave
 backgrounded tab for every shared resource — it deregisters its viewport from PTY geometry
 arbitration, cannot take input ownership, and cannot write the system clipboard. The hide/show
 transition itself is load-bearing: hiding withdraws the viewport immediately; showing re-fits
-and fully redraws the retained xterm instance. Mechanics: `technical/frontend/workspace-state.md`
+and fully redraws the retained xterm instance. Hidden panes remain absolutely positioned at the
+stack's dimensions instead of collapsing to zero, while logical visibility prevents them from
+participating in PTY geometry. Mechanics: `technical/frontend/workspace-state.md`
 § Warm terminal panes.
 
 ## Key files

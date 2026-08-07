@@ -3,6 +3,37 @@ type TerminalRendererOptions = { options: { customGlyphs?: boolean } }
 type TerminalFit = { fit: () => void }
 type TerminalHost = { isConnected: boolean; clientWidth: number; clientHeight: number }
 
+/**
+ * Desktop width envelope for agent TUIs with known layout boundaries.
+ *
+ * Claude's live-region renderer leaves stale and duplicated cells across large
+ * column changes. Past this reading width, a wider pane should add margin rather
+ * than keep resizing the PTY. Codex publishes an 80-column minimum in its own
+ * terminal diagnostics; below it the composer can wrap through visually blank
+ * rows, so desktop panes reduce the font before accepting a narrower grid.
+ */
+export const CLAUDE_MAX_DESKTOP_COLUMNS = 120
+export const CODEX_MIN_DESKTOP_COLUMNS = 80
+export const CODEX_MIN_DESKTOP_FONT_PX = 8
+
+export function terminalWidthPolicyFontSize(
+  backend: string,
+  compactLayout: boolean,
+  proposedColumns: number,
+  baseFontSize: number,
+): number {
+  if (
+    backend !== 'codex'
+    || compactLayout
+    || !Number.isFinite(proposedColumns)
+    || proposedColumns >= CODEX_MIN_DESKTOP_COLUMNS
+    || baseFontSize <= 0
+  ) return baseFontSize
+  const scaled = Math.floor(baseFontSize * proposedColumns / CODEX_MIN_DESKTOP_COLUMNS)
+  const floor = Math.min(baseFontSize, CODEX_MIN_DESKTOP_FONT_PX)
+  return Math.max(floor, Math.min(baseFontSize, scaled))
+}
+
 export function terminalHostIsVisible(host: TerminalHost | null): host is TerminalHost {
   return !!host && host.isConnected && host.clientWidth > 0 && host.clientHeight > 0
 }
@@ -14,7 +45,7 @@ export function refitVisibleTerminal(fit: TerminalFit, host: TerminalHost | null
 }
 
 /**
- * Recalculate xterm's renderer pixels after a pane returns from `display:none`.
+ * Recalculate xterm's renderer pixels after a pane returns from a hidden interval.
  *
  * FitAddon deliberately skips `term.resize` when the grid has not changed. The public resize
  * method has the same early return, while the DOM or canvas surface can still retain dimensions
@@ -40,8 +71,8 @@ export function reflowVisibleTerminalRenderer(
  *
  * Two things have to hold, and the second is not implied by the first: the pane is on
  * screen, *and* it has just fitted itself. Skipping the fit check is what pinned whole
- * sessions to xterm's 80x24 construction default. A pane whose host measures zero — a
- * warm pane behind another tab is `display:none` — cannot fit, so `term.cols/rows` are
+ * sessions to xterm's 80x24 construction default. A pane whose host measures zero cannot
+ * fit, so `term.cols/rows` are
  * whatever they last were: the unfitted default on a first attach, and on a reconnect
  * the grid `applyLetterbox` resized to *another* device's size, because leaving a
  * letterbox restores the font but not the grid. Reporting either re-registers a size
@@ -289,11 +320,96 @@ export function effectiveViewportCost(elapsedMs: number, sentResize: boolean): n
  * `scheduleBurstFit`, which on a pane expensive enough to matter is exactly the case the
  * scheduler coalesces, and it only fires at all if the box changes size again.
  *
- * Bounded rather than a loop: a few frames covers layout settling after `display:none`
- * is lifted, and anything longer is a pane that is not coming back, which the hidden
- * check ahead of this already handles.
+ * Bounded rather than a loop: a few frames covers ordinary layout settling after
+ * `display:none` is lifted. The caller retains fit debt after the burst and resumes it
+ * from the next visibility, renderer-repair, observer, or health-sweep signal.
  */
 export const VIEWPORT_MEASURE_RETRY_FRAMES = 5
+
+export interface AnimationFrameTimers {
+  requestFrame: (fn: () => void) => number
+  cancelFrame: (id: number) => void
+}
+
+export interface SurfaceRepairScheduler {
+  /** Record that renderer dimensions and pixels still need a successful repair. */
+  markOwed: () => void
+  /** Record the debt and start attempting it on the next frame. */
+  request: () => void
+  /** Retry existing debt after a new visibility or measurement signal. */
+  resume: () => void
+  cancel: () => void
+  readonly owed: boolean
+}
+
+/**
+ * Keep a terminal surface repair pending until an attempt actually succeeds.
+ *
+ * A newly visible pane can still have a zero-sized host on the first
+ * animation frame. A one-shot redraw silently loses the repair in that frame, as does
+ * a delayed confirmation that happens to land after the pane was hidden again. This
+ * scheduler retries briefly while the pane is logically visible, then retains the debt
+ * without spinning. A later reveal, ResizeObserver pass, or health sweep calls `resume`.
+ */
+export function createSurfaceRepairScheduler(
+  repair: () => boolean,
+  mayRetry: () => boolean,
+  frames: AnimationFrameTimers,
+  maxRetryFrames = VIEWPORT_MEASURE_RETRY_FRAMES,
+): SurfaceRepairScheduler {
+  let frame: number | null = null
+  let owed = false
+  let retries = 0
+
+  const cancelFrame = () => {
+    if (frame === null) return
+    frames.cancelFrame(frame)
+    frame = null
+  }
+  const schedule = () => {
+    cancelFrame()
+    frame = frames.requestFrame(run)
+  }
+  const run = () => {
+    frame = null
+    if (!owed) return
+    if (repair()) {
+      owed = false
+      retries = 0
+      return
+    }
+    if (mayRetry() && retries < maxRetryFrames) {
+      retries += 1
+      schedule()
+    }
+  }
+  const restart = () => {
+    retries = 0
+    schedule()
+  }
+
+  return {
+    markOwed() {
+      owed = true
+    },
+    request() {
+      owed = true
+      restart()
+    },
+    resume() {
+      if (!owed) return
+      restart()
+    },
+    cancel() {
+      cancelFrame()
+      owed = false
+      retries = 0
+    },
+    get owed() {
+      return owed
+    },
+  }
+}
 
 /**
  * Hard cap on coalescing, so a continuous gesture still updates.

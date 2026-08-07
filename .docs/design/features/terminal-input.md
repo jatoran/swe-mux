@@ -95,9 +95,15 @@ reshape the PTY for the device in use. Every client is told the result and any c
 own fit differs LETTERBOXES: shrink the font, never re-fit, because re-fitting is what put
 two devices into a resize loop.
 
+**Desktop agent width policy is applied before viewport registration.**
+Claude's host has a centered 120-column maximum, so making its pane wider adds margin instead of repeatedly resizing the PTY through Claude Code's known stale-cell and duplicate-live-region failure.
+Codex's own diagnostics recommend at least 80 columns.
+When an ordinary desktop pane would fall below that, mux reduces the xterm font to a floor of 8 px, proposes dimensions again, and sends only the resulting grid; replay therefore starts with the same width xterm is already rendering.
+Compact mobile panes are excluded because preserving readable touch-device type is more important than imposing a desktop minimum.
+
 **A pane returning to screen adopts its own fit instead of waiting to be told**
 (`adoptsOwnGeometryOnReveal`). `serverGeometry` is one round trip stale by construction, and a
-warm pane has usually just measured a box that changed while it was `display:none` (the window
+warm pane has usually retained an old fit while its measurable hidden box changed (the window
 was resized, the drawer opened, the UI scale moved). Comparing the two on the reveal is
 therefore guaranteed to disagree, so the pane letterboxed to its pre-hide grid, rendered at
 that size, and snapped when the daemon confirmed the size the pane itself had just reported.
@@ -115,8 +121,8 @@ surface on its own, even at an unchanged grid, so the stale-dimension repair
 fails loudly rather than silently reinstating the symptom.
 
 **A viewport pass whose host measures zero retries instead of dropping**
-(`VIEWPORT_MEASURE_RETRY_FRAMES`). A pane revealed from `display:none` can measure zero for a
-frame or two while layout settles, and that pass is the only thing that would register its
+(`VIEWPORT_MEASURE_RETRY_FRAMES`). A newly visible pane can still measure zero for a frame or
+two while layout settles, and that pass is the only thing that would register its
 real viewport. Returning silently left the pane on its pre-hide grid indefinitely, because the
 daemon broadcasts a `geometry` frame only when the arbitrated size actually *changes*
 (`Session.apply_geometry`) — an unchanged arbitration is silence, not confirmation, so nothing
@@ -158,7 +164,7 @@ breadcrumbs in the render diagnostics.
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
 session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm
-pane is `display:none` inside a foreground tab), and a pane that could not fit — its host
+pane is logically hidden inside a foreground tab), and a pane that could not fit — its host
 measures zero — is still holding xterm's unfitted 80x24 default, or, after a letterbox,
 another device's grid, since leaving a letterbox restores the font but not the grid.
 Because ownership carries geometry, an unfocused client is refused an unowned session too;

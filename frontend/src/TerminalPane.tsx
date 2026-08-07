@@ -39,7 +39,7 @@ import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
 import { currentProfile, loadRailItems } from './deviceSettings'
-import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, refitVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, trackAppTailDistance, type TerminalSurface } from './terminalViewport'
+import { APP_TAIL_KEY, CLAUDE_MAX_DESKTOP_COLUMNS, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
 import { scaledFontSize } from './uiScale'
@@ -74,7 +74,7 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
-import { remountDecision, surfaceDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
+import { remountDecision, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
   caretResolverForBackend,
@@ -637,6 +637,38 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     termRef.current = term
     searchRef.current = search
     term.open(host.current)
+    let normalFontSize = baseFontRef.current
+    const proposeNormalDimensions = (restoreFont: boolean) => {
+      const previousFont = term.options.fontSize ?? baseFontRef.current
+      const base = baseFontRef.current
+      term.options.fontSize = base
+      let proposed = fit.proposeDimensions()
+      if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) {
+        normalFontSize = terminalWidthPolicyFontSize(
+          session.backend,
+          window.matchMedia('(max-width:760px)').matches,
+          proposed.cols,
+          base,
+        )
+        if (normalFontSize !== base) {
+          term.options.fontSize = normalFontSize
+          proposed = fit.proposeDimensions()
+        }
+      }
+      if (restoreFont) term.options.fontSize = previousFont
+      return proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)
+        ? proposed
+        : undefined
+    }
+    const fitVisiblePane = () => {
+      if (!terminalHostIsVisible(host.current)) return false
+      const proposed = proposeNormalDimensions(false)
+      if (!proposed) return false
+      if (term.cols !== proposed.cols || term.rows !== proposed.rows) {
+        term.resize(proposed.cols, proposed.rows)
+      }
+      return true
+    }
     const mobileLiveInput=mobileTerminalInput?mobileLiveInputRef.current:null
     // The live-input textarea is uncontrolled, and switching stack tabs re-runs this
     // effect against the *same* DOM node (the pane is rendered unkeyed as the stack's
@@ -749,9 +781,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let exitWritten = false
     let fitFrame = 0
     let redrawFrame = 0
-    let surfaceFrame = 0
     let visibilityFrame = 0
     let surfaceConfirmTimer: number | undefined
+    let surfaceRepair: SurfaceRepairScheduler | null = null
     let invalidateAtlasOnRedraw = false
     let webgl: WebglAddon | null = null
     let activeRenderer: ActiveTerminalRenderer = 'dom'
@@ -847,6 +879,40 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           rows: term.rows,
         })
         scheduleFit()
+        return
+      }
+      const proposedFit = paneIsHidden() || letterboxed ? undefined : fit.proposeDimensions()
+      if (terminalFitDrifted(
+        term,
+        proposedFit,
+        replaying,
+        paneIsHidden(),
+        letterboxed,
+      )) {
+        diagnoseRender?.('viewport_fit_drift_repair', {
+          current: { cols: term.cols, rows: term.rows },
+          proposed: proposedFit,
+          host: { width: host.current?.clientWidth ?? 0, height: host.current?.clientHeight ?? 0 },
+        })
+        scheduleFit()
+        return
+      }
+      if (viewportFitOwed && !paneIsHidden() && terminalHostIsVisible(host.current)) {
+        diagnoseRender?.('viewport_fit_resumed', {
+          cols: term.cols,
+          rows: term.rows,
+          host: { width: host.current?.clientWidth ?? 0, height: host.current?.clientHeight ?? 0 },
+        })
+        scheduleFit()
+        return
+      }
+      if (surfaceRepair?.owed && !paneIsHidden() && terminalHostIsVisible(host.current)) {
+        diagnoseRender?.('surface_repair_resumed', {
+          cols: term.cols,
+          rows: term.rows,
+          renderer: activeRenderer,
+        })
+        surfaceRepair.resume()
       }
     }
     const terminalStateTimer = window.setInterval(() => {
@@ -871,6 +937,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let adoptOwnFitOnReveal = false
     // Consecutive frames this pass has waited for a revealed host to gain layout.
     let measureRetries = 0
+    // A visible viewport request is not complete until FitAddon returns real dimensions.
+    // Bounded frame retries may pause, but they cannot erase this debt.
+    let viewportFitOwed = false
     const sendViewport = (cols: number, rows: number, force = false) => {
       if (socket?.readyState !== WebSocket.OPEN) return
       const hidden = paneIsHidden()
@@ -882,28 +951,25 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // the user is actually holding.
       socket.send(JSON.stringify({ type: 'resize', cols, rows, hidden }))
     }
-    const measureFit = () => {
+    const measureFit = (): boolean => {
       const box = host.current
-      if (!box) return
+      if (!box) return false
       const size = { width: box.clientWidth, height: box.clientHeight }
       // While letterboxed, measuring means briefly restoring the pane's own font, so it
       // is done only when the box it has to fit actually changed.
       if (letterboxed && localFit && localFitBox?.width === size.width && localFitBox.height === size.height) {
         sendViewport(localFit.cols, localFit.rows)
-        return
+        return true
       }
       // A letterboxed pane renders at a smaller font, and a proposal measured there
       // would tell the daemon this pane wants columns nobody on this device could read
       // — and that is the number the shared PTY would then be sized to.
-      const base = baseFontRef.current
-      const fontSize = term.options.fontSize ?? base
-      if (fontSize !== base) term.options.fontSize = base
-      const proposed = fit.proposeDimensions()
-      if (fontSize !== base) term.options.fontSize = fontSize
-      if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return
+      const proposed = proposeNormalDimensions(true)
+      if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return false
       localFit = { cols: proposed.cols, rows: proposed.rows }
       localFitBox = size
       sendViewport(localFit.cols, localFit.rows)
+      return true
     }
     const applyLetterbox = (target: { cols: number; rows: number }) => {
       const box = host.current
@@ -939,7 +1005,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (!letterboxed) return
       letterboxed = false
       setLetterboxSize('')
-      term.options.fontSize = baseFontRef.current
+      term.options.fontSize = normalFontSize
     }
     const applyGeometry = () => {
       // Consume the reveal's licence to trust its own measurement before comparing, so
@@ -967,30 +1033,45 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // apply to this path. Measured in `runLetterboxExitRepair`, which asserts it.
         term.options.fontSize = baseFontRef.current
       }
-      refitVisibleTerminal(fit, host.current)
+      fitVisiblePane()
     }
     const runViewportPass = () => {
+      viewportFitOwed = true
       window.cancelAnimationFrame(fitFrame)
       window.cancelAnimationFrame(redrawFrame)
       fitFrame = window.requestAnimationFrame(() => {
-        // Deregistering has to happen even when the pane has no layout to measure,
-        // otherwise a hidden client's last size would hold the PTY hostage. A warm
-        // pane has layout of its own (it is only `display:none`), so without this it
-        // would keep the PTY sized for a tab nobody is looking at.
-        if (paneIsHidden()) sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
-        if (!terminalHostIsVisible(host.current)) {
+        // Deregister before doing any geometry work. Warm panes deliberately retain a
+        // measurable box so xterm never passes through a zero-sized renderer, but that
+        // box must not refit the local model while its PTY remains at the last visible
+        // geometry or register a viewport for a tab nobody is looking at.
+        if (paneIsHidden()) {
+          sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
+          viewportFitOwed = false
+          measureRetries = 0
+          return
+        }
+        const viewportBox = host.current
+        const viewportBoxState = {
+          width: viewportBox?.clientWidth ?? 0,
+          height: viewportBox?.clientHeight ?? 0,
+        }
+        if (!terminalHostIsVisible(viewportBox)) {
           // A pane revealed this frame can still measure zero while layout settles, and
           // this pass is the only thing that would register its real viewport. Retry a
           // bounded number of frames instead of dropping it: see
           // VIEWPORT_MEASURE_RETRY_FRAMES for why the ResizeObserver is not the net it
           // looks like. A pane that is genuinely hidden stopped at the check above.
+          if (!paneIsHidden()) diagnoseRender?.('viewport_fit_deferred', {
+            reason: 'host_unmeasurable',
+            retries: measureRetries,
+            host: viewportBoxState,
+          })
           if (!paneIsHidden() && measureRetries < VIEWPORT_MEASURE_RETRY_FRAMES) {
             measureRetries += 1
             runViewportPass()
           }
           return
         }
-        measureRetries = 0
         // A resize moves `baseY` (a ConPTY-backed buffer gains blank rows rather than
         // pulling scrollback back down), so a viewport that was on the newest line no
         // longer is. Remembered before the fit and restored after, because "was the
@@ -1003,8 +1084,21 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         const rowsAboveTail = wasAtTail ? 0 : terminalRowsAboveTail(term)
         const startedAt = performance.now()
         viewportResizeSent = false
-        measureFit()
+        if (!measureFit()) {
+          diagnoseRender?.('viewport_fit_deferred', {
+            reason: 'dimensions_unavailable',
+            retries: measureRetries,
+            host: { width: host.current?.clientWidth ?? 0, height: host.current?.clientHeight ?? 0 },
+          })
+          if (!paneIsHidden() && measureRetries < VIEWPORT_MEASURE_RETRY_FRAMES) {
+            measureRetries += 1
+            runViewportPass()
+          }
+          return
+        }
+        measureRetries = 0
         applyGeometry()
+        viewportFitOwed = false
         // Timed around the two calls that do the work, so the scheduler's decision to
         // coalesce is based on this pane's real cost rather than on its backend — and a
         // pass that shipped a `resize` frame is charged the pseudoconsole resize and CLI
@@ -1013,6 +1107,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         viewportScheduler.observeCost(
           effectiveViewportCost(performance.now() - startedAt, viewportResizeSent),
         )
+        // A successful measurement is the first reliable point after reveal at which
+        // renderer repair can run. Resume any debt that a zero-sized frame retained.
+        surfaceRepair?.resume()
         if (wasAtTail) scrollTerminalToTail(term)
         else restoreTerminalScrollAnchor(term, rowsAboveTail)
         // DOM/WebGL pixels can be discarded while a pane or browser tab is hidden.
@@ -1055,30 +1152,60 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // Deliberately not another viewport pass: a fit is `term.resize` plus a pseudoconsole
     // resize plus the CLI repainting everything it is showing (see EXPENSIVE_VIEWPORT_PASS_MS),
     // and none of that is what needs repeating. Only the two calls that put pixels back do.
-    const runSurfaceRedraw = () => {
-      surfaceFrame = window.requestAnimationFrame(() => {
-        if (!terminalHostIsVisible(host.current)) return
+    // The surface this pane last confirmed it had drawn, so a pass can tell whether the one
+    // it just painted is a different shape. Written only by the confirmation, never by the
+    // pass that requests it: a pass that painted into a moving layout is precisely the one
+    // whose result must not be believed.
+    let confirmedSurface: TerminalSurface | null = null
+    surfaceRepair = createSurfaceRepairScheduler(
+      () => {
+        const box = host.current
+        const boxState = {
+          connected: box?.isConnected ?? false,
+          width: box?.clientWidth ?? 0,
+          height: box?.clientHeight ?? 0,
+        }
+        if (paneIsHidden() || !terminalHostIsVisible(box)) {
+          diagnoseRender?.('surface_redraw_deferred', {
+            ...boxState,
+            paneHidden: paneIsHidden(),
+            renderer: activeRenderer,
+          })
+          return false
+        }
         webgl?.clearTextureAtlas()
         // Renderer dimensions first, then pixels. A pass whose box moved without its grid
         // changing leaves the renderer sized for the old box, and refreshing rows into a
         // surface that is still the wrong size repaints exactly the region that was
         // already right. FitAddon's same-grid early return is what makes this reachable —
         // see `reflowVisibleTerminalRenderer`. Free when nothing is stale.
-        reflowVisibleTerminalRenderer(term, host.current)
-        redrawVisibleTerminal(term, host.current)
-        confirmedSurface = terminalSurface(term, host.current)
+        const reflowed = reflowVisibleTerminalRenderer(term, box)
+        const redrawn = redrawVisibleTerminal(term, box)
+        confirmedSurface = terminalSurface(term, box)
+        if (!reflowed || !redrawn || !confirmedSurface) {
+          diagnoseRender?.('surface_redraw_deferred', {
+            reflowed,
+            redrawn,
+            hasSurface: !!confirmedSurface,
+            renderer: activeRenderer,
+          })
+          confirmedSurface = null
+          return false
+        }
         diagnoseRender?.('surface_redraw_confirmed', {
           cols: term.cols,
           rows: term.rows,
           renderer: activeRenderer,
         })
-      })
-    }
-    // The surface this pane last confirmed it had drawn, so a pass can tell whether the one
-    // it just painted is a different shape. Written only by the confirmation, never by the
-    // pass that requests it: a pass that painted into a moving layout is precisely the one
-    // whose result must not be believed.
-    let confirmedSurface: TerminalSurface | null = null
+        if (viewportFitOwed) runViewportPass()
+        return true
+      },
+      () => !paneIsHidden(),
+      {
+        requestFrame: fn => window.requestAnimationFrame(fn),
+        cancelFrame: id => window.cancelAnimationFrame(id),
+      },
+    )
     // A redraw races the compositor: the frame it lands on may be one where this pane's
     // canvas is not being presented at its final size yet, and the render is then simply lost
     // — xterm's RenderService fires `onRender` whether or not the renderer drew anything, so
@@ -1093,8 +1220,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // nothing to retry it — the pane is only asked to redraw again when something else happens.
     const armSurfaceConfirmation = (issued: boolean) => {
       if (!issued) return
+      surfaceRepair?.markOwed()
       window.clearTimeout(surfaceConfirmTimer)
-      surfaceConfirmTimer = window.setTimeout(runSurfaceRedraw, VIEWPORT_SETTLE_MS)
+      surfaceConfirmTimer = window.setTimeout(() => surfaceRepair?.request(), VIEWPORT_SETTLE_MS)
     }
     const viewportScheduler = createViewportScheduler(runViewportPass, {
       now: () => performance.now(),
@@ -1120,8 +1248,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       window.cancelAnimationFrame(visibilityFrame)
       if (!nowVisible) {
         cancelCaretPlacement()
-        // Hidden by `display:none`, so the host measures zero and the scheduled fit
-        // would return before deregistering. Send the deregistration directly.
+        // Send the deregistration directly. The warm host remains measurable on
+        // purpose, but no scheduled geometry work may run for a hidden viewport.
         // Unconditional in the dimensions: `sendViewport` reads `hidden` itself, so what
         // matters is that the frame goes at all. Gating it on a `localFit` this pane may
         // never have taken (a reconnect nulls it) is what let a registration outlive the
@@ -1129,11 +1257,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         sendViewport(localFit?.cols ?? term.cols, localFit?.rows ?? term.rows)
         return
       }
-      // Back on screen. The pane may have missed geometry changes while it had no
-      // layout to measure, and its renderer may hold pixels from before the tab was
-      // resized, so this is a full redraw rather than a plain fit. FitAddon skips its
+      // Back on screen. The pane may have missed geometry changes while hidden, and
+      // its renderer may hold pixels from before the tab was resized, so this is a
+      // full redraw rather than a plain fit. FitAddon skips its
       // resize when the grid is unchanged, but xterm's renderer can still hold stale
-      // pixel dimensions after `display:none`; force the same-grid renderer reflow
+      // pixel dimensions after a retained hidden interval; force the same-grid renderer reflow
       // after the scheduled fit. The tail scroll is the same repair `finishReplay`
       // does: output that arrived while the pane was hidden moved `baseY` without
       // moving a viewport nobody was watching.
@@ -1148,11 +1276,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // real measurement of the box the user is now looking at instead of a cache hit
       // on `localFitBox`, which is what let a stale grid survive the whole transition.
       localFitBox = null
+      // Record this before scheduling either frame. The debt survives if both land while
+      // the host still measures zero and is resumed by the first successful measurement.
+      surfaceRepair?.markOwed()
       scheduleFullRedraw()
       visibilityFrame = window.requestAnimationFrame(() => {
         if (paneIsHidden()) return
-        reflowVisibleTerminalRenderer(term, host.current)
-        runSurfaceRedraw()
+        surfaceRepair?.resume()
         // Only for a viewport that was on the tail when the pane went away. A reader who
         // had deliberately scrolled up is not asking to be taken to the newest output every
         // time they visit another tab, and the pass above has already put their anchor back.
@@ -1163,12 +1293,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // its emulated pixel ratio, leaving xterm interactive but visually blank.
     // The built-in renderer is reliable for the single full-screen mobile pane.
     const mobileRenderer = window.matchMedia('(max-width:760px)').matches
-    // Codex's full-screen redraws can corrupt WebGL scrollback while the
-    // viewport is off-tail. Its DOM renderer remains stable for old sessions;
-    // new sessions also keep their transcript in scrollback on the backend
-    // (`tui.alternate_screen="never"`), so they no longer make those redraws.
-    // The exclusion predates both that default and the `preserveDrawingBuffer`
-    // fix below, and is worth re-measuring rather than assuming still needed.
+    // Claude is DOM-only because its alternate-screen WebGL surface can remain live
+    // but corrupt after a retained hidden interval; there is no context-loss event to
+    // recover from.
+    // Under `auto`, scrollback-repainting harnesses also remain on DOM.
     if (shouldLoadWebgl(rendererPreference, mobileRenderer, session.backend)) {
       try {
         // `preserveDrawingBuffer: true`, and it is not optional here.
@@ -1177,8 +1305,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // its model ("Nothing has changed, no updates needed"), so a frame re-uploads only
         // what changed and every other pixel is expected to still be in the drawing buffer.
         // With the default `false` the spec lets the browser discard that buffer once the
-        // canvas stops being composited — which is exactly what a warm pane behind another
-        // tab is, since `.pane-warm` is `display:none`. Coming back, the model still claims
+        // canvas stops being composited, which is exactly what a warm pane behind another
+        // tab can be. Coming back, the model still claims
         // everything is drawn, so only genuinely-changed cells repaint and the rest stay
         // blank. Dragging a selection over them changes their fg/bg, which fails that
         // equality check and makes them reappear: the "it draws once I highlight it" report.
@@ -1207,7 +1335,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     // Establish final geometry after the selected renderer is active and before
     // the socket can start replaying the terminal buffer.
-    const preconnectFit = refitVisibleTerminal(fit, host.current)
+    const preconnectFit = fitVisiblePane()
     diagnoseRender?.('preconnect_fit', {
       fitted: preconnectFit,
       cols: term.cols,
@@ -1275,7 +1403,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // geometry the daemon applies whether this client already owns input or takes it
       // from another client with the following claim.
       resetLetterbox()
-      if (!refitVisibleTerminal(fit, box)) return
+      if (!fitVisiblePane()) return
       reflowVisibleTerminalRenderer(term, box)
       localFit = { cols: term.cols, rows: term.rows }
       localFitBox = { width: box.clientWidth, height: box.clientHeight }
@@ -1283,7 +1411,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       sendViewport(localFit.cols, localFit.rows, true)
       lastInteractionAt = Date.now()
       claimInput('gesture')
-      runSurfaceRedraw()
+      surfaceRepair?.request()
     }
     const claimOnFocus = () => claimInput(claimReasonForFocus(lastInteractionAt, Date.now()))
     // The events socket and this one race on a cold load, and this one usually wins,
@@ -1483,8 +1611,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         sentViewport=null
         serverGeometry=null
         resetLetterbox()
-        const fitted = refitVisibleTerminal(fit, host.current)
-        // `document.hidden` is not this pane's visibility: a warm pane is `display:none`
+        const fitted = fitVisiblePane()
+        // `document.hidden` is not this pane's visibility: a warm pane is logically hidden
         // inside a *foreground* tab, so it answered "visible", registered the 80x24 it
         // had never fitted, and — being unowned — took ownership and resized the session
         // to it. `paneIsHidden` is the pane's own axis, and the fit check covers the rest.
@@ -2173,7 +2301,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);window.cancelAnimationFrame(surfaceFrame);window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);if(onRenderError)window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
@@ -2463,7 +2591,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(keyboardInset,peekTop,offTail,appOffTail)&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  const claudeHostStyle=session.backend==='claude'?{
+    // `justifySelf:center` opts a grid item out of stretch sizing. Keep the width
+    // definite before applying the cap or the host becomes shrink-to-fit, with its
+    // 100%-wide xterm child feeding the result back into the next FitAddon pass.
+    width:'100%',
+    maxWidth:`calc(${CLAUDE_MAX_DESKTOP_COLUMNS}ch + 11px)`,
+    justifySelf:'center',
+    fontFamily:'"Cascadia Mono", Consolas, monospace',
+    fontSize:`${baseFont}px`,
+    fontWeight:'600',
+  }:undefined
+  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><RailScroller>{scrollingRailItems.map(renderRailItem)}<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>{onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, order, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(keyboardInset,peekTop,offTail,appOffTail)&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

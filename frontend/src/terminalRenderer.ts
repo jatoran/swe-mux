@@ -13,26 +13,30 @@ export function terminalCursorOptions(mobileInput: boolean) {
 /**
  * Whether this pane may run the WebGL renderer.
  *
- * The `auto` preference excludes any harness whose TUI rewrites content already
+ * Claude and OMP are always excluded. Their repainting surfaces can leave a live
+ * WebGL context intermittently mangled after a retained pane returns or a deep
+ * session is reconstructed from bounded replay. No context-loss event fires, and
+ * invalidating xterm's model does not reliably recover it; a real resize does. The
+ * DOM renderer has no corresponding failure.
+ *
+ * The `auto` preference also excludes any harness whose TUI rewrites content already
  * in scrollback (`repaints_scrollback` on its descriptor: Codex reflows its
  * normal-screen transcript on resize, OMP repaints its tail continuously),
  * because those full-screen redraws could corrupt WebGL scrollback while the
  * viewport was off-tail. A trait rather than a name check, so a new harness
  * defaults to the safe DOM renderer until its descriptor declares otherwise —
- * alternate-screen TUIs (Claude) and shells never rewrite scrollback and stay
- * WebGL-eligible.
+ * shells remain WebGL-eligible.
  *
- * An *explicit* `webgl` preference reaches every backend. Opting in is a
- * decision with a visible failure mode (blank or torn scrollback, repaired by
- * scrolling or switching back to `dom`), and it is the only way to measure
- * whether the exclusion is still earning its place.
+ * An *explicit* `webgl` preference still reaches Codex and shells. OMP's continuous
+ * tail repaint makes its failure indistinguishable from incomplete replay, so it
+ * does not expose that unsafe override.
  */
 export function shouldLoadWebgl(
   preference: TerminalRendererPreference,
   mobileViewport: boolean,
   backend: TerminalRendererBackend,
 ): boolean {
-  if (mobileViewport || preference === 'dom') return false
+  if (mobileViewport || preference === 'dom' || backend === 'claude' || backend === 'omp') return false
   return !repaintsScrollback(backend) || preference === 'webgl'
 }
 

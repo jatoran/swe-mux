@@ -4,6 +4,7 @@ import {
   REMOUNT_ATTEMPT_LIMIT,
   remountDecision,
   surfaceDrifted,
+  terminalFitDrifted,
   WRITE_PIPELINE_STALL_MS,
   writePipelineStalled,
 } from '../src/terminalHealth.ts'
@@ -37,6 +38,18 @@ test('surface drift is only judged on a settled, visible pane', () => {
   assert.equal(surfaceDrifted(confirmed, moved, false, true), false)
   // No measurable host: nothing to compare.
   assert.equal(surfaceDrifted(confirmed, null, false, false), false)
+})
+
+test('fit drift detects a stale grid inside an otherwise stable host', () => {
+  const current = { cols: 100, rows: 20 }
+  const fitted = { cols: 100, rows: 40 }
+  assert.equal(terminalFitDrifted(current, fitted, false, false, false), true)
+  assert.equal(terminalFitDrifted(fitted, fitted, false, false, false), false)
+  assert.equal(terminalFitDrifted(current, undefined, false, false, false), false)
+  assert.equal(terminalFitDrifted(current, fitted, true, false, false), false)
+  assert.equal(terminalFitDrifted(current, fitted, false, true, false), false)
+  // A letterbox intentionally renders the shared grid instead of the local proposal.
+  assert.equal(terminalFitDrifted(current, fitted, false, false, true), false)
 })
 
 test('remount attempts are budgeted so a poison replay cannot loop the pane', () => {

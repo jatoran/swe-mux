@@ -141,6 +141,54 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_omp_same_geometry_attach_pulses_a_repaint_behind_replay() -> None:
+    resizes: list[tuple[int, int]] = []
+    record = SessionRecord(
+        "omp-id",
+        "agent",
+        "default",
+        "omp",
+        "native-id",
+        ".",
+        "omp.exe",
+        [],
+        state="working",
+    )
+    pty = cast(
+        Any,
+        SimpleNamespace(
+            write=lambda _data: None,
+            resize=lambda cols, rows: resizes.append((cols, rows)),
+            isalive=lambda: True,
+        ),
+    )
+    session = Session(record, pty, cast(Any, SimpleNamespace()), 1024, "secret")
+    session.scrollback.append(b"bounded replay")
+    session.set_viewport("existing", 80, 24, hidden=False)
+    assert session.apply_geometry() is True
+    resizes.clear()
+
+    app = web.Application()
+    app["sessions"] = SimpleNamespace(
+        resolve=lambda _identity: session,
+        sessions={record.id: session},
+    )
+    app["events"] = EventBus()
+    app.router.add_get("/pty/{sid}", pty_ws)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/omp-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        assert resizes == [(79, 24), (80, 24)]
+        assert session.geometry == (80, 24)
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_only_latest_gesture_claiming_browser_can_write_input() -> None:
     writes: list[str] = []
     record = SessionRecord(
