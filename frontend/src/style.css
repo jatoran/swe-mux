@@ -150,8 +150,10 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-summary>button.external .quota-account{color:var(--amber)}
 .account-summary>button.quota-reset-indicator{grid-column:1/-1;border-left:3px solid #a855f7;background:#6b21a822}.account-summary>button.quota-reset-indicator span,.account-summary>button.quota-reset-indicator strong{color:#d8b4fe}
 .quota-grid{min-width:0;display:grid;align-items:stretch;column-gap:7px;color:var(--muted);white-space:nowrap;text-transform:none}
-.quota-grid-2{grid-template-columns:minmax(28px,.7fr) repeat(2,minmax(34px,1fr))}
-.quota-grid-3{grid-template-columns:minmax(28px,.7fr) repeat(3,minmax(34px,1fr))}
+.quota-grid-0{grid-template-columns:28px}
+.quota-grid-1{grid-template-columns:28px minmax(34px,1fr)}
+.quota-grid-2{grid-template-columns:28px repeat(2,minmax(34px,1fr))}
+.quota-grid-3{grid-template-columns:28px repeat(3,minmax(34px,1fr))}
 .quota-grid-column{min-width:0;display:grid;grid-template-rows:1fr 1fr;align-items:center;justify-items:center;line-height:1.15}
 .quota-grid-column>*{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}
 .quota-grid-identity .provider-glyph{display:grid;place-items:center;color:var(--accent);font-style:normal}
@@ -181,6 +183,8 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
    type follows `--ui-font-size`, so the grid condenses through structure and spacing. */
 .toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:2px 4px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer}
 .toolbar-quota .quota-grid{height:100%;column-gap:4px}
+.toolbar-quota .quota-grid-0{grid-template-columns:auto}
+.toolbar-quota .quota-grid-1{grid-template-columns:auto max-content}
 .toolbar-quota .quota-grid-2{grid-template-columns:auto repeat(2,max-content)}
 .toolbar-quota .quota-grid-3{grid-template-columns:auto repeat(3,max-content)}
 .toolbar-quota .quota-grid-identity{min-width:4ch}

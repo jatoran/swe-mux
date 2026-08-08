@@ -32,29 +32,28 @@ test('quota chips blank out unreadable or unselected accounts',()=>{
   assert.deepEqual(providerQuotaWindows(accounts,{claude:null,codex:null}),{})
 })
 
-test('the quota grid reads reset/percentage columns, keeping the slot of a window the provider omits',()=>{
+test('the quota grid reads reset/percentage columns and omits windows the provider does not report',()=>{
   const now=2_000_000
   const accounts=[
     {provider:'claude',id:'a',quota:{status:'ready',session:{used_percent:89.6,resets_at:now+75*60},weekly:{used_percent:80,resets_at:now+5*86400+13*3600},fable:{used_percent:74}}},
-    // Codex reports no 5-hour window today, so that slot has to survive as a dash.
+    // Codex reports no 5-hour window today, so only its weekly value should render.
     {provider:'codex',id:'b',quota:{status:'ready',weekly:{used_percent:73.5}}},
   ]
   const quotas=providerQuotaWindows(accounts,{claude:'a',codex:'b'})
   assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.heading),['1h15m','5d13h','Fable'])
   assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.text),['90%','80%','74%'])
-  assert.deepEqual(quotaGridSegments(quotas.codex,now).map(segment=>segment.text),['—','74%'])
-  // No fable slot at all for a plan without one, rather than a third dash.
-  assert.deepEqual(quotaGridSegments(quotas.codex,now).map(segment=>segment.key),['session','weekly'])
+  assert.deepEqual(quotaGridSegments(quotas.codex,now).map(segment=>segment.text),['74%'])
+  assert.deepEqual(quotaGridSegments(quotas.codex,now).map(segment=>segment.key),['weekly'])
   assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.band),['critical','warn','ok'])
 })
 
-test('the toolbar chip blanks every window when the account poll errored',()=>{
+test('the toolbar chip omits every window when the account poll errored',()=>{
   const accounts=[{provider:'claude',id:'a',quota:{status:'error',session:{used_percent:12},weekly:{used_percent:99}}}]
   const quotas=providerQuotaWindows(accounts,{claude:'a'})
-  assert.deepEqual(quotaGridSegments(quotas.claude).map(segment=>segment.text),['—','—'])
+  assert.deepEqual(quotaGridSegments(quotas.claude),[])
   assert.equal(chipUsageBand(quotas.claude),'unknown')
   // An unselected or missing provider has no entry, and the chip degrades to the same reading.
-  assert.deepEqual(quotaGridSegments(quotas.codex).map(segment=>segment.text),['—','—'])
+  assert.deepEqual(quotaGridSegments(quotas.codex),[])
 })
 
 test('account abbreviations are trimmed, capped at four characters, and visible without a label',()=>{

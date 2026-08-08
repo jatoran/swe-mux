@@ -179,7 +179,7 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
   }
   // One chip per provider. The collapsed-sidebar rail has room only for the glyph above a
   // single weekly percentage. The mobile toolbar uses the same two-row grid as the expanded
-  // sidebar because the phone has no hover tooltip to recover omitted reset information.
+  // sidebar, omitting quota-window columns that the provider does not report.
   const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>{
     const windows=quotas[provider]
     const weekly=windows?.weekly||null

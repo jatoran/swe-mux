@@ -108,17 +108,14 @@ responsive controls.
 - The **collapsed desktop rail** has room for one number, and that number is weekly: the 5-hour
   session window churns constantly, and `fable` is a sub-window of one provider's plan rather
   than a measure comparable across providers, so weekly is the one worth a permanent glance.
-- The **mobile toolbar** has the width for all of them and shows every window the provider
-  reports — `5h/weekly[/fable]`, so Claude reads `90/80/74` and Codex, which has no 5-hour
-  window today, reads `—/74`. A window the provider omits keeps its slot as `—` rather than
-  collapsing, because there are no percent signs to anchor on and it is a number's *position*
-  that says which window it is. The signs are dropped for width: every value here is a
-  percentage, so the sign distinguishes nothing while costing a third of the chip. Each window
-  is banded on its own, so the chip says *which* one is hot; the chip's border takes the worst
-  of them. The weekly reset countdown stays on a second line beneath — "22% used" answers a
-  different question from "and it clears in 4d12h", and a phone has no hover tooltip to reach
-  the second one. The chip's tooltip (and so its accessible name) names every window and says
-  the countdown is the weekly one, since the chip itself shows unlabelled numbers.
+- The **mobile toolbar** and expanded sidebar show every window the provider reports, so Claude
+  can show `5h/weekly[/fable]` while Codex shows only `weekly` when no 5-hour window is reported.
+  Missing windows do not render placeholder dashes.
+  The provider identity column has a fixed width so its mark stays left-aligned across rows with different window counts.
+  Visible percentage signs distinguish usage readings from reset countdowns, while the tooltip names each reported window.
+  Each window is banded on its own, so the chip says *which* one is hot; the chip's border takes the worst of them.
+  The weekly reset countdown stays on a second line beneath: "22% used" answers a different question from "and it clears in 4d12h", and a phone has no hover tooltip to reach the second one.
+  The chip's tooltip, and therefore its accessible name, names every window and says the countdown is the weekly one.
 - A band always describes the digits actually printed, not the value behind them: a rounded `90`
   colours as 90 even when the true reading is 89.6, or the colour would contradict the number
   beside it at exactly the threshold people watch for.

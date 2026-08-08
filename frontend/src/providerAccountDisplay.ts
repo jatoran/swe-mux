@@ -64,10 +64,9 @@ export type QuotaGridSegment={key:'session'|'weekly'|'fable';heading:string;text
 
 /** The shared desktop/mobile grid: reset or Fable heading, then usage percentage.
  *
- * Session and weekly keep stable columns even when the provider omits one. Fable is
- * optional because only plans that report it should spend the extra column. The
- * visible percentage signs make every number self-describing instead of relying on
- * position alone.
+ * Only windows the provider reports get columns. The visible percentage signs make
+ * every value self-describing, so an unavailable session window does not need a dash
+ * placeholder before the weekly value.
  */
 export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=Date.now()/1000):QuotaGridSegment[]{
   const slots:Array<{key:QuotaGridSegment['key'];window:QuotaWindowDisplay|null}>=[
@@ -75,7 +74,7 @@ export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=
     {key:'weekly',window:windows?.weekly||null},
   ]
   if(windows?.fable)slots.push({key:'fable',window:windows.fable})
-  return slots.map(slot=>({
+  return slots.filter((slot):slot is {key:QuotaGridSegment['key'];window:QuotaWindowDisplay}=>!!slot.window).map(slot=>({
     key:slot.key,
     heading:slot.key==='fable'?'Fable':formatResetRemaining(slot.window?.resets_at,nowSeconds)||'—',
     text:percent(slot.window),
