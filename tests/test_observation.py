@@ -631,6 +631,29 @@ async def test_parser_drift_degrades_after_sustained_unknown_ratio() -> None:
     assert [item.type for item in emitted] == ["capability_degraded"]
 
 
+async def test_codex_item_completed_envelope_does_not_degrade_parser() -> None:
+    session = cast(Any, SimpleNamespace(record=record("codex"), publish_update=lambda: None))
+    session.record.parser_status = "watching"
+    events = EventBus()
+    item_completed = {
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "item": {"type": "CommandExecution", "id": "item-1"},
+            "turn_id": "turn-1",
+        },
+    }
+
+    for _ in range(20):
+        recognized, signature = classify_transcript_event("codex", item_completed)
+        await _record_parser_observation(session, events, recognized, signature)
+
+    assert session.record.parser_status == "ready"
+    assert session.record.parser_events_seen == 20
+    assert session.record.parser_unknown_events == 0
+    assert session.record.parser_unknown_signatures == {}
+
+
 async def test_claude_local_command_records_never_begin_turns() -> None:
     session = cast(Any, SimpleNamespace(record=record("claude")))
     session.record.state = "idle"

@@ -204,6 +204,7 @@ Transcript classification records schema version, recognized and unknown counts,
 unknown signatures, and a degraded status after sustained drift. Claude discovery follows
 the CLI's current project-directory encoding. Codex discovery honors `CODEX_HOME` and rejects
 rollouts with `parent_thread_id`; history reconciliation applies the same root-only rule.
+Codex `item_completed` records are known non-semantic envelopes: their matching `response_item` records carry the tool and message semantics, so the envelopes affect neither lifecycle nor measurement confidence.
 
 ## Regression suite
 

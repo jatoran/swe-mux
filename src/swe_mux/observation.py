@@ -71,6 +71,7 @@ CODEX_KNOWN_PAYLOADS = {
     "exec_command_output_delta",
     "function_call",
     "function_call_output",
+    "item_completed",
     "mcp_tool_call_end",
     "message",
     "patch_apply_end",

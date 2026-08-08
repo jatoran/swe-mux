@@ -7,6 +7,7 @@
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "task_started"}}},
     {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "function_call", "name": "shell_command", "call_id": "a"}}},
     {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "a", "output": "ok"}}},
+    {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "CommandExecution", "id": "a"}, "turn_id": "turn-1"}}},
     {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "image", "call_id": "b"}}},
     {"kind": "transcript", "record": {"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "b", "content": "ok"}}},
     {"kind": "transcript", "record": {"type": "event_msg", "payload": {"type": "patch_apply_end", "success": true}}},
@@ -40,7 +41,7 @@
       {"previous": "awaiting", "state": "working", "source": "transcript", "proof": "proven"},
       {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
     ],
-    "parser": {"status": "ready", "recognized": 14, "unknown": 0, "unknown_signatures": {}},
+    "parser": {"status": "ready", "recognized": 15, "unknown": 0, "unknown_signatures": {}},
     "delivery_state": "safe",
     "delivery_reason": "all_required_evidence_positive"
   }
