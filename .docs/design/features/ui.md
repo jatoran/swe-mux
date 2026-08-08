@@ -107,6 +107,7 @@ responsive controls.
 - Each quota chip stacks the provider's own mark above its usage. The mark is the only thing
   identifying the row, so it keeps full contrast while the numbers carry the shared
   ok/warn/critical banding. Providers render in the same order as everywhere else.
+  Provider marks use inline vector geometry with `currentColor`, so platform emoji substitution cannot replace their configured identity colours.
 - The **collapsed desktop rail** has room for one number, and that number is weekly: the 5-hour
   session window churns constantly, and `fable` is a sub-window of one provider's plan rather
   than a measure comparable across providers, so weekly is the one worth a permanent glance.

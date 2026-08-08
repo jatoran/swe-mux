@@ -54,7 +54,10 @@ def test_sidebar_account_status_uses_separate_terminal_icon_rows_at_the_bottom()
     css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
 
     assert "providerGlyph" in accounts
-    assert "provider==='claude'?'✳':provider==='codex'?openaiMark" in accounts
+    assert 'const claudeMark=<svg class="provider-mark"' in accounts
+    assert 'stroke="currentColor"' in accounts
+    assert "provider==='claude'?claudeMark:provider==='codex'?openaiMark" in accounts
+    assert "provider==='claude'?'✳'" not in accounts
     assert "harnessDisplayName(provider).slice(0,1).toUpperCase()" in accounts
     assert 'class="provider-mark"' in accounts
     assert "accountAbbreviation(currentLabel(current,account))" in accounts
