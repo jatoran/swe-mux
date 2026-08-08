@@ -300,7 +300,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   remain under ConPTY so suppressing console flashes never suppresses terminal output.
 - Preview registration identity is Project endpoint, not clicked terminal.
   Resolve listener ownership across live sessions before attachment.
-  Automatic discovery creates undeclared route identities for cross-service traffic; only an explicit registration promotes the identity into the listed Preview inventory.
+  Automatic discovery creates route-only identities for cross-service traffic.
+  A bounded HTML probe or explicit registration promotes an identity into the listed Preview inventory.
+  Cache negative probes by listener process identity and back them off so UI refresh does not create a request loop against tool listeners.
   Do not weaken the iframe sandbox or let a browser dial raw loopback for cross-service traffic.
 - Once a route has resolved an explicit Project, Project-resource helpers must receive that
   canonical identity (`_registered_identity(project)` → the `project=` keyword on

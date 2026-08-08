@@ -41,7 +41,7 @@ type SessionSnapshot = {
 }
 type PreviewResult = {preview:Preview;project:Project}
 type PreviewList = {items:Preview[]}
-export type Preview = {id:string;session_id:string;project_id:string;url:string;host:string;port:number;source:string;viewport:string;declared?:boolean}
+export type Preview = {id:string;session_id:string;project_id:string;url:string;host:string;port:number;source:string;viewport:string;listed?:boolean}
 
 type Props={
   initialSessionId?:string|null; initialProjectId?:string|null

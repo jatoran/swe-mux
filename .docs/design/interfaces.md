@@ -977,9 +977,10 @@ request it. Totals report it only when every contributor supplied one.
 
 Preview URLs are HTTP(S), literal loopback, and credential/query/fragment-free.
 Registration deduplicates by canonical Project endpoint and records the session that owns the live listener, even when another terminal printed the clicked URL.
-Automatic Project listener discovery creates `declared=false` route identities for cross-service rewriting without creating navigation.
-An explicit registration promotes the stable identity to `declared=true`; `GET /previews` returns declared items only, plus session-scoped raw listener candidates when requested with `?session=`.
-`attach=true` opens or activates the stable Preview leaf beside the owner, and closing the leaf leaves the declared registration intact.
+Automatic Project listener discovery creates `listed=false` route identities for cross-service rewriting.
+A bounded, cached HTTP probe promotes browser-facing HTML endpoints to `listed=true`; explicit registration promotes any accepted endpoint.
+`GET /previews` returns listed items only, plus session-scoped raw listener candidates when requested with `?session=`.
+`attach=true` opens or activates the stable Preview leaf beside the owner, and closing the leaf leaves the listed registration intact.
 Sandboxed Preview fetch/XHR/WebSocket traffic to another registered Project service is rewritten through that service's `/preview/{id}/…` route.
 
 ## Provider accounts and usage

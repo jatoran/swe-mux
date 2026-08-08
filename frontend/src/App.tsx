@@ -1179,8 +1179,8 @@ export function App() {
   }, [])
 
   // Resource summaries and the Processes drawer reuse the daemon's cached sample,
-  // so this poll adds no process enumeration. Raw listeners never become sidebar
-  // navigation here; opening one explicitly creates a declared Preview instead.
+  // so this poll adds no process enumeration. Preview classification happens in
+  // the daemon; this raw fleet sample is never navigation state by itself.
   const loadProcesses = async () => {
     try {
       const snapshot = await api<FleetSnapshot>('GET','/api/processes')
@@ -3624,8 +3624,8 @@ export function App() {
       }
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
-  // A declared Preview lives beside its owning session. Raw loopback listeners
-  // remain in Processes until a user or agent explicitly opens one as a Preview.
+  // A listed Preview lives beside its owning session. Raw loopback listeners remain
+  // in Processes unless browser classification or an explicit action promotes one.
   const sidebarPreviewRow=(preview:Preview,session:Session)=>{
     const layout=layoutMap[session.project_id]||parseLayout(projects.find(item=>item.id===session.project_id)?.layout)
     const previewStack=stackForView(layout,preview.id)
@@ -3645,7 +3645,7 @@ export function App() {
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   const sessionRow=(session:Session)=>{
-    const spawnedPreviews=Object.values(previews).filter(item=>item.session_id===session.id&&item.declared!==false)
+    const spawnedPreviews=Object.values(previews).filter(item=>item.session_id===session.id&&item.listed!==false)
     // Sidebar attention tier for agent rows. The focused row keeps its own
     // `.active` treatment; a row visible in another split pane reads as
     // "viewing" (on screen, not focused); an off-screen row with unseen output

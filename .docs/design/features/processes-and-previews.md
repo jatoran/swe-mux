@@ -266,10 +266,13 @@ more — swe-mux does not reap or share language servers.
   and port of a listener owned by some session in that Project or carry explicit user approval.
   Clicking a URL printed by another session therefore attributes the Preview to the listener
   owner, and the same Project/scheme/host/port can never create a second registration.
-- The registry separates route-only identities from declared Previews.
-  Automatic listener discovery creates an undeclared identity only so sandboxed Preview traffic can reach sibling Project services.
-  A terminal-link click, Processes action, or explicit `POST /previews` promotes that stable identity to `declared=true`.
-  `GET /previews` and the sidebar expose declared Previews only.
+- The registry separates route-only identities from listed Previews.
+  Automatic listener discovery creates a route-only identity so sandboxed Preview traffic can reach sibling Project services.
+  A bounded HTTP probe automatically lists 2xx HTML/XHTML responses, HTML signatures, and relative redirects as browser-facing Previews.
+  Authenticated, error, JSON, debugger, tool-bridge, non-HTTP, and unreachable endpoints stay route-only.
+  Negative results retry with exponential backoff capped at five minutes and reset immediately when listener process identity changes.
+  A terminal-link click, Processes action, or explicit `POST /previews` also promotes the stable identity to `listed=true`.
+  `GET /previews` and the sidebar expose listed Previews only.
 - A wildcard bind is reported at its loopback address: `0.0.0.0` becomes `127.0.0.1` and
   `::` becomes `::1`, so a server that binds every interface — the default for most dev
   servers — is detected in Processes and previewable by explicit action.
@@ -296,11 +299,12 @@ more — swe-mux does not reap or share language servers.
   region that already holds its owning session, so an agent and the services it started share
   one tab strip; it only falls back to a split when that session has no terminal in the
   layout.
-  Every detected loopback listener receives an undeclared routing identity owned by its actual session without opening a workspace tab or adding navigation.
-  Selecting its row in Processes declares, opens, or activates that registered endpoint.
-- Sidebar child rows are declared Previews only.
+  Every detected loopback listener receives a route-only identity owned by its actual session without opening a workspace tab.
+  Browser classification may add navigation without opening a workspace tab.
+  Selecting a raw listener in Processes lists, opens, or activates that registered endpoint.
+- Sidebar child rows are listed Previews only.
   Raw listeners are not asserted to be application servers because agent runtimes, browser debuggers, and tool bridges also bind loopback ports.
-  Current-version ownership, liveness, and loopback reachability make a listener eligible as a Processes candidate, not as general navigation.
+  Current-version ownership, liveness, and loopback reachability make a listener eligible as a Processes candidate; the browser probe or an explicit action makes it navigation.
   Rejected/stale records, exited records, and non-loopback listeners remain excluded, and a port bound on both `127.0.0.1` and `::1` collapses to one candidate.
   Descendant shells and the full process tree remain visible only in process tooling.
 - Preview leaves use `/preview/{registration}/…`; phones and desktop browsers never need

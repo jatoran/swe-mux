@@ -1124,7 +1124,8 @@ responsive controls.
   the agent CLI), so a per-process column would be a wall of noise around the one row that
   matters.
   Each row is a rollup (process count, CPU, working set) plus its raw loopback listeners.
-  A listener is not asserted to be an application server; `preview` explicitly promotes one into a declared Preview beside its session, and `copy` takes the URL.
+  A listener is not asserted to be an application server; `preview` explicitly lists one beside its session, and `copy` takes the URL.
+  Independently, the daemon lists browser-facing HTML endpoints automatically while leaving debugger and tool listeners raw.
   Ended processes are dropped rather than greyed:
   they support no action here and are already excluded from every total in the app.
 - Scoped to the active Project by default, with **the focused session's row pinned first and

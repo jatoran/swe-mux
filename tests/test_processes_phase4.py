@@ -14,8 +14,10 @@ from swe_mux.event_bus import EventBus
 from swe_mux.layouts import attach_leaf, layout_terminal_ids, stack_leaf
 from swe_mux.processes import (
     OwnedProcess,
+    PreviewProbeResult,
     PreviewRegistry,
     ProcessInspector,
+    classify_preview_response,
     listener_record,
 )
 
@@ -143,8 +145,20 @@ async def test_preview_registration_attributes_a_printed_url_to_its_actual_proje
 
 
 @pytest.mark.asyncio
-async def test_live_project_services_get_routing_registrations_without_opening_tabs() -> None:
-    registry = PreviewRegistry(cast(Any, ProjectInspector()), cast(Any, project_sessions()))
+async def test_browser_service_is_listed_while_tool_listener_stays_route_only() -> None:
+    probes: list[str] = []
+
+    async def classify(url: str) -> PreviewProbeResult:
+        probes.append(url)
+        if url.endswith(":37656/"):
+            return PreviewProbeResult(True, 200, "text/html", "html_content_type")
+        return PreviewProbeResult(False, 403, "application/json", "http_status_403")
+
+    registry = PreviewRegistry(
+        cast(Any, ProjectInspector()),
+        cast(Any, project_sessions()),
+        preview_probe=classify,
+    )
 
     await registry.ensure_detected("project-a")
 
@@ -156,20 +170,60 @@ async def test_live_project_services_get_routing_registrations_without_opening_t
         "http://127.0.0.1:37656",
         "http://127.0.0.1:37655",
     }
-    assert (await registry.list())["items"] == []
+    listed = (await registry.list())["items"]
+    assert [(item["session_id"], item["port"]) for item in listed] == [("frontend", 37656)]
+    assert len(probes) == 2  # The immediate list refresh reuses both cached verdicts.
 
 
 @pytest.mark.asyncio
 async def test_explicit_registration_promotes_a_hidden_routing_identity() -> None:
-    registry = PreviewRegistry(cast(Any, ProjectInspector()), cast(Any, project_sessions()))
+    async def not_browser_facing(_url: str) -> PreviewProbeResult:
+        return PreviewProbeResult(False, 403, "application/json", "http_status_403")
+
+    registry = PreviewRegistry(
+        cast(Any, ProjectInspector()),
+        cast(Any, project_sessions()),
+        preview_probe=not_browser_facing,
+    )
     await registry.ensure_detected("project-a")
     hidden = next(item for item in registry.items.values() if item.port == 37656)
 
-    declared = await registry.register("frontend", "http://127.0.0.1:37656/")
+    listed = await registry.register("frontend", "http://127.0.0.1:37656/")
 
-    assert declared is hidden
-    assert declared.declared is True
+    assert listed is hidden
+    assert listed.listed is True
     assert [item["id"] for item in (await registry.list())["items"]] == [hidden.id]
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "prefix", "location", "expected", "reason"),
+    [
+        (200, "text/html; charset=utf-8", b"Workout Log", "", True, "html_content_type"),
+        (200, "", b"<!doctype html><html><body>app", "", True, "html_signature"),
+        (302, "text/plain", b"", "/login", True, "relative_redirect"),
+        (
+            200,
+            "application/json",
+            b'{"Browser": "Chrome"}',
+            "",
+            False,
+            "content_type_application/json",
+        ),
+        (403, "application/json", b'{"error": "auth"}', "", False, "http_status_403"),
+    ],
+)
+def test_preview_response_classification(
+    status: int,
+    content_type: str,
+    prefix: bytes,
+    location: str,
+    expected: bool,
+    reason: str,
+) -> None:
+    result = classify_preview_response(status, content_type, prefix, location)
+
+    assert result.browser_preview is expected
+    assert result.reason == reason
 
 
 def test_wildcard_binds_are_reported_at_the_address_a_client_can_reach() -> None:

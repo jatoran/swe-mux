@@ -6,10 +6,13 @@ import os
 import signal
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from .background_tasks import background
 from .event_bus import EventBus
@@ -36,6 +39,10 @@ ENDED_RETENTION_SECONDS = 24 * 60 * 60.0
 # rather than vanish on every reload; a server that is actually stopped is reaped
 # once the gap exceeds this.
 PREVIEW_LISTENER_GRACE_SECONDS = 20.0
+PREVIEW_PROBE_INITIAL_RETRY_SECONDS = 5.0
+PREVIEW_PROBE_MAX_RETRY_SECONDS = 300.0
+PREVIEW_PROBE_CONCURRENCY = 8
+PREVIEW_PROBE_PREFIX_BYTES = 4096
 HIGH_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 NO_OUTPUT_SECONDS = 300.0
 # Constructing a psutil.Process is the single most expensive operation in a sampling
@@ -1558,21 +1565,80 @@ class PreviewRegistration:
     project_scope_id: str | None = None
     repo_group_id: str | None = None
     viewport: str = "responsive"
-    # Automatic discovery creates registrations so Preview traffic can route to
-    # sibling Project services. Only an explicit user/agent registration promotes
-    # that routing identity into the UI-facing Preview inventory.
-    declared: bool = True
+    # Every live listener needs a routing identity, but only browser-facing or
+    # explicitly opened endpoints belong in navigation.
+    listed: bool = True
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
 
 
+@dataclass(frozen=True, slots=True)
+class PreviewProbeResult:
+    browser_preview: bool
+    status: int | None
+    content_type: str
+    reason: str
+
+
+def classify_preview_response(
+    status: int, content_type: str, prefix: bytes, location: str = ""
+) -> PreviewProbeResult:
+    """Classify a bounded HTTP response as browser navigation or service plumbing."""
+    media_type = content_type.partition(";")[0].strip().casefold()
+    if 300 <= status < 400 and location:
+        target = urlsplit(location)
+        if not target.scheme and not target.netloc:
+            return PreviewProbeResult(True, status, media_type, "relative_redirect")
+    if not 200 <= status < 300:
+        return PreviewProbeResult(False, status, media_type, f"http_status_{status}")
+    if media_type in {"text/html", "application/xhtml+xml"}:
+        return PreviewProbeResult(True, status, media_type, "html_content_type")
+    if b"<html" in prefix.lstrip().lower()[:1024]:
+        return PreviewProbeResult(True, status, media_type, "html_signature")
+    return PreviewProbeResult(False, status, media_type, f"content_type_{media_type or 'missing'}")
+
+
+async def probe_browser_preview(url: str) -> PreviewProbeResult:
+    """Read only enough of one loopback endpoint to decide if it is browser-facing."""
+    timeout = ClientTimeout(total=1.5, sock_connect=0.5, sock_read=1.0)
+    try:
+        async with ClientSession(timeout=timeout) as client:
+            async with client.get(
+                url,
+                allow_redirects=False,
+                headers={
+                    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+                    "User-Agent": "swe-mux-preview-detector/1",
+                },
+            ) as response:
+                prefix = await response.content.read(PREVIEW_PROBE_PREFIX_BYTES)
+                return classify_preview_response(
+                    response.status,
+                    response.headers.get("Content-Type", ""),
+                    prefix,
+                    response.headers.get("Location", ""),
+                )
+    except TimeoutError:
+        return PreviewProbeResult(False, None, "", "timeout")
+    except (ClientError, OSError) as exc:
+        return PreviewProbeResult(False, None, "", type(exc).__name__)
+
+
 class PreviewRegistry:
-    def __init__(self, inspector: ProcessInspector, sessions: SessionManager) -> None:
+    def __init__(
+        self,
+        inspector: ProcessInspector,
+        sessions: SessionManager,
+        *,
+        preview_probe: Callable[[str], Awaitable[PreviewProbeResult]] | None = None,
+    ) -> None:
         self.inspector = inspector
         self.sessions = sessions
         self.items: dict[str, PreviewRegistration] = {}
         self._listener_seen: dict[str, float] = {}
+        self._preview_probe = preview_probe or probe_browser_preview
+        self._preview_probe_state: dict[str, tuple[str, int, float]] = {}
 
     def prune(self, now: float | None = None) -> list[PreviewRegistration]:
         """Drop detected previews whose server has stopped listening.
@@ -1602,6 +1668,7 @@ class PreviewRegistry:
             if moment - last_seen >= PREVIEW_LISTENER_GRACE_SECONDS:
                 del self.items[item.id]
                 self._listener_seen.pop(item.id, None)
+                self._preview_probe_state.pop(item.id, None)
                 removed.append(item)
         return removed
 
@@ -1628,7 +1695,7 @@ class PreviewRegistry:
         )
 
     def _record_detected(
-        self, session: Any, url: str, *, host: str, port: int, declared: bool = True
+        self, session: Any, url: str, *, host: str, port: int, listed: bool = True
     ) -> PreviewRegistration:
         parsed = urlsplit(url)
         existing = self._existing_endpoint(session.record.project_id, parsed.scheme, host, port)
@@ -1645,7 +1712,9 @@ class PreviewRegistry:
                 getattr(session.record, "project_scope_id", None),
             )
             existing.repo_group_id = getattr(session.record, "repo_group_id", None)
-            existing.declared = existing.declared or declared
+            existing.listed = existing.listed or listed
+            if existing.listed:
+                self._preview_probe_state.pop(existing.id, None)
             self._listener_seen[existing.id] = time.time()
             return existing
         item = PreviewRegistration(
@@ -1665,7 +1734,7 @@ class PreviewRegistry:
             getattr(session.record, "repo_group_id", None),
         )
         self.items[item.id] = item
-        item.declared = declared
+        item.listed = listed
         self._listener_seen[item.id] = time.time()
         return item
 
@@ -1680,13 +1749,15 @@ class PreviewRegistry:
         if snapshot_all is None:
             return
         snapshot = await snapshot_all()
+        probe_targets: list[tuple[PreviewRegistration, str]] = []
+        now = time.monotonic()
         for group in snapshot.get("sessions", []):
             if project_id is not None and group.get("project_id") != project_id:
                 continue
             session = self.sessions.sessions.get(str(group.get("session_id") or ""))
             if session is None:
                 continue
-            endpoints: dict[tuple[str, int], tuple[str, str]] = {}
+            endpoints: dict[tuple[str, int], tuple[str, str, str]] = {}
             for process in group.get("processes", []):
                 for listener in process.get("listeners", []):
                     if listener.get("loopback") is not True:
@@ -1700,9 +1771,75 @@ class PreviewRegistry:
                     key = (scheme, port)
                     current = endpoints.get(key)
                     if current is None or (host == "127.0.0.1" and current[0] != host):
-                        endpoints[key] = (host, url)
-            for (_, port), (host, url) in endpoints.items():
-                self._record_detected(session, url, host=host, port=port, declared=False)
+                        process_identity = str(
+                            process.get("identity_id")
+                            or f"{process.get('pid')}:{process.get('started_at')}"
+                        )
+                        endpoints[key] = (host, url, process_identity)
+            for (_, port), (host, url, process_identity) in endpoints.items():
+                item = self._record_detected(session, url, host=host, port=port, listed=False)
+                if item.listed:
+                    continue
+                previous = self._preview_probe_state.get(item.id)
+                if previous is not None and previous[0] == process_identity and now < previous[2]:
+                    continue
+                attempts = (
+                    previous[1] + 1
+                    if previous is not None and previous[0] == process_identity
+                    else 1
+                )
+                retry = min(
+                    PREVIEW_PROBE_INITIAL_RETRY_SECONDS * (2 ** min(attempts - 1, 6)),
+                    PREVIEW_PROBE_MAX_RETRY_SECONDS,
+                )
+                self._preview_probe_state[item.id] = (process_identity, attempts, now + retry)
+                probe_targets.append((item, url))
+
+        semaphore = asyncio.Semaphore(PREVIEW_PROBE_CONCURRENCY)
+
+        async def classify(item: PreviewRegistration, url: str) -> None:
+            try:
+                async with semaphore:
+                    result = await self._preview_probe(url)
+            except Exception:
+                log.exception(
+                    "preview classification failed session_id=%s project_id=%s "
+                    "preview_id=%s url=%s",
+                    item.session_id,
+                    item.project_id,
+                    item.id,
+                    url,
+                )
+                return
+            if result.browser_preview:
+                item.listed = True
+                self._preview_probe_state.pop(item.id, None)
+                log.info(
+                    "preview auto-listed session_id=%s project_id=%s preview_id=%s url=%s "
+                    "status=%s content_type=%s reason=%s",
+                    item.session_id,
+                    item.project_id,
+                    item.id,
+                    url,
+                    result.status,
+                    result.content_type,
+                    result.reason,
+                )
+            else:
+                log.debug(
+                    "preview candidate retained session_id=%s project_id=%s preview_id=%s url=%s "
+                    "status=%s content_type=%s reason=%s",
+                    item.session_id,
+                    item.project_id,
+                    item.id,
+                    url,
+                    result.status,
+                    result.content_type,
+                    result.reason,
+                )
+
+        if probe_targets:
+            await asyncio.gather(*(classify(item, url) for item, url in probe_targets))
 
     def routes_for_project(self, project_id: str) -> dict[str, str]:
         routes: dict[str, str] = {}
@@ -1799,6 +1936,7 @@ class PreviewRegistry:
             raise KeyError(preview_id)
         del self.items[preview_id]
         self._listener_seen.pop(preview_id, None)
+        self._preview_probe_state.pop(preview_id, None)
 
     async def list(self, session_id: str | None = None) -> dict[str, Any]:
         await self.ensure_detected()
@@ -1815,7 +1953,7 @@ class PreviewRegistry:
             "items": [
                 item.snapshot()
                 for item in self.items.values()
-                if item.declared and (not session_id or item.session_id == session_id)
+                if item.listed and (not session_id or item.session_id == session_id)
             ],
             "candidates": candidates,
         }
