@@ -936,6 +936,8 @@ responsive controls.
 - Terminal copy is success-preserving: keyboard, menu, automatic selection, the action rail, and
   provider OSC 52 requests retain the exact text until a write succeeds. Blocked or insecure
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
+- Every successful terminal copy uses the same app-level `Copied to clipboard` HUD on desktop and mobile instead of hiding acknowledgment in the command rail.
+  The HUD is a polite live region, carries no copied content, stays above modal layers, and never appears for a rejected clipboard write.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
@@ -1237,6 +1239,8 @@ responsive controls.
   window is collapsed client-side and the daemon promotes an existing entry instead of
   duplicating it. Nothing reads or polls the OS clipboard: copies made in other applications
   never appear, by design.
+- The same boot hooks emit a payload-free `mux:clipboard-copied` event only after a programmatic write resolves or a native copy completes.
+  `App.tsx` turns that event into the shared interaction HUD, so explicit copy controls, selection auto-copy, plain DOM copy, and legacy fallback copy have one confirmation path.
 - On mobile the sidebar and the utility drawer are mutually exclusive: opening either closes the
   other. They are both full-height drawers over the workspace entering from opposite edges, so two
   open at once leave no workspace between them and bury one under the other's scrim. The rule is

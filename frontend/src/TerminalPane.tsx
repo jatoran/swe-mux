@@ -759,7 +759,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         const text = term.getSelection()
         captureCopy(text, 'terminal')
         void copyPreparedText(text).then(copied => {
-          if (copied) { term.clearSelection(); showClipboardStatus('Copied') }
+          if (copied) term.clearSelection()
           else prepareClipboardFallback(text)
         })
         return false
@@ -2010,8 +2010,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       lastAutoCopiedSelectionRef.current=text
       captureCopy(text,'terminal')
       void copyPreparedText(text).then(copied=>{
-        if(copied)showClipboardStatus('Selection copied')
-        else prepareClipboardFallback(text)
+        if(!copied)prepareClipboardFallback(text)
       })
     }
     let longPress: number | null = null
@@ -2405,7 +2404,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       term.clearSelection()
       setPreparedClipboard('')
       setManualClipboard(false)
-      showClipboardStatus('Copied')
     } else {
       prepareClipboardFallback(text)
     }
@@ -2441,7 +2439,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     captureCopy(text,'reply')
     if(await copyPreparedText(text)){
-      setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Reply copied')
+      setPreparedClipboard('');setManualClipboard(false)
     }else prepareClipboardFallback(text)
   }
   const find = () => {
@@ -2567,14 +2565,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if (!resumeCmd) return
     captureCopy(resumeCmd,'resume')
     if (await copyPreparedText(resumeCmd)) {
-      setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Resume command copied')
+      setPreparedClipboard('');setManualClipboard(false)
     } else prepareClipboardFallback(resumeCmd)
   }
 
   const retryPreparedCopy=async()=>{
     if(!preparedClipboard)return
     if(await copyPreparedText(preparedClipboard,manualClipboardRef.current)){
-      setPreparedClipboard('');setManualClipboard(false);showClipboardStatus('Copied');return
+      setPreparedClipboard('');setManualClipboard(false);return
     }
     setManualClipboard(true)
     requestAnimationFrame(()=>{manualClipboardRef.current?.focus();manualClipboardRef.current?.select()})

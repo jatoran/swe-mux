@@ -69,7 +69,10 @@ import {
 } from './drawerNotes'
 import type { WatchScope } from './processWatch'
 import { DRAWER_TAB_ICONS, SidePanelIcon } from './railIcons'
-import { CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture } from './clipboardHistory'
+import {
+  CLIPBOARD_CHANGED_EVENT, CLIPBOARD_COPIED_EVENT, clearClipboardHistory,
+  configureClipboardCapture, type ClipboardCopiedDetail,
+} from './clipboardHistory'
 import { insertIntoFocusedSurface } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
@@ -772,10 +775,10 @@ export function App() {
     window.addEventListener('pointerup',stop,{once:true})
     window.addEventListener('pointercancel',stop,{once:true})
   }
-  // Transient touch feedback (which tab a swipe landed on, what a held Run
-  // started). Purely visual, so it never enters layout or Project state.
-  const [mobileHud,setMobileHud]=useState('')
-  const mobileHudTimer=useRef<number|null>(null)
+  // Transient interaction feedback (copy success, which tab a mobile swipe landed
+  // on, what a held Run started). It never enters layout or Project state.
+  const [interactionHud,setInteractionHud]=useState('')
+  const interactionHudTimer=useRef<number|null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [talkActiveSessionId,setTalkActiveSessionId]=useState<string|null>(null)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
@@ -942,12 +945,17 @@ export function App() {
     window.addEventListener('pointercancel',release)
   }
 
-  const showMobileHud = (text: string) => {
-    setMobileHud(text)
-    if (mobileHudTimer.current !== null) window.clearTimeout(mobileHudTimer.current)
-    mobileHudTimer.current = window.setTimeout(() => { setMobileHud(''); mobileHudTimer.current = null }, 1100)
+  const showInteractionHud = (text: string) => {
+    setInteractionHud(text)
+    if (interactionHudTimer.current !== null) window.clearTimeout(interactionHudTimer.current)
+    interactionHudTimer.current = window.setTimeout(() => {
+      setInteractionHud('')
+      interactionHudTimer.current = null
+    }, 1400)
   }
-  useEffect(() => () => { if (mobileHudTimer.current !== null) window.clearTimeout(mobileHudTimer.current) }, [])
+  useEffect(() => () => {
+    if (interactionHudTimer.current !== null) window.clearTimeout(interactionHudTimer.current)
+  }, [])
 
   const toggleSidebar=()=>setSidebarCollapsed(value=>{
     const next=!value
@@ -1283,6 +1291,15 @@ export function App() {
       projectId: () => clipboardContextRef.current.projectId || null,
       enabled: () => clipboardContextRef.current.enabled,
     })
+  }, [])
+
+  useEffect(() => {
+    const onClipboardCopied = (event: Event) => {
+      const detail = (event as CustomEvent<ClipboardCopiedDetail>).detail
+      showInteractionHud(detail?.action === 'cut' ? 'Cut to clipboard' : 'Copied to clipboard')
+    }
+    window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)
+    return () => window.removeEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)
   }, [])
 
   useEffect(() => {
@@ -2756,7 +2773,7 @@ export function App() {
     const index = projection.selected ? tabs.findIndex(tab => tab.id === projection.selected!.id) : -1
     const next = tabs[((index < 0 ? 0 : index) + offset + tabs.length) % tabs.length]
     if (!next) return
-    showMobileHud(mobileTabLabel(next))
+    showInteractionHud(mobileTabLabel(next))
     setFocusedViewId(next.id)
     if (next.kind === 'terminal') setActiveId(next.id)
     const pane = stackForView(layout, next.id)
@@ -3771,7 +3788,7 @@ export function App() {
           if(!activeProject)return
           runHeldRef.current=true
           const backend=lastLaunchBackend()
-          showMobileHud(`starting ${backend}…`)
+          showInteractionHud(`starting ${backend}…`)
           void spawnTerminal(activeProject.id,false,undefined,undefined,'after',backend)
         })}}
         onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress}
@@ -3788,7 +3805,7 @@ export function App() {
           the last tab used, which is why the icon is the panel and not one tab's mark. */}
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
-    {mobileHud&&<div class="mobile-hud" role="status" aria-live="polite">{mobileHud}</div>}
+    {interactionHud&&<div class="interaction-hud" role="status" aria-live="polite" aria-atomic="true">{interactionHud}</div>}
 
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}

@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  CLIPBOARD_COPIED_EVENT,
   CaptureDedupe,
+  configureClipboardCapture,
+  installClipboardCapture,
   relativeAge,
+  resetCaptureDedupe,
   selectionText,
   shouldCapture,
   sourceLabel,
+  type ClipboardCopiedDetail,
 } from '../src/clipboardHistory.ts'
 import { chooseInsertTarget, type EditorHandle } from '../src/insertTarget.ts'
 
@@ -42,6 +47,61 @@ test('trivia is not captured', () => {
   assert.equal(shouldCapture(''), false)
   assert.equal(shouldCapture(null), false)
   assert.equal(shouldCapture(42), false)
+})
+
+test('clipboard feedback follows successful writes and carries no copied text', async () => {
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const savedDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+
+  class TestClipboard {
+    lastWrite: Promise<void> | null = null
+
+    writeText(text: string): Promise<void> {
+      this.lastWrite = text === 'blocked'
+        ? Promise.reject(new Error('blocked'))
+        : Promise.resolve()
+      return this.lastWrite
+    }
+  }
+
+  const clipboard = new TestClipboard()
+  const fakeWindow = new EventTarget() as Window & typeof globalThis
+  Object.assign(fakeWindow, { queueMicrotask })
+  const fakeDocument = new EventTarget() as Document
+  Object.defineProperty(fakeDocument, 'activeElement', { value: null })
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard },
+  })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow })
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: fakeDocument })
+
+  try {
+    configureClipboardCapture({ enabled: () => false })
+    resetCaptureDedupe()
+    const feedback: ClipboardCopiedDetail[] = []
+    fakeWindow.addEventListener(CLIPBOARD_COPIED_EVENT, event => {
+      feedback.push((event as CustomEvent<ClipboardCopiedDetail>).detail)
+    })
+    installClipboardCapture()
+
+    const successfulWrite = clipboard.writeText('copied text')
+    assert.equal(successfulWrite, clipboard.lastWrite, 'the wrapper must return the native promise')
+    await successfulWrite
+    assert.deepEqual(feedback, [{ action: 'copy' }])
+    assert.equal('text' in feedback[0]!, false)
+
+    await assert.rejects(clipboard.writeText('blocked'), /blocked/)
+    assert.deepEqual(feedback, [{ action: 'copy' }])
+  } finally {
+    if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator)
+    else Reflect.deleteProperty(globalThis, 'navigator')
+    if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+    if (savedDocument) Object.defineProperty(globalThis, 'document', savedDocument)
+    else Reflect.deleteProperty(globalThis, 'document')
+  }
 })
 
 test('native copy events read the focused field range before the window selection', () => {

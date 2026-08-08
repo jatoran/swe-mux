@@ -98,6 +98,26 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
     assert "overflow-x:auto" in css and ".terminal-action-rail .kbd-toggle" in css
 
 
+def test_successful_clipboard_writes_use_the_shared_interaction_hud() -> None:
+    root = Path(__file__).parents[1]
+    app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    clipboard = (root / "frontend" / "src" / "clipboardHistory.ts").read_text(encoding="utf-8")
+    pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "CLIPBOARD_COPIED_EVENT = 'mux:clipboard-copied'" in clipboard
+    assert "write.then(() => announceClipboardCopy(text, 'copy')" in clipboard
+    assert "if (!event.defaultPrevented || suppliedText)" in clipboard
+    assert "window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)" in app
+    assert "Copied to clipboard" in app
+    assert 'class="interaction-hud"' in app
+    assert ".interaction-hud" in css and "pointer-events:none" in css
+    # Copy success has one visible owner. The rail keeps selection, paste, upload,
+    # and recovery state but no longer duplicates the app-level confirmation.
+    assert "showClipboardStatus('Selection copied')" not in pane
+    assert "showClipboardStatus('Reply copied')" not in pane
+
+
 def test_mobile_terminal_ime_streams_composition_without_xterm_overlay() -> None:
     root = Path(__file__).parents[1]
     pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")

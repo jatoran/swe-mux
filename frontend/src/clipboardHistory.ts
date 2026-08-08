@@ -54,6 +54,12 @@ export type ClipboardCaptureResult = {
 
 /** Window event fired after a local capture or mutation so open pickers refresh. */
 export const CLIPBOARD_CHANGED_EVENT = 'mux:clipboard-changed'
+/** Window event fired after an in-app clipboard write succeeds. Carries no copied text. */
+export const CLIPBOARD_COPIED_EVENT = 'mux:clipboard-copied'
+
+export type ClipboardCopiedDetail = {
+  action: 'copy' | 'cut'
+}
 
 /** Two hooks can report the same copy; collapse repeats inside this window. */
 export const CAPTURE_DEDUPE_MS = 1500
@@ -134,8 +140,17 @@ let context: CaptureContext = {
   enabled: () => true,
 }
 const dedupe = new CaptureDedupe()
+const feedbackDedupe = new CaptureDedupe()
 let installed = false
 let suppressDepth = 0
+
+/** Announce a successful clipboard mutation without exposing its payload to UI listeners. */
+function announceClipboardCopy(text: unknown, action: ClipboardCopiedDetail['action']): void {
+  if (typeof text !== 'string' || !text || !feedbackDedupe.accept(text)) return
+  window.dispatchEvent(new CustomEvent<ClipboardCopiedDetail>(CLIPBOARD_COPIED_EVENT, {
+    detail: { action },
+  }))
+}
 
 /**
  * Run a copy that must not enter the ring, and return whatever it returns.
@@ -202,7 +217,11 @@ export function installClipboardCapture(): void {
       // promise the caller sees, and a rejected write is still a copy the user
       // asked for (the app's manual-copy fallbacks paste from history too).
       captureCopy(text, 'app')
-      return original.call(this, text)
+      const write = original.call(this, text)
+      // Observe the original promise without replacing it. Callers keep the native
+      // success/failure contract, and blocked writes never produce false feedback.
+      void write.then(() => announceClipboardCopy(text, 'copy'), () => {})
+      return write
     }
   }
   // Capture phase: xterm and the note editor both stop propagation of their own
@@ -216,6 +235,15 @@ export function installClipboardCapture(): void {
       clipboardEvent.clipboardData?.getData('text/plain') ||
       selectionText(document.activeElement, window.getSelection())
     captureCopy(text, event.type === 'cut' ? 'cut' : 'selection')
+    // Run after the remaining copy handlers. A prevented event with no supplied
+    // clipboard payload is a cancelled copy, while the default browser path and
+    // custom clipboardData path both represent a completed native copy request.
+    window.queueMicrotask(() => {
+      const suppliedText = clipboardEvent.clipboardData?.getData('text/plain') || ''
+      if (!event.defaultPrevented || suppliedText) {
+        announceClipboardCopy(text, event.type === 'cut' ? 'cut' : 'copy')
+      }
+    })
   }
   document.addEventListener('copy', onNativeCopy, true)
   document.addEventListener('cut', onNativeCopy, true)
@@ -224,6 +252,7 @@ export function installClipboardCapture(): void {
 /** Reset the dedupe window (used when a test or a re-copy must not be collapsed). */
 export function resetCaptureDedupe(): void {
   dedupe.forget()
+  feedbackDedupe.forget()
 }
 
 export async function loadClipboardHistory(): Promise<ClipboardHistory> {

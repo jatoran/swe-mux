@@ -1561,11 +1561,11 @@ body {
   .sidebar-footer .notes-shelf-trigger{height:44px;min-height:44px}
 }
 
-/* Transient touch feedback pill (swipe landed on tab X, held Run started Y).
-   Non-interactive and self-clearing, so it never needs a dismiss affordance. */
-.mobile-hud{position:fixed;z-index:47;top:max(58px,calc(env(safe-area-inset-top) + 52px));left:50%;transform:translateX(-50%);max-width:min(76vw,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 13px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel) 92%,var(--green));color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;box-shadow:0 4px 14px #000a;pointer-events:none;animation:mobile-hud-in .14s ease-out}
-@keyframes mobile-hud-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
-@media(prefers-reduced-motion:reduce){.mobile-hud{animation:none}}
+/* App-level success/gesture feedback. It stays above modal layers so a copy made
+   inside one is acknowledged, and never takes focus or intercepts a follow-up tap. */
+.interaction-hud{position:fixed;z-index:500;top:max(58px,calc(env(safe-area-inset-top) + 52px));left:50%;transform:translateX(-50%);max-width:min(76vw,320px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:7px 13px;border:1px solid var(--green);background:color-mix(in srgb,var(--panel) 92%,var(--green));color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;box-shadow:0 4px 14px #000a;pointer-events:none;animation:interaction-hud-in .14s ease-out}
+@keyframes interaction-hud-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}
+@media(prefers-reduced-motion:reduce){.interaction-hud{animation:none}}
 
 /* Touch-only: app chrome is tap targets, not prose. Long-pressing a toolbar
    title, tab, sidebar row, or rail button to reach its context menu must not
