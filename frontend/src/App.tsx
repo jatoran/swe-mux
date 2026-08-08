@@ -2507,6 +2507,16 @@ export function App() {
     setQueueOpenToken(current => current + 1)
   }
 
+  /** Read one session's conversation in the drawer without replacing its terminal.
+   *
+   *  Like Queue, Transcript follows the focused session, so the pane chip must focus
+   *  its own session before selecting the drawer tab. */
+  const openTranscriptForSession = async (sessionId: string) => {
+    const session = sessionsRef.current.find(item => item.id === sessionId)
+    if (session) await selectSession(session)
+    openDrawerTab('transcript',session?.project_id||projectId)
+  }
+
   /** Pop one target's queue out into a workspace tab: the wide-review escape hatch, and
    *  what a persisted layout holding a `queue:` leaf resolves to. Nothing creates one
    *  implicitly any more — a queue tab per session inspected was the reason the queue
@@ -3543,7 +3553,7 @@ export function App() {
         <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
         {!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
-        <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
+        <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
             on a phone it cost 40px of a bar that also has to fit the session name and path. What it
             opened is now the drawer's Processes tab, which pins this session's row first, and the
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>

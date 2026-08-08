@@ -561,6 +561,7 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     omission — including the `onDone` every sibling takes, which on mobile would close
     the drawer after each copy and end the reading.
     """
+    app = source("App.tsx")
     drawer = source("UtilityDrawer.tsx")
     tab = source("TranscriptTab.tsx")
     view = source("transcriptView.ts")
@@ -573,6 +574,23 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     # of the clipboard ring rather than evicting the snippets it exists to hand back.
     assert "withoutClipboardCapture" in tab
     assert "suppressDepth > 0" in source("clipboardHistory.ts")
+
+    # The pane-header route is shared by desktop panes and the mobile projection. It
+    # follows the same focus-first contract as Queue, is available only for harnesses
+    # with transcripts, and stays adjacent to Queue in source/render order.
+    opener_start = app.index("const openTranscriptForSession =")
+    opener = app[opener_start : app.index("/** Pop one target's queue", opener_start)]
+    assert "if (session) await selectSession(session)" in opener
+    assert "openDrawerTab('transcript',session?.project_id||projectId)" in opener
+    tools_start = app.index('<div class="pane-tools">')
+    tools = app[tools_start : app.index('</div>', tools_start)]
+    assert "hasHarnessTranscript(session.backend)" in tools
+    assert 'class="pane-tool-label transcript-chip"' in tools
+    assert "openQueueForSession(session.id)" in tools
+    assert "openTranscriptForSession(session.id)" in tools
+    assert tools.index("openQueueForSession(session.id)") < tools.index(
+        "openTranscriptForSession(session.id)"
+    )
 
     # The drawer unmounts a tab body on every tab switch, so anything that has to
     # survive that cannot be component state. The scroll place is the whole reason this

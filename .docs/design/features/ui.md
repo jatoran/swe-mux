@@ -740,11 +740,13 @@ responsive controls.
 - A terminal pane is three rows: the header bar, an optional read-aloud player strip, then the
   terminal surface (terminal + action rail). The rows are placed explicitly so the middle track
   collapses to nothing when no strip is rendered.
-- The pane tools row carries `note`, `queue[:N]` (agent sessions only — focuses that session
+- The pane tools row carries `note`, `queue[:N]` (agent sessions only - focuses that session
   and opens the drawer's Queue tab on it, the count is its pending items;
-  `features/prompt-queue.md`), and the `⋯` session menu. Every labelled chip here **reports
-  state** — empty/written/open, or a pending count — which is the bar for occupying a bar that
-  also has to fit the session name and path; `proc` did not, and went to the drawer.
+  `features/prompt-queue.md`), `transcript` (transcript-capable sessions only - focuses that
+  session and opens the drawer's Transcript tab), and the `⋯` session menu.
+  The shared pane header supplies the same controls on desktop and in the mobile projection.
+  Labelled chips either report session state or directly open a primary session-bound surface;
+  `proc` did neither, and remains in the drawer.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
   toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
@@ -967,6 +969,8 @@ responsive controls.
   This is the same watch-here/act-there split **Processes** has with the process inspector, and it also stops the rail from carrying two queue-shaped tabs that read as duplicates.
 - **Transcript** is an *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
+  A capability-gated `transcript` chip beside `queue[:N]` in each terminal header focuses that
+  session and opens this tab on desktop and mobile.
   Deliberately no composer, no insert, no send. Mixing those actions into the surface for reviewing
   what already happened is how a stray tap
   becomes a message nobody wrote. Copy is the only verb: per message, or the whole conversation
