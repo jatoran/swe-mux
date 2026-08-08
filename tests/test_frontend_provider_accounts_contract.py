@@ -110,3 +110,34 @@ def test_account_and_resource_switchers_escape_sidebar_as_viewport_popovers() ->
     assert "daemon + infrastructure" in resources
     assert ".account-popover{position:fixed" in css
     assert ".resource-usage-popover>section{padding:0}" in css
+
+
+def test_expanded_resource_summary_is_one_icon_led_row_with_full_hover_copy() -> None:
+    resources = (ROOT / "frontend" / "src" / "ResourceUsage.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert 'class="resource-process-count"' in resources
+    assert "<ProcessesIcon/>" in resources
+    assert "<CpuIcon/>" in resources
+    assert "<RamIcon/>" in resources
+    assert "click to see usage details" in resources
+    assert '<div class="resource-usage-head">' not in resources
+    assert ".resource-usage-summary{width:100%;min-width:0;min-height:34px;display:flex" in css
+
+
+def test_resource_popover_separates_system_and_process_tree_memory_scopes() -> None:
+    resources = (ROOT / "frontend" / "src" / "ResourceUsage.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (ROOT / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "SYSTEM CPU" in resources
+    assert "RECLAIMABLE RAM" in resources
+    assert "WORKING SET" in resources
+    assert "CPU is whole-system load." in resources
+    assert "RAM and process counts cover swe-mux plus everything it started." in resources
+    assert "OWNED RAM" not in resources
+    assert "OWNED PROC" not in resources
+    assert "grid-template-columns:repeat(auto-fit,minmax(72px,1fr))" in css

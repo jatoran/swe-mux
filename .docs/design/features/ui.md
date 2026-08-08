@@ -29,6 +29,7 @@ responsive controls.
   valid remembered view exists.
 - The sidebar shows only Projects marked for active navigation.
   A Project row is followed directly by its layout/session rows; notes do not appear in the tree.
+  Its fold cell stays allocated for alignment, but the fold control renders only when the Project has sessions to hide.
 - **Project rows carry no `Note` / `Files` chips.**
   Both surfaces live in the utility drawer and the Project context menu exposes `Notes…` and `Browse files…` for another Project.
 - The global `PROJECTS` header is navigation chrome rather than a Group.
@@ -76,9 +77,10 @@ responsive controls.
   On the left they shared a gutter with the tree's connector lines, so a row marker read as a
   branch, and consecutive marked rows merged into one long rule that looked like a stray spine.
   The left gutter belongs to the tree alone.
-- The active-Project header and each Project row expose **Run**.
-  Its compact menu contains new Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a launch surface, not persistent sidebar grouping.
-  Mobile Project rows also expose `⋮` immediately left of Run, giving Project actions a direct tap target.
+- The active-Project header exposes **Run** persistently.
+  On desktop, each Project row reveals its Run control while the pointer or keyboard focus is anywhere in that Project's row-and-session block; its reserved column preserves row alignment while hidden.
+  On mobile, Project rows expose Run persistently and also expose `⋮` immediately left of it, giving Project actions direct tap targets.
+  The compact Run menu contains new Claude/Codex/shell/custom-terminal launchers followed by trusted Project Actions; it is a launch surface, not persistent sidebar grouping.
 - Run is the only always-present launcher, since tab strips carry no new-tab button
   (`workspace-layout.md`). The header Run is styled as an accent chip rather than a faint label,
   and because it has no room in the 40 px collapsed header column, the collapsed rail carries an
@@ -121,6 +123,11 @@ responsive controls.
   beside it at exactly the threshold people watch for.
 - The resource chip reports RAM rather than CPU, since a percentage that moves every sample is
   not worth a permanent glance, and abbreviates it (`3.2G`) to fit the strip.
+- The expanded sidebar resource trigger is one row: boxed process-tree icon and count, CPU icon and rounded system CPU percentage, then RAM icon and swe-mux process-tree working set.
+  Its tooltip and accessible name expand the icon-only values and state that clicking opens usage details.
+- The resource popover separates machine and process-tree scope explicitly.
+  System CPU covers the whole machine; process count, reclaimable RAM, and working set cover swe-mux plus everything it started.
+  Reclaimable RAM and working set are separate metric boxes because working set counts shared pages in every process while reclaimable RAM excludes them.
 - Popover direction is independent of the condensed trigger, so a rail anchored at the bottom of
   the window still opens upward.
 - Git state is Project/session metadata. Worktrees have no first-class sidebar row, creation
@@ -936,8 +943,9 @@ responsive controls.
 - Terminal copy is success-preserving: keyboard, menu, automatic selection, the action rail, and
   provider OSC 52 requests retain the exact text until a write succeeds. Blocked or insecure
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
-- Every successful terminal copy uses the same app-level `Copied to clipboard` HUD on desktop and mobile instead of hiding acknowledgment in the command rail.
-  The HUD is a polite live region, carries no copied content, stays above modal layers, and never appears for a rejected clipboard write.
+- Every successful terminal copy uses the same `Copied to clipboard` HUD on desktop and mobile instead of hiding acknowledgment in the command rail.
+  The HUD is a polite live region anchored to the bottom-right safe area, carries no copied content, stays above modal layers, and never appears for a rejected clipboard write.
+  `InteractionHud.tsx` owns its state and dismissal timer below the composition root, so copy and cut feedback cannot re-render terminals, agent chats, or Continuity editors and disturb an active selection or edit transaction.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.

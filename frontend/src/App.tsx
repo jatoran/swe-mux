@@ -70,9 +70,9 @@ import {
 import type { WatchScope } from './processWatch'
 import { DRAWER_TAB_ICONS, SidePanelIcon } from './railIcons'
 import {
-  CLIPBOARD_CHANGED_EVENT, CLIPBOARD_COPIED_EVENT, clearClipboardHistory,
-  configureClipboardCapture, type ClipboardCopiedDetail,
+  CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
+import { InteractionHud, showInteractionHud } from './InteractionHud'
 import { insertIntoFocusedSurface } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
@@ -775,10 +775,6 @@ export function App() {
     window.addEventListener('pointerup',stop,{once:true})
     window.addEventListener('pointercancel',stop,{once:true})
   }
-  // Transient interaction feedback (copy success, which tab a mobile swipe landed
-  // on, what a held Run started). It never enters layout or Project state.
-  const [interactionHud,setInteractionHud]=useState('')
-  const interactionHudTimer=useRef<number|null>(null)
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
   const [talkActiveSessionId,setTalkActiveSessionId]=useState<string|null>(null)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
@@ -944,18 +940,6 @@ export function App() {
     window.addEventListener('pointerup',release)
     window.addEventListener('pointercancel',release)
   }
-
-  const showInteractionHud = (text: string) => {
-    setInteractionHud(text)
-    if (interactionHudTimer.current !== null) window.clearTimeout(interactionHudTimer.current)
-    interactionHudTimer.current = window.setTimeout(() => {
-      setInteractionHud('')
-      interactionHudTimer.current = null
-    }, 1400)
-  }
-  useEffect(() => () => {
-    if (interactionHudTimer.current !== null) window.clearTimeout(interactionHudTimer.current)
-  }, [])
 
   const toggleSidebar=()=>setSidebarCollapsed(value=>{
     const next=!value
@@ -1291,15 +1275,6 @@ export function App() {
       projectId: () => clipboardContextRef.current.projectId || null,
       enabled: () => clipboardContextRef.current.enabled,
     })
-  }, [])
-
-  useEffect(() => {
-    const onClipboardCopied = (event: Event) => {
-      const detail = (event as CustomEvent<ClipboardCopiedDetail>).detail
-      showInteractionHud(detail?.action === 'cut' ? 'Cut to clipboard' : 'Copied to clipboard')
-    }
-    window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)
-    return () => window.removeEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)
   }, [])
 
   useEffect(() => {
@@ -3751,9 +3726,10 @@ export function App() {
     const dropClass=dragProject?.overId===project.id&&dragProject.side?`project-drop-target drop-${dragProject.side}`:''
     const collapsed=collapsedProjects.has(project.id)
     const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
+    const hasSessions=children.length>0
     return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
       <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace?'Hold to reorder Project':'Drag to reorder Project'} onPointerDown={event=>beginProjectPointerDrag(event,project,peerIds)} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
-        <button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button><strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-menu-toggle class="project-row-menu" title={`Project actions for ${project.name}`} aria-label={`Project actions for ${project.name}`} aria-haspopup="menu" aria-expanded={projectMenu?.project.id===project.id} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(projectMenu?.project.id===project.id){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(project,rect.left,rect.bottom+4)}}>⋮</button><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
+        {hasSessions?<button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button>:<span class="project-chevron project-collapse-spacer" aria-hidden="true"/>}<strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-menu-toggle class="project-row-menu" title={`Project actions for ${project.name}`} aria-label={`Project actions for ${project.name}`} aria-haspopup="menu" aria-expanded={projectMenu?.project.id===project.id} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(projectMenu?.project.id===project.id){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(project,rect.left,rect.bottom+4)}}>⋮</button><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
       </div>
       {!collapsed&&<div class="session-list">
         {sidebarNode(projectLayout.root)}
@@ -3805,7 +3781,7 @@ export function App() {
           the last tab used, which is why the icon is the panel and not one tab's mark. */}
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
-    {interactionHud&&<div class="interaction-hud" role="status" aria-live="polite" aria-atomic="true">{interactionHud}</div>}
+    <InteractionHud />
 
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}

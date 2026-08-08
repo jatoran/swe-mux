@@ -101,6 +101,7 @@ def test_terminal_clipboard_rail_and_selection_autocopy_are_wired() -> None:
 def test_successful_clipboard_writes_use_the_shared_interaction_hud() -> None:
     root = Path(__file__).parents[1]
     app = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    hud = (root / "frontend" / "src" / "InteractionHud.tsx").read_text(encoding="utf-8")
     clipboard = (root / "frontend" / "src" / "clipboardHistory.ts").read_text(encoding="utf-8")
     pane = (root / "frontend" / "src" / "TerminalPane.tsx").read_text(encoding="utf-8")
     css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
@@ -108,10 +109,17 @@ def test_successful_clipboard_writes_use_the_shared_interaction_hud() -> None:
     assert "CLIPBOARD_COPIED_EVENT = 'mux:clipboard-copied'" in clipboard
     assert "write.then(() => announceClipboardCopy(text, 'copy')" in clipboard
     assert "if (!event.defaultPrevented || suppliedText)" in clipboard
-    assert "window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)" in app
-    assert "Copied to clipboard" in app
-    assert 'class="interaction-hud"' in app
+    assert "window.addEventListener(CLIPBOARD_COPIED_EVENT, onClipboardCopied)" in hud
+    assert "Copied to clipboard" in hud
+    assert 'class="interaction-hud"' in hud
+    assert "<InteractionHud />" in app
+    # Clipboard acknowledgement owns state below App. A copy or cut must not
+    # re-render terminals, agent chats, or Continuity editors through the root.
+    assert "setInteractionHud" not in app
+    assert "CLIPBOARD_COPIED_EVENT" not in app
     assert ".interaction-hud" in css and "pointer-events:none" in css
+    assert "right:max(16px,calc(env(safe-area-inset-right) + 12px))" in css
+    assert "bottom:max(16px,calc(env(safe-area-inset-bottom) + 12px))" in css
     # Copy success has one visible owner. The rail keeps selection, paste, upload,
     # and recovery state but no longer duplicates the app-level confirmation.
     assert "showClipboardStatus('Selection copied')" not in pane
@@ -293,6 +301,19 @@ def test_mobile_sidebars_use_the_full_selection_and_width_contract() -> None:
     overlay = css[overlay_start : css.index("}", overlay_start)]
     assert "width:90vw" in overlay
     assert "min(" not in overlay
+
+
+def test_project_rows_reserve_empty_fold_and_hover_run_cells() -> None:
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "style.css").read_text(encoding="utf-8")
+
+    assert "const hasSessions=children.length>0" in app
+    assert 'class="project-chevron project-collapse-spacer"' in app
+    assert ".project-row .project-collapse-spacer{" in css
+    assert ".project-row-run{opacity:0;visibility:hidden;pointer-events:none" in css
+    assert ".project-group:hover>.project-row .project-row-run" in css
+    assert ".project-group:focus-within>.project-row .project-row-run" in css
 
 
 def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:

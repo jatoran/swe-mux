@@ -11,7 +11,7 @@ type Listener = {host:string;port:number;loopback:boolean;url:string}
 type Connection = {local_host:string;local_port:number;remote_host:string;remote_port:number}
 export type ProcessItem = {
   pid:number;parent_pid?:number;executable:string;command:string;started_at?:number
-  exited_at?:number;cpu_pct:number;memory_bytes:number;listeners:Listener[];connections:Connection[];conditions:string[]
+  exited_at?:number;cpu_pct:number;memory_bytes:number;memory_unique_bytes?:number|null;listeners:Listener[];connections:Connection[];conditions:string[]
   identity_id?:string;command_hash?:string;parent_lineage?:Array<{pid:number;creation_time?:number}>
   job_assignment?:string;evidence_state?:'active'|'exited'|'escaped'|'suspected_orphan'|'stale'|'inaccessible'
   evidence_reason?:string;confidence?:'high'|'medium'|'low';first_seen?:number;last_seen?:number
@@ -25,7 +25,7 @@ type OwnershipDiagnostic = {
   parent_pid?:number;reason?:string
 }
 export type DaemonProcesses = {
-  pid:number;processes:number;cpu_pct:number;memory_bytes:number
+  pid:number;processes:number;cpu_pct:number;memory_bytes:number;memory_unique_bytes?:number|null
   listeners?:number;connections?:number;members?:ProcessItem[]
 }
 export type FleetSnapshot = {
@@ -33,7 +33,7 @@ export type FleetSnapshot = {
   system_cpu_pct?:number|null
   daemon?:DaemonProcesses
   ownership_diagnostics?:OwnershipDiagnostic[]
-  totals:{processes:number;cpu_pct:number;memory_bytes:number;listeners:number;connections:number}
+  totals:{processes:number;cpu_pct:number;memory_bytes:number;memory_unique_bytes?:number|null;listeners:number;connections:number}
 }
 type SessionSnapshot = {
   available:boolean;diagnostic?:string;session_id:string;processes:ProcessItem[]
