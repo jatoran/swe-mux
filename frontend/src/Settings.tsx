@@ -9,6 +9,7 @@ import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
+import { ThemePicker } from './ThemePicker'
 import { applyUiScale, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
@@ -222,6 +223,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [query,setQuery] = useState('')
   const [highlight,setHighlight] = useState(0)
   const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
+  const [themePickerOpen,setThemePickerOpen] = useState(false)
   const panel = useRef<HTMLElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const searchIndex = useRef<{source:Config|null;entries:SettingsSearchEntry[]}|null>(null)
@@ -261,6 +263,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   useEffect(() => {
     setActiveTab(tabForSection(initialSection))
   },[initialSection])
+
+  useEffect(()=>setThemePickerOpen(false),[activeTab])
 
   const dirty = useMemo(() => Boolean(config&&draft&&(
     !sameDraftValue(config,draft)
@@ -356,6 +360,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         event.preventDefault()
         event.stopImmediatePropagation()
         if(closeIntent){setCloseIntent(null);return}
+        if(themePickerOpen){setThemePickerOpen(false);return}
         // Escape unwinds one layer at a time: an open result list first, the
         // panel only once search is out of the way.
         if(query){setQuery('');return}
@@ -371,7 +376,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       }
       const focusRoot=closeIntent?confirmPanel.current:panel.current
       if (isFocusTraversalKey(event) && focusRoot) {
-        const focusable = [...focusRoot.querySelectorAll<HTMLElement>('button,input,select,textarea')].filter(item => !item.hasAttribute('disabled'))
+        const focusable = [...focusRoot.querySelectorAll<HTMLElement>('button,input,select,textarea,[tabindex]:not([tabindex="-1"])')].filter(item => !item.hasAttribute('disabled'))
         if (!focusable.length) return
         const first = focusable[0], last = focusable[focusable.length - 1]
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
@@ -380,7 +385,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     }
     window.addEventListener('keydown', close, true)
     return () => window.removeEventListener('keydown', close, true)
-  }, [requestClose,closeIntent,capturingCommand,query])
+  }, [requestClose,closeIntent,capturingCommand,query,themePickerOpen])
 
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
@@ -852,7 +857,15 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
         </section>}
 
-        {activeTab==='appearance'&&<section><h3>Appearance</h3><label>Theme<select value={draft.theme} onChange={e=>{const value=e.currentTarget.value as ThemeName;change('theme',value);applyTheme(value)}}><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option><option value="solarized-dark">Solarized Dark</option><option value="tokyo-night">Tokyo Night</option><option value="gruvbox-dark">Gruvbox Dark</option><option value="catppuccin-mocha">Catppuccin Mocha</option><option value="catppuccin-latte">Catppuccin Latte</option><option value="nord">Nord</option><option value="dracula">Dracula</option><option value="everforest-dark">Everforest Dark</option><option value="rose-pine">Rosé Pine</option><option value="kanagawa">Kanagawa</option><option value="ayu-dark">Ayu Dark</option><option value="tron">Tron</option><option value="synthwave-84">Synthwave '84</option><option value="cyberpunk-neon">Cyberpunk Neon</option><option value="amber-crt">Amber CRT</option><option value="green-phosphor">Green Phosphor</option><option value="borland-dos">Borland DOS</option><option value="custom">Custom</option></select></label>{draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}<input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} /><div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div><p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
+        {activeTab==='appearance'&&<section><h3>Appearance</h3>
+          <div class="theme-field">
+            <span>Theme</span>
+            <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} />
+          </div>
+          {draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}
+          <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
+          <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
+          <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
           <h3>Side panel tabs</h3>
           <label>Drawer tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <label>Right rail<select value={draft.utility_rail_display} onChange={e=>change('utility_rail_display',e.currentTarget.value as Config['utility_rail_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>

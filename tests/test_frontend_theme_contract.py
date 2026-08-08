@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from swe_mux.config import contrast_ratio
+from swe_mux.config import THEMES, contrast_ratio
 
 
 def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None:
@@ -32,7 +32,11 @@ def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None
         "white",
         "brightWhite",
     }
-    for name in ("dark", "light", "solarized-dark", "tokyo-night"):
+    theme_type = re.search(r"export type ThemeName = ([^\n]+)", source)
+    assert theme_type
+    names = re.findall(r"'([^']+)'", theme_type.group(1))
+    assert set(names) == THEMES
+    for name in (name for name in names if name != "system"):
         pattern = rf"(?:^|\n)\s*['\"]?{re.escape(name)}['\"]?:\s*\{{([^}}]+)\}}"
         block = re.search(pattern, source)
         assert block, f"missing {name} xterm theme"
@@ -43,6 +47,9 @@ def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None
         assert background and foreground
         assert contrast_ratio(background.group(1), foreground.group(1)) >= 4.5
 
+    for name in (name for name in names if name not in {"system", "custom"}):
+        assert f':root[data-theme="{name}"]' in css
+
     for selector in (
         "button:focus-visible",
         ".state-dot.working",
@@ -51,6 +58,18 @@ def test_every_builtin_theme_defines_readable_xterm_ansi_and_ui_states() -> None
         "selectionBackground",
     ):
         assert selector in css or selector in source
+
+
+def test_theme_picker_previews_are_fixed_width_and_catalog_driven() -> None:
+    root = Path(__file__).parents[1]
+    picker = (root / "frontend" / "src" / "ThemePicker.tsx").read_text(encoding="utf-8")
+    settings = (root / "frontend" / "src" / "Settings.tsx").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "themeOptions.map" in picker
+    assert "<ThemePicker" in settings
+    assert "grid-template-columns:minmax(0,1fr) 94px 14px" in css
+    assert "grid-template-columns:repeat(6,12px)" in css
 
 
 def test_scrollbars_use_compact_theme_aware_shared_chrome() -> None:

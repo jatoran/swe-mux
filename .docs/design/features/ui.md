@@ -282,6 +282,10 @@ responsive controls.
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
   the editor package rather than hand-listed, so it cannot drift from what the editor binds.
+- Appearance exposes one palette picker for the shared browser chrome and xterm theme.
+  Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
+  The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.
+  The built-in retro set includes Phosphor Blue, Phosphor Purple, Commodore 64, Amiga Workbench, CGA, Macintosh System 6, Game Boy, and Virtual Boy.
 - Appearance exposes **chrome scale**, one multiplier on the size of every surface, stored
   **separately for desktop and mobile**. Both default to `1.0`, so installing the build that
   added it changes nothing on screen; it only moves when the user moves it.

@@ -36,6 +36,14 @@ THEMES = {
     "amber-crt",
     "green-phosphor",
     "borland-dos",
+    "phosphor-blue",
+    "phosphor-purple",
+    "commodore-64",
+    "amiga-workbench",
+    "cga",
+    "macintosh-system-6",
+    "game-boy",
+    "virtual-boy",
     "custom",
 }
 CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "accent", "error"}
@@ -83,6 +91,14 @@ BUILTIN_THEME_PAIRS = {
     "amber-crt": ("#140d00", "#ffb000"),
     "green-phosphor": ("#001100", "#33ff33"),
     "borland-dos": ("#0000a8", "#ffff54"),
+    "phosphor-blue": ("#020817", "#9dd7ff"),
+    "phosphor-purple": ("#0b0312", "#dda6ff"),
+    "commodore-64": ("#40318d", "#bbb7f2"),
+    "amiga-workbench": ("#0050a4", "#ffffff"),
+    "cga": ("#000000", "#aaaaaa"),
+    "macintosh-system-6": ("#f5f5ed", "#111111"),
+    "game-boy": ("#0f380f", "#b6d44a"),
+    "virtual-boy": ("#000000", "#ff3045"),
 }
 CCUSAGE_PACKAGE = "ccusage@latest"
 MAX_PROJECT_INIT_SCRIPTS = 32

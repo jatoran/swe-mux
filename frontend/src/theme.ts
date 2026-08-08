@@ -1,4 +1,36 @@
-export type ThemeName = 'light' | 'dark' | 'system' | 'solarized-dark' | 'tokyo-night' | 'gruvbox-dark' | 'catppuccin-mocha' | 'catppuccin-latte' | 'nord' | 'dracula' | 'everforest-dark' | 'rose-pine' | 'kanagawa' | 'ayu-dark' | 'tron' | 'synthwave-84' | 'cyberpunk-neon' | 'amber-crt' | 'green-phosphor' | 'borland-dos' | 'custom'
+export type ThemeName = 'light' | 'dark' | 'system' | 'solarized-dark' | 'tokyo-night' | 'gruvbox-dark' | 'catppuccin-mocha' | 'catppuccin-latte' | 'nord' | 'dracula' | 'everforest-dark' | 'rose-pine' | 'kanagawa' | 'ayu-dark' | 'tron' | 'synthwave-84' | 'cyberpunk-neon' | 'amber-crt' | 'green-phosphor' | 'borland-dos' | 'phosphor-blue' | 'phosphor-purple' | 'commodore-64' | 'amiga-workbench' | 'cga' | 'macintosh-system-6' | 'game-boy' | 'virtual-boy' | 'custom'
+
+export const themeOptions: ReadonlyArray<{name:ThemeName;label:string}> = [
+  {name:'dark',label:'Dark'},
+  {name:'light',label:'Light'},
+  {name:'system',label:'System'},
+  {name:'solarized-dark',label:'Solarized Dark'},
+  {name:'tokyo-night',label:'Tokyo Night'},
+  {name:'gruvbox-dark',label:'Gruvbox Dark'},
+  {name:'catppuccin-mocha',label:'Catppuccin Mocha'},
+  {name:'catppuccin-latte',label:'Catppuccin Latte'},
+  {name:'nord',label:'Nord'},
+  {name:'dracula',label:'Dracula'},
+  {name:'everforest-dark',label:'Everforest Dark'},
+  {name:'rose-pine',label:'Rosé Pine'},
+  {name:'kanagawa',label:'Kanagawa'},
+  {name:'ayu-dark',label:'Ayu Dark'},
+  {name:'tron',label:'Tron'},
+  {name:'synthwave-84',label:"Synthwave '84"},
+  {name:'cyberpunk-neon',label:'Cyberpunk Neon'},
+  {name:'amber-crt',label:'Amber CRT'},
+  {name:'green-phosphor',label:'Green Phosphor'},
+  {name:'borland-dos',label:'Borland DOS'},
+  {name:'phosphor-blue',label:'Phosphor Blue'},
+  {name:'phosphor-purple',label:'Phosphor Purple'},
+  {name:'commodore-64',label:'Commodore 64'},
+  {name:'amiga-workbench',label:'Amiga Workbench'},
+  {name:'cga',label:'CGA'},
+  {name:'macintosh-system-6',label:'Macintosh System 6'},
+  {name:'game-boy',label:'Game Boy'},
+  {name:'virtual-boy',label:'Virtual Boy'},
+  {name:'custom',label:'Custom'},
+]
 
 export const terminalThemes: Record<Exclude<ThemeName, 'system'>, Record<string, string>> = {
   dark: { background:'#090a0c', foreground:'#d9dde2', cursor:'#d9dde2', selectionBackground:'#3b4658', black:'#15171b', brightBlack:'#686f7a', red:'#f07178', brightRed:'#ff8b92', green:'#8bd450', brightGreen:'#b1f477', yellow:'#e7c768', brightYellow:'#f5dc89', blue:'#72a7ff', brightBlue:'#9bc0ff', magenta:'#c792ea', brightMagenta:'#ddb0f5', cyan:'#6fd3d8', brightCyan:'#91e5e9', white:'#d9dde2', brightWhite:'#ffffff' },
@@ -20,7 +52,21 @@ export const terminalThemes: Record<Exclude<ThemeName, 'system'>, Record<string,
   'amber-crt': { background:'#140d00', foreground:'#ffb000', cursor:'#ffcc55', selectionBackground:'#4a3200', black:'#241800', brightBlack:'#8a6000', red:'#ff5a1f', brightRed:'#ff8c4d', green:'#ffb000', brightGreen:'#ffc94d', yellow:'#ffc300', brightYellow:'#ffd966', blue:'#d99000', brightBlue:'#ffb833', magenta:'#ff8f1f', brightMagenta:'#ffab52', cyan:'#ffa000', brightCyan:'#ffc270', white:'#ffb000', brightWhite:'#ffe0a3' },
   'green-phosphor': { background:'#001100', foreground:'#33ff33', cursor:'#33ff33', selectionBackground:'#0a3d0a', black:'#001a00', brightBlack:'#158f15', red:'#00ff88', brightRed:'#5cffb4', green:'#22cc22', brightGreen:'#4dff4d', yellow:'#a6ff4d', brightYellow:'#c8ff85', blue:'#00e0a0', brightBlue:'#2effc0', magenta:'#7cff29', brightMagenta:'#9cff5c', cyan:'#00e0c0', brightCyan:'#4dffe0', white:'#33ff33', brightWhite:'#ccffcc' },
   'borland-dos': { background:'#0000a8', foreground:'#ffff54', cursor:'#ffffff', selectionBackground:'#1414b4', black:'#000000', brightBlack:'#545454', red:'#fe5454', brightRed:'#ff8a8a', green:'#54fe54', brightGreen:'#8aff8a', yellow:'#ffff54', brightYellow:'#ffff9c', blue:'#5454fe', brightBlue:'#8a8aff', magenta:'#fe54fe', brightMagenta:'#ff8aff', cyan:'#54fefe', brightCyan:'#8affff', white:'#e6e6ff', brightWhite:'#ffffff' },
+  'phosphor-blue': { background:'#020817', foreground:'#9dd7ff', cursor:'#c6eaff', selectionBackground:'#173d69', black:'#050d1a', brightBlack:'#326a97', red:'#62b9ff', brightRed:'#93d4ff', green:'#32a6ff', brightGreen:'#64c7ff', yellow:'#9ad8ff', brightYellow:'#c2e9ff', blue:'#247ad4', brightBlue:'#4ba2ff', magenta:'#788cff', brightMagenta:'#a7b7ff', cyan:'#24c7e8', brightCyan:'#70eaff', white:'#9dd7ff', brightWhite:'#e5f7ff' },
+  'phosphor-purple': { background:'#0b0312', foreground:'#dda6ff', cursor:'#efceff', selectionBackground:'#4a2065', black:'#11051c', brightBlack:'#70448a', red:'#d56aff', brightRed:'#efa0ff', green:'#ae58e8', brightGreen:'#d083ff', yellow:'#e5b1ff', brightYellow:'#f5d8ff', blue:'#8456d8', brightBlue:'#aa83f3', magenta:'#c45cff', brightMagenta:'#e692ff', cyan:'#a57ae8', brightCyan:'#ccb0f5', white:'#dda6ff', brightWhite:'#f8ebff' },
+  'commodore-64': { background:'#40318d', foreground:'#bbb7f2', cursor:'#ffffff', selectionBackground:'#6759b2', black:'#000000', brightBlack:'#4a4a4a', red:'#813338', brightRed:'#c46c71', green:'#56ac4d', brightGreen:'#a9ff9f', yellow:'#d8d46d', brightYellow:'#edf171', blue:'#2e2c9b', brightBlue:'#706deb', magenta:'#8e3c97', brightMagenta:'#c96fd1', cyan:'#75cec8', brightCyan:'#9ff3ed', white:'#b2b2b2', brightWhite:'#ffffff' },
+  'amiga-workbench': { background:'#0050a4', foreground:'#ffffff', cursor:'#ff8800', selectionBackground:'#1671c1', black:'#000000', brightBlack:'#4f6680', red:'#dd3322', brightRed:'#ff6655', green:'#00aa88', brightGreen:'#44ddbb', yellow:'#ff8800', brightYellow:'#ffbb55', blue:'#0055aa', brightBlue:'#55aaff', magenta:'#aa55aa', brightMagenta:'#dd88dd', cyan:'#55cccc', brightCyan:'#99eeee', white:'#cccccc', brightWhite:'#ffffff' },
+  cga: { background:'#000000', foreground:'#aaaaaa', cursor:'#ffffff', selectionBackground:'#555555', black:'#000000', brightBlack:'#555555', red:'#aa0000', brightRed:'#ff5555', green:'#00aa00', brightGreen:'#55ff55', yellow:'#aa5500', brightYellow:'#ffff55', blue:'#0000aa', brightBlue:'#5555ff', magenta:'#aa00aa', brightMagenta:'#ff55ff', cyan:'#00aaaa', brightCyan:'#55ffff', white:'#aaaaaa', brightWhite:'#ffffff' },
+  'macintosh-system-6': { background:'#f5f5ed', foreground:'#111111', cursor:'#111111', selectionBackground:'#a8c4df', black:'#111111', brightBlack:'#676762', red:'#a32323', brightRed:'#cc4545', green:'#2d6a4f', brightGreen:'#438c6b', yellow:'#8a6410', brightYellow:'#b08524', blue:'#285f9e', brightBlue:'#3f7ec2', magenta:'#72527f', brightMagenta:'#916b9f', cyan:'#34747a', brightCyan:'#4d959c', white:'#deded6', brightWhite:'#ffffff' },
+  'game-boy': { background:'#0f380f', foreground:'#b6d44a', cursor:'#d5ef68', selectionBackground:'#306230', black:'#0f380f', brightBlack:'#306230', red:'#6c4a24', brightRed:'#a56b32', green:'#5f7f18', brightGreen:'#9bbc0f', yellow:'#8bac0f', brightYellow:'#d5ef68', blue:'#365f38', brightBlue:'#609260', magenta:'#556b2f', brightMagenta:'#83a343', cyan:'#4f7a3a', brightCyan:'#78a85a', white:'#8bac0f', brightWhite:'#d5ef68' },
+  'virtual-boy': { background:'#000000', foreground:'#ff3045', cursor:'#ff7584', selectionBackground:'#5e000b', black:'#000000', brightBlack:'#5e000b', red:'#a80018', brightRed:'#ff1830', green:'#8f1424', brightGreen:'#d52a3e', yellow:'#c12738', brightYellow:'#ff596b', blue:'#70101d', brightBlue:'#bb3442', magenta:'#a7182b', brightMagenta:'#eb4254', cyan:'#8b2732', brightCyan:'#d35f6e', white:'#cf2639', brightWhite:'#ff9da7' },
   custom: { background:'#090a0c', foreground:'#d9dde2', cursor:'#8bd450', selectionBackground:'#3b4658', black:'#15171b', brightBlack:'#686f7a', red:'#f07178', brightRed:'#f07178', green:'#8bd450', brightGreen:'#8bd450', yellow:'#e7c768', brightYellow:'#e7c768', blue:'#72a7ff', brightBlue:'#72a7ff', magenta:'#c792ea', brightMagenta:'#c792ea', cyan:'#6fd3d8', brightCyan:'#6fd3d8', white:'#d9dde2', brightWhite:'#ffffff' },
+}
+
+export function themePreviewColors(name: ThemeName,customTheme?:CustomTheme): string[] {
+  if(name==='custom'&&customTheme)return [customTheme.background,customTheme.foreground,customTheme.error,customTheme.accent,customTheme.line,customTheme.muted]
+  const palette = terminalThemes[resolvedTheme(name)]
+  return [palette.background,palette.foreground,palette.red,palette.green,palette.blue,palette.magenta]
 }
 
 export type CustomTheme = {background:string;panel:string;line:string;foreground:string;muted:string;accent:string;error:string}
