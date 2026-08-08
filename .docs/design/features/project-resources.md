@@ -28,6 +28,7 @@ The file tree and notes collection are utility-drawer tabs.
 - The default `Ctrl+Alt+N` binding and two-finger swipe-up gesture open the current Project's notes.
 - Stored `project.note` and `session.note` bindings and gestures migrate to `notes.open`.
 - The Notes drawer lists explicit notes even when empty, supports Project/all-Projects scope, searches title/Project/excerpt, and provides create, rename, delete, open-in-drawer, and open-in-pane actions.
+- A note editor header keeps the note title, owning Project, and current save state on one row, separated by centered dots.
 - A note already open in a pane is activated where it is.
 - Opening a note never creates or rearranges a split.
 - Moving a note is an explicit tab move or pane-edge split action.

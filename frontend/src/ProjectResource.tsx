@@ -1220,7 +1220,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='error'?null
     :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div><strong>{isNote?noteTitle:resource.id}</strong><span>{isGlobalNote?'Global':project.name} · {stateLabel}</span></div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div class={isNote?'note-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{isNote?<><span class="note-resource-separator" aria-hidden="true">·</span><span>{isGlobalNote?'Global':project.name}</span><span class="note-resource-separator" aria-hidden="true">·</span><span class="note-resource-state">{stateLabel}</span></>:<span>{project.name} · {stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}

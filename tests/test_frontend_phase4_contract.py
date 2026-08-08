@@ -147,6 +147,16 @@ def test_continuity_find_is_available_from_the_shared_resource_header() -> None:
     assert "<ProjectResource" in drawer
 
 
+def test_note_resource_header_keeps_identity_and_save_state_on_one_row() -> None:
+    resource = source("ProjectResource.tsx")
+    css = source("style.css")
+
+    assert "class={isNote?'note-resource-heading':undefined}" in resource
+    assert resource.count('class="note-resource-separator"') == 2
+    assert 'class="note-resource-state">{stateLabel}</span>' in resource
+    assert ".project-resource>header>.note-resource-heading{display:flex" in css
+
+
 def test_note_selection_can_be_consumed_only_after_an_accepted_agent_handoff() -> None:
     resource = source("ProjectResource.tsx")
     picker = source("SendToAgentPicker.tsx")
