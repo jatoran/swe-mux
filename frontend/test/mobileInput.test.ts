@@ -34,14 +34,14 @@ test('sub-row drag travel is carried rather than truncated or rounded up', () =>
   assert.deepEqual(terminalScrollSteps(400, 0), { steps: 0, remainder: 0 })
 })
 
-test('touch scroll accelerates with finger velocity and never below 1:1', () => {
-  const { slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
-  assert.equal(touchScrollGain(0), 1)
-  assert.equal(touchScrollGain(slowVelocity), 1)
+test('touch scroll starts controlled and still accelerates to the full flick gain', () => {
+  const { baseGain, slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
+  assert.equal(touchScrollGain(0), baseGain)
+  assert.equal(touchScrollGain(slowVelocity), baseGain)
   assert.equal(touchScrollGain(fastVelocity), maxGain)
   assert.equal(touchScrollGain(fastVelocity * 10), maxGain)
   const middle = touchScrollGain((slowVelocity + fastVelocity) / 2)
-  assert.ok(middle > 1 && middle < maxGain)
+  assert.ok(Math.abs(middle - (baseGain + maxGain) / 2) < 1e-9)
   // Velocity is px/ms and frame-rate independent: the same gesture sampled twice as often,
   // at half the distance per sample, converges on the same reading.
   let slow = 0

@@ -44,10 +44,9 @@ export function touchWheelDelta(previousY: number, currentY: number, settings: M
 /**
  * Touch-scroll acceleration.
  *
- * A drag tracks the finger 1:1 at reading speed (content staying under the thumb is the whole
- * point of direct manipulation, and anything faster makes a small correction overshoot) and
- * gains up to `maxGain` as the flick gets faster, which is how a native scroller crosses a long
- * document without a dozen swipes. The user's own `scrollSensitivity` multiplies on top and is
+ * A deliberate reading drag starts slightly below 1:1 so a small correction does not overshoot,
+ * then gains up to `maxGain` as the flick gets faster, which is how a native scroller crosses a
+ * long document without a dozen swipes. The user's own `scrollSensitivity` multiplies on top and is
  * deliberately left out of the velocity measurement: the ramp reads the finger, not the setting,
  * so raising sensitivity scales the whole curve rather than shifting where acceleration starts.
  *
@@ -56,7 +55,9 @@ export function touchWheelDelta(previousY: number, currentY: number, settings: M
  * distance would read that as a slow drag, while velocity reads both as the same gesture.
  */
 export const TOUCH_SCROLL_ACCELERATION = {
-  /** px/ms at or below which the drag is 1:1. A deliberate reading drag sits under this. */
+  /** Gain at deliberate reading speed. Slightly below 1:1 keeps small corrections controlled. */
+  baseGain: 0.85,
+  /** px/ms at or below which the drag stays at `baseGain`. */
   slowVelocity: 0.4,
   /** px/ms at which the gain saturates. A flick clears it easily; a drag never reaches it. */
   fastVelocity: 2.4,
@@ -80,11 +81,11 @@ export function smoothTouchVelocity(previous: number, deltaPixels: number, elaps
   return previous * (1 - smoothing) + sample * smoothing
 }
 
-/** The multiplier a drag at `velocity` px/ms earns: 1 at reading speed, `maxGain` at a flick. */
+/** The multiplier a drag at `velocity` px/ms earns: `baseGain` while reading, `maxGain` at a flick. */
 export function touchScrollGain(velocity: number): number {
-  const { slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
+  const { baseGain, slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
   const ramp = (velocity - slowVelocity) / (fastVelocity - slowVelocity)
-  return 1 + (maxGain - 1) * Math.max(0, Math.min(1, ramp))
+  return baseGain + (maxGain - baseGain) * Math.max(0, Math.min(1, ramp))
 }
 
 export type TerminalScrollSteps = {
