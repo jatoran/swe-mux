@@ -5,6 +5,7 @@ import { notifyPromptLibraryChanged, subscribeToPromptLibraryChanges } from '../
 import { renderPromptTemplate } from '../src/promptTemplates.ts'
 import { itemsInOrder, reorderForHover, reorderTargetForPoint } from '../src/dragReorder.ts'
 import { classifySoundEvent, isQuietTime, normalizeSoundPreferences, satisfyingSounds, type SoundPreferences } from '../src/sessionSounds.ts'
+import { isAlertQuietTime, normalizeAlertPreferences } from '../src/alertPrefs.ts'
 
 test('prompt variables render as text without adding a submit action',()=>{
   assert.equal(renderPromptTemplate('Review {{target}} then {{ target }}.',{target:'src/app.ts'}),'Review src/app.ts then src/app.ts.')
@@ -28,6 +29,15 @@ test('sound classification admits root events and excludes subagents',()=>{
   assert.deepEqual(classifySoundEvent({type:'approval_needed',payload:{scope:'root',kind:'input'}})?.event,'attention')
   assert.equal(classifySoundEvent({type:'state_changed',payload:{state:'idle'}})?.event,'waiting')
   assert.equal(classifySoundEvent({type:'session_crashed',payload:{reason:'exit'}})?.event,'failure')
+  assert.equal(classifySoundEvent({type:'turn_aborted',payload:{outcome:'interrupted'}}),null)
+})
+
+test('shared alert policy migrates channel state and owns quiet hours',()=>{
+  const migrated=normalizeAlertPreferences(undefined,{enabled:false},{enabled:true,quietStart:'22:00',quietEnd:'07:00'})
+  assert.deepEqual(migrated,{enabled:true,quietStart:'22:00',quietEnd:'07:00'})
+  const explicit=normalizeAlertPreferences({enabled:false,quietStart:'01:00',quietEnd:'05:00'},{enabled:true},{enabled:true})
+  assert.deepEqual(explicit,{enabled:false,quietStart:'01:00',quietEnd:'05:00'})
+  assert.equal(isAlertQuietTime({...explicit,enabled:true},new Date(2026,1,1,3,0)),true)
 })
 
 test('quiet hours support ranges that cross midnight',()=>{

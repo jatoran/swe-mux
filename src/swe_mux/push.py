@@ -149,7 +149,9 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
             "title": "swe-mux — approval",
             "body": "The agent needs your approval.",
         }
-    if kind in ("turn_failed", "turn_aborted", "session_crashed") or (
+    # `turn_aborted` is cancellation, including deliberate session shutdown. A
+    # real provider/process failure is reported by turn_failed/session_crashed.
+    if kind in ("turn_failed", "session_crashed") or (
         kind == "state_changed" and payload.get("state") == "crashed"
     ):
         return {
@@ -187,7 +189,7 @@ def _resolves_attention(event: MuxEvent) -> bool:
     alert was about is being dealt with. A deferral that fired anyway would be a
     lock-screen buzz for a question the user had already answered.
     """
-    if event.type in {"terminal_input", "turn_started"}:
+    if event.type in {"terminal_input", "turn_started", "session_exited", "session_crashed"}:
         return True
     return event.type == "state_changed" and (event.payload or {}).get("state") == "working"
 

@@ -1,10 +1,10 @@
-# Session and reset notifications
+# Session and reset alerts
 
 ## What it is
 
-Optional sounds in a live tab, and optional Web Push alerts that reach a locked phone,
-for normalized root-session attention/completion and confirmed unexpected provider-quota
-resets. Both supplement, but never replace, the durable inbox.
+Alerts are normalized root-session events delivered through an optional sound channel in a live tab and an optional Web Push channel that can reach a locked phone.
+Supported events cover attention, completion, waiting, failure, and confirmed unexpected provider-quota resets.
+Both delivery channels supplement, but never replace, the durable inbox.
 
 ## Contract
 
@@ -14,6 +14,10 @@ failure, and confirmed unexpected quota reset. Reset sounds are emitted only aft
 quota classifier's timer, drop-size, floor, independent-confirmation, and account/auth gates all
 pass. EventBus semantic deduplication collapses hook and transcript duplicates; the browser adds
 a short sequence-aware guard. Events explicitly scoped to subagents/sidechains are rejected.
+
+`turn_aborted` is a cancellation, not a failure.
+It covers deliberate session shutdown, user interruption, and provider clear/rollback paths, so neither sound nor push may classify it as `failure`.
+Unexpected process death remains visible through `session_crashed`, and an explicit agent failure remains visible through `turn_failed`.
 
 Three rules decide whether an idle session is worth interrupting a human for, and all three
 apply identically to sounds and to web push (`classify_notification` and
@@ -89,31 +93,42 @@ raised (they were there and chose not to act), or the session was dealt with in 
 human input into it, or the agent resuming, cancels anything held for it. Enablement, category
 and quiet hours are re-checked when the deferral fires, since it can cross into quiet hours.
 Categories that go stale while held (`complete`, `failure`, `reset`) are dropped, not deferred.
+`session_exited` and `session_crashed` also cancel every pending settle and deferral for that session before any terminal failure alert is considered.
 
 ## Preferences
 
-Sound preferences are device-local; notification (push) preferences are stored on the daemon
-per device class, because the push sender has to read them with no browser involved. Master
-enable, volume, quiet hours (including overnight ranges), per-event mute, and a sound
-selection for each event. The shared sound library
-contains seven bundled presets plus one optional audio file no larger than 512 KiB stored as a
-data URL. Uploading a custom sound adds `Custom` to the same preview and event-selection surfaces;
-it does not reassign events. Removing it resets only events assigned to `Custom` back to Two Tone.
-Legacy device preferences with one global selection migrate that choice to every event. The seven
-curated 0.5-second presets are copied from the MIT-licensed Orca reference and retain its license
-beside the assets. Library clicks and event-row Preview actions play without changing other event
-assignments; selecting from an event dropdown assigns and previews that event's choice. Two Tone
-is the default. Previewing unlocks/validates browser playback. No arbitrary script or shell hook
-runs, and existing inbox/toast delivery remains independent. A portable Project may disable
-sounds for its own events, but cannot enable a device whose master setting is off.
-The daemon exposes the packaged files at `/notification-sounds`; this route must remain separate
-from the SPA fallback so preview clicks receive audio rather than `index.html`.
+Every alert preference is stored on the daemon under a Desktop or Mobile device-class profile so either device can configure both profiles and the push sender can enforce policy without a live browser.
+The `alerts` domain owns the profile-wide master and one quiet-hours schedule, including overnight ranges.
+The `sounds` and `notifications` domains remain independent delivery-channel policies under that master.
+Muting the master suppresses sound and push without changing either channel's enabled state or any per-event choice.
+The sidebar bell controls this shared master and must be labelled as Alerts rather than claiming to control only notifications.
+
+The Settings surface has one device-profile selector, one master, two channel toggles, and one event matrix.
+Each event row selects a sound or `Off` and independently enables push.
+Browser push subscription and permission are capability state for the current physical browser, not profile policy, so they are displayed separately from the Mobile/Desktop push channel toggle.
+The durable inbox remains available while alert delivery is muted.
+
+Profiles created before the `alerts` domain derive the master from either legacy channel being enabled.
+Legacy push quiet hours win while push is enabled; otherwise enabled sound quiet hours are preserved.
+The first unified-policy edit persists an explicit `alerts` domain without rewriting the legacy channel blobs or losing custom audio and event choices.
+
+The shared sound library contains seven bundled presets plus one optional audio file no larger than 512 KiB stored as a data URL.
+Uploading a custom sound adds `Custom` to the same preview and event-selection surfaces; it does not reassign events.
+Removing it resets only events assigned to `Custom` back to Two Tone.
+Legacy sound preferences with one global selection migrate that choice to every event.
+The seven curated 0.5-second presets are copied from the MIT-licensed Orca reference and retain its license beside the assets.
+Library clicks and event-row Preview actions play without changing other event assignments; selecting from an event dropdown assigns and previews that event's choice.
+Two Tone is the default.
+Previewing unlocks and validates browser playback.
+No arbitrary script or shell hook runs, and existing inbox/toast delivery remains independent.
+A portable Project may disable sounds for its own events, but cannot enable a device whose shared master or sound channel is off.
+The daemon exposes the packaged files at `/notification-sounds`; this route must remain separate from the SPA fallback so preview clicks receive audio rather than `index.html`.
 
 ## Key files
 
 - `frontend/src/sessionSounds.ts`
-- `frontend/src/NotificationSoundSettings.tsx`
-- `frontend/src/NotificationPushSettings.tsx`, `frontend/src/notificationPrefs.ts`
+- `frontend/src/alertPrefs.ts`, `frontend/src/notificationPrefs.ts`
+- `frontend/src/NotificationPushSettings.tsx` (the unified Alerts settings surface)
 - `frontend/src/push.ts` (subscription lifecycle; presence itself lives in
   `features/device-presence.md`)
 - `frontend/src/ProviderAccounts.tsx`

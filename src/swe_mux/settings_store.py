@@ -7,12 +7,12 @@ own localStorage (unshareable, invisible to the push sender that runs on the
 server), settings live here keyed by a device *class* — ``desktop`` or
 ``mobile`` — and every device can read and edit either profile.
 
-The ``sounds``, ``commandRail``, ``fileTree`` and ``drawerTabs`` domains are
-stored opaquely: the browser owns their schema and normalization (custom sound
-data URLs, per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}``
-blob, the utility drawer's ``{order: tabId[]}``). Only the ``notifications``
-domain is interpreted server-side, because the Web Push sender must decide
-whether to deliver a push before any tab is alive to filter it.
+The ``sounds``, ``commandRail``, ``fileTree`` and ``drawerTabs`` domains are stored
+opaquely: the browser owns their schema and normalization (custom sound data URLs,
+per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}`` blob, the
+utility drawer's ``{order: tabId[]}``). The ``alerts`` and ``notifications`` domains
+are interpreted server-side because the Web Push sender must apply the shared
+master, quiet hours, and push-channel policy before any tab is alive to filter it.
 """
 
 from __future__ import annotations
@@ -25,7 +25,14 @@ from typing import Any
 
 SETTINGS_SCHEMA_VERSION = 1
 PROFILES: tuple[str, ...] = ("desktop", "mobile")
-DOMAINS: tuple[str, ...] = ("sounds", "notifications", "commandRail", "fileTree", "drawerTabs")
+DOMAINS: tuple[str, ...] = (
+    "alerts",
+    "sounds",
+    "notifications",
+    "commandRail",
+    "fileTree",
+    "drawerTabs",
+)
 NOTIFICATION_EVENTS: tuple[str, ...] = ("complete", "waiting", "attention", "failure", "reset")
 #: Which presence silences a profile's push. See ``default_notifications``.
 SUPPRESS_MODES: tuple[str, ...] = ("never", "focused", "anyDevice")
@@ -121,6 +128,52 @@ def normalize_notifications(value: Any, profile: str = "mobile") -> dict[str, An
     return base
 
 
+def normalize_alerts(
+    value: Any,
+    *,
+    notifications: Any = None,
+    sounds: Any = None,
+    profile: str = "mobile",
+) -> dict[str, Any]:
+    """Normalize the shared alert master and quiet hours.
+
+    Profiles saved before the alerts domain existed derived their effective master
+    from either delivery channel being enabled. Push quiet hours win when the push
+    channel is active; otherwise the sound schedule is preserved. Once the browser
+    saves the unified controls, this compatibility path is no longer consulted.
+    """
+
+    push = normalize_notifications(notifications, profile)
+    sound = sounds if isinstance(sounds, dict) else {}
+    sound_enabled = sound.get("enabled") is True
+    push_quiet = (str(push.get("quietStart", "")), str(push.get("quietEnd", "")))
+    sound_quiet = (
+        str(sound.get("quietStart", "")) if isinstance(sound.get("quietStart"), str) else "",
+        str(sound.get("quietEnd", "")) if isinstance(sound.get("quietEnd"), str) else "",
+    )
+    if push["enabled"] and any(push_quiet):
+        quiet_start, quiet_end = push_quiet
+    elif sound_enabled and any(sound_quiet):
+        quiet_start, quiet_end = sound_quiet
+    elif any(push_quiet):
+        quiet_start, quiet_end = push_quiet
+    else:
+        quiet_start, quiet_end = sound_quiet
+    result = {
+        "enabled": bool(push["enabled"] or sound_enabled),
+        "quietStart": quiet_start,
+        "quietEnd": quiet_end,
+    }
+    if not isinstance(value, dict):
+        return result
+    if isinstance(value.get("enabled"), bool):
+        result["enabled"] = value["enabled"]
+    for key in ("quietStart", "quietEnd"):
+        if isinstance(value.get(key), str):
+            result[key] = value[key]
+    return result
+
+
 class SettingsStore:
     def __init__(self, data_dir: Path) -> None:
         self.path = data_dir / "settings.json"
@@ -174,8 +227,32 @@ class SettingsStore:
         return current
 
     def notifications(self, profile: str) -> dict[str, Any]:
-        """Normalized notification settings for a profile, for the push sender."""
+        """Effective push settings after the shared alert policy is applied."""
 
         if profile not in PROFILES:
             profile = "mobile"
-        return normalize_notifications(self._profiles()[profile].get("notifications"), profile)
+        stored = self._profiles()[profile]
+        notifications = normalize_notifications(stored.get("notifications"), profile)
+        alerts = normalize_alerts(
+            stored.get("alerts"),
+            notifications=stored.get("notifications"),
+            sounds=stored.get("sounds"),
+            profile=profile,
+        )
+        notifications["enabled"] = bool(notifications["enabled"] and alerts["enabled"])
+        notifications["quietStart"] = alerts["quietStart"]
+        notifications["quietEnd"] = alerts["quietEnd"]
+        return notifications
+
+    def alerts(self, profile: str) -> dict[str, Any]:
+        """Normalized shared alert policy, including legacy-domain migration."""
+
+        if profile not in PROFILES:
+            profile = "mobile"
+        stored = self._profiles()[profile]
+        return normalize_alerts(
+            stored.get("alerts"),
+            notifications=stored.get("notifications"),
+            sounds=stored.get("sounds"),
+            profile=profile,
+        )

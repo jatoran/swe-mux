@@ -38,7 +38,7 @@ def test_usage_dashboard_exposes_phase2_evidence_without_identity_overclaim() ->
 def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile() -> None:
     accounts = source("ProviderAccounts.tsx")
     sounds = source("sessionSounds.ts")
-    sound_settings = source("NotificationSoundSettings.tsx")
+    alert_settings = source("NotificationPushSettings.tsx")
     device_settings = source("deviceSettings.ts")
     styles = source("style.css")
     assert "quota-reset-indicator" in accounts
@@ -52,8 +52,9 @@ def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile(
     assert "/api/telemetry/quota-resets/" in accounts
     assert "manual Codex usage" in accounts
     assert "discard as error" in accounts
-    assert "Enable sounds for" in sound_settings
-    assert "settings-profile-switch" in sound_settings
+    assert "Sound in the open app" in alert_settings
+    assert "Enable alerts for" in alert_settings
+    assert "settings-profile-switch" in alert_settings
     assert "#a855f7" in styles
 
 

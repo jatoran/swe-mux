@@ -1,4 +1,5 @@
 import { currentProfile, rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
+import { alertPreferences, isAlertQuietTime } from './alertPrefs.ts'
 export type SoundEvent='complete'|'waiting'|'attention'|'failure'|'reset'
 export type SoundId='two-tone'|'bong'|'thump'|'blip'|'sonar'|'blop'|'ding'|'custom'
 export type SoundPreferences={enabled:boolean;volume:number;quietStart:string;quietEnd:string;events:Record<SoundEvent,boolean>;eventSounds:Record<SoundEvent,SoundId>;customSound?:string}
@@ -85,7 +86,10 @@ export function classifySoundEvent(event:NormalizedMuxEvent):{event:SoundEvent;r
   if(payload.sidechain===true||payload.subagent===true)return null
   if(event.type==='unexpected_quota_reset')return {event:'reset',reason:'confirmed unexpected quota reset'}
   if(event.type==='approval_needed')return {event:'attention',reason:payload.kind==='input'?'root agent asked a question':'root agent needs approval'}
-  if(event.type==='turn_failed'||event.type==='turn_aborted'||event.type==='session_crashed'||(event.type==='state_changed'&&payload.state==='crashed'))return {event:'failure',reason:'root agent failed'}
+  // An aborted turn is a cancellation, not a failure. Session shutdown and a
+  // user pressing Escape both produce this event; unexpected process death has
+  // its own `session_crashed` signal and still alerts.
+  if(event.type==='turn_failed'||event.type==='session_crashed'||(event.type==='state_changed'&&payload.state==='crashed'))return {event:'failure',reason:'root agent failed'}
   // The turn ended but the agent did not: subagents or background tasks are still
   // running and it wakes itself when they land, so this is not the moment that
   // wants the user's attention — the one after it is. Suppressing here keeps "the
@@ -112,8 +116,8 @@ export async function testSessionSound(preferences=soundPreferences(),soundId=pr
   await audio.play()
 }
 export function handleSessionSound(event:NormalizedMuxEvent,projectAllows=true):void{
-  const match=classifySoundEvent(event),preferences=soundPreferences()
-  if(!match||!projectAllows||!preferences.enabled||!preferences.events[match.event]||isQuietTime(preferences))return
+  const match=classifySoundEvent(event),preferences=soundPreferences(),alerts=alertPreferences()
+  if(!match||!projectAllows||!alerts.enabled||!preferences.enabled||!preferences.events[match.event]||isAlertQuietTime(alerts))return
   const key=event.id||`${event.type}:${event.session_id||''}:${String(event.seq||event.ts||event.timestamp||event.payload?.timestamp||'')}`
   const now=Date.now();if((played.get(key)||0)>now-10_000)return
   played.set(key,now);for(const [id,at] of played)if(at<now-60_000)played.delete(id)

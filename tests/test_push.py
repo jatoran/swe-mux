@@ -78,6 +78,7 @@ def test_classify_covers_categories() -> None:
     assert classify_notification(_event("state_changed", state="idle"))["category"] == "waiting"
     assert classify_notification(_event("turn_failed"))["category"] == "failure"
     assert classify_notification(_event("unexpected_quota_reset"))["category"] == "reset"
+    assert classify_notification(_event("turn_aborted", outcome="interrupted")) is None
 
 
 def test_classify_excludes_subagent_and_nonroot() -> None:
@@ -201,6 +202,14 @@ async def test_sender_respects_disabled_profile(tmp_path: Path, recorder: _Recor
     assert recorder.sent == []
 
 
+async def test_sender_respects_unified_alert_master(tmp_path: Path, recorder: _Recorder) -> None:
+    now = [100.0]
+    _store, settings, sender = await _make_sender(tmp_path, lambda: now[0])
+    settings.update("mobile", {"alerts": {"enabled": False}})
+    await sender._handle(_event("approval_needed"))
+    assert recorder.sent == []
+
+
 def test_notification_plan_routes_around_the_device_in_use() -> None:
     settings = default_notifications("mobile")
     plan = lambda **kw: notification_plan(settings, "attention", **kw)  # noqa: E731
@@ -320,6 +329,21 @@ async def test_dealing_with_the_session_cancels_what_is_held_for_it(
     gate.released.set()
     await asyncio.sleep(0)
     assert recorder.sent == []
+
+
+@pytest.mark.parametrize("event_type", ["session_exited", "session_crashed"])
+async def test_session_end_cancels_pending_delivery(
+    tmp_path: Path, recorder: _Recorder, event_type: str
+) -> None:
+    now = [100.0]
+    gate = _Gate()
+    _store, _settings, sender = await _make_sender(
+        tmp_path, lambda: now[0], presence=_desktop_presence(now), sleep=gate
+    )
+    await sender._handle(_event("approval_needed"))
+    assert sender.pending_deferrals() == 1
+    await sender._handle(_event(event_type))
+    assert sender.pending_deferrals() == 0
 
 
 async def test_the_agent_resuming_also_cancels_a_held_notification(

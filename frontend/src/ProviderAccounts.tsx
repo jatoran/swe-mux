@@ -1,6 +1,8 @@
 import { createPortal } from 'preact/compat'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
+import { currentProfile } from './deviceSettings'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
 import { accountAbbreviation, accountPopoverStyle, chipUsageBand, formatResetRemaining, percent, providerQuotaWindows, quotaGridSegments, quotaSummary, quotaWindowSummary, shownUsageBand, type QuotaWindowDisplay } from './providerAccountDisplay'
 import { emitTutorialAction } from './tutorial'
@@ -77,7 +79,7 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
   const [open,setOpen]=useState(false)
   const [busy,setBusy]=useState('')
   const [resetUnread,setResetUnread]=useState(false)
-  const [resetSound,setResetSound]=useState(()=>soundPreferences().enabled&&soundPreferences().events.reset)
+  const [resetSound,setResetSound]=useState(()=>alertPreferences().enabled&&soundPreferences().enabled&&soundPreferences().events.reset)
   const root=useRef<HTMLDivElement>(null)
   const popover=useRef<HTMLDivElement>(null)
   const [popoverStyle,setPopoverStyle]=useState<Record<string,string>>({})
@@ -91,7 +93,7 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
     setResetUnread(true)
   },[latestReset?.id])
   const dismissReset=()=>{if(latestReset?.id)localStorage.setItem('swe-mux:last-seen-reset',latestReset.id);setResetUnread(false)}
-  const toggleResetSound=()=>setResetSound(value=>{const next=!value,prefs=soundPreferences();setSoundPreferences({...prefs,enabled:next||prefs.enabled,events:{...prefs.events,reset:next}});return next})
+  const toggleResetSound=()=>setResetSound(value=>{const next=!value,prefs=soundPreferences();if(next){const alerts=alertPreferences();setAlertPreferencesFor(currentProfile(),{...alerts,enabled:true})}setSoundPreferences({...prefs,enabled:next||prefs.enabled,events:{...prefs.events,reset:next}});return next})
   const reviewReset=async(resolution:'manual_usage'|'discarded')=>{
     if(!latestReset?.id)return
     const reviewedId=latestReset.id

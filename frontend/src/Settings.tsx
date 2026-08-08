@@ -4,8 +4,7 @@ import { api } from './api'
 import { displayChord } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
-import { NotificationSoundSettings } from './NotificationSoundSettings'
-import { NotificationPushSettings } from './NotificationPushSettings'
+import { NotificationAlertSettings } from './NotificationPushSettings'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
@@ -139,7 +138,7 @@ const settingsTabs = [
   {id:'commandrail',label:'Command rail'},
   {id:'usage',label:'Usage'},
   {id:'automation',label:'Automation'},
-  {id:'notifications',label:'Notifications'},
+  {id:'notifications',label:'Alerts'},
   {id:'voice',label:'Voice'},
   {id:'remote',label:'Remote'},
   {id:'appearance',label:'Appearance'},
@@ -153,7 +152,7 @@ const tabForSection = (section:string):SettingsTab => ({
   Terminals:'terminals',
   Agents:'agents',Accounts:'accounts',Input:'input','Command rail':'commandrail','Git and history':'workspace','Usage analytics':'usage',
   Notes:'notes',
-  Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
+  Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Alerts:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
 
 // The note editor's own binding table, enumerated from the editor package so the
@@ -784,7 +783,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
         </section>}
 
-        {activeTab==='notifications'&&<><NotificationPushSettings/><NotificationSoundSettings/></>}
+        {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
         {activeTab==='voice'&&<section><h3>Read aloud (TTS)</h3>
           <p>Mark an observed agent session with its pane <code>tts:</code> chip or context menu. On demand adds a speak button; auto generates audio when each reply completes. Playback and per-device autoplay live in the pane's player strip.</p>
