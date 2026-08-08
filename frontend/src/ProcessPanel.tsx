@@ -41,7 +41,7 @@ type SessionSnapshot = {
 }
 type PreviewResult = {preview:Preview;project:Project}
 type PreviewList = {items:Preview[]}
-export type Preview = {id:string;session_id:string;project_id:string;url:string;host:string;port:number;source:string;viewport:string}
+export type Preview = {id:string;session_id:string;project_id:string;url:string;host:string;port:number;source:string;viewport:string;declared?:boolean}
 
 type Props={
   initialSessionId?:string|null; initialProjectId?:string|null
@@ -196,7 +196,7 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
         <small>{live.length} proc · CPU {live.reduce((total,item)=>total+item.cpu_pct,0).toFixed(1)}% · {memoryLabel(live.reduce((total,item)=>total+item.memory_bytes,0))} · net {listeners.length}L/{live.reduce((total,item)=>total+item.connections.length,0)}C</small>
       </button>
       {previews.length>0&&<div class="registered-preview-list"><h3>Registered previews</h3>{previews.map(preview=><article><div><strong>{preview.url}</strong><span>{preview.source} · port {preview.port}</span></div><button onClick={()=>void navigator.clipboard.writeText(preview.url)}>Copy URL</button></article>)}</div>}
-      {listeners.length>0&&<div class="listener-list"><h3>Detected previews</h3>{listeners.map(({process,listener})=><article><div><strong>{listener.url}</strong><span>{process.executable} · PID {process.pid}</span></div><button onClick={()=>void attach(group.session_id,listener.url)}>Open preview</button><button onClick={()=>void navigator.clipboard.writeText(listener.url)}>Copy URL</button></article>)}</div>}
+      {listeners.length>0&&<div class="listener-list"><h3>Loopback listeners</h3>{listeners.map(({process,listener})=><article><div><strong>{listener.url}</strong><span>{process.executable} · PID {process.pid}</span></div><button onClick={()=>void attach(group.session_id,listener.url)}>Open preview</button><button onClick={()=>void navigator.clipboard.writeText(listener.url)}>Copy URL</button></article>)}</div>}
       <ul class="process-list process-tree">{buildProcessTree(group.processes).map(renderProcessNode)}</ul>
     </section>
   }

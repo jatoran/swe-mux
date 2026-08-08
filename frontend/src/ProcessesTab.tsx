@@ -5,8 +5,8 @@ import type { Project, Session } from './types'
 
 // The drawer's Processes tab: what is running, and what it is serving.
 //
-// It reads the snapshot `App` already polls for the sidebar's resource summary and its
-// spawned-server rows, and starts no loop of its own. That matters more than it looks: the
+// It reads the snapshot `App` already polls for the sidebar's resource summary and starts no
+// loop of its own. That matters more than it looks: the
 // reconcile walk behind that data holds the GIL on Windows, and the one rule this feature must
 // not break is that a panel left open all day costs the daemon nothing extra.
 //
@@ -76,9 +76,8 @@ export function ProcessesTab({
             {row.processes} proc · {row.cpu_pct.toFixed(1)}% · {memoryLabel(row.memory_bytes)}
           </small>
         </button>
-        {/* Listening on a loopback port is the only signal that a child is a server, and a
-            preview is the only thing this tab can do about it. Everything else a session
-            spawned stays in the inspector. */}
+        {/* These are raw loopback listeners, not asserted application servers. Process
+            tooling offers explicit Preview promotion; general navigation does not. */}
         {row.servers.map(server => <div class="process-watch-server" key={server.port}>
           <span title={server.url}>:{server.port}</span>
           <button title={`Open ${server.url} as a preview tab beside this session`} onClick={() => { onOpenPreview(row.sessionId, server.url); onDone() }}>preview</button>

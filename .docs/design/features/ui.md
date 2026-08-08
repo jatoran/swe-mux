@@ -1109,9 +1109,10 @@ responsive controls.
   opens the modal, prefiltered to whatever the tab is scoped to.
 - Rows are per session, not per process: a session's tree is mostly bookkeeping (`cmd`, `conhost`,
   the agent CLI), so a per-process column would be a wall of noise around the one row that
-  matters. Each row is a rollup (process count, CPU, working set) plus the loopback servers that
-  session is listening on, which are the only actionable things here — `preview` registers one as
-  a tab beside its session, `copy` takes the URL. Ended processes are dropped rather than greyed:
+  matters.
+  Each row is a rollup (process count, CPU, working set) plus its raw loopback listeners.
+  A listener is not asserted to be an application server; `preview` explicitly promotes one into a declared Preview beside its session, and `copy` takes the URL.
+  Ended processes are dropped rather than greyed:
   they support no action here and are already excluded from every total in the app.
 - Scoped to the active Project by default, with **the focused session's row pinned first and
   marked**. That combination is deliberate. Session-scoped would read empty most of the time (most
@@ -1120,7 +1121,7 @@ responsive controls.
   people actually have, and the pin answers "what is *this* session running" without a scope
   change. `All projects` is one click away and the choice survives a tab switch.
 - **It starts no poll of its own**, reading the fleet sample `App` already refreshes for the
-  sidebar's resource summary and its spawned-server rows. The reconcile walk behind that data
+  sidebar's resource summary. The reconcile walk behind that data
   holds the GIL on Windows (`processes-and-previews.md` § Sampling cost), so a panel left open
   all day must cost the daemon nothing extra. Any future addition here inherits that rule.
 - The pane header lost its `proc` chip when this shipped. It was the only pane tool carrying no

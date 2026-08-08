@@ -298,9 +298,10 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
 - Windowed builds must route only allowlisted internal module entrypoints through `desktop.py`;
   daemon-owned maintenance subprocesses use `subprocess_flags.py`, while interactive commands
   remain under ConPTY so suppressing console flashes never suppresses terminal output.
-- Preview registration identity is Project endpoint, not clicked terminal. Resolve listener
-  ownership across live sessions before attachment; do not weaken the iframe sandbox or let a
-  browser dial raw loopback for cross-service traffic.
+- Preview registration identity is Project endpoint, not clicked terminal.
+  Resolve listener ownership across live sessions before attachment.
+  Automatic discovery creates undeclared route identities for cross-service traffic; only an explicit registration promotes the identity into the listed Preview inventory.
+  Do not weaken the iframe sandbox or let a browser dial raw loopback for cross-service traffic.
 - Once a route has resolved an explicit Project, Project-resource helpers must receive that
   canonical identity (`_registered_identity(project)` → the `project=` keyword on
   `read_note`/`write_note`/`initialize_note`/`read_project_config`/`write_project_config`/

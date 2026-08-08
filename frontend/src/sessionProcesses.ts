@@ -9,12 +9,12 @@ export type ProcessWithListeners = {
 export type DetectedServer = { pid: number; host: string; port: number; url: string }
 
 /**
- * The servers a session is actually running, derived from its process snapshot.
+ * Loopback listener candidates derived from a session process snapshot.
  *
- * Listening on a port is the only reliable signal that a child is a *server*. An
- * agent's process tree is otherwise mostly bookkeeping (`cmd`, `python`,
- * `claude.exe`), and no amount of age or liveness filtering separates those from
- * something worth surfacing, so this keys on listeners alone.
+ * A listener is not necessarily an application server. Agent runtimes, browser
+ * automation, debuggers, and tool bridges also listen on loopback. Callers may
+ * offer these as Preview candidates in process tooling, but must not promote them
+ * into general navigation until the user or agent declares a Preview.
  *
  * Only loopback listeners are returned: a preview can bridge nothing else, so a
  * non-loopback listener would be an unactionable row. (The daemon reports a wildcard

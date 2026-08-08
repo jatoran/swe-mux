@@ -156,6 +156,20 @@ async def test_live_project_services_get_routing_registrations_without_opening_t
         "http://127.0.0.1:37656",
         "http://127.0.0.1:37655",
     }
+    assert (await registry.list())["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_registration_promotes_a_hidden_routing_identity() -> None:
+    registry = PreviewRegistry(cast(Any, ProjectInspector()), cast(Any, project_sessions()))
+    await registry.ensure_detected("project-a")
+    hidden = next(item for item in registry.items.values() if item.port == 37656)
+
+    declared = await registry.register("frontend", "http://127.0.0.1:37656/")
+
+    assert declared is hidden
+    assert declared.declared is True
+    assert [item["id"] for item in (await registry.list())["items"]] == [hidden.id]
 
 
 def test_wildcard_binds_are_reported_at_the_address_a_client_can_reach() -> None:

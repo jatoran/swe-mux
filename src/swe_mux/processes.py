@@ -1558,6 +1558,10 @@ class PreviewRegistration:
     project_scope_id: str | None = None
     repo_group_id: str | None = None
     viewport: str = "responsive"
+    # Automatic discovery creates registrations so Preview traffic can route to
+    # sibling Project services. Only an explicit user/agent registration promotes
+    # that routing identity into the UI-facing Preview inventory.
+    declared: bool = True
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)
@@ -1624,7 +1628,7 @@ class PreviewRegistry:
         )
 
     def _record_detected(
-        self, session: Any, url: str, *, host: str, port: int
+        self, session: Any, url: str, *, host: str, port: int, declared: bool = True
     ) -> PreviewRegistration:
         parsed = urlsplit(url)
         existing = self._existing_endpoint(session.record.project_id, parsed.scheme, host, port)
@@ -1641,6 +1645,7 @@ class PreviewRegistry:
                 getattr(session.record, "project_scope_id", None),
             )
             existing.repo_group_id = getattr(session.record, "repo_group_id", None)
+            existing.declared = existing.declared or declared
             self._listener_seen[existing.id] = time.time()
             return existing
         item = PreviewRegistration(
@@ -1660,6 +1665,7 @@ class PreviewRegistry:
             getattr(session.record, "repo_group_id", None),
         )
         self.items[item.id] = item
+        item.declared = declared
         self._listener_seen[item.id] = time.time()
         return item
 
@@ -1696,7 +1702,7 @@ class PreviewRegistry:
                     if current is None or (host == "127.0.0.1" and current[0] != host):
                         endpoints[key] = (host, url)
             for (_, port), (host, url) in endpoints.items():
-                self._record_detected(session, url, host=host, port=port)
+                self._record_detected(session, url, host=host, port=port, declared=False)
 
     def routes_for_project(self, project_id: str) -> dict[str, str]:
         routes: dict[str, str] = {}
@@ -1809,7 +1815,7 @@ class PreviewRegistry:
             "items": [
                 item.snapshot()
                 for item in self.items.values()
-                if not session_id or item.session_id == session_id
+                if item.declared and (not session_id or item.session_id == session_id)
             ],
             "candidates": candidates,
         }

@@ -42,7 +42,7 @@ test('mobile long-press consumes its follow-up click and background close preser
 })
 
 test('file resource tabs expose scoped filesystem actions',()=>{
-  const resolver=section('type FileMenuSource=', '// A server a session spawned')
+  const resolver=section('type FileMenuSource=', 'const sidebarPreviewRow=')
   assert.match(resolver,/menu\.leaf\.kind==='note'\?menu\.leaf\.id:''/, 'non-resource tabs must not resolve as files')
   assert.match(resolver,/identity\?\.kind!=='file'&&identity\?\.kind!=='worktree-file'/)
   assert.match(resolver,/\/api\/projects\/\$\{menu\.projectId\}\/reveal/)

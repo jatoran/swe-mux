@@ -24,11 +24,10 @@ import {
   projectCreateRoot, suggestFolderName, toggleInitScript,
   type InitScript, type ProjectCreateDraft,
 } from './projectCreate'
-import { ProcessPanel, type FleetSnapshot, type Preview, type ProcessItem } from './ProcessPanel'
+import { ProcessPanel, type FleetSnapshot, type Preview } from './ProcessPanel'
 import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './ProjectsManager'
 import { MenuGroup } from './MenuGroup'
-import { detectedServers, type DetectedServer } from './sessionProcesses'
 import { PreviewPane } from './PreviewPane'
 import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
@@ -403,7 +402,6 @@ export function App() {
   const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
   const [processSession, setProcessSession] = useState<Session | null>(null)
   const [processViewerOpen,setProcessViewerOpen]=useState(false)
-  const [sessionProcesses,setSessionProcesses]=useState<Record<string,ProcessItem[]>>({})
   const [processFleet,setProcessFleet]=useState<FleetSnapshot|null>(null)
   const [previews, setPreviews] = useState<Record<string, Preview>>({})
   const [notificationData, setNotificationData] = useState<NotificationData>({notifications:[],deliveries:[]})
@@ -1172,17 +1170,14 @@ export function App() {
     }
   }, [])
 
-  // Sidebar rows nest the long-running children a session spawned. The daemon's
-  // inspector already samples every 2s on its own loop and this read reuses that
-  // cached sample, so polling costs no process enumeration; keep it slow anyway
-  // because nothing here is latency-sensitive. Fails quiet: an older daemon or a
-  // missing psutil simply means no nested rows.
+  // Resource summaries and the Processes drawer reuse the daemon's cached sample,
+  // so this poll adds no process enumeration. Raw listeners never become sidebar
+  // navigation here; opening one explicitly creates a declared Preview instead.
   const loadProcesses = async () => {
     try {
       const snapshot = await api<FleetSnapshot>('GET','/api/processes')
       setProcessFleet(snapshot)
-      setSessionProcesses(Object.fromEntries((snapshot.sessions||[]).map(group=>[group.session_id,group.processes||[]])))
-    } catch { setProcessFleet(null);setSessionProcesses({}) }
+    } catch { setProcessFleet(null) }
   }
 
   useEffect(() => {
@@ -3613,8 +3608,8 @@ export function App() {
       }
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
-  // A server a session spawned lives beside it: nested under its sidebar row and
-  // activated as a tab in the same region, so it is always one click away.
+  // A declared Preview lives beside its owning session. Raw loopback listeners
+  // remain in Processes until a user or agent explicitly opens one as a Preview.
   const sidebarPreviewRow=(preview:Preview,session:Session)=>{
     const layout=layoutMap[session.project_id]||parseLayout(projects.find(item=>item.id===session.project_id)?.layout)
     const previewStack=stackForView(layout,preview.id)
@@ -3623,9 +3618,7 @@ export function App() {
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{preview.port}</strong></span>
     </button>
   }
-  // A detected server has no preview yet. Opening one registers it and, because the
-  // daemon groups previews, it lands as a tab beside this session.
-  const openDetectedServer=async(server:Pick<DetectedServer,'url'>,session:Session)=>{
+  const openDetectedServer=async(server:{url:string},session:Session)=>{
     try{
       const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:server.url,attach:true})
       setPreviews(current=>({...current,[result.preview.id]:result.preview}))
@@ -3635,17 +3628,8 @@ export function App() {
       setFocusedViewId(result.preview.id)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
-  const sidebarServerRow=(server:DetectedServer,session:Session)=>
-    <button key={`server-${server.port}`} class="sidebar-note-row preview-row" title={`${server.url} · detected server · open it as a tab`} onClick={event=>{event.stopPropagation();void openDetectedServer(server,session);setSidebarOpen(false)}}>
-      <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{server.port}</strong></span>
-    </button>
   const sessionRow=(session:Session)=>{
-    const spawnedPreviews=Object.values(previews).filter(item=>item.session_id===session.id)
-    // Only servers earn a sidebar row. A session's other children are bookkeeping
-    // noise and stay in the process inspector. Ones already open as a preview are
-    // rendered by that row instead.
-    const spawnedServers=detectedServers(sessionProcesses[session.id]||[])
-      .filter(server=>!spawnedPreviews.some(preview=>preview.port===server.port))
+    const spawnedPreviews=Object.values(previews).filter(item=>item.session_id===session.id&&item.declared!==false)
     // Sidebar attention tier for agent rows. The focused row keeps its own
     // `.active` treatment; a row visible in another split pane reads as
     // "viewing" (on screen, not focused); an off-screen row with unseen output
@@ -3658,7 +3642,7 @@ export function App() {
       {sessionStateDot(session)}
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isObservedHarness(session.backend) ? `agent-status ${session.state}` : 'agent-unobserved'}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
-    </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}{spawnedServers.map(server=>sidebarServerRow(server,session))}</div>
+    </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}</div>
   }
   const sidebarNode=(node:PaneNode|PaneLeaf|null|undefined):ComponentChildren=>{
     if(!node)return null

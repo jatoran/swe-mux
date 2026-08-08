@@ -30,7 +30,7 @@
   starts to outlive one tool call: Codex's shell tool runs one-shot and must detach
   (`Start-Process`), where Claude's holds the parent open for the command's whole life.
   The visible symptom was a Codex session serving a live dev server that swe-mux reported
-  as zero listeners — no sidebar row, no Preview, no clickable route to one — while the
+  as zero listeners, which meant no Process candidate, implicit Preview route, or clickable route, while the
   identical thing under Claude worked. Each session's nested Win32 job is therefore
   queried (`JOBOBJECT_BASIC_PROCESS_ID_LIST`) and its members unioned into the walk.
   **This is not known to fix the Codex case — see § Detached servers: what is and is not
@@ -154,7 +154,8 @@ Read this before spending time on the problem again.
 - Windows neither re-parents the orphan nor clears the dead pid: the server's ppid still
   named a pid that returned `NoSuchProcess`. Two such servers existed, both unreachable.
 - Consequence: `_tree_handles` reported 6 processes and **zero listeners** for a session
-  that was demonstrably serving HTTP. No listener means no sidebar row and no Preview.
+  that was demonstrably serving HTTP.
+  No listener means no Process candidate and no implicit Preview route.
 - Claude never hits this because its Bash tool keeps a `bash.exe` alive as the parent for
   the command's whole life, background commands included, so the server stays a genuine
   descendant. This is a difference between the two CLIs' shell tools, not a gap in swe-mux's
@@ -265,9 +266,14 @@ more — swe-mux does not reap or share language servers.
   and port of a listener owned by some session in that Project or carry explicit user approval.
   Clicking a URL printed by another session therefore attributes the Preview to the listener
   owner, and the same Project/scheme/host/port can never create a second registration.
+- The registry separates route-only identities from declared Previews.
+  Automatic listener discovery creates an undeclared identity only so sandboxed Preview traffic can reach sibling Project services.
+  A terminal-link click, Processes action, or explicit `POST /previews` promotes that stable identity to `declared=true`.
+  `GET /previews` and the sidebar expose declared Previews only.
 - A wildcard bind is reported at its loopback address: `0.0.0.0` becomes `127.0.0.1` and
   `::` becomes `::1`, so a server that binds every interface — the default for most dev
-  servers — is detected, listed, and previewable. This states a fact rather than widening
+  servers — is detected in Processes and previewable by explicit action.
+  This states a fact rather than widening
   the boundary, because a wildcard bind does serve loopback; the destination actually dialed
   is still literal loopback and the wildcard address itself remains an illegal destination.
   A bind to one specific non-loopback address is reported verbatim and stays unpreviewable,
@@ -289,16 +295,14 @@ more — swe-mux does not reap or share language servers.
 - A server belongs beside whatever spawned it. Attaching a preview groups it as a tab in the
   region that already holds its owning session, so an agent and the services it started share
   one tab strip; it only falls back to a split when that session has no terminal in the
-  layout. Every detected loopback service receives a routing registration, nested under its
-  actual owning session, without opening a workspace tab. Selecting its row opens or activates
-  that registered service.
-- Sidebar rows are servers only. A current-version, ownership-eligible live loopback listener is the sole test, since the rest of
-  a session's tree is bookkeeping that no age or liveness filter distinguishes from signal;
-  rejected/stale records, exited records, and non-loopback listeners are excluded, and a port bound on both 127.0.0.1
-  and ::1 collapses to one row. Descendant shells have no PTY, are never terminal tabs, and
-  are never sidebar rows: the process inspector remains the one place showing the full tree.
-  The sidebar read reuses the inspector's existing cached sample, so it adds no process
-  enumeration.
+  layout.
+  Every detected loopback listener receives an undeclared routing identity owned by its actual session without opening a workspace tab or adding navigation.
+  Selecting its row in Processes declares, opens, or activates that registered endpoint.
+- Sidebar child rows are declared Previews only.
+  Raw listeners are not asserted to be application servers because agent runtimes, browser debuggers, and tool bridges also bind loopback ports.
+  Current-version ownership, liveness, and loopback reachability make a listener eligible as a Processes candidate, not as general navigation.
+  Rejected/stale records, exited records, and non-loopback listeners remain excluded, and a port bound on both `127.0.0.1` and `::1` collapses to one candidate.
+  Descendant shells and the full process tree remain visible only in process tooling.
 - Preview leaves use `/preview/{registration}/…`; phones and desktop browsers never need
   the development server's raw port. The runtime bridge maps absolute loopback fetch, XHR,
   and WebSocket destinations to other registered services in the same Project, so a frontend
