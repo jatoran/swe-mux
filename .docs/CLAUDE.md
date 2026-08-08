@@ -15,7 +15,8 @@
   `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing the session Agent Environment inventory, safety boundaries, or drawer surface:
   `design/features/agent-environment.md`, `design/features/ui.md`, `design/interfaces.md`,
-  `technical/backend/packages.md`, `technical/frontend/packages.md`
+  `technical/backend/packages.md`, `technical/frontend/packages.md`; runtime inventory research
+  and planned collection strategy: `development/AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md`
 - Changing trusted task imports, the Project Run menu, or task launch:
   `design/features/project-actions.md`, `design/features/projects.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`

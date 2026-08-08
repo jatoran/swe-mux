@@ -11,6 +11,7 @@ export type UniqueMemory={memory_unique_bytes?:number|null}
 export type ResourceSnapshot={
   sessions:Array<{session_id:string;project_id?:string;processes:ResourceProcess[]}>
   totals?:ResourceBucket&UniqueMemory;daemon?:ResourceBucket&UniqueMemory&{pid:number}
+  system_cpu_pct?:number|null
 }
 export type ResourceSession={id:string;project_id:string}
 export type ResourceProject={id:string;name:string;position:number}

@@ -125,13 +125,20 @@
   The coherent snapshot also exposes daemon/infrastructure members as a separate tree with
   PID, parent, executable/command, CPU, RSS, and network detail. These rows are observational:
   they allow PID copy but never interrupt/terminate actions against the swe-mux runtime.
-- The bottom-sidebar owned-resource summary reuses the cached fleet snapshot and reports
-  aggregate CPU/RSS. Its anchored viewport popover groups live attributed processes by
-  Project, shows a separate daemon/infrastructure bucket, and links to Process fleet.
+- The bottom-sidebar resource summary reuses the cached fleet snapshot and reports normalized
+  whole-system CPU utilization alongside aggregate RSS for owned session and daemon processes.
+  System CPU comes from deltas between cumulative OS CPU counters and therefore stays on the
+  familiar 0–100% whole-machine scale regardless of logical processor count.
+  The first sample is unavailable until a second counter reading establishes an interval.
+  The anchored viewport popover groups live attributed processes by Project, shows a separate
+  daemon/infrastructure bucket, and links to Process fleet.
+  Its top CPU figure is system-wide; memory and process counts remain explicitly owned.
+  Attributed CPU remains additive for attribution detail and is presented as equivalent core
+  load (`1.0×` means one logical processor), not as a misleading whole-machine percentage.
   Daemon accounting includes the daemon plus descendant infrastructure PIDs not already
-  attributed to a session, preventing double counting. Process Fleet totals use that same
-  additive bucket, so its count and usage reconcile with the sidebar. The closed popover and
-  detailed fleet rows reuse the existing sample and cause no additional process enumeration.
+  attributed to a session, preventing double counting.
+  Process Fleet totals use that same additive owned bucket, so its count and usage reconcile
+  with the detailed rows rather than the system-wide sidebar CPU figure.
 
 ## Detached servers: what is and is not known
 

@@ -16,7 +16,8 @@ const totalLabel=(snapshot:FleetSnapshot|null)=>{
   if(!snapshot)return 'loading resources…'
   if(!snapshot.available)return 'resource data unavailable'
   const total=combinedResourceTotals(snapshot)
-  return `cpu ${total.cpu_pct.toFixed(1)}% · working set ${memoryLabel(total.memory_bytes)}`
+  const cpu=typeof snapshot.system_cpu_pct==='number'?`${snapshot.system_cpu_pct.toFixed(1)}%`:'sampling…'
+  return `system cpu ${cpu} · owned working set ${memoryLabel(total.memory_bytes)}`
 }
 
 export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,onRefresh,onOpenFleet}:{
@@ -33,6 +34,7 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
   const popover=useRef<HTMLDivElement>(null)
   const shown=(open&&detailed)||snapshot
   const combined=combinedResourceTotals(shown)
+  const systemCpu=typeof shown?.system_cpu_pct==='number'?`${shown.system_cpu_pct.toFixed(1)}%`:'sampling…'
   const projectTotals=projectResourceTotals(shown,sessions,projects)
   const tooling=duplicateToolingGroups(shown)
   const daemon=shown?.daemon
@@ -63,18 +65,18 @@ export function ResourceUsageSummary({snapshot,sessions,projects,compact=false,o
     return()=>{window.removeEventListener('resize',reposition);window.removeEventListener('scroll',reposition,true);window.removeEventListener('pointerdown',dismiss);window.removeEventListener('keydown',key)}
   },[open])
   const popup=open&&<div ref={popover} class="account-popover resource-usage-popover ui-portal" style={popoverStyle} role="dialog" aria-label="Swe-mux resource usage">
-    <header><div><strong>OWNED RESOURCES</strong><span>daemon + session process trees</span></div><button aria-label="Close resource usage" onClick={()=>setOpen(false)}>×</button></header>
+    <header><div><strong>RESOURCES</strong><span>system CPU · owned process trees</span></div><button aria-label="Close resource usage" onClick={()=>setOpen(false)}>×</button></header>
     {!snapshot&&<p class="resource-usage-empty">Loading owned process usage…</p>}
     {snapshot&&!snapshot.available&&<p class="resource-usage-empty">{snapshot.diagnostic||'Process resource inspection is unavailable.'}</p>}
     {snapshot?.available&&<>
       <section class="resource-usage-total">
-        <article><span>CPU</span><strong>{combined.cpu_pct.toFixed(1)}%</strong></article>
-        <article><span>{typeof combined.memory_unique_bytes==='number'?'UNIQUE RAM':'WORKING SET'}</span><strong>{memoryLabel(typeof combined.memory_unique_bytes==='number'?combined.memory_unique_bytes:combined.memory_bytes)}</strong></article>
-        <article><span>PROC</span><strong>{combined.processes}</strong></article>
+        <article><span>SYSTEM CPU</span><strong>{systemCpu}</strong></article>
+        <article><span>OWNED RAM</span><strong>{memoryLabel(typeof combined.memory_unique_bytes==='number'?combined.memory_unique_bytes:combined.memory_bytes)}</strong></article>
+        <article><span>OWNED PROC</span><strong>{combined.processes}</strong></article>
       </section>
       {typeof combined.memory_unique_bytes==='number'&&<p class="resource-usage-note">Working set totals {memoryLabel(combined.memory_bytes)}; the difference is shared pages counted once per process. Unique RAM is what ending these processes would actually return.</p>}
-      <section class="resource-daemon-usage"><h4>daemon + infrastructure</h4><article><div><strong>swe-mux daemon</strong><small>PID {daemon?.pid||'—'} · {daemon?.processes||0} process{daemon?.processes===1?'':'es'}</small></div><span>CPU <b>{(daemon?.cpu_pct||0).toFixed(1)}%</b></span><span>RAM <b>{memoryLabel(daemon?.memory_bytes||0)}</b></span></article></section>
-      <section class="resource-project-list"><h4>by project</h4>{projectTotals.map(project=><article key={project.project_id}><div><strong>{project.label}</strong><small>{project.processes} process{project.processes===1?'':'es'}</small></div><span>CPU <b>{project.cpu_pct.toFixed(1)}%</b></span><span>RAM <b>{memoryLabel(typeof project.memory_unique_bytes==='number'?project.memory_unique_bytes:project.memory_bytes)}</b></span></article>)}{!projectTotals.length&&<p class="resource-usage-empty">No live project-owned processes.</p>}</section>
+      <section class="resource-daemon-usage"><h4>daemon + infrastructure</h4><article><div><strong>swe-mux daemon</strong><small>PID {daemon?.pid||'—'} · {daemon?.processes||0} process{daemon?.processes===1?'':'es'}</small></div><span>CORE LOAD <b>{((daemon?.cpu_pct||0)/100).toFixed(1)}×</b></span><span>RAM <b>{memoryLabel(daemon?.memory_bytes||0)}</b></span></article></section>
+      <section class="resource-project-list"><h4>by project</h4>{projectTotals.map(project=><article key={project.project_id}><div><strong>{project.label}</strong><small>{project.processes} process{project.processes===1?'':'es'}</small></div><span>CORE LOAD <b>{(project.cpu_pct/100).toFixed(1)}×</b></span><span>RAM <b>{memoryLabel(typeof project.memory_unique_bytes==='number'?project.memory_unique_bytes:project.memory_bytes)}</b></span></article>)}{!projectTotals.length&&<p class="resource-usage-empty">No live project-owned processes.</p>}</section>
       {tooling.length>0&&<section class="resource-tooling-list">
         <h4>duplicated per-session tooling</h4>
         {tooling.map(group=><article key={group.tool}><div><strong>{group.tool}</strong><small>{group.instances} process{group.instances===1?'':'es'} across {group.sessions} sessions</small></div><span>RAM <b>{memoryLabel(group.memory_bytes)}</b></span></article>)}

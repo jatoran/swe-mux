@@ -964,6 +964,11 @@ Each process carries stable `attribution_version`, `attribution_source`, `last_a
 Fleet and session responses carry a bounded command-free `ownership_diagnostics` list for rejected causal edges, infrastructure claims, ownership conflicts, and legacy repair.
 `GET /processes` returns running processes only; `include_ended=1` adds records that ended
 during the current daemon run. Ended records never contribute to resource totals.
+Fleet responses also carry nullable `system_cpu_pct`, normalized to 0–100% whole-machine
+utilization from consecutive cumulative OS CPU-counter samples.
+It is null until two samples establish an interval.
+Per-process and owned-bucket `cpu_pct` values remain additive per logical processor and can
+exceed 100%; resource summaries present those attributable values as equivalent core load.
 `memory_bytes` is RSS (the working set), which counts shared pages once per mapping process
 and therefore overstates a summed tree. `unique_memory=1` additionally samples unique set size
 into `memory_unique_bytes` per process, per daemon member, and in totals; it is opt-in because

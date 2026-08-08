@@ -30,6 +30,7 @@ export type DaemonProcesses = {
 }
 export type FleetSnapshot = {
   available:boolean;diagnostic?:string;sessions:SessionProcesses[]
+  system_cpu_pct?:number|null
   daemon?:DaemonProcesses
   ownership_diagnostics?:OwnershipDiagnostic[]
   totals:{processes:number;cpu_pct:number;memory_bytes:number;listeners:number;connections:number}

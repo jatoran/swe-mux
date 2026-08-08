@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -353,6 +354,32 @@ def test_process_reconciliation_records_descendant_exit(
     assert inspector.owned[(55, 1.0)].exited_at is not None
 
 
+def test_system_cpu_sample_is_normalized_across_all_logical_processors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from swe_mux import processes
+
+    CpuTimes = namedtuple("CpuTimes", "user system idle")
+    samples = iter(
+        [
+            CpuTimes(user=100.0, system=50.0, idle=850.0),
+            CpuTimes(user=120.0, system=60.0, idle=920.0),
+        ]
+    )
+    monkeypatch.setattr(
+        processes,
+        "psutil",
+        SimpleNamespace(cpu_times=lambda: next(samples)),
+    )
+    inspector = ProcessInspector(cast(Any, SimpleNamespace(sessions={})), EventBus())
+
+    inspector._sample_system_cpu()
+    assert inspector._system_cpu_pct is None
+
+    inspector._sample_system_cpu()
+    assert inspector._system_cpu_pct == 30.0
+
+
 @pytest.mark.asyncio
 async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources(
     monkeypatch: pytest.MonkeyPatch,
@@ -382,6 +409,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
         sessions={identity: SimpleNamespace(record=record) for identity, record in records.items()}
     )
     inspector = ProcessInspector(cast(Any, sessions), EventBus())
+    inspector._system_cpu_pct = 62.5
     first = OwnedProcess(
         55,
         10,
@@ -409,6 +437,7 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
         "session-b",
     ]
     assert result["sessions"][0]["project_id"] == "project-a"
+    assert result["system_cpu_pct"] == 62.5
     assert result["totals"] == {
         "processes": 2,
         "cpu_pct": 20.0,

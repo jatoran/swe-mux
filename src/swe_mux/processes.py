@@ -144,6 +144,8 @@ class ProcessInspector:
         self._task: asyncio.Task[None] | None = None
         self._listeners: set[tuple[str, int, str]] = set()
         self._cpu_samples: dict[tuple[int, float], tuple[float, float]] = {}
+        self._system_cpu_times: tuple[float, float] | None = None
+        self._system_cpu_pct: float | None = None
         self._sample_lock = asyncio.Lock()
         self._last_collect = 0.0
         self._last_persist = 0.0
@@ -634,7 +636,36 @@ class ProcessInspector:
                 return True
         return False
 
+    def _sample_system_cpu(self) -> None:
+        """Update normalized whole-machine CPU usage from cumulative OS counters."""
+        cpu_times = getattr(psutil, "cpu_times", None)
+        if cpu_times is None:
+            return
+        try:
+            sample = cpu_times()
+            total = sum(float(value) for value in sample)
+            # Linux includes guest time in user/nice, so counting the guest fields
+            # again inflates the denominator. I/O wait is idle capacity, matching
+            # psutil.cpu_percent's cross-platform definition of system utilization.
+            total -= float(getattr(sample, "guest", 0.0))
+            total -= float(getattr(sample, "guest_nice", 0.0))
+            busy = total - float(getattr(sample, "idle", 0.0))
+            busy -= float(getattr(sample, "iowait", 0.0))
+        except (OSError, TypeError, ValueError):
+            log.debug("system CPU sample unavailable", exc_info=True)
+            return
+        previous = self._system_cpu_times
+        self._system_cpu_times = (total, busy)
+        if previous is None:
+            return
+        total_delta = total - previous[0]
+        if total_delta <= 0:
+            return
+        busy_delta = max(0.0, busy - previous[1])
+        self._system_cpu_pct = round(min(100.0, busy_delta / total_delta * 100), 1)
+
     def _collect_all(self, startup: bool = False) -> list[OwnedProcess]:
+        self._sample_system_cpu()
         # An empty fleet is not a cheap pass, it is a pass with nothing to answer. The
         # two most expensive things here run before any session is consulted: the whole
         # OS socket table (`_connections_by_pid`) and the system-wide parent map
@@ -1332,6 +1363,7 @@ class ProcessInspector:
         if not self.available:
             return {
                 "available": False,
+                "system_cpu_pct": None,
                 "diagnostic": "psutil is not installed in the active environment",
                 "sessions": [],
                 "totals": {
@@ -1422,6 +1454,7 @@ class ProcessInspector:
             )
         return {
             "available": True,
+            "system_cpu_pct": self._system_cpu_pct,
             "sessions": groups,
             "daemon": daemon,
             "totals": totals,
