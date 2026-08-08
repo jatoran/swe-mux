@@ -778,6 +778,14 @@ responsive controls.
   The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be
   reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only. Shell and
   desktop Enter behavior is unchanged.
+- On touch, an overflowing command rail owns horizontal pointer movement directly instead of
+  depending on native overflow-scroll arbitration inside the keyboard-translated terminal surface.
+  The first drag therefore moves the rail even while the soft keyboard is open.
+  A modest drag gain compensates for the lost native fling without making nearby commands hard to
+  target.
+  The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the
+  resulting click; repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps
+  priority when a gesture starts on an arrow.
 - The rail configuration separates **what a command is** from **where it appears**, and the second half is per device.
   The *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
   The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` (under the terminal) and the `panel` (the utility drawer's Commands tab).

@@ -44,6 +44,16 @@ test('workspace rails retrigger selected-tab reveal when their pane receives foc
   assert.match(railSource, /if \(focusKey === undefined\) return\s+return scheduleSelectedReveal\(\)/)
 })
 
+test('command rail owns the first touch drag without dropping the soft keyboard', () => {
+  const railSource = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
+  const styles = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
+  const commandRail = railSource.slice(railSource.indexOf('export function RailScroller'))
+
+  assert.match(commandRail, /touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard/)
+  assert.match(railSource, /event\.target instanceof Element \? event\.target\.closest\('\.rail-key-repeat'\)/)
+  assert.match(styles, /\.terminal-action-scroller\.overflow-rail-touch-drag\{touch-action:none\}/)
+})
+
 test('jump-to-latest does not request terminal input focus', () => {
   const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
   const handler = source.slice(source.indexOf('const jumpToLatest='), source.indexOf('const toggleKeyboard='))

@@ -1,5 +1,6 @@
 import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { holdSoftKeyboard, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import { horizontalWheelDelta } from './wheelScroll'
 import {
   railFocusTarget,
@@ -23,6 +24,7 @@ interface OverflowRailProps {
   stripProps?: OverflowRailStripProps
   touchDrag?: boolean
   touchDragGain?: number
+  preserveSoftKeyboard?: boolean
 }
 
 type TouchDragState = {
@@ -32,6 +34,8 @@ type TouchDragState = {
   startScrollLeft: number
   dragging: boolean
   cancelled: boolean
+  keyboardHolder: HTMLElement | null
+  keyboardDismissals: number
 }
 
 const NO_OVERFLOW: RailOverflowState = { left: false, right: false }
@@ -80,6 +84,7 @@ export function OverflowRail({
   stripProps,
   touchDrag = false,
   touchDragGain = 1,
+  preserveSoftKeyboard = false,
 }: OverflowRailProps) {
   const stripRef = useRef<HTMLDivElement>(null)
   const touchDragRef = useRef<TouchDragState | null>(null)
@@ -164,12 +169,18 @@ export function OverflowRail({
     touchDragRef.current = null
     if (wrapper.hasPointerCapture(pointerId)) wrapper.releasePointerCapture(pointerId)
     syncOverflow()
+    if (preserveSoftKeyboard && state.keyboardHolder) {
+      requestAnimationFrame(() => restoreSoftKeyboard(state.keyboardHolder, state.keyboardDismissals))
+    }
   }
 
   return <div
     class={`overflow-rail ${touchDrag ? 'overflow-rail-touch-drag' : ''} ${wrapperClassName}`.trim()}
+    onMouseDown={preserveSoftKeyboard ? holdSoftKeyboard : undefined}
     onPointerDown={event => {
       if (!touchDrag || event.pointerType !== 'touch' || !event.isPrimary) return
+      const target = event.target instanceof Element ? event.target.closest('.rail-key-repeat') : null
+      if (target) return
       const strip = stripRef.current
       if (!strip || strip.scrollWidth <= strip.clientWidth + 1) return
       touchDragRef.current = {
@@ -179,6 +190,8 @@ export function OverflowRail({
         startScrollLeft: strip.scrollLeft,
         dragging: false,
         cancelled: false,
+        keyboardHolder: preserveSoftKeyboard ? softKeyboardHolder() : null,
+        keyboardDismissals: softKeyboardDismissals(),
       }
       event.currentTarget.setPointerCapture(event.pointerId)
     }}
@@ -199,6 +212,7 @@ export function OverflowRail({
     }}
     onPointerUp={event => finishTouchDrag(event.currentTarget, event.pointerId, false)}
     onPointerCancel={event => finishTouchDrag(event.currentTarget, event.pointerId, true)}
+    onLostPointerCapture={event => finishTouchDrag(event.currentTarget, event.pointerId, true)}
     onClickCapture={event => {
       if (performance.now() > suppressClickUntilRef.current) return
       event.preventDefault()
@@ -230,7 +244,7 @@ export function OverflowRail({
 
 /** Command-rail specialization of the shared overflow treatment. */
 export function RailScroller({ children }: Pick<OverflowRailProps, 'children'>) {
-  return <OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller">
+  return <OverflowRail className="terminal-action-scroll" itemLabel="commands" wrapperClassName="terminal-action-scroller" touchDrag touchDragGain={1.75} preserveSoftKeyboard>
     {children}
   </OverflowRail>
 }
