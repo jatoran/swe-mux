@@ -165,8 +165,17 @@ layer, so the answer's quality cannot silently change — only which host produc
 are complements: jittered backoff absorbs a burst, fallbacks route around one sick provider, the
 scheduled retry covers an outage that outlasts both, and the model switch covers a pool-wide one.
 
-Title actions send `reasoning.effort=none` so the bounded completion budget is reserved for the
-small JSON title rather than hidden reasoning output.
+OpenRouter model metadata is retained with the cached model catalog and loaded into the provider client at daemon startup.
+`complete_json` uses each model's advertised token-limit and reasoning capabilities instead of sending one universal parameter set.
+It never sends `temperature`, because sampling controls are optional for these deterministic schema calls and some reasoning endpoints reject that parameter entirely.
+It prefers `max_completion_tokens` when advertised, falls back to `max_tokens`, and keeps a token limit on every attempt.
+Title actions request `reasoning.effort=none` only when the model advertises a non-mandatory reasoning control that permits `none`; non-reasoning and mandatory-reasoning models omit that control.
+
+An exact OpenRouter parameter-compatibility 404 may advance to the next bounded profile, such as omitting an optional reasoning control or changing the token-limit field.
+No compatibility profile changes the exact model, removes strict `response_format`, removes `provider.require_parameters`, or makes output unbounded.
+Other 404s do not mutate the request: an unknown model remains a terminal configuration fault, while OpenRouter's explicit no-provider-available response is retryable by the title ladder.
+Models absent from a stale catalog use the same bounded profile sequence, so a newly configured exact model is not coupled to catalog refresh timing.
+The selectable catalog still excludes non-text models and models without structured-output support because every current swe-mux OpenRouter consumer requires a strict JSON object.
 Malformed, empty, non-object, and schema-invalid structured responses are retryable title faults.
 Observer-call rows retain only safe response diagnostics: generation and resolved model, provider,
 finish reason, HTTP status, token and cost usage, response content type and length, and retryability.
@@ -182,12 +191,10 @@ shim decoding UTF-8 with the Windows code page, fixed at that boundary too — `
 has the byte-level account. Both layers are kept: the shim fix stops new corruption, and the
 scrub means no future bad byte from a transcript, a paste, or a CLI can cost a run its name.
 
-`OpenRouterError` carries `status`, `retryable` and `retry_after`. For statuses that describe the
-far side's health (`RETRY_STATUSES`) the message also carries the provider's own explanation —
-`error.metadata.raw` plus `provider_name` — because a bare "HTTP 429" reads as an account problem
-and cost an hour of guessing. An auth failure's body is still never echoed (it is the one that can
-quote the rejected credential back), and key-shaped text is scrubbed regardless, since these
-strings land in the firings table and on the status surface.
+`OpenRouterError` carries `status`, `retryable` and `retry_after`.
+For statuses that describe the far side's health (`RETRY_STATUSES`) and safe routing/parameter failures, the message also carries the provider's own explanation from `error.metadata.raw` plus `provider_name`.
+That detail is required to distinguish incompatible parameters, an unknown model, and temporary provider unavailability instead of collapsing all three into "HTTP 404".
+An auth failure's body is still never echoed because it can quote the rejected credential back, and key-shaped text is scrubbed regardless, since these strings land in the firings table and on the status surface.
 
 A conversation rollover (an in-CLI `/clear` or `/new` — `backends.md`) always retitles, because it
 mints a new `agent_run_id` and the existing title describes work the conversation no longer

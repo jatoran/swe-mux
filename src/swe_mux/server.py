@@ -934,6 +934,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     openrouter = OpenRouterClient(
         secret_store, timeout_seconds=config.openrouter_request_timeout_seconds
     )
+    openrouter.set_model_catalog((await automation_store.model_cache())["models"])
     automation = AutomationEngine(
         config.data_dir / "rules.toml",
         events,

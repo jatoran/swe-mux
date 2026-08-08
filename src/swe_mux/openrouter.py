@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 import re
 import time
@@ -26,6 +27,16 @@ RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
 RETRY_ATTEMPTS = 5
 RETRY_BASE_SECONDS = 0.5
 MAX_RETRY_SLEEP_SECONDS = 8.0
+SAFE_ERROR_DETAIL_STATUSES = RETRY_STATUSES | {404, 412, 413, 422}
+TOKEN_LIMIT_PARAMETERS = ("max_completion_tokens", "max_tokens")
+PARAMETER_COMPATIBILITY_ERRORS = (
+    "no endpoints found that can handle the requested parameters",
+    "no endpoints found that support the requested parameters",
+)
+TRANSIENT_MODEL_AVAILABILITY_ERRORS = (
+    "no allowed providers are available for the selected model",
+    "no providers are available for the selected model",
+)
 # How much of the provider's own error text to keep. A 429 from OpenRouter names the
 # upstream provider and says whether the limit is the account's or that provider's —
 # the difference between "add credit" and "wait", and unrecoverable once discarded.
@@ -34,6 +45,7 @@ MAX_PROVIDER_ERROR_CHARS = 400
 # put it there. Covers OpenRouter's own `sk-or-v1-…` and the generic `sk-…` an
 # upstream provider might quote back at us.
 SECRET_SHAPED = re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE)
+log = logging.getLogger(__name__)
 
 
 class OpenRouterError(RuntimeError):
@@ -94,6 +106,13 @@ class OpenRouterResult:
     response_content_length: int | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class _ModelCapabilities:
+    supported_parameters: frozenset[str]
+    reasoning_efforts: frozenset[str] | None
+    reasoning_mandatory: bool
+
+
 class OpenRouterClient:
     """Fixed-origin, bounded OpenRouter client. No caller-controlled URLs are accepted."""
 
@@ -110,6 +129,7 @@ class OpenRouterClient:
         self.retry_base_seconds = retry_base_seconds
         self._session = session
         self._owned_session = False
+        self._model_capabilities: dict[str, _ModelCapabilities] = {}
 
     async def close(self) -> None:
         if self._owned_session and self._session:
@@ -158,11 +178,14 @@ class OpenRouterClient:
                         if len(body) > MAX_RESPONSE_BYTES:
                             raise OpenRouterError("OpenRouter response exceeded the size limit")
                     retry_after = _retry_after(response)
-                    if response.status in RETRY_STATUSES:
-                        # Only ever read for statuses that mean "the far side is busy
-                        # or broken". An auth failure's body is the one that can echo
-                        # the credential that was rejected, and it stays redacted.
+                    if response.status in SAFE_ERROR_DETAIL_STATUSES:
+                        # Auth failures are deliberately excluded: their body can echo
+                        # the rejected credential. Routing and parameter errors are safe
+                        # and necessary to distinguish incompatibility from an unknown
+                        # model or a temporarily unavailable provider fleet.
                         detail = _provider_error(body)
+                    else:
+                        detail = ""
                     if response.status in RETRY_STATUSES and attempt < last_attempt:
                         await asyncio.sleep(self._retry_delay(attempt, retry_after))
                         continue
@@ -171,7 +194,7 @@ class OpenRouterClient:
                             f"OpenRouter request failed with HTTP {response.status}"
                             + (f": {detail}" if detail else ""),
                             status=response.status,
-                            retryable=response.status in RETRY_STATUSES,
+                            retryable=_retryable_http_error(response.status, detail),
                             retry_after=retry_after,
                         )
                     try:
@@ -218,31 +241,51 @@ class OpenRouterClient:
         payload = await self._request("GET", "/models", key=candidate)
         return {"ok": True, "models": len(payload.get("data") or [])}
 
+    def set_model_catalog(self, models: list[dict[str, Any]]) -> None:
+        """Replace the capability cache used to shape completion requests.
+
+        The server hydrates this from the persisted catalog on startup. A refresh
+        replaces it from OpenRouter's current `/models` response. Completion still
+        has bounded compatibility profiles when a configured model is absent from
+        the cache, so a stale catalog cannot make an otherwise valid model unusable.
+        """
+        capabilities: dict[str, _ModelCapabilities] = {}
+        for item in models:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            capabilities[str(item["id"])] = _model_capabilities(item)
+        self._model_capabilities = capabilities
+
     async def models(self) -> list[dict[str, Any]]:
         payload = await self._request("GET", "/models")
         result: list[dict[str, Any]] = []
         for item in payload.get("data") or []:
             if not isinstance(item, dict) or not item.get("id"):
                 continue
-            supported = set(item.get("supported_parameters") or [])
-            architecture = item.get("architecture") or {}
+            supported = _string_set(item.get("supported_parameters"))
+            architecture = item.get("architecture")
+            architecture = architecture if isinstance(architecture, dict) else {}
             modality = str(architecture.get("modality") or "")
             if "response_format" not in supported and "structured_outputs" not in supported:
                 continue
             output_modalities = modality.rsplit("->", 1)[-1].split("+") if modality else []
             if output_modalities and "text" not in output_modalities:
                 continue
-            pricing = item.get("pricing") or {}
-            result.append(
-                {
-                    "id": str(item["id"]),
-                    "name": str(item.get("name") or item["id"]),
-                    "context_length": int(item.get("context_length") or 0),
-                    "prompt_price": _number(pricing.get("prompt")),
-                    "completion_price": _number(pricing.get("completion")),
-                    "supported_parameters": sorted(supported),
-                }
-            )
+            pricing = item.get("pricing")
+            pricing = pricing if isinstance(pricing, dict) else {}
+            model = {
+                "id": str(item["id"]),
+                "name": str(item.get("name") or item["id"]),
+                "context_length": _integer(item.get("context_length")),
+                "prompt_price": _number(pricing.get("prompt")),
+                "completion_price": _number(pricing.get("completion")),
+                "supported_parameters": sorted(supported),
+            }
+            reasoning = _reasoning_metadata(item.get("reasoning"))
+            if reasoning is not None:
+                model["reasoning"] = reasoning
+            result.append(model)
+        self.set_model_catalog(result)
         return result
 
     async def complete_json(
@@ -267,8 +310,6 @@ class OpenRouterClient:
             "model": model,
             "messages": safe_messages,
             "stream": False,
-            "temperature": 0,
-            "max_tokens": max_tokens,
             # `require_parameters` is the guarantee that matters: it restricts
             # routing to providers that actually honour `response_format`, so a
             # fallback still returns the schema rather than prose. Pinning to the
@@ -284,15 +325,33 @@ class OpenRouterClient:
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
         }
-        if reasoning_enabled is not None:
-            request_body["reasoning"] = (
-                {"enabled": True} if reasoning_enabled else {"effort": "none"}
-            )
-        payload = await self._request(
-            "POST",
-            "/chat/completions",
-            json_body=request_body,
+        profiles = _completion_profiles(
+            self._model_capabilities.get(model),
+            max_tokens=max_tokens,
+            reasoning_enabled=reasoning_enabled,
         )
+        payload: dict[str, Any] | None = None
+        for index, profile in enumerate(profiles):
+            candidate = {**request_body, **profile}
+            try:
+                payload = await self._request(
+                    "POST",
+                    "/chat/completions",
+                    json_body=candidate,
+                )
+                break
+            except OpenRouterError as exc:
+                if index + 1 >= len(profiles) or not _is_parameter_compatibility_error(exc):
+                    raise
+                log.info(
+                    "OpenRouter rejected completion parameter profile for model %s; "
+                    "retrying with the next bounded profile (%s -> %s)",
+                    model,
+                    _profile_name(profile),
+                    _profile_name(profiles[index + 1]),
+                )
+        if payload is None:  # pragma: no cover - every path returns or raises above
+            raise OpenRouterError("OpenRouter did not return a completion")
         choices = payload.get("choices")
         choice = choices[0] if isinstance(choices, list) and choices else None
         message = choice.get("message") if isinstance(choice, dict) else None
@@ -400,6 +459,137 @@ def _provider_error(body: bytes | bytearray) -> str:
         parts.append(f"(provider: {provider})")
     text = " ".join(part for part in parts if part)[:MAX_PROVIDER_ERROR_CHARS]
     return SECRET_SHAPED.sub("[redacted]", text)
+
+
+def _retryable_http_error(status: int, detail: str) -> bool:
+    if status in RETRY_STATUSES:
+        return True
+    normalized = detail.casefold()
+    return status == 404 and any(
+        phrase in normalized for phrase in TRANSIENT_MODEL_AVAILABILITY_ERRORS
+    )
+
+
+def _is_parameter_compatibility_error(error: OpenRouterError) -> bool:
+    if error.status != 404:
+        return False
+    normalized = str(error).casefold()
+    return any(phrase in normalized for phrase in PARAMETER_COMPATIBILITY_ERRORS)
+
+
+def _reasoning_metadata(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, Any] = {}
+    supported_efforts = value.get("supported_efforts")
+    if isinstance(supported_efforts, list):
+        result["supported_efforts"] = sorted(
+            {str(effort) for effort in supported_efforts if effort is not None}
+        )
+    for name in ("default_effort",):
+        if value.get(name) is not None:
+            result[name] = str(value[name])
+    for name in ("default_enabled", "supports_max_tokens", "mandatory"):
+        if isinstance(value.get(name), bool):
+            result[name] = value[name]
+    return result or None
+
+
+def _model_capabilities(item: dict[str, Any]) -> _ModelCapabilities:
+    supported = frozenset(_string_set(item.get("supported_parameters")))
+    reasoning = item.get("reasoning")
+    reasoning = reasoning if isinstance(reasoning, dict) else {}
+    raw_efforts = reasoning.get("supported_efforts")
+    efforts = (
+        frozenset(str(effort) for effort in raw_efforts if effort is not None)
+        if isinstance(raw_efforts, list)
+        else None
+    )
+    return _ModelCapabilities(
+        supported_parameters=supported,
+        reasoning_efforts=efforts,
+        reasoning_mandatory=reasoning.get("mandatory") is True,
+    )
+
+
+def _completion_profiles(
+    capabilities: _ModelCapabilities | None,
+    *,
+    max_tokens: int,
+    reasoning_enabled: bool | None,
+) -> list[dict[str, Any]]:
+    """Build request variants without ever weakening schema or output bounds."""
+    if max_tokens <= 0:
+        raise OpenRouterError("OpenRouter max_tokens must be greater than zero")
+
+    if capabilities is None:
+        token_parameters = list(TOKEN_LIMIT_PARAMETERS)
+    else:
+        token_parameters = [
+            name for name in TOKEN_LIMIT_PARAMETERS if name in capabilities.supported_parameters
+        ]
+        # OpenRouter's cached model catalog can lag a newly configured exact model.
+        # Advertised capabilities guide the first request, but a missing token field
+        # must not force an unbounded call or reject a model the router can handle.
+        if not token_parameters:
+            token_parameters = list(TOKEN_LIMIT_PARAMETERS)
+
+    reasoning_profiles: list[dict[str, Any]] = [{}]
+    if reasoning_enabled is True:
+        if capabilities is not None and not (
+            {"reasoning", "reasoning_effort"} & capabilities.supported_parameters
+        ):
+            raise OpenRouterError(
+                "The selected OpenRouter model does not support reasoning controls"
+            )
+        reasoning_profiles = [{"reasoning": {"enabled": True}}]
+    elif reasoning_enabled is False:
+        can_disable = capabilities is None or (
+            not capabilities.reasoning_mandatory
+            and bool(
+                {"reasoning", "reasoning_effort"}
+                & capabilities.supported_parameters
+            )
+            and (
+                capabilities.reasoning_efforts is None
+                or "none" in capabilities.reasoning_efforts
+            )
+        )
+        if can_disable:
+            # Omitting this on the fallback supports non-reasoning models and older
+            # endpoints whose model-level catalog overstates reasoning support.
+            reasoning_profiles = [{"reasoning": {"effort": "none"}}, {}]
+
+    profiles: list[dict[str, Any]] = []
+    for token_parameter in token_parameters:
+        for reasoning in reasoning_profiles:
+            profiles.append({token_parameter: max_tokens, **reasoning})
+    return profiles
+
+
+def _profile_name(profile: dict[str, Any]) -> str:
+    token_parameter = next(
+        (name for name in TOKEN_LIMIT_PARAMETERS if name in profile), "bounded-output"
+    )
+    reasoning = profile.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return token_parameter
+    if reasoning.get("effort") == "none":
+        return f"{token_parameter}+reasoning-disabled"
+    return f"{token_parameter}+reasoning"
+
+
+def _string_set(value: Any) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {str(item) for item in value if item is not None}
+
+
+def _integer(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def _content_shape(value: Any) -> tuple[str, int]:

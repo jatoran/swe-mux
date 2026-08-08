@@ -199,6 +199,9 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
     assert body["model"] == "vendor/exact"
     assert body["stream"] is False
     assert body["reasoning"] == {"effort": "none"}
+    assert body["max_completion_tokens"] == 64
+    assert "max_tokens" not in body
+    assert "temperature" not in body
     # `require_parameters` is the guarantee (a provider that honours the schema);
     # pinning to one provider on top of it is not, and cost a whole day of titles.
     assert body["provider"] == {"require_parameters": True, "allow_fallbacks": True}
@@ -214,6 +217,198 @@ async def test_openrouter_completion_requires_exact_model_and_strict_schema() ->
     assert result.finish_reason == "stop"
     assert result.response_content_type == "string"
     assert result.response_content_length == 18
+
+
+def _completion_payload(model: str = "vendor/exact") -> dict[str, Any]:
+    return {
+        "id": "generation-profile",
+        "model": model,
+        "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+        "usage": {},
+    }
+
+
+async def test_openrouter_uses_the_models_advertised_bounded_profile() -> None:
+    session = FakeSession([FakeResponse(200, _completion_payload("openai/gpt-5.6-luna"))])
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    client.set_model_catalog(
+        [
+            {
+                "id": "openai/gpt-5.6-luna",
+                "supported_parameters": [
+                    "max_tokens",
+                    "reasoning",
+                    "reasoning_effort",
+                    "response_format",
+                    "structured_outputs",
+                ],
+                "reasoning": {"supported_efforts": ["none", "low"], "mandatory": False},
+            }
+        ]
+    )
+
+    await client.complete_json(
+        model="openai/gpt-5.6-luna",
+        messages=[{"role": "user", "content": "title this"}],
+        schema_name="title_v1",
+        schema={"type": "object"},
+        max_tokens=32,
+        reasoning_enabled=False,
+    )
+
+    body = session.requests[0][2]["json"]
+    assert body["max_tokens"] == 32
+    assert "max_completion_tokens" not in body
+    assert body["reasoning"] == {"effort": "none"}
+    assert "temperature" not in body
+
+
+@pytest.mark.parametrize(
+    ("supported_parameters", "reasoning", "expected_reasoning"),
+    [
+        (["max_completion_tokens", "response_format"], None, None),
+        (
+            ["max_completion_tokens", "reasoning", "response_format"],
+            {"supported_efforts": ["low", "medium"], "mandatory": True},
+            None,
+        ),
+        (
+            ["max_completion_tokens", "reasoning", "response_format"],
+            {"supported_efforts": ["none", "low"], "mandatory": False},
+            {"effort": "none"},
+        ),
+    ],
+)
+async def test_reasoning_controls_follow_model_capabilities(
+    supported_parameters: list[str],
+    reasoning: dict[str, Any] | None,
+    expected_reasoning: dict[str, Any] | None,
+) -> None:
+    session = FakeSession([FakeResponse(200, _completion_payload())])
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    model: dict[str, Any] = {
+        "id": "vendor/exact",
+        "supported_parameters": supported_parameters,
+    }
+    if reasoning is not None:
+        model["reasoning"] = reasoning
+    client.set_model_catalog([model])
+
+    await client.complete_json(
+        model="vendor/exact",
+        messages=[{"role": "user", "content": "title this"}],
+        schema_name="title_v1",
+        schema={"type": "object"},
+        max_tokens=32,
+        reasoning_enabled=False,
+    )
+
+    body = session.requests[0][2]["json"]
+    assert body.get("reasoning") == expected_reasoning
+    assert body["max_completion_tokens"] == 32
+
+
+async def test_parameter_routing_404_falls_back_without_weakening_contract() -> None:
+    incompatible = {
+        "error": {"message": "No endpoints found that can handle the requested parameters."}
+    }
+    session = FakeSession(
+        [FakeResponse(404, incompatible), FakeResponse(200, _completion_payload())]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+    client.set_model_catalog(
+        [
+            {
+                "id": "vendor/exact",
+                "supported_parameters": [
+                    "max_completion_tokens",
+                    "reasoning",
+                    "response_format",
+                ],
+                "reasoning": {"supported_efforts": ["none", "low"]},
+            }
+        ]
+    )
+
+    await client.complete_json(
+        model="vendor/exact",
+        messages=[{"role": "user", "content": "title this"}],
+        schema_name="title_v1",
+        schema={"type": "object"},
+        max_tokens=32,
+        reasoning_enabled=False,
+    )
+
+    first = session.requests[0][2]["json"]
+    second = session.requests[1][2]["json"]
+    assert first["reasoning"] == {"effort": "none"}
+    assert "reasoning" not in second
+    assert first["max_completion_tokens"] == second["max_completion_tokens"] == 32
+    assert first["response_format"] == second["response_format"]
+    assert first["model"] == second["model"] == "vendor/exact"
+
+
+async def test_unknown_model_falls_back_between_bounded_token_fields() -> None:
+    incompatible = {
+        "error": {"message": "No endpoints found that can handle the requested parameters."}
+    }
+    session = FakeSession(
+        [FakeResponse(404, incompatible), FakeResponse(200, _completion_payload())]
+    )
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    await client.complete_json(
+        model="vendor/exact",
+        messages=[{"role": "user", "content": "title this"}],
+        schema_name="title_v1",
+        schema={"type": "object"},
+        max_tokens=32,
+    )
+
+    first = session.requests[0][2]["json"]
+    second = session.requests[1][2]["json"]
+    assert first["max_completion_tokens"] == 32
+    assert second["max_tokens"] == 32
+    assert "max_tokens" not in first
+    assert "max_completion_tokens" not in second
+
+
+async def test_non_parameter_404_does_not_change_the_request_profile() -> None:
+    missing = {"error": {"message": "Model vendor/missing was not found"}}
+    session = FakeSession([FakeResponse(404, missing)])
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError, match="vendor/missing") as captured:
+        await client.complete_json(
+            model="vendor/missing",
+            messages=[{"role": "user", "content": "title this"}],
+            schema_name="title_v1",
+            schema={"type": "object"},
+            max_tokens=32,
+        )
+
+    assert captured.value.retryable is False
+    assert len(session.requests) == 1
+
+
+async def test_temporarily_unavailable_model_404_is_retryable() -> None:
+    unavailable = {
+        "error": {"message": "No allowed providers are available for the selected model"}
+    }
+    session = FakeSession([FakeResponse(404, unavailable)])
+    client = OpenRouterClient(MemorySecrets(), session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(OpenRouterError) as captured:
+        await client.complete_json(
+            model="vendor/exact",
+            messages=[{"role": "user", "content": "title this"}],
+            schema_name="title_v1",
+            schema={"type": "object"},
+            max_tokens=32,
+        )
+
+    assert "No allowed providers" in str(captured.value)
+    assert captured.value.retryable is True
 
 
 @pytest.mark.parametrize("content", [None, [], "not json"])
