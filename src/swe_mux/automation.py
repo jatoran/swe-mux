@@ -253,7 +253,7 @@ EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "approval_needed": {"kind", "detail"},
     "state_changed": {"previous", "state", "detail"},
     "runtime_cwd_changed": {"dropped"},
-    "git_changed": {"branch", "dirty", "ahead", "behind"},
+    "git_changed": {"branch", "dirty", "ahead", "behind", "worktree", "added", "removed"},
     "process_snapshot": {"cpu_percent", "memory_bytes", "descendants", "listeners"},
     "listener_detected": {"host", "port"},
     "listener_closed": {"host", "port"},

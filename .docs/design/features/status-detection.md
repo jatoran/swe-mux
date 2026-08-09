@@ -467,6 +467,27 @@ ledger entry; `promote`/`demote`/nested-agent detection/`_mark_ended` all route 
 Inferred transitions are recovery events — counted, bounded, and never the primary path
 for a healthy session.
 
+## Timing exposed on the record
+
+Two timings cross the API boundary so a client can age a session without a second request.
+
+- `state_since` is the wall-clock instant of the transition into the current state, written by
+  `apply_state_transition` alongside `Session.last_state_change_ts`.
+  Wall-clock rather than monotonic because a browser has no access to this process's clock origin.
+  A record adopted from a daemon that predates the field is seeded at adoption rather than left
+  at zero, and a client renders `0` as "unknown", never as "just now".
+- `last_turn_ms` is the wall-clock length of the last **completed** root turn.
+  A harness-reported `duration_ms` outranks the daemon's own measurement, which also counts the
+  lag before the boundary was observed.
+  A turn longer than `MAX_TURN_DURATION_SECONDS` (6 h) is treated as a missed boundary rather
+  than a measurement and leaves the previous value alone: an overnight-idle session must not
+  claim its last turn took nine hours.
+  The field is run-scoped and cleared wherever observation identity resets, because a duration
+  measured in a replaced conversation is not this conversation's.
+
+Both ends of a turn are stamped from `_session_now`, so the replay harness's virtual clock
+cannot pair a virtual start with a real end.
+
 ## Reading the PTY screen
 
 The screen is read from the last `SCREEN_TAIL_BYTES` (32 KiB) via

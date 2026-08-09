@@ -56,6 +56,19 @@ class GitState:
     dirty: int = 0
     ahead: int = 0
     behind: int = 0
+    #: Leaf directory name of the checkout when it is a *linked* worktree rather
+    #: than the repository's primary checkout; None for the primary checkout and
+    #: for anything outside a repository.
+    worktree: str | None = None
+    #: Lines added/removed against HEAD across staged and unstaged **tracked**
+    #: changes. Untracked files are counted by ``dirty`` but contribute no lines
+    #: here, because their content has never been compared to anything.
+    #:
+    #: ``None`` means "not measured" (no HEAD yet, or the diff failed); ``0``
+    #: means "measured, and nothing changed". A display that conflates the two
+    #: reports a clean tree for a repository it simply failed to read.
+    added: int | None = None
+    removed: int | None = None
 
 
 @dataclass(slots=True)
@@ -79,6 +92,16 @@ class SessionRecord:
     created_at: float = field(default_factory=time.time)
     state: SessionState = "starting"
     state_detail: str | None = None
+    #: Epoch seconds of the transition into ``state``. The mirror of
+    #: ``Session.last_state_change_ts`` on the record, so a UI can age the current
+    #: state without asking the daemon a second question. Adopted across daemon
+    #: restarts with the rest of the record; a record restored from an older
+    #: snapshot keeps 0.0 and is rendered as "unknown", never as "just now".
+    state_since: float = 0.0
+    #: Wall-clock duration of the last **completed** root turn, milliseconds.
+    #: None until a turn has ended on this run. Reset with observation identity,
+    #: because a duration from a replaced conversation is not this one's.
+    last_turn_ms: float | None = None
     # Set whenever state == "awaiting"; cleared by every transition elsewhere.
     awaiting_reason: str | None = None
     # The idle-axis sibling of `awaiting_reason`. `waiting_on_background` means
