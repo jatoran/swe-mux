@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { useModalFocus } from './modalFocus'
-import { sessionDotClass } from './sessionStatus'
+import { StateIndicator } from './StateIndicator'
+import { useSessionRowConfig } from './sessionRowPrefs'
 import {
   agentTargetName, agentTargets, backendFromTargetKey, defaultNewTarget, newTargetKey,
   retargetForProject, sessionIdFromTargetKey, sessionTargetKey,
@@ -57,6 +58,7 @@ type Props = {
 
 export function SendToAgentPicker({ request, projects, sessions, onClose, onSend }: Props) {
   const panel = useRef<HTMLElement>(null)
+  const rowConfig = useSessionRowConfig()
   const [projectId, setProjectId] = useState(request.projectId)
   const [message, setMessage] = useState(request.message)
   const [target, setTarget] = useState(() =>
@@ -226,7 +228,7 @@ export function SendToAgentPicker({ request, projects, sessions, onClose, onSend
             {agents.map(session =>
               option(
                 sessionTargetKey(session.id),
-                <span class={sessionDotClass(session)} />,
+                <StateIndicator session={session} shape={rowConfig.dotShape} />,
                 agentTargetName(session),
                 `${session.backend} · ${session.state}${session.state_detail ? ` · ${session.state_detail}` : ''}`,
               ),

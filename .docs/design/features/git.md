@@ -3,7 +3,8 @@
 ## What it is
 
 - Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is
-  available) for branch, dirty count, and upstream divergence.
+  available) for branch, dirty count, upstream divergence, linked-worktree identity, and
+  lines changed against HEAD.
 - User-initiated worktree API wraps `git worktree` without performing other mutating git operations.
 
 ## Operations
@@ -12,7 +13,21 @@
   concurrently behind one timeout window. Results are cached briefly per canonical cwd so a burst
   of terminal launches does not repeatedly cross the Git process boundary.
 - Poll only cwd values with at least one attached terminal pane; deduplicate by cwd and
-  cap concurrency. Branch/status/upstream calls run in parallel with bounded timeouts.
+  cap concurrency. Branch/status/upstream/git-dir calls run in parallel with bounded timeouts.
+- A checkout is a **linked worktree** when its `--absolute-git-dir` differs from its
+  `--git-common-dir`; `GitState.worktree` is then the checkout's leaf directory name.
+  Comparing the two paths is the only check that stays correct for bare repositories and
+  `.git`-file submodules, where comparing directory names does not.
+- Lines added and removed come from `git diff --numstat HEAD`, memoized per repository root on
+  the working-tree fingerprint (`GitEvidence.dirty_hash`) the cheap poll already computes.
+  The diff therefore runs when the change set actually moves, not once per session and not once
+  per five-second poll, and every session sharing a checkout reads one measurement.
+  A clean tree answers 0/0 with no subprocess at all.
+- The counts cover **tracked** changes only: an untracked file raises the dirty count but has no
+  content to compare, so it contributes no lines.
+- `added`/`removed` are `None` when the measurement could not be made — no HEAD yet, or a failed
+  diff — which is deliberately distinct from a measured `0`. A display that conflates the two
+  reports a clean tree for a repository it merely failed to read.
 - OSC-driven targets are existing local directories, debounced for 1.25 seconds, and limited
   to 12 accepted switches per session per minute before Git polling follows them. Invalid,
   remote, fragmented-spam, and over-limit telemetry cannot create subprocess churn.

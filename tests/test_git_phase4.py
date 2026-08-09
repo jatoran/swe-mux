@@ -19,7 +19,16 @@ def _fake_git_responses(porcelain: str) -> dict[tuple[str, ...], tuple[int, str]
         ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): (1, ""),
         ("rev-parse", "HEAD"): (0, _FULL_SHA),
         ("rev-parse", "--short", "HEAD"): (0, "a1b2c3d"),
+        # Same path twice: the primary checkout, not a linked worktree.
+        ("rev-parse", "--absolute-git-dir", "--git-common-dir"): (0, "C:/repo/.git\nC:/repo/.git"),
+        ("diff", "--numstat", "HEAD"): (0, "3\t1\tfile.txt"),
     }
+
+
+@pytest.fixture(autouse=True)
+def _clean_diffstat_cache() -> None:
+    """The diffstat memo is process-wide; a test must not inherit another's tree."""
+    git_monitor.reset_diffstat_cache()
 
 
 @pytest.mark.asyncio
@@ -58,6 +67,126 @@ async def test_git_reading_carries_head_and_dirty_hash(monkeypatch: pytest.Monke
     # A clean tree has no dirty hash at all.
     porcelain["value"] = ""
     assert (await read_git_reading("C:/repo")).evidence.dirty_hash is None
+
+
+@pytest.mark.asyncio
+async def test_diffstat_is_memoized_on_the_dirty_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`git diff --numstat` runs when the change set moves, not once per poll.
+
+    This is what makes per-session line counts affordable: an idle fleet sharing
+    one checkout re-reads the fingerprint the cheap poll already computed and
+    spawns no diff at all.
+    """
+    porcelain = {"value": " M file.txt"}
+    numstat_calls: list[str] = []
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del timeout_seconds
+        if args[:2] == ("diff", "--numstat"):
+            numstat_calls.append(cwd)
+        return _fake_git_responses(porcelain["value"])[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    first = await read_git_state("C:/repo")
+    assert (first.added, first.removed) == (3, 1)
+    assert len(numstat_calls) == 1
+
+    # Same change set: memoized, no second subprocess.
+    await read_git_reading("C:/repo")
+    assert len(numstat_calls) == 1
+
+    # The change set moved, so the measurement must be redone.
+    porcelain["value"] = " M file.txt\n M other.txt"
+    await read_git_reading("C:/repo")
+    assert len(numstat_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_clean_tree_reports_zero_without_running_a_diff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No change set means no changed lines, and that needs no subprocess."""
+    numstat_calls: list[str] = []
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del timeout_seconds
+        if args[:2] == ("diff", "--numstat"):
+            numstat_calls.append(cwd)
+        return _fake_git_responses("")[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    state = await read_git_state("C:/repo")
+    assert (state.added, state.removed) == (0, 0)
+    assert numstat_calls == []
+
+
+@pytest.mark.asyncio
+async def test_unmeasurable_diffstat_is_none_not_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed diff must not read as a clean tree — those are different facts."""
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _fake_git_responses(" M file.txt")
+        responses[("diff", "--numstat", "HEAD")] = (128, "fatal: bad revision")
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    state = await read_git_state("C:/repo")
+    assert state.added is None and state.removed is None
+
+
+@pytest.mark.asyncio
+async def test_unborn_branch_has_no_diffstat(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no HEAD there is nothing to diff against, so nothing is claimed."""
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _fake_git_responses(" M file.txt")
+        responses[("rev-parse", "HEAD")] = (128, "fatal: ambiguous argument 'HEAD'")
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    state = await read_git_state("C:/repo")
+    assert state.added is None and state.removed is None
+
+
+def test_numstat_parsing_survives_binary_files() -> None:
+    """Binary rows report `-` for both counts; a PNG must not void the sum."""
+    output = "3\t1\tfile.txt\n-\t-\timage.png\n12\t0\tother.txt"
+    assert git_monitor.parse_numstat(output) == (15, 1)
+
+
+@pytest.mark.asyncio
+async def test_linked_worktree_is_named_and_primary_checkout_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Comparing git-dir to git-common-dir is the check that stays correct.
+
+    Comparing directory *names* would misreport bare repositories and `.git`-file
+    submodules; the two paths only diverge for a genuinely linked worktree.
+    """
+
+    async def primary(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        return _fake_git_responses("")[args]
+
+    monkeypatch.setattr(git_monitor, "_git", primary)
+    assert (await read_git_state("C:/repo")).worktree is None
+
+    async def linked(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _fake_git_responses("")
+        responses[("rev-parse", "--show-toplevel")] = (0, "C:/repo/.worktrees/wt-audit")
+        responses[("rev-parse", "--absolute-git-dir", "--git-common-dir")] = (
+            0,
+            "C:/repo/.git/worktrees/wt-audit\nC:/repo/.git",
+        )
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", linked)
+    assert (await read_git_state("C:/repo/.worktrees/wt-audit")).worktree == "wt-audit"
 
 
 @pytest.mark.asyncio

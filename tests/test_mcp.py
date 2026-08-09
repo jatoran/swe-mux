@@ -32,10 +32,12 @@ def record(
     scope_id: str = "scope-1",
     backend: str = "claude",
     state: str = "working",
+    auto_named: bool = True,
 ) -> Any:
     return SimpleNamespace(
         id=sid,
         name=f"{backend}-{sid[:6]}",
+        auto_named=auto_named,
         backend=backend,
         state=state,
         state_detail=None,
@@ -79,6 +81,26 @@ class HistoryStub:
         return next((row for row in self.rows if row.get("id") == session_id), None)
 
 
+class AutomationStoreStub:
+    def __init__(self, titles: dict[str, str] | None = None) -> None:
+        self.titles = titles or {}
+
+    async def annotations(self, **_kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {"agent_run_id": run_id, "content": title}
+            for run_id, title in self.titles.items()
+        ]
+
+
+class MessagingStub:
+    def __init__(self) -> None:
+        self.targets: list[str] = []
+
+    async def notify(self, _caller: Any, *, target: str, **_kwargs: Any) -> dict[str, Any]:
+        self.targets.append(target)
+        return {"target_session_id": target}
+
+
 def manager_for(*sessions: Any) -> Any:
     table = {session.record.id: session for session in sessions}
 
@@ -93,8 +115,18 @@ def manager_for(*sessions: Any) -> Any:
     return SimpleNamespace(sessions=table, resolve=resolve)
 
 
-def service_for(*sessions: Any, history: HistoryStub | None = None) -> McpService:
-    return McpService(manager_for(*sessions), history or HistoryStub())
+def service_for(
+    *sessions: Any,
+    history: HistoryStub | None = None,
+    titles: dict[str, str] | None = None,
+    messaging: Any = None,
+) -> McpService:
+    return McpService(
+        manager_for(*sessions),
+        history or HistoryStub(),
+        messaging=messaging,
+        automation_store=AutomationStoreStub(titles),
+    )
 
 
 # ------------------------------------------------------------------ identity
@@ -134,6 +166,107 @@ async def test_list_sessions_is_scoped_to_the_caller_project() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sessions_include_the_same_effective_display_name_as_the_ui() -> None:
+    caller = live_session("s1", token="tok")
+    generated = live_session("s2")
+    manual = live_session("s3", auto_named=False)
+    service = service_for(
+        caller,
+        generated,
+        manual,
+        titles={"s2": "Fix Sidebar Sorting", "s3": "Ignored generated title"},
+    )
+
+    result = await service.list_sessions(caller, {})
+    by_id = {item["session_id"]: item for item in result["sessions"]}
+
+    assert by_id["s1"]["display_name"] == "claude-s1"
+    assert by_id["s2"]["name"] == "claude-s2"
+    assert by_id["s2"]["display_name"] == "Fix Sidebar Sorting"
+    assert by_id["s3"]["display_name"] == "claude-s3"
+
+
+@pytest.mark.asyncio
+async def test_exact_display_name_resolves_live_sessions() -> None:
+    caller = live_session("s1", token="tok")
+    target = live_session("s2")
+    service = service_for(caller, target, titles={"s2": "Fix Sidebar Sorting"})
+
+    result = await service.get_session(caller, {"session_id": "Fix Sidebar Sorting"})
+
+    assert result["session_id"] == "s2"
+    assert result["name"] == "claude-s2"
+    assert result["display_name"] == "Fix Sidebar Sorting"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_display_name_does_not_resolve() -> None:
+    caller = live_session("s1", token="tok")
+    first = live_session("s2")
+    second = live_session("s3")
+    service = service_for(
+        caller,
+        first,
+        second,
+        titles={"s2": "Same title", "s3": "Same title"},
+    )
+
+    with pytest.raises(KeyError):
+        await service.get_session(caller, {"session_id": "Same title"})
+
+
+@pytest.mark.asyncio
+async def test_notify_accepts_the_display_name_but_sends_the_stable_id() -> None:
+    caller = live_session("s1", token="tok")
+    target = live_session("s2")
+    messaging = MessagingStub()
+    service = service_for(
+        caller,
+        target,
+        titles={"s2": "Fix Sidebar Sorting"},
+        messaging=messaging,
+    )
+
+    result = await service.notify(
+        caller,
+        {"target": "Fix Sidebar Sorting", "body": "Review this"},
+    )
+
+    assert messaging.targets == ["s2"]
+    assert result["target_session_id"] == "s2"
+
+
+@pytest.mark.asyncio
+async def test_recently_ended_sessions_include_and_resolve_the_display_name() -> None:
+    caller = live_session("s1", token="tok")
+    history = HistoryStub(
+        [
+            {
+                "id": "ended-1",
+                "name": "codex-ended",
+                "backend": "codex",
+                "project_id": "p1",
+                "project_scope_id": "scope-1",
+                "auto_named": 1,
+                "final_state": "exited",
+            }
+        ]
+    )
+    service = service_for(
+        caller,
+        history=history,
+        titles={"ended-1": "Fix Sidebar Sorting"},
+    )
+
+    listing = await service.list_sessions(caller, {"include_ended": True})
+    resolved = await service.get_session(caller, {"session_id": "Fix Sidebar Sorting"})
+
+    assert listing["ended_sessions"][0]["display_name"] == "Fix Sidebar Sorting"
+    assert resolved["session_id"] == "ended-1"
+    assert resolved["display_name"] == "Fix Sidebar Sorting"
+
+
+@pytest.mark.asyncio
 async def test_scope_and_true_misses_answer_identically() -> None:
     # Confirming a foreign session exists is itself a leak; both answers must
     # be byte-identical "not found".
@@ -160,11 +293,12 @@ async def test_search_history_passes_the_caller_project_filter() -> None:
 
 
 def test_session_summary_is_an_allowlist_that_cannot_leak_spawn_env() -> None:
-    summary = session_summary(record("s1"))
+    summary = session_summary(record("s1"), display_name="Fix Sidebar Sorting")
     flattened = json.dumps(summary)
     assert "spawn_env" not in flattened
     assert "sk-live" not in flattened
     assert summary["state"] == "working"
+    assert summary["display_name"] == "Fix Sidebar Sorting"
 
 
 @pytest.mark.asyncio
@@ -194,6 +328,25 @@ async def test_read_transcript_is_bounded_and_redacts_credential_shapes(
     assert "redacted" in last
     ordinary = result["messages"][0]["text"]
     assert ordinary.startswith("message ")
+
+
+@pytest.mark.asyncio
+async def test_read_transcript_accepts_the_display_name(tmp_path: Path) -> None:
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok")
+    target = live_session("s2", transcript=transcript)
+    service = service_for(caller, target, titles={"s2": "Fix Sidebar Sorting"})
+
+    result = await service.read_transcript(
+        caller, {"session_id": "Fix Sidebar Sorting"}
+    )
+
+    assert result["session_id"] == "s2"
+    assert result["messages"][0]["text"] == "hello"
 
 
 @pytest.mark.asyncio

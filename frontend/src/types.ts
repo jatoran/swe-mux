@@ -30,6 +30,10 @@ export interface Session {
   id: string; name: string; project_id: string; backend: string
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
   created_at: number; state: SessionState; state_detail?: string; tokens_in: number
+  /** Epoch seconds of the transition into `state`; 0 when the daemon never dated it. */
+  state_since?: number
+  /** Wall-clock length of the last completed root turn, milliseconds. Run-scoped. */
+  last_turn_ms?: number | null
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]
@@ -37,7 +41,13 @@ export interface Session {
   tokens_out: number; tokens_cache_read:number; tokens_cache_write:number; cost_usd:number
   provider?:string|null; provider_account_hashes?:Record<string,string>
   context_window: number; context_pct: number; last_activity_ts: number
-  git: { branch?: string; dirty: number; ahead: number; behind: number }
+  /** `worktree` is the leaf name of a *linked* worktree checkout, absent for the
+   *  primary one. `added`/`removed` are lines changed against HEAD across tracked
+   *  files; absent means "not measured", which is not the same as zero. */
+  git: {
+    branch?: string; dirty: number; ahead: number; behind: number
+    worktree?: string | null; added?: number | null; removed?: number | null
+  }
   pinned_attention: boolean; broadcast: boolean
   startup_timing_ms?: Record<string, number>
   client_startup_timing_ms?: Record<string, number>

@@ -5,7 +5,8 @@ import { agentTargetName, agentTargets } from './agentTargets'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
 import { renderPromptTemplate } from './promptTemplates'
-import { sessionDotClass } from './sessionStatus'
+import { StateIndicator } from './StateIndicator'
+import { useSessionRowConfig } from './sessionRowPrefs'
 import type { PromptTemplate } from './PromptLibrary'
 import type { SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
@@ -55,6 +56,7 @@ type PendingSend = { key: string; target: SendToAgentTarget }
 const LONG_PRESS_MS = 550
 
 export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessions, onSend, preselect }: Props) {
+  const rowConfig = useSessionRowConfig()
   const [items, setItems] = useState<PromptTemplate[] | null>(null)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
@@ -304,7 +306,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
         role="menuitem"
         title={`${session.backend} · ${session.state}${session.state_detail ? ` · ${session.state_detail}` : ''}`}
         onClick={() => chooseTarget(menu.item, { kind: 'session', session, submit })}
-      ><span class={sessionDotClass(session)} />{agentTargetName(session)}</button>)}
+      ><StateIndicator session={session} shape={rowConfig.dotShape} />{agentTargetName(session)}</button>)}
       {!targets.length && <button role="menuitem" disabled>{project ? 'No live agent session here' : 'Select a Project first'}</button>}
       <div class="context-subtitle">NEW SESSION</div>
       {promptDeliveryHarnesses().map(harness=><button role="menuitem" disabled={!project} onClick={() => project && chooseTarget(menu.item, { kind: 'new', backend: harness.name, projectId: project.id })}>New {harness.display_name} session</button>)}
