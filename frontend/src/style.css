@@ -476,11 +476,15 @@ body {
 .pane-grid {
   background:var(--line);
 }
-/* Header, then the optional read-aloud strip, then the terminal surface. The rows are
-   placed explicitly so the middle track collapses to nothing when no strip is rendered,
-   instead of the surface sliding up into it. */
+/* Header, the optional read-aloud strip, the optional dictation draft, then the terminal
+   surface. The rows are placed explicitly so an unrendered middle track collapses to
+   nothing instead of the surface sliding up into it.
+   This declaration wins over the one in the base layer, so the two must list the SAME
+   number of tracks: the surface is placed on the last row by index, and a template short
+   one track leaves it in an `auto` implicit row while the real `1fr` track stays empty —
+   which reads as a band of dead black space eating the terminal's height. */
 .terminal-pane {
-  grid-template-rows:calc(34px*var(--ui-scale)) auto minmax(0,1fr);
+  grid-template-rows:calc(34px*var(--ui-scale)) auto auto minmax(0,1fr);
 }
 /* A recently-viewed terminal kept mounted behind the active tab (warmPanes.ts), so
    returning to it costs no buffer replay. Keep its box measurable while removing it
