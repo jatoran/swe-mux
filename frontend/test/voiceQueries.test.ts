@@ -31,6 +31,18 @@ assert.deepEqual(parseVoiceQuery('status of session two'), {
   kind: 'status', entity: 'session', reference: '2', scope: { kind: 'all' },
 })
 assert.deepEqual(parseVoiceQuery('open project 3'), { kind: 'open', entity: 'project', reference: '3' })
+assert.deepEqual(parseVoiceQuery('go to project1'), { kind: 'open', entity: 'project', reference: '1' })
+assert.deepEqual(parseVoiceQuery('GoToProject, Project1'), { kind: 'open', entity: 'project', reference: '1' })
+assert.deepEqual(parseVoiceQuery('go to project, project one'), { kind: 'open', entity: 'project', reference: '1' })
+assert.deepEqual(parseVoiceQuery('go to project 1 session 2'), {
+  kind:'open',entity:'session',projectReference:'1',reference:'2',
+})
+assert.deepEqual(parseVoiceQuery('GoToProject Project1 Session2'), {
+  kind:'open',entity:'session',projectReference:'1',reference:'2',
+})
+assert.deepEqual(parseVoiceQuery('open session two in project one'), {
+  kind:'open',entity:'session',projectReference:'1',reference:'2',
+})
 assert.deepEqual(parseVoiceQuery('what are the possible voice commands for navigation'), { kind: 'help', category: 'navigation' })
 assert.deepEqual(parseVoiceQuery('read me possible voice commands'), { kind: 'help', category: null })
 assert.deepEqual(parseVoiceQuery('help with session statuses'), { kind: 'help', category: 'sessions' })
@@ -66,6 +78,7 @@ assert.deepEqual(parseVoiceQuery('list project alpha pending sessions'), {
 assert.deepEqual(parseVoiceQuery('focus on session two'), { kind: 'open', entity: 'session', reference: '2' })
 assert.deepEqual(parseVoiceQuery('take me to project Alpha'), { kind: 'open', entity: 'project', reference: 'alpha' })
 assert.equal(safeDuringSystemPlayback('open session two'), true)
+assert.equal(safeDuringSystemPlayback('open project one session two'), true)
 assert.equal(safeDuringSystemPlayback('confirm approval'), false)
 assert.equal(safeDuringSystemPlayback('kill session two'), false)
 assert.doesNotMatch(voiceHelpText(null), /\bmux\b/i)
@@ -90,7 +103,20 @@ assert.match(page.speech, /1 more session\. Say, next page, to continue\./)
 assert.match(page.detail, /Session 2 - Agent two\nProject: Alpha\nStatus: awaiting your approval/)
 assert.equal(page.shownThrough, 5)
 assert.match(sessionListPage(model.sessions, 5).speech, /Session 6/)
+const addresses=new Map(model.sessions.map((item,index)=>[item.session.id,{projectNumber:3,sessionNumber:index+1}]))
+const canonicalPage=sessionListPage([model.sessions[1],model.sessions[4]],0,5,false,{
+  addressFor:item=>addresses.get(item.session.id)||null,
+  compound:false,
+})
+assert.match(canonicalPage.speech,/Session 2\. Name, Agent two\./)
+assert.match(canonicalPage.speech,/Session 5\. Name, Agent five\./)
+const compoundPage=sessionListPage([model.sessions[4]],0,5,false,{
+  addressFor:item=>addresses.get(item.session.id)||null,
+  compound:true,
+})
+assert.match(compoundPage.detail,/Project 3, Session 5 - Agent five/)
 assert.equal(projectListPage([{name:'Alpha'},{name:'Beta'}]).speech, 'Project list. 2 projects. Project 1. Name, Alpha. Next project. Project 2. Name, Beta. End of project list.')
+assert.match(projectListPage([{id:'beta',name:'Beta'}],0,5,project=>project.id==='beta'?8:null).speech,/Project 8\. Name, Beta\./)
 const helpPage=voiceHelpPage('sessions')
 assert.match(helpPage.speech,/Command 1\. list sessions\. Next command\. Command 2\./)
 assert.match(helpPage.speech,/End of sessions commands\./)

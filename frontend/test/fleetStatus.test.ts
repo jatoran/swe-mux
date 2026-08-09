@@ -20,6 +20,9 @@ assert.equal(sessionsMatchingFleetPredicate(model,'approval')[0].session.id,'two
 assert.equal(sessionsMatchingFleetPredicate(model,'crashed')[0].session.id,'three')
 assert.equal(fleetRundown(model),'Fleet status. Total sessions, 3. Active sessions, 1. Awaiting your approval, 1. Awaiting your answer, 0. Needing attention, 1. End of fleet status.')
 assert.match(fleetRundownDetail(model),/Session 2\. Name, Agent two\. Project, Alpha\. Status, awaiting approval\./)
+assert.match(fleetRundownDetail(model,{
+  addressFor:item=>({projectNumber:4,sessionNumber:item.session.id==='two'?7:3}),compound:true,
+}),/Project 4, Session 7\. Name, Agent two\./)
 assert.match(fleetRundownDetail(model),/End of detailed fleet status\./)
 
 console.log('fleet status tests passed')

@@ -374,7 +374,9 @@ export function useConversation(
         }else{
           setPhase('listening')
           respond(marks.playbackOriginAtStart==='system'
-            ?'Playback command ignored. Only read-only lookup and navigation can interrupt application speech.'
+            ?spoken===null
+              ?`Playback command ignored. Say “${wakeRef.current}” before a read-only lookup or navigation command.`
+              :'Playback command ignored. During application speech, only read-only lookup and navigation commands are allowed.'
             :`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`)
         }
       }else await handleTranscript(decoded.parsed,decoded.text)

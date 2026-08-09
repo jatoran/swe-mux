@@ -109,9 +109,10 @@ import {
   parseVoiceQuery, projectListPage, sessionListPage, spokenSessionStatus, voiceHelpPage,
   voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
 } from './voiceQueries'
+import { buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber } from './voiceNavigation'
 import {
   clearSpokenListContext, loadSpokenListContext, saveSpokenListContext,
-  spokenProjectId, spokenSessionHandle, SPOKEN_LIST_TTL_MS, type SpokenListContext,
+  SPOKEN_LIST_TTL_MS, type SpokenListContext,
 } from './spokenListContext'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
@@ -3035,6 +3036,22 @@ export function App() {
   }
   const fleetVoiceModel=buildFleetReadModel(sessions,projects)
   const fleetItemById=new Map(fleetVoiceModel.sessions.map(item=>[item.session.id,item]))
+  const voiceNavigationIndex=buildVoiceNavigationIndex(
+    displayProjects,sessions,project=>resolveLayout(layoutMap[project.id],project.layout),
+  )
+  const voiceSessionAddress=(item:FleetSession)=>voiceNavigationIndex.sessionAddressById.get(item.session.id)||null
+  const voiceProjectNumber=(project:{id?:string})=>project.id
+    ?voiceNavigationIndex.projectNumberById.get(project.id)||null
+    :null
+  const voiceSessionPage=(items:FleetSession[],offset=0,limit=5,detailed=false,compound=false)=>
+    sessionListPage(items,offset,limit,detailed,{addressFor:voiceSessionAddress,compound})
+  const orderedFleetSessions=(project:Project|null):FleetSession[]=>{
+    const ordered=project
+      ?voiceNavigationIndex.sessionsByProject.get(project.id)||[]
+      :displayProjects.flatMap(item=>voiceNavigationIndex.sessionsByProject.get(item.id)||[])
+    return ordered.map(session=>fleetItemById.get(session.id)).filter((item):item is FleetSession=>!!item)
+  }
+  const orderedVoiceFleetModel={...fleetVoiceModel,sessions:orderedFleetSessions(null)}
   const rememberSpokenContext=(context:SpokenListContext)=>{
     spokenListContext.current=context
     saveSpokenListContext(context)
@@ -3049,10 +3066,11 @@ export function App() {
     spokenListContext.current=context
     return context
   }
-  const rememberSessionPage=(items:FleetSession[],pageFrom:number,page:{shownThrough:number;speech:string})=>{
+  const rememberSessionPage=(items:FleetSession[],pageFrom:number,page:{shownThrough:number;speech:string},compound:boolean)=>{
     rememberSpokenContext({
       kind:'sessions',
-      items:items.map(item=>({id:item.session.id,agentRunId:item.session.agent_run_id||null})),
+      ids:items.map(item=>item.session.id),
+      compound,
       pageFrom,
       shownThrough:page.shownThrough,
       expiresAt:Date.now()+SPOKEN_LIST_TTL_MS,
@@ -3067,7 +3085,7 @@ export function App() {
   }
   type SessionResolution={item:FleetSession|null;expectedRun:string|null;candidates:FleetSession[];error:string}
   type ProjectResolution={item:Project|null;candidates:Project[];error:string}
-  const resolveSessionReference=(reference:string):SessionResolution=>{
+  const resolveSessionReference=(reference:string,projectScope?:Project):SessionResolution=>{
     const normalized=normalizeSpokenText(reference)
     if(normalized==='current'||normalized==='focused'||normalized==='this'){
       const targetId=normalized==='focused'
@@ -3077,18 +3095,18 @@ export function App() {
       return item?{item,expectedRun:item.session.agent_run_id||null,candidates:[],error:''}
         :{item:null,expectedRun:null,candidates:[],error:'Focus an agent session first.'}
     }
-    const named=fleetVoiceModel.sessions.filter(item=>normalizeSpokenText(sessionName(item.session))===normalized)
+    const named=fleetVoiceModel.sessions.filter(item=>(!projectScope||item.session.project_id===projectScope.id)
+      &&normalizeSpokenText(sessionName(item.session))===normalized)
     if(named.length===1)return{item:named[0],expectedRun:named[0].session.agent_run_id||null,candidates:[],error:''}
     if(named.length>1)return{item:null,expectedRun:null,candidates:named,error:'More than one session has that name.'}
     if(/^\d+$/.test(normalized)){
-      const context=freshSpokenContext()
-      const handle=spokenSessionHandle(context,Number(normalized))
-      if(!handle){
-        return{item:null,expectedRun:null,candidates:[],error:'That session number is not in the current spoken list. List sessions again.'}
-      }
-      const item=fleetItemById.get(handle.id)||null
-      return item?{item,expectedRun:handle.agentRunId,candidates:[],error:''}
-        :{item:null,expectedRun:null,candidates:[],error:'That session is no longer available. List sessions again.'}
+      const project=projectScope||activeProject
+      if(!project)return{item:null,expectedRun:null,candidates:[],error:'Select a Project first, or say open Project 1 Session 1.'}
+      const projectSessions=voiceNavigationIndex.sessionsByProject.get(project.id)||[]
+      const session=sessionAtVoiceNumber(voiceNavigationIndex,project.id,Number(normalized))
+      const item=session?fleetItemById.get(session.id)||null:null
+      return item?{item,expectedRun:item.session.agent_run_id||null,candidates:[],error:''}
+        :{item:null,expectedRun:null,candidates:[],error:`Project ${project.name} has ${projectSessions.length} session${projectSessions.length===1?'':'s'}. There is no Session ${normalized}.`}
     }
     return{item:null,expectedRun:null,candidates:[],error:`No session named ${reference} is available.`}
   }
@@ -3101,13 +3119,9 @@ export function App() {
     if(named.length===1)return{item:named[0],candidates:[],error:''}
     if(named.length>1)return{item:null,candidates:named,error:'More than one project has that name.'}
     if(/^\d+$/.test(normalized)){
-      const context=freshSpokenContext()
-      const projectId=spokenProjectId(context,Number(normalized))
-      if(!projectId){
-        return{item:null,candidates:[],error:'That project number is not in the current spoken list. List projects again.'}
-      }
-      const item=projects.find(project=>project.id===projectId)||null
-      return item?{item,candidates:[],error:''}:{item:null,candidates:[],error:'That project is no longer available. List projects again.'}
+      const item=projectAtVoiceNumber(voiceNavigationIndex,Number(normalized))
+      return item?{item,candidates:[],error:''}
+        :{item:null,candidates:[],error:`There is no Project ${normalized}. There are ${displayProjects.length} visible Projects.`}
     }
     return{item:null,candidates:[],error:`No project named ${reference} is available.`}
   }
@@ -3122,13 +3136,19 @@ export function App() {
     return result.item?{project:result.item,error:''}:{project:null,error:result.error}
   }
   const ambiguousSessions=(items:FleetSession[],message:string):VoiceCommandResult=>{
-    const page=sessionListPage(items)
-    rememberSessionPage(items,0,page)
+    const ordered=[...items].sort((left,right)=>{
+      const a=voiceSessionAddress(left),b=voiceSessionAddress(right)
+      return(a?.projectNumber??Number.MAX_SAFE_INTEGER)-(b?.projectNumber??Number.MAX_SAFE_INTEGER)
+        ||(a?.sessionNumber??Number.MAX_SAFE_INTEGER)-(b?.sessionNumber??Number.MAX_SAFE_INTEGER)
+    })
+    const page=voiceSessionPage(ordered,0,5,false,true)
+    rememberSessionPage(ordered,0,page,true)
     return{detail:`${message} ${page.detail}`,speech:`${message} ${page.speech}`}
   }
   const ambiguousProjects=(items:Project[],message:string):VoiceCommandResult=>{
-    const page=projectListPage(items)
-    rememberProjectPage(items,0,page)
+    const ordered=[...items].sort((left,right)=>(voiceProjectNumber(left)??Number.MAX_SAFE_INTEGER)-(voiceProjectNumber(right)??Number.MAX_SAFE_INTEGER))
+    const page=projectListPage(ordered,0,5,voiceProjectNumber)
+    rememberProjectPage(ordered,0,page)
     return{detail:`${message} ${page.detail}`,speech:`${message} ${page.speech}`}
   }
   voiceQueryHandler.current=async(query:VoiceQuery):Promise<VoiceCommandResult>=>{
@@ -3138,7 +3158,7 @@ export function App() {
     }
     if(query.kind==='list_projects'){
       if(!displayProjects.length)return{detail:'No projects are registered.',speech:'No projects are registered.'}
-      const page=projectListPage(displayProjects)
+      const page=projectListPage(displayProjects,0,5,voiceProjectNumber)
       rememberProjectPage(displayProjects,0,page)
       return{detail:page.detail,speech:page.speech}
     }
@@ -3153,20 +3173,23 @@ export function App() {
       if(context.kind==='projects'){
         const items=context.ids.map(id=>projects.find(project=>project.id===id)).filter((item):item is Project=>!!item)
         if(items.length!==context.ids.length)return{detail:'The project list changed. List projects again.',speech:'The project list changed. List projects again.'}
-        const page=projectListPage(items,context.shownThrough)
+        const page=projectListPage(items,context.shownThrough,5,voiceProjectNumber)
         rememberProjectPage(items,context.shownThrough,page)
         return{detail:page.detail,speech:page.speech}
       }
-      const items=context.items.map(handle=>fleetItemById.get(handle.id)).filter((item):item is FleetSession=>!!item)
-      if(items.length!==context.items.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
-      const page=sessionListPage(items,context.shownThrough)
-      rememberSessionPage(items,context.shownThrough,page)
+      const items=context.ids.map(id=>fleetItemById.get(id)).filter((item):item is FleetSession=>!!item)
+      if(items.length!==context.ids.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
+      const page=voiceSessionPage(items,context.shownThrough,5,false,context.compound)
+      rememberSessionPage(items,context.shownThrough,page,context.compound)
       return{detail:page.detail,speech:page.speech}
     }
     if(query.kind==='detail'){
       const context=freshSpokenContext()
       if(!context){
-        const speech=fleetRundownDetail(fleetVoiceModel)
+        const speech=fleetRundownDetail(orderedVoiceFleetModel,{
+          addressFor:voiceSessionAddress,
+          compound:true,
+        })
         return{detail:speech,speech}
       }
       if(context.kind==='projects'){
@@ -3174,28 +3197,30 @@ export function App() {
           const project=projects.find(item=>item.id===id)
           if(!project)return''
           const live=fleetVoiceModel.sessions.filter(item=>item.session.project_id===id&&!isEndedSession(item.session)).length
-          return `Project ${context.pageFrom+index+1}, ${project.name}, has ${live} live session${live===1?'':'s'}.`
+          const number=voiceProjectNumber(project)
+          return `${number?`Project ${number}, `:'Project '}${project.name}, has ${live} live session${live===1?'':'s'}.`
         }).filter(Boolean)
         const speech=lines.length?lines.join(' '):'The project list changed. List projects again.'
         context.lastSpeech=speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS;rememberSpokenContext(context)
         return{detail:speech,speech}
       }
-      const items=context.items.map(handle=>fleetItemById.get(handle.id)).filter((item):item is FleetSession=>!!item)
-      if(items.length!==context.items.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
-      const page=sessionListPage(items,context.pageFrom,context.shownThrough-context.pageFrom,true)
+      const items=context.ids.map(id=>fleetItemById.get(id)).filter((item):item is FleetSession=>!!item)
+      if(items.length!==context.ids.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
+      const page=voiceSessionPage(items,context.pageFrom,context.shownThrough-context.pageFrom,true,context.compound)
       context.lastSpeech=page.speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS;rememberSpokenContext(context)
       return{detail:page.detail,speech:page.speech}
     }
     if(query.kind==='list_sessions'){
       const scope=resolveVoiceScope(query.scope)
       if(scope.error)return{detail:scope.error,speech:scope.error}
-      const items=fleetVoiceModel.sessions.filter(item=>(!scope.project||item.session.project_id===scope.project.id)&&voiceSessionFilterMatches(item,query.filter))
+      const items=orderedFleetSessions(scope.project).filter(item=>voiceSessionFilterMatches(item,query.filter))
       if(!items.length){
         const speech=`No ${sessionFilterLabel(query.filter)} sessions${scope.project?` in ${scope.project.name}`:' overall'}.`
         return{detail:speech,speech}
       }
-      const page=sessionListPage(items)
-      rememberSessionPage(items,0,page)
+      const compound=!scope.project
+      const page=voiceSessionPage(items,0,5,false,compound)
+      rememberSessionPage(items,0,page,compound)
       return{detail:page.detail,speech:page.speech}
     }
     if(query.kind==='open'){
@@ -3207,12 +3232,18 @@ export function App() {
         const speech=ran==='ran'?`Opened project ${result.item.name}.`:`Project ${result.item.name} cannot be opened.`
         return{detail:speech,speech}
       }
-      const result=resolveSessionReference(query.reference)
+      const projectResult=query.projectReference?resolveProjectReference(query.projectReference):null
+      if(projectResult?.candidates.length)return ambiguousProjects(projectResult.candidates,projectResult.error)
+      if(projectResult&&!projectResult.item)return{detail:projectResult.error,speech:projectResult.error}
+      const result=resolveSessionReference(query.reference,projectResult?.item||undefined)
       if(result.candidates.length)return ambiguousSessions(result.candidates,result.error)
       if(!result.item)return{detail:result.error,speech:result.error}
       if(isEndedSession(result.item.session))return{detail:'That session has ended and cannot be opened.',speech:'That session has ended and cannot be opened.'}
       const ran=runCommand(commandRegistryRef.current,`session.focus:${result.item.session.id}`)
-      const speech=ran==='ran'?`Opened session ${sessionName(result.item.session)} in ${result.item.projectName}.`:'That session cannot be opened.'
+      const address=voiceSessionAddress(result.item)
+      const speech=ran==='ran'
+        ?`Opened ${address?`Project ${address.projectNumber}, Session ${address.sessionNumber}, `:''}${sessionName(result.item.session)} in ${result.item.projectName}.`
+        :'That session cannot be opened.'
       return{detail:speech,speech}
     }
     if(query.kind==='read_reply'){
@@ -3245,13 +3276,14 @@ export function App() {
       if(projectResult&&!projectResult.item)return{detail:projectResult.error,speech:projectResult.error}
       const scope=query.entity==='fleet'?resolveVoiceScope(query.scope):{project:projectResult?.item||null,error:''}
       if(scope.error)return{detail:scope.error,speech:scope.error}
-      const scopedSessions=scope.project?sessions.filter(session=>session.project_id===scope.project?.id):sessions
+      const scopedSessions=orderedFleetSessions(scope.project).map(item=>item.session)
       const model=buildFleetReadModel(scopedSessions,projects)
       const speech=`${scope.project?`${scope.project.name}. `:''}${fleetRundown(model)}`
       const live=model.sessions.filter(item=>!isEndedSession(item.session))
       if(live.length){
-        const page=sessionListPage(live)
-        rememberSessionPage(live,0,{...page,speech})
+        const compound=!scope.project
+        const page=voiceSessionPage(live,0,5,false,compound)
+        rememberSessionPage(live,0,{...page,speech},compound)
       }
       return{detail:speech,speech}
     }
@@ -3396,7 +3428,7 @@ export function App() {
     }},
     { id:'voice.fleetStatusDetail',label:'Speak detailed fleet status',category:'voice',available:true,run:()=>{},voice:{
       phrases:['detailed fleet status','full status report','status details'],
-      execute:()=>{const speech=fleetRundownDetail(fleetVoiceModel);return{detail:speech,speech}},
+      execute:()=>{const speech=fleetRundownDetail(orderedVoiceFleetModel,{addressFor:voiceSessionAddress,compound:true});return{detail:speech,speech}},
     }},
     { id:'voice.query',label:'Ask a deterministic voice lookup',category:'voice',available:true,run:()=>{},voice:{
       phrases:['{text}'],

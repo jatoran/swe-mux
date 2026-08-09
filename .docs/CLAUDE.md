@@ -156,7 +156,8 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   App-owned Talk state renders in the focused pane's floating voice overlay, with a fixed top fallback when no terminal pane is visible.
   It names the target, supports an exact-target pin, keeps the draft across focus changes, and retains a device-local user/Mux history.
   Dynamic navigation, direct spawn, typed fleet/help/reply queries, and guarded approvals resolve through voice aliases on the ordinary command registry.
-  Spoken lists issue five-minute device-local numbered Project/session handles that survive UI remounts, speak five explicitly separated items at a time, and support next/repeat/detail/open/status/read follow-ups.
+  Spoken navigation uses live hierarchical indexes without requiring a prior list: `Project N` follows visible sidebar order, bare `Session N` follows the selected Project's sidebar session order, and `Project N Session N` resolves both coordinates atomically.
+  Spoken lists retain those canonical addresses, speak five explicitly separated items at a time, and keep five-minute device-local paging context for next/repeat/detail follow-ups.
   Playback leaves capture open; agent speech permits only exact `mute`, while trusted application speech may be interrupted by the closed read-only lookup/navigation grammar.
   Agent Send uses idempotent `voice/submit`; note, Scratchpad, Markdown, and Queue-composer Send inserts at the caret without staging or delivering a queue item.
   Capture always decodes through session-free `/api/voice/transcribe`.

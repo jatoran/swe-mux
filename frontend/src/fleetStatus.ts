@@ -1,4 +1,5 @@
 import type { Project, Session } from './types.ts'
+import type { VoiceSessionAddress } from './voiceNavigation.ts'
 
 export type FleetConfidence = 'proven' | 'inferred' | 'unknown'
 export type FleetClaim<T> = {
@@ -78,11 +79,16 @@ export function fleetRundown(model:FleetReadModel):string {
   return `Fleet status. Total sessions, ${model.sessions.length}. Active sessions, ${active}. Awaiting your approval, ${approvals}. Awaiting your answer, ${questions}. Needing attention, ${problems}. End of fleet status.`
 }
 
-export function fleetRundownDetail(model:FleetReadModel):string {
+export function fleetRundownDetail(
+  model:FleetReadModel,
+  addressing?:{addressFor:(item:FleetSession)=>VoiceSessionAddress|null;compound:boolean},
+):string{
   if (!model.sessions.length) return 'No sessions are running.'
   return `Detailed fleet status. ${model.sessions.map((item,index) => {
     const reason = item.awaiting.value ? ` awaiting ${item.awaiting.value.replace('_',' ')}` : ` ${item.state.value}`
     const freshness = item.activity.ageSeconds < 2 ? 'now' : `${item.activity.ageSeconds} seconds ago`
-    return `${index?'Next session. ':''}Session ${index+1}. Name, ${item.session.name}. Project, ${item.projectName}. Status,${reason}. Observed ${freshness} from ${item.state.source}.`
+    const address=addressing?.addressFor(item)
+    const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
+    return `${index?'Next session. ':''}${project}Session ${address?.sessionNumber??index+1}. Name, ${item.session.name}. Project, ${item.projectName}. Status,${reason}. Observed ${freshness} from ${item.state.source}.`
   }).join(' ')} End of detailed fleet status.`
 }

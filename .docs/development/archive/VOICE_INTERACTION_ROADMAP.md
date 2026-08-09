@@ -217,7 +217,9 @@ One-line and detailed speech are templates over that projection, and the same pr
 No model call and no second status cache exist on this path.
 
 The post-phase spoken dialog adds a closed typed query grammar in `voiceQueries.ts`.
-It filters session status overall or by current/named/numbered Project, speaks at most five numbered results, and keeps exact id plus agent-run handles in validated device-local storage for five minutes so `next`, `repeat`, `more detail`, `open session 2`, `status of session 2`, and `read session 2 reply` remain deterministic across UI remounts.
+It filters session status overall or by current/named/numbered Project and speaks at most five results with canonical hierarchical addresses.
+`Project N` follows visible sidebar order, `Session N` follows the selected Project's sidebar session order, and `Project N Session N` resolves atomically without requiring a prior list.
+Filtered and overall lists retain those addresses, while validated device-local list context preserves paging, repeat, and detail for five minutes across UI remounts.
 Exact visible names remain available without a handle.
 Explicit last-reply `summary` or `verbatim` is a one-shot request and does not mutate the session's saved content mode.
 The grammar accepts natural read-only noun forms and scope orderings without broadening the mutation grammar.

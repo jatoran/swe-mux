@@ -1,6 +1,7 @@
 import type { FleetSession } from './fleetStatus.ts'
 import { fleetPredicateMatches } from './fleetStatus.ts'
 import { normalizeSpokenText } from './voiceIntents.ts'
+import type { VoiceSessionAddress } from './voiceNavigation.ts'
 
 export type VoiceSessionFilter =
   | 'live'
@@ -27,7 +28,8 @@ export type VoiceQuery =
   | { kind: 'list_projects' }
   | { kind: 'list_sessions'; filter: VoiceSessionFilter; scope: VoiceScope }
   | { kind: 'status'; entity: 'session' | 'project' | 'fleet'; reference: string; scope: VoiceScope }
-  | { kind: 'open'; entity: 'session' | 'project'; reference: string }
+  | { kind: 'open'; entity: 'project'; reference: string }
+  | { kind: 'open'; entity: 'session'; reference: string; projectReference?: string }
   | { kind: 'read_reply'; reference: string; mode: VoiceReplyMode }
   | { kind: 'next' | 'repeat' | 'detail' }
 
@@ -83,19 +85,24 @@ const sessionFilter = (value: string): VoiceSessionFilter | null => {
   return null
 }
 
-const cleanReference = (value: string): string => value
+const cleanReference = (value: string,entity?:'session'|'project'): string => value
   .replace(/^(?:the\s+)?/, '')
   .replace(/^focused pane$/, 'focused')
   .replace(/^(?:current|this) pane$/, 'current')
   .replace(/^focused session$/, 'focused')
   .replace(/^(?:current|this) session$/, 'current')
-  .replace(/^session\s+/, '')
+  .replace(entity?new RegExp(`^${entity}\\s+`):/^session\s+/, '')
   .replace(/\s+s$/, '')
   .trim()
 
+const normalizeQueryText=(value:string):string=>normalizeSpokenText(value)
+  .replace(/^goto(?=\s|project|session)/,'go to ')
+  .replace(/\b(project|session)(\d+)\b/g,'$1 $2')
+  .replace(/\s+/g,' ')
+
 /** Closed, deterministic query grammar. It returns null for ordinary command aliases. */
 export function parseVoiceQuery(value: string): VoiceQuery | null {
-  const text = normalizeSpokenText(value)
+  const text = normalizeQueryText(value)
   if (!text) return null
 
   if (/^(?:next|next page|continue|keep going|more)$/.test(text)) return { kind: 'next' }
@@ -125,8 +132,21 @@ export function parseVoiceQuery(value: string): VoiceQuery | null {
     mode: (readLeadingTarget[2] as VoiceReplyMode | undefined) || 'current',
   }
 
+  const compoundProjectFirst=text.match(/^(?:open|go to|focus(?: on)?|switch to|show me|take me to) (?:the )?project (.+?) (?:the )?session (.+)$/)
+  if(compoundProjectFirst)return{
+    kind:'open',entity:'session',reference:cleanReference(compoundProjectFirst[2],'session'),
+    projectReference:cleanReference(compoundProjectFirst[1],'project'),
+  }
+  const compoundSessionFirst=text.match(/^(?:open|go to|focus(?: on)?|switch to|show me|take me to) (?:the )?session (.+?) (?:in|from|within) (?:the )?project (.+)$/)
+  if(compoundSessionFirst)return{
+    kind:'open',entity:'session',reference:cleanReference(compoundSessionFirst[1],'session'),
+    projectReference:cleanReference(compoundSessionFirst[2],'project'),
+  }
   let match = text.match(/^(?:open|go to|focus(?: on)?|switch to|show me|take me to) (?:the )?(session|project) (.+)$/)
-  if (match) return { kind: 'open', entity: match[1] as 'session' | 'project', reference: cleanReference(match[2]) }
+  if (match) {
+    const entity=match[1] as 'session'|'project'
+    return { kind: 'open', entity, reference: cleanReference(match[2],entity) }
+  }
 
   match = text.match(/^status (?:of )?(session|project) (.+)$/)
   if (match) return { kind: 'status', entity: match[1] as 'session' | 'project', reference: cleanReference(match[2]), scope: { kind: 'all' } }
@@ -183,16 +203,30 @@ export function spokenSessionStatus(item: FleetSession, detailed = false): strin
   return `${status}, observed ${age} from ${item.state.source}`
 }
 
-export function sessionListPage(items: FleetSession[], offset = 0, limit = 5, detailed = false): SpokenPage {
+export type SessionListAddressing={
+  addressFor:(item:FleetSession)=>VoiceSessionAddress|null
+  compound:boolean
+}
+
+export function sessionListPage(
+  items:FleetSession[],offset=0,limit=5,detailed=false,addressing?:SessionListAddressing,
+):SpokenPage{
   const start = Math.max(0, Math.min(offset, items.length))
   const page = items.slice(start, start + limit)
   if (!page.length) return { speech: 'There are no more sessions in that list.', detail: 'There are no more sessions in that list.', shownFrom: start, shownThrough: start, hasMore: false }
   const speechItems = page.map((item, index) => {
-    const number = start + index + 1
+    const address=addressing?.addressFor(item)
+    const number=address?.sessionNumber??start+index+1
+    const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
     const boundary=index?'Next session. ':''
-    return `${boundary}Session ${number}. Name, ${item.session.name}. Project, ${item.projectName}. Status, ${spokenSessionStatus(item, detailed)}.`
+    return `${boundary}${project}Session ${number}. Name, ${item.session.name}. Project, ${item.projectName}. Status, ${spokenSessionStatus(item, detailed)}.`
   }).join(' ')
-  const detailItems=page.map((item,index)=>`Session ${start+index+1} - ${item.session.name}\nProject: ${item.projectName}\nStatus: ${spokenSessionStatus(item,detailed)}`).join('\n\n')
+  const detailItems=page.map((item,index)=>{
+    const address=addressing?.addressFor(item)
+    const number=address?.sessionNumber??start+index+1
+    const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
+    return`${project}Session ${number} - ${item.session.name}\nProject: ${item.projectName}\nStatus: ${spokenSessionStatus(item,detailed)}`
+  }).join('\n\n')
   const remaining=items.length-start-page.length
   const speechTail=remaining>0?`${remaining} more session${remaining===1?'':'s'}. Say, next page, to continue.`:'End of session list.'
   const detailTail=remaining>0?`\n\n${remaining} more. Say “next page” to continue.`:'\n\nEnd of list.'
@@ -201,12 +235,14 @@ export function sessionListPage(items: FleetSession[], offset = 0, limit = 5, de
   return { speech, detail, shownFrom: start, shownThrough: start + page.length, hasMore: remaining > 0 }
 }
 
-export function projectListPage(projects: Array<{ name: string }>, offset = 0, limit = 5): SpokenPage {
+export function projectListPage(
+  projects:Array<{id?:string;name:string}>,offset=0,limit=5,numberFor?:(project:{id?:string;name:string})=>number|null,
+):SpokenPage{
   const start = Math.max(0, Math.min(offset, projects.length))
   const page = projects.slice(start, start + limit)
   if (!page.length) return { speech: 'There are no more projects in that list.', detail: 'There are no more projects in that list.', shownFrom: start, shownThrough: start, hasMore: false }
-  const speechItems=page.map((project,index)=>`${index?'Next project. ':''}Project ${start+index+1}. Name, ${project.name}.`).join(' ')
-  const detailItems=page.map((project,index)=>`Project ${start+index+1} - ${project.name}`).join('\n')
+  const speechItems=page.map((project,index)=>`${index?'Next project. ':''}Project ${numberFor?.(project)??start+index+1}. Name, ${project.name}.`).join(' ')
+  const detailItems=page.map((project,index)=>`Project ${numberFor?.(project)??start+index+1} - ${project.name}`).join('\n')
   const remaining=projects.length-start-page.length
   const speechTail=remaining>0?`${remaining} more project${remaining===1?'':'s'}. Say, next page, to continue.`:'End of project list.'
   const detailTail=remaining>0?`\n${remaining} more. Say “next page” to continue.`:'\nEnd of list.'
@@ -218,8 +254,8 @@ export function projectListPage(projects: Array<{ name: string }>, offset = 0, l
 const HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
   reading:['read the last reply','read the last reply verbatim','summarize the last reply','read session 2 reply','mute'],
   sessions:['list sessions','list active sessions','list pending sessions','list approvals','list questions','list stuck sessions','list failed sessions','status of session 2','list sessions in the current project'],
-  projects:['list projects','open project 2','status of project 2','list sessions in project 2'],
-  navigation:['open session 2','open project 2','open a session or project by its visible name','next page','repeat','more detail'],
+  projects:['list projects','open project 2','open project 2 session 1','status of project 2','list sessions in project 2'],
+  navigation:['open session 2 in the current project','open project 2','open project 2 session 1','open a session or project by its visible name','next page','repeat','more detail'],
   dictation:['send','undo last phrase','cancel','standby','resume','stop listening','pin the current voice target from the Talk panel'],
   approvals:['open a session awaiting approval','approve','listen to the exact operation','confirm approval','cancel approval'],
 }

@@ -173,6 +173,7 @@ affect the PTY, session state, transcripts, history, or projects.
   Capture records whether playback was active and whether the clip was agent or trusted application speech when an utterance began, then disables speculative decoding for that utterance.
   Agent speech permits only exact `mute`.
   Trusted application speech permits the closed read-only lookup/navigation grammar after stopping the current clip; dictation, mutation, and approval confirmation remain blocked.
+  A rejected utterance without a wake word names that missing boundary instead of reporting the allowed-command class as if the command itself were unsafe.
 - **The endpoint is acknowledged before any text exists**, by flipping the phase to `heard`.
   Silence after speaking reads as broken; the same silence after an acknowledgement reads as
   thinking.
@@ -290,14 +291,19 @@ executed action — so that number is measured rather than estimated.
   Natural read-only forms such as `active sessions`, `list approvals`, `do I have pending sessions in the current project`, and `list Project Alpha sessions` normalize into those same typed queries.
   An unmatched wake-word query speaks its refusal as well as displaying it, so failure cannot look like silence.
   `pending sessions` is an input alias for sessions needing a human answer or approval; spoken output uses `needing you` so it cannot be confused with pending Queue messages.
-  Result lists speak at most five entries, number every entry, announce item boundaries and the end of the list, support `next page`, `repeat`, and `more detail`, and assign `Session N` or `Project N` handles for five minutes.
-  The validated handle context is stored device-locally so a pane or app-view remount between the list and follow-up cannot lose the numbering.
-  A handle is frozen to the exact entity id, and a session handle also freezes the agent-run id; reply reading refuses a handle whose run changed.
-  Resolution priority is current focus, an exact unique visible name, then a valid recent ordinal; ambiguity produces a numbered list instead of guessing.
-  Project ordinals follow visible sidebar order.
+  Numbered navigation is always available and never depends on a prior spoken list.
+  `Project N` follows rendered visible-sidebar order, including the active Project and Group sort.
+  Bare `Session N` follows the selected Project's rendered session order: pane traversal first, then unattached sessions by creation order.
+  `Project N Session N` resolves both coordinates against one live index before running the existing session-focus command, so a missing session cannot partially change Projects.
+  Pending optimistic session rows have no voice address because their identifiers and placement are not final.
+  Result lists speak at most five entries, announce item boundaries and the end of the list, support `next page`, `repeat`, and `more detail`, and retain canonical addresses instead of renumbering filtered results.
+  Overall lists use compound `Project N, Session N` addresses; Project-scoped lists use that Project's canonical `Session N` values.
+  Five-minute validated device-local context preserves only list membership, paging position, and last speech across view remounts.
+  Resolution priority is current focus, an exact unique visible name, then the live hierarchical index; ambiguity reports canonical addresses instead of inventing temporary navigation numbers.
+  The closed parser tolerates joined `GoToProject` or `Project1` tokens and a duplicated entity word from punctuation-sensitive transcription.
 - **Last-reply reading supports a one-shot content choice.**
   `read the last reply` uses the session/global effective mode, while an explicit `summary` or `verbatim` applies to that clip only and does not mutate the session preference.
-  Reading may target the focused Agent, an exact visible session name, or a valid recent session ordinal.
+  Reading may target the focused Agent, an exact visible session name, or the selected Project's canonical session number.
   Summary remains the only model-backed lookup; fleet, help, status, navigation, and verbatim speech remain deterministic.
 - **Fleet status is a model-free read projection.**
   `fleetStatus.ts` recomputes from the same session and Project snapshots the UI already receives.
@@ -425,9 +431,9 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
-- `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, and fleet speech projection.
+- `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/voiceNavigation.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, canonical hierarchical indexes, and fleet speech projection.
 - `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
-- `frontend/src/spokenListContext.ts` - validated five-minute device-local binding for numbered Project and session follow-ups.
+- `frontend/src/spokenListContext.ts` - validated five-minute device-local membership and paging context for recent spoken lists.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
 - `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (toolbar control), `ConversationSurface` (pane placement or top fallback), and `DictationPanel` (draft and history surface).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
