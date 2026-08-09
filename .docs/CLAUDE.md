@@ -93,6 +93,10 @@
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`
+- Changing HTTP/WebSocket traffic accounting, response compression, static precompression,
+  or browser polling cadence: `design/features/remote-access.md`, `design/interfaces.md`,
+  `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing per-project automation opt-in, the enablement dependency graph, or its toggle
   surface: `design/features/automation-enablement.md`,
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
@@ -160,7 +164,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   Dynamic navigation, direct spawn, typed fleet/help/reply queries, and guarded approvals resolve through voice aliases on the ordinary command registry.
   Spoken navigation uses live hierarchical indexes without requiring a prior list: `Project N` follows visible sidebar order, bare `Session N` follows the selected Project's sidebar session order, `next/previous session` traverses that same Project-scoped order without wrapping, and `Project N Session N` resolves both coordinates atomically.
   Spoken lists retain those canonical addresses, speak five explicitly separated items at a time, and keep five-minute device-local paging context for next/repeat/detail follow-ups.
-  Playback leaves capture open; three consecutive accepted frames stop any playback before transcription and continue as ordinary dictation or wake-word command input. Bare `Mux, stop` stops playback without releasing Talk.
+  Playback leaves capture open; possible speech immediately ducks app audio, waits three frames for echo to drain, then three accepted frames on the quiet mic stop the whole stream before transcription and continue as ordinary dictation or wake-word command input. Rejected echo restores playback. Bare `Mux, stop` stops playback without releasing Talk.
   Agent Send and Append use the mounted terminal's acknowledged xterm path, so Send appends to an existing composer, waits 180 ms for bracketed-paste commit, and then uses the same carriage return as the visible mobile control.
   Note, Scratchpad, Markdown, and Queue-composer Send and Append only insert at the caret without staging or delivering a queue item.
   Voice Comms pins one Agent, prepends a short-response protocol once per run, and temporarily enables automatic verbatim playback until restored.
@@ -172,6 +176,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `resume`/`stop` command; `stop` releases the mic. Hold `Ctrl+Alt+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
+  `POST /api/voice/barge-in-diagnostic` validates and logs confirmed/rejected browser sidechain probes.
   `voiceQueries.ts` adds the non-configurable deterministic query grammar for help, scoped fleet lists/status, numbered navigation, and one-shot summary/verbatim reply reading.
 
 **Mobile mic needs HTTPS (secure context).** swe-mux runs **Tailscale Serve on 443**

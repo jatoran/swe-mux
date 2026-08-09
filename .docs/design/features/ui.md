@@ -474,7 +474,9 @@ responsive controls.
   provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
   lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
   and keyboard shortcuts. Replay with an existing Project opens it instead of forcing a duplicate.
-- The notes step is anchored on the utility rail's persistent **Notes** button.
+- The notes step is anchored on whichever **Notes** control the drawer currently shows: the
+  launcher rail's button while the drawer is closed, and the drawer's own pane strip while it is
+  open. Exactly one carries the anchor at a time, which a click-gated step requires.
   It opens the Project-owned collection and teaches note creation independently of sessions.
 - Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
   the spotlight opening and tutorial card interactive; Project creation, account save, terminal
@@ -1237,6 +1239,29 @@ responsive controls.
   Its launcher rail takes a second tonal step, while internal drawer panes reuse the workspace's neutral gutter and focus-frame language.
   It has no fixed maximum; its live maximum is the available viewport width after reserving the navigation chrome, utility rail, and a 150 px main workspace.
   Dragging its divider below 260 px previews collapse, and reversing the same drag past 280 px reopens it before release.
+- **The launcher rail is what the closed drawer looks like**, exactly as the collapsed sidebar rail
+  is what the closed sidebar looks like. It is desktop-only, holds the workspace's last column while
+  the drawer is closed, and is replaced by the drawer itself on open.
+  Keeping it beside an open drawer duplicated that drawer's own tab strip: with the default
+  single-stack layout the two lists are the same twelve icons, and the rail spent a column
+  restating what the strip already said.
+  The rail's width stays reserved in both states and is handed to the drawer on open, so the
+  Project workspace is exactly as wide either way and opening the drawer sends no larger reflow to
+  the PTYs than it did when the rail stayed put.
+  What the rail uniquely provides — discoverability without a menu or a chord, and the Alerts unread
+  badge — only matters while the drawer is closed, which is precisely when it is drawn.
+  The cost is a split drawer, where the rail was the one place all twelve tabs appeared together and
+  each pane strip shows only its own subset. The per-tab palette commands, their voice phrases, and
+  pane tab cycling all still reach any tab, and a rail that appears and disappears with split
+  geometry would be harder to predict than one that simply means "collapsed".
+- Losing the rail on open also loses the pointer affordance for closing again, since clicking an
+  already-selected tab collapses the drawer but does not advertise that it will.
+  Exactly one pane heading therefore carries a **collapse control**: the pane holding the drawer's
+  top-right corner, resolved by taking the right branch of horizontal splits and the top branch of
+  vertical ones. One per drawer rather than one per pane, because the drawer collapses as a whole
+  and a heading is the only chrome available to hang it on.
+  Escape inside the drawer, the outer resizer's collapse threshold, and the `drawer.toggle` command
+  remain the other ways out.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
   PTY and makes agent TUIs redraw. Width persists globally for the device and the drag commits on
   pointer-up rather than per-frame.
@@ -1263,7 +1288,7 @@ responsive controls.
 - Tabs move only through pane rails.
   Dragging across a rail gap performs exact insertion, dropping in a pane center joins that pane, and dropping on a pane edge creates a left, right, top, or bottom split.
   Moving the last tab out of a stack collapses its redundant parent split immediately.
-  The desktop outer launcher is a depth-first mirror and activation control only, so it never becomes a second layout editor or content host.
+  The desktop outer launcher is a depth-first mirror and activation control only, so it never becomes a second layout editor or content host, and it is not on screen at all while the drawer is open.
 - Dragging uses the shared pointer contract with a 5 px threshold, pointer ownership after activation, one fixed ghost, direct DOM indicators, a prospective tree in refs, and one commit on pointer-up.
   Escape, invalid targets, pointer cancellation, lost capture, window blur, Project changes, breakpoint changes, drawer closure, and unmount cancel without persistence.
   Mobile exposes no drag targets or split separators.

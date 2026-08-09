@@ -112,9 +112,12 @@
   confirmation: the process tree, parent lineage, evidence state/reason/confidence, the ended
   toggle, add-preview-by-URL, and interrupt/terminate/terminate-tree. **The drawer tab cannot
   terminate anything**, deliberately — a two-click destructive confirm in a 300 px column is how
-  the wrong tree gets killed. It reads the fleet sample the frontend already polls and starts no
-  loop of its own, so leaving it open adds no process enumeration (see § Sampling cost); its
-  `Full inspector` button opens the modal prefiltered to the tab's scope.
+  the wrong tree gets killed. It reads the reduced fleet sample the frontend already polls at
+  `/api/processes?summary=1` and starts no loop of its own, so leaving it open adds no process
+  enumeration (see § Sampling cost). The summary retains watch and preview fields while omitting
+  identity evidence, ownership diagnostics, parent/connection detail, and daemon members.
+  Its `Full inspector` button opens the modal prefiltered to the tab's scope and fetches the full
+  snapshot.
 - The inspector opens from session/terminal right-click, the drawer tab's `Full inspector`,
   sidebar
   `: menu` Process fleet, or the command palette. The pane header's `proc` chip is gone: it was
@@ -251,6 +254,9 @@ adds `memory_unique_bytes` per process, per daemon member, and in totals; the re
 requests it only while open and the background rail poll never does. A total is reported only
 when every contributor supplied one, because a partial sum would read as a real but too-small
 number rather than as "not sampled".
+The always-mounted rail polls the summary projection every 10 seconds.
+Fleet and keybinding safety refreshes run once per minute and event-driven invalidation remains
+the primary refresh path.
 
 The popover also names **duplicated per-session tooling**: language servers are per-session, so
 N sessions open on one repo run N independent indexes of the same code. On a four-session
