@@ -4274,19 +4274,53 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
     )
 
 
+async def _discard_session_media(app: web.Application, session_id: str) -> None:
+    """Clear a removed session's attachment and paste directory, off the event loop.
+
+    Unbounded filesystem work: the directory holds every image and file the operator
+    ever handed this session. Run inline it stalls the loop that carries every other
+    session's PTY output, and the sessions with the most attachments are exactly the
+    long-lived ones whose close is already the slowest.
+    """
+    await asyncio.to_thread(
+        shutil.rmtree,
+        session_media_directory(app["config"].data_dir, session_id),
+        ignore_errors=True,
+    )
+
+
 async def delete_session(request: web.Request) -> web.Response:
+    """Stop a session and drop it from the registry.
+
+    Unavoidably slow for a live session: the graceful exit keys are typed, the child
+    is given time to act on them, an agent mid-turn that never does is force-killed,
+    and the run is then persisted. The UI no longer waits for any of that: it removes
+    the session on sight and settles this request in the background, so the durable
+    `session_removed` event is the only remaining record of how long a close actually
+    took and whether it was live when asked. Keep it: without it, a close that quietly
+    starts taking ten seconds is invisible to everyone.
+    """
     manager: SessionManager = request.app["sessions"]
     session = manager.resolve(request.match_info["sid"])
-    if session.record.state not in {"exited", "crashed"}:
+    started = time.monotonic()
+    was_live = session.record.state not in {"exited", "crashed"}
+    if was_live:
         await manager.stop(session.record.id)
+    stopped = time.monotonic()
     manager.sessions.pop(session.record.id, None)
     attachment_locks = request.app.get("attachment_locks", {})
     for key in tuple(attachment_locks):
         if key[1] == session.record.id:
             attachment_locks.pop(key, None)
-    shutil.rmtree(
-        session_media_directory(request.app["config"].data_dir, session.record.id),
-        ignore_errors=True,
+    await _discard_session_media(request.app, session.record.id)
+    request.app["events"].emit_background(
+        "session_removed",
+        session_id=session.record.id,
+        source="http",
+        was_live=was_live,
+        exit_code=session.record.exit_code,
+        stop_ms=round((stopped - started) * 1000),
+        total_ms=round((time.monotonic() - started) * 1000),
     )
     return json_response({"ok": True})
 
@@ -4328,10 +4362,7 @@ async def relaunch_session(request: web.Request) -> web.Response:
     for key in tuple(attachment_locks):
         if key[1] == old_id:
             attachment_locks.pop(key, None)
-    shutil.rmtree(
-        session_media_directory(request.app["config"].data_dir, old_id),
-        ignore_errors=True,
-    )
+    await _discard_session_media(request.app, old_id)
     return json_response({"session": session.record.snapshot(), "replaced": old_id}, 201)
 
 

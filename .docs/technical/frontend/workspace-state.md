@@ -26,6 +26,7 @@
 | canonical file tab identity | `file:<project_id>:<relative_path>` layout leaf | durable, multi-client |
 | worktree file tab identity | `worktree-file:<project_id>:<encoded_root>:<encoded_relative_path>` layout leaf | durable, multi-client |
 | open Git review snapshot and annotations | `GitReviewModal` component memory | one modal |
+| sessions removed on screen but not yet gone from the daemon | `pendingKills.current` keyed by session ID | until that session's DELETE settles |
 
 ## Utility drawer authority and migration
 
@@ -159,6 +160,29 @@ void updateLayout(projectId, moveLeafToStack(activeLayout, kind, id, targetStack
 Never persist pending client terminal IDs. Insert them into optimistic state for launch feedback,
 then replace/remove them when the spawn request resolves.
 
+## Optimistic session removal
+
+Killing a session is slow at the daemon (`design/features/sessions.md`), so `killNow` removes it locally first and settles `DELETE /api/sessions/{id}` afterwards.
+The row leaves `sessions`, the leaf leaves the rendered layout, and focus moves to the survivor `nextActiveAfterKill` picks, all before the request is issued.
+This is the mirror of `spawnTerminal`'s pending-terminal path, and it needs the same kind of reconciler guard.
+
+`sessionKills.ts` owns that guard.
+A `KillTombstone` per in-flight kill excludes the session from two things in `refresh`: the incoming fleet handed to `reconcileSessionSnapshots`, and the live set that `reconcileTerminals` prunes layout leaves against.
+Both are required.
+`reconcileSessionSnapshots` rebuilds membership from the daemon's list, which still contains the session, so without the first filter any refresh landing mid-kill restores the row.
+`reconcileTerminals` only ever removes leaves, so the second filter is what keeps the leaf gone.
+
+The layout PATCH deliberately waits for the DELETE to succeed, which is the opposite of the ordinary optimistic-write rule and is the point.
+Nothing on screen depends on that write while the tombstone stands, and deferring it means a failed kill has no persisted state to undo: the next refresh finds the session live, restores the row and the leaf, and reports the failure.
+The write re-derives from `layoutValues.current` rather than replaying the snapshot taken before the wait, because a drag may have landed in between and `removeLeaf` on an already-absent ID is a no-op.
+
+Two rules keep a tombstone from outliving what it stands for, since a tombstone with nothing behind it hides a session that is still running:
+
+- The request carries `KILL_TOMBSTONE_TTL_MS` as an explicit deadline, so it always settles and always clears its own tombstone.
+- `refresh` expires tombstones past that TTL anyway, covering a frozen tab whose continuation never ran.
+
+Bulk close (`closeWorkAndHideProject`) tombstones its sessions but still awaits every DELETE, because hiding a Project is refused while live work is attached.
+
 ## Worktree file leaves
 
 Canonical `file:` resource IDs are unchanged.
@@ -245,5 +269,8 @@ handler stayed API-free.
   DOM same-grid renderer-dimension repair; the latter proves `fit()` leaves a stale half-size
   surface untouched and `reflowVisibleTerminalRenderer` restores it.
 - `frontend/test/previewLinks.test.ts`: loopback-only terminal link normalization.
+- `frontend/test/sessionKills.test.ts`: tombstone filtering and TTL expiry, 404-means-removed, and
+  every branch of the post-kill focus choice (unfocused kill, visible sibling, stacked-behind
+  fallback, ended and cross-Project exclusions, last session in a Project).
 - Pointer behavior tests/inspection must cover threshold, exact insertion, split edges, cross-pane
   movement, Escape, lost capture, and cleanup after responsive changes.

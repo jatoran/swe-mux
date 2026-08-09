@@ -27,6 +27,21 @@ from swe_mux.server import (
 )
 
 
+class EventsStub:
+    """Records durable telemetry without a SQLite sink or a running task."""
+
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, dict[str, Any]]] = []
+
+    def emit_background(self, event_type: str, **payload: Any) -> None:
+        self.emitted.append((event_type, payload))
+
+    def payload(self, event_type: str) -> dict[str, Any]:
+        matches = [payload for kind, payload in self.emitted if kind == event_type]
+        assert len(matches) == 1, f"expected exactly one {event_type}, got {len(matches)}"
+        return matches[0]
+
+
 class HistoryStub:
     def __init__(self, row: dict[str, Any]) -> None:
         self.row = row
@@ -57,7 +72,7 @@ class ProjectsStub:
 async def test_delete_crashed_session_dismisses_it_without_stopping_pty(
     tmp_path: Path,
 ) -> None:
-    record = SimpleNamespace(id="crashed-session", state="crashed")
+    record = SimpleNamespace(id="crashed-session", state="crashed", exit_code=1)
     session = SimpleNamespace(record=record)
 
     class SessionsStub:
@@ -72,8 +87,13 @@ async def test_delete_crashed_session_dismisses_it_without_stopping_pty(
             raise AssertionError("an ended session must not stop its PTY again")
 
     manager = SessionsStub()
+    events = EventsStub()
     request = SimpleNamespace(
-        app={"sessions": manager, "config": SimpleNamespace(data_dir=tmp_path)},
+        app={
+            "sessions": manager,
+            "config": SimpleNamespace(data_dir=tmp_path),
+            "events": events,
+        },
         match_info={"sid": record.id},
     )
 
@@ -81,6 +101,54 @@ async def test_delete_crashed_session_dismisses_it_without_stopping_pty(
 
     assert response.status == 200
     assert record.id not in manager.sessions
+    removed = events.payload("session_removed")
+    assert removed["was_live"] is False
+    assert removed["exit_code"] == 1
+
+
+async def test_delete_live_session_stops_it_and_records_how_long_that_took(
+    tmp_path: Path,
+) -> None:
+    """The UI removes a killed session on sight, so this event is the only place the
+    real cost of a close is recorded. Losing it would make a close that starts taking
+    ten seconds invisible to every observer."""
+    record = SimpleNamespace(id="live-session", state="running", exit_code=None)
+    session = SimpleNamespace(record=record)
+    stopped: list[str] = []
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {record.id: session}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+        async def stop(self, identity: str) -> None:
+            stopped.append(identity)
+            record.state = "exited"
+            record.exit_code = 0
+
+    manager = SessionsStub()
+    events = EventsStub()
+    request = SimpleNamespace(
+        app={
+            "sessions": manager,
+            "config": SimpleNamespace(data_dir=tmp_path),
+            "events": events,
+        },
+        match_info={"sid": record.id},
+    )
+
+    response = await delete_session(cast(Any, request))
+
+    assert response.status == 200
+    assert stopped == [record.id]
+    assert record.id not in manager.sessions
+    removed = events.payload("session_removed")
+    assert removed["was_live"] is True
+    assert removed["exit_code"] == 0
+    assert removed["stop_ms"] >= 0
+    assert removed["total_ms"] >= removed["stop_ms"]
 
 
 async def test_relaunch_replays_task_shell_and_retires_the_old_session(

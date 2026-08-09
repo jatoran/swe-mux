@@ -89,6 +89,25 @@ and reattachable browser viewports.
   buffer, growing scrollback on every frame — the exact cost the bound removes).
 - Slow subscribers receive a gap frame and deterministic bounded replay.
 - Explicit kill attempts adapter-specific graceful exit before process-tree termination.
+- **Removal is asynchronous by contract.** `DELETE /api/sessions/{id}` cannot be quick for a
+  live session: it types the backend's graceful exit keys, waits out an agent mid-turn that
+  never processes them, force-kills the tree, persists the run, and clears the session's media
+  directory.
+  The client does not wait for any of it.
+  It removes the session from the workspace on sight and settles the request underneath
+  (`technical/frontend/workspace-state.md`, "Optimistic session removal").
+  Two consequences are load-bearing.
+  The daemon keeps reporting a session being killed as live for the whole teardown window, so
+  only the client that issued the kill hides it early and every other client converges when the
+  request lands.
+  And `session_removed` (durable; carries `was_live`, `exit_code`, `stop_ms`, `total_ms`) is the
+  only remaining record of what a close actually cost, because no operator watches one happen
+  any more.
+- `DELETE` against an id the daemon no longer holds answers 404, and callers treat that as
+  success rather than as an error.
+  A double-tap, a second client that got there first, and a session that exited on its own
+  between the click and the request all land there, and all three are the outcome the request
+  wanted.
 - Once the root exit code is captured, an ended session releases its dead ConPTY host. The
   reader keeps only a thread-local reference long enough to drain final output, and finalization
   cancels any frozen pywinpty read still parked after root exit. Retained scrollback is independent

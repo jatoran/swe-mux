@@ -1,0 +1,111 @@
+import { terminalIds, visibleTerminalIds, type PaneLayout } from './layout.ts'
+import type { Session } from './types'
+
+/**
+ * Optimistic session removal.
+ *
+ * Killing a live session is slow on purpose: the daemon types the backend's graceful
+ * exit keys and waits for the process to die (up to a couple of seconds when an agent
+ * is mid-turn and never processes them), force-kills the tree, persists the run, and
+ * clears the session's media directory. Awaiting all of that before touching the UI
+ * left the tab, its pane, and the focus sitting on a session the operator had already
+ * decided was gone.
+ *
+ * So the client removes it immediately and lets the DELETE finish underneath, the
+ * mirror image of what `spawnTerminal` already does with `pendingSpawns`. The
+ * bookkeeping that makes that safe lives here:
+ *
+ * - A tombstone per in-flight kill, so the periodic `refresh()` cannot resurrect the
+ *   row. `reconcileSessionSnapshots` rebuilds the fleet from the daemon's list, and
+ *   the daemon still reports the session as live for the whole teardown window.
+ * - The same tombstone excludes the id from the layout reconcile's live set. That is
+ *   the only removal the layout needs: `reconcileTerminals` prunes leaves whose
+ *   session is not live and never adds one back, so the leaf stays gone whether or not
+ *   the layout PATCH has landed yet - which is why the caller can defer that write
+ *   until the DELETE settles and have nothing to roll back if it fails.
+ * - A TTL, because the dangerous direction is a tombstone that outlives its request:
+ *   that hides a session which is still running. On expiry the id is released and the
+ *   next refresh decides the truth.
+ */
+
+/** How long a kill may hide a session before the client stops believing it. Chosen
+ *  above the daemon's own ceiling (graceful wait, force kill, run persistence) so an
+ *  ordinary slow kill never trips it, and low enough that a lost request surfaces
+ *  while the operator still connects it to what they did. */
+export const KILL_TOMBSTONE_TTL_MS = 15000
+
+export type KillTombstone = {
+  sessionId: string
+  projectId: string
+  /** `Date.now()` when the DELETE was issued. */
+  startedAt: number
+}
+
+export type KillTombstones = Record<string, KillTombstone>
+
+/** Session ids currently hidden by an in-flight kill. */
+export function killedSessionIds(tombstones: KillTombstones): Set<string> {
+  return new Set(Object.keys(tombstones))
+}
+
+/** Drop the rows an optimistic kill has already taken off screen. */
+export function applyKillTombstones<T extends { id: string }>(
+  sessions: T[], tombstones: KillTombstones,
+): T[] {
+  const killed = killedSessionIds(tombstones)
+  return killed.size === 0 ? sessions : sessions.filter(session => !killed.has(session.id))
+}
+
+/** Ids whose DELETE never settled, and which must stop being hidden. */
+export function expiredKillIds(
+  tombstones: KillTombstones, now: number, ttlMs: number = KILL_TOMBSTONE_TTL_MS,
+): string[] {
+  return Object.values(tombstones)
+    .filter(tombstone => now - tombstone.startedAt >= ttlMs)
+    .map(tombstone => tombstone.sessionId)
+}
+
+/**
+ * Whether a failed DELETE still means the session is gone.
+ *
+ * The daemon answers 404 for an id it no longer holds, which is precisely the
+ * outcome a kill wants: a double-tap, a second client that killed it first, or a
+ * session that exited on its own between the click and the request. Treating that as
+ * an error would put a row back that nothing is behind.
+ */
+export function killRemovedTheSession(status: number | undefined): boolean {
+  return status === 404
+}
+
+export type NextActiveInput = {
+  /** Layout with the killed leaf already removed. */
+  layout: PaneLayout
+  /** Fleet as it stood before the kill. */
+  sessions: Session[]
+  killedId: string
+  projectId: string
+  activeId: string | null
+}
+
+/**
+ * Which session takes focus once a killed one leaves.
+ *
+ * Preference order is visible-in-the-layout, then anywhere in the layout, then any
+ * surviving session in the project - a tab that is merely stacked behind another is
+ * still a better landing spot than nothing. Focus only moves when the killed session
+ * held it; killing an unfocused tab must not yank the operator elsewhere.
+ */
+export function nextActiveAfterKill(
+  { layout, sessions, killedId, projectId, activeId }: NextActiveInput,
+): string | null {
+  if (activeId !== killedId) return activeId
+  const surviving = sessions.filter(session =>
+    session.id !== killedId
+    && session.project_id === projectId
+    && session.state !== 'exited' && session.state !== 'crashed')
+  const survivingIds = new Set(surviving.map(session => session.id))
+  return visibleTerminalIds(layout).find(id => survivingIds.has(id))
+    ?? terminalIds(layout).find(id => survivingIds.has(id))
+    ?? surviving[0]?.id
+    ?? null
+}
