@@ -449,7 +449,10 @@ export function App() {
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsSection, setSettingsSection] = useState('General')
+  // The section a caller asked Settings to land on, or undefined for "wherever the
+  // user left off" - Settings remembers its own last tab, so an unqualified open must
+  // stay unqualified rather than assert General.
+  const [settingsSection, setSettingsSection] = useState<string|undefined>(undefined)
   // Which MenuGroup is expanded in the app menu; null collapses every group.
   const [menuGroup,setMenuGroup]=useState<string|null>(null)
   const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
@@ -1898,7 +1901,7 @@ export function App() {
   }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
-  const openSettings = (section='General') => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
+  const openSettings = (section?:string) => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
   const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
     ? target.worktree?worktreeFileResourceId(target.worktree,target.resourceId):''
     : noteResourceId(target.kind,target.resourceId)
@@ -4668,7 +4671,11 @@ export function App() {
           <AccountSwitcher onManage={()=>openSettings('Accounts')}/>
           <ResourceUsageSummary snapshot={processFleet} sessions={sessions} projects={projects} onRefresh={()=>void loadProcesses()} onOpenFleet={()=>openProcessViewer()}/>
         </div>
-        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button><button data-tutorial="projects" class="project-trigger" onClick={()=>openProjectsManager()}><span>◇</span> projects</button></div>
+        <div class="sidebar-footer"><button data-tutorial="menu" class="menu-trigger" onClick={() => setMainMenuOpen(value => !value)}><span>:</span> menu</button><button type="button" class={`notify-trigger ${alertsEnabled?'':'off'}`} aria-pressed={alertsEnabled} title={alertsEnabled?'Alerts on - click to mute sounds and push':'Alerts muted - click to restore sounds and push'} aria-label={alertsEnabled?'Mute alerts':'Enable alerts'} onClick={toggleAlerts}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2c-2.2 0-3.6 1.6-3.6 3.9 0 2.7-1.2 3.6-1.2 4.6h9.6c0-1-1.2-1.9-1.2-4.6C11.6 3.6 10.2 2 8 2Z"/><path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>{!alertsEnabled&&<line x1="2.6" y1="2.6" x2="13.4" y2="13.4"/>}</svg></button>{/* Settings is one of the two things anyone reaches for from this footer, and it
+            was three interactions deep (menu → All Settings…). It sits beside the bell
+            because both are install-wide switches rather than navigation, and the menu
+            entry stays: a cog next to a bell is discoverable, a named row is searchable. */}
+          <button type="button" class="settings-trigger" title="Settings" aria-label="Open Settings" onClick={()=>openSettings()}><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5.1"/><circle cx="8" cy="8" r="1.9"/><path d="M8 1.2v1.8M8 13v1.8M14.8 8H13M3 8H1.2M12.8 3.2l-1.3 1.3M4.5 11.5l-1.3 1.3M12.8 12.8l-1.3-1.3M4.5 4.5L3.2 3.2"/></svg></button><button data-tutorial="projects" class="project-trigger" onClick={()=>openProjectsManager()}><span>◇</span> projects</button></div>
       </aside>
       {/* The collapsed strip keeps the sidebar's own controls reachable rather
           than forcing an expand round-trip for menu, projects, or status. */}

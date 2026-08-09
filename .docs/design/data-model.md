@@ -125,6 +125,10 @@
   proving-period counters (`auto_sent`, `auto_refused`, `auto_failed`, `unsafe_reported`,
   `proving_since`). The store carries a v1→v2 migration: the Phase 5 columns are added in
   place, because `CREATE TABLE IF NOT EXISTS` would otherwise reach only fresh databases.
+  `accept_agent_messages` keeps a column default of `0` while the conversation-default grant
+  writes `1` explicitly. A column default would also land on rows inserted by an opt-out and
+  on the reserved pause row, where "on" is not what was meant, so the per-run default belongs
+  in the one code path that grants a run rather than in the DDL.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.

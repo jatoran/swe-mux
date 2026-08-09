@@ -108,6 +108,14 @@ responsive controls.
   equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
+- The sidebar footer reads `menu` at the left edge, `projects` at the right, and the two
+  install-wide icon switches - the alerts bell and a settings cog - clustered between them.
+  The cog opens Settings directly; `menu → All Settings…` stays, because a named row is
+  searchable and reachable from the keyboard while an icon is not, and the app menu is where
+  someone already looking for a global action goes. Settings had been three interactions deep
+  for the one panel that is opened most often. The two icons sit adjacent rather than spread
+  by `space-between`: evenly distributed, four buttons read as four unrelated controls instead
+  of two labelled ends around a pair of toggles.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
@@ -273,6 +281,15 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
+  A caller that names a section still wins - Voice from the read-aloud chip, Accounts from the
+  account switcher, Command rail from a pane - because that caller knows where the user needs
+  to be; only an unqualified open restores the remembered tab.
+  It is a device preference rather than App state so it survives a reload, and it is validated
+  against the live tab list, so a renamed or removed tab degrades to General instead of
+  rendering an empty panel.
+  The panel is opened, scanned, and closed many times in a session, and landing on General
+  every time re-charges the navigation that reached the tab someone actually lives in.
 - Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
@@ -822,8 +839,11 @@ responsive controls.
   `proc` did neither, and remains in the drawer.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
-  toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
-  reason shown — when the install's master switch is off (`features/auto-delivery.md`).
+  toggle and the separate "accept agent messages armed" switch. Both are checked by default
+  for a live agent conversation, so the disclosure reads as an opt-*out*. Only the
+  auto-delivery toggle is unavailable - with the reason shown - when the install's master
+  switch is off; arming is authorization and stays editable regardless of who presses send
+  (`features/auto-delivery.md`).
 - That same `auto:` disclosure carries the two **install-wide** controls that must be one
   gesture away on any device — pause all auto-delivery and report an unsafe delivery —
   below a rule that marks them as not per-session. They are here, on the one queue surface

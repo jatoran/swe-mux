@@ -174,8 +174,35 @@ async def test_only_an_armed_user_message_is_eligible(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_agent_message_needs_the_receivers_opt_in(harness: Harness) -> None:
-    await harness.auto.enable_session("s1")
+async def test_an_agent_message_is_accepted_armed_by_the_default_grant(
+    harness: Harness,
+) -> None:
+    """`accept_agent_messages` rides along with the per-run conversation default.
+
+    No explicit opt-in here: the grant the controller materializes for a live agent
+    run is what authorizes an agent-authored head, exactly as it authorizes a human
+    one. The install master switch is still the thing that decides anything sends.
+    """
+    message = await harness.service.enqueue(
+        target_session_id="s1",
+        body="from another agent",
+        armed=True,
+        sender_kind="agent",
+        sender_id="s2",
+    )
+    await harness.settle()
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and policy["accept_agent_messages"]
+    assert policy["updated_by"] == "conversation-default"
+    assert await harness.auto.tick() == [message["id"]]
+
+
+@pytest.mark.asyncio
+async def test_an_agent_message_is_refused_once_the_receiver_opts_out(
+    harness: Harness,
+) -> None:
+    await harness.auto.tick()  # materialize the run-bound conversation default
+    await harness.auto.set_accept_agent_messages("s1", False)
     message = await harness.service.enqueue(
         target_session_id="s1",
         body="from another agent",
@@ -188,6 +215,24 @@ async def test_an_agent_message_needs_the_receivers_opt_in(harness: Harness) -> 
     await harness.auto.set_accept_agent_messages("s1", True)
     await harness.settle()
     assert await harness.auto.tick() == [message["id"]]
+
+
+@pytest.mark.asyncio
+async def test_re_arming_a_grant_leaves_the_agent_message_opt_out_alone(
+    harness: Harness,
+) -> None:
+    """Arming is authorization; auto-delivery is who presses send.
+
+    Cycling the auto-delivery toggle is a statement about the second one, so it must
+    not quietly undo a separate decision the user made about the first.
+    """
+    await harness.auto.tick()
+    await harness.auto.set_accept_agent_messages("s1", False)
+    await harness.auto.disable_session("s1")
+    await harness.auto.enable_session("s1")
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and policy["enabled"]
+    assert not policy["accept_agent_messages"]
 
 
 @pytest.mark.asyncio

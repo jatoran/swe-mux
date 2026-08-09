@@ -955,12 +955,12 @@ body {
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}.sidebar-footer .project-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:left;white-space:nowrap;font:9px 'Cascadia Mono',Consolas,monospace}.sidebar-footer .project-trigger:hover{border:0;background:transparent;color:#a8eab3}.sidebar-footer .project-trigger span{margin-right:6px;color:#8ee69a}
-.sidebar-footer .notify-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
-.sidebar-footer .notify-trigger:hover{border:0;background:transparent;color:#a8eab3}
+.sidebar-footer .notify-trigger,.sidebar-footer .settings-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer .notify-trigger:hover,.sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notify-trigger.off{color:#5a6470}
 .sidebar-footer .notify-trigger.off:hover{color:#8ee69a}
-.sidebar-footer .notify-trigger svg{display:block}
-@media(max-width:760px){.sidebar-footer .notify-trigger{min-height:44px}}
+.sidebar-footer .notify-trigger svg,.sidebar-footer .settings-trigger svg{display:block}
+@media(max-width:760px){.sidebar-footer .notify-trigger,.sidebar-footer .settings-trigger{min-height:44px}}
 .project-resource:has(>.resource-error){grid-template-rows:auto auto [resource-editor] minmax(0,1fr)}.resource-actions{display:flex!important;grid-auto-flow:column!important;gap:4px!important}.resource-actions button{min-width:29px;padding:0 8px;cursor:pointer}.resource-actions button:last-child{font-size:15px}.file-tree{min-height:0;overflow:auto;padding:3px 0}.file-tree-branch{display:block}.file-tree-row{width:100%;min-height:30px;display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:6px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding-right:9px;background:transparent;color:var(--text);text-align:left;cursor:pointer}.file-tree-row:hover{background:var(--panel2)}.file-tree-row span,.file-tree-row small{color:var(--muted)}.file-tree-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.file-tree-row.directory strong{color:color-mix(in srgb,var(--text) 88%,var(--green))}.file-tree-loading{margin:0;min-height:28px;display:flex;align-items:center;padding:0 9px;color:var(--muted);font-size:8px}
 .resource-retry{min-height:0;padding:1px 7px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.resource-retry{min-height:28px;padding:0 10px}}
@@ -1280,7 +1280,13 @@ body {
 @media(max-width:700px){.send-agent-targets{max-height:200px}.control-plane-modal-body .send-agent-option,.control-plane-modal-body .send-agent-submit{grid-template-columns:24px minmax(0,1fr)}.control-plane-modal-body .send-agent-message{min-height:150px}}
 
 /* Unified note discovery: the footer is the global entry point; editors remain contextual. */
-.sidebar-footer{justify-content:space-between}
+/* menu pinned left, projects pinned right, and the icon switches (alerts, settings)
+   as one cluster between them. `space-between` would have spread every button
+   evenly, which reads as four unrelated controls rather than two labelled ends
+   around a pair of toggles. */
+.sidebar-footer{justify-content:flex-start}
+.sidebar-footer .menu-trigger{margin-right:auto}
+.sidebar-footer .project-trigger{margin-left:auto}
 .sidebar-footer .notes-shelf-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;margin-left:auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:right;font:inherit}
 .sidebar-footer .notes-shelf-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notes-shelf-trigger span{margin-right:6px;color:#8ee69a}

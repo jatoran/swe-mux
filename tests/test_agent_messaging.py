@@ -124,9 +124,16 @@ def harness(tmp_path: Path):  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.asyncio
-async def test_a_notify_is_an_inert_draft_until_the_receiver_opts_in(
+async def test_a_notify_arrives_armed_unless_the_receiver_opted_out(
     harness: Harness,
 ) -> None:
+    """Armed is the receiver's per-run default; opting out downgrades to a draft.
+
+    Either way the message only *waits*: armed still needs head-of-line order,
+    delivery readiness, and either a human "Send now" or the receiver's own
+    auto-delivery grant under the install master switch.
+    """
+    await harness.auto.set_accept_agent_messages("s2", False)
     result = await harness.messaging.notify(
         harness.manager.sessions["s1"], target="s2", body="I finished the migration"
     )
@@ -146,6 +153,20 @@ async def test_a_notify_is_an_inert_draft_until_the_receiver_opts_in(
         harness.manager.sessions["s1"], target="s2", body="second"
     )
     assert armed["state"] == "armed"
+
+
+@pytest.mark.asyncio
+async def test_the_receivers_conversation_default_is_what_arms_a_notify(
+    harness: Harness,
+) -> None:
+    """No opt-in call anywhere: one controller tick is the whole authorization."""
+    await harness.auto.tick()
+    result = await harness.messaging.notify(
+        harness.manager.sessions["s1"], target="s2", body="I finished the migration"
+    )
+    assert result["state"] == "armed"
+    # Armed is not sent. Nothing reached the PTY on the strength of the default.
+    assert not harness.writes
 
 
 @pytest.mark.asyncio
