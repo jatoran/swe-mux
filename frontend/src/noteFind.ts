@@ -14,6 +14,7 @@ import { byteForUtf16Index, comparePositions, type SelectionPosition } from './n
 
 export type FindRange = { start: SelectionPosition; end: SelectionPosition }
 export type FindOptions = { matchCase?: boolean }
+export type FindStepDirection = 'next' | 'previous'
 
 /**
  * Every non-overlapping occurrence of `query`, in document order.
@@ -77,4 +78,10 @@ export function matchIndexAfter(
 export function stepMatchIndex(count: number, index: number, backwards: boolean): number {
   if (count <= 0) return 0
   return (index + (backwards ? -1 : 1) + count) % count
+}
+
+/** Standard browser find-result navigation while swe-mux's note find bar is open. */
+export function findStepDirection(key: string, shiftKey: boolean): FindStepDirection | null {
+  if (key !== 'F3') return null
+  return shiftKey ? 'previous' : 'next'
 }

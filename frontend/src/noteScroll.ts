@@ -1,20 +1,16 @@
-// Bringing a source line to the top of a Continuity viewport.
+// Bringing a source line to the top of a Continuity viewport without moving the selection.
 //
-// The editor's `revealRange` works in the hidden textarea's coordinates, and the reader is
-// looking at the projection, which is a different function of the same source: a projected
-// heading renders at up to 1.45em, wrapped rows carry a measured pixel hanging indent, and
-// whatever surplus height the textarea's padding cannot absorb is applied to the projection as a
-// proportional ramp. One source line therefore sits at a different pixel offset in each surface,
-// so a reveal computed against the textarea lands short by however much extra height the
-// projection carries above the target - a few rows near the top of a note, a screenful deep into
-// a heading-dense one. That is the "it scrolls, but not far enough" of a long note's outline.
+// Continuity 0.2.25 reveals ranges against rendered projection geometry, but `revealRange`
+// deliberately makes its range the primary selection. A heading jump is a reading action: it
+// must leave the caret alone and keep one source row above the target for swe-mux's heading trail.
 //
-// No exported geometry can convert between the two (the editor says so outright: pixels do not
-// become lines outside its viewport module), and exactly one fact is trustworthy from out here -
-// `visibleLineRange()`, measured from the projection's own client rectangles. So a jump is a
-// feedback loop rather than a calculation: scroll, measure which lines that actually put on
-// screen, correct, repeat. The loop needs no pixel model of the document to be correct, only a
-// step size good enough to converge, which each round re-measures from what the last one bought.
+// The public viewport API exposes the visible source-line window and scroll offset, not a direct
+// viewport-only line jump. A projected heading can render larger, wrapped rows carry a measured
+// hanging indent, and the active scroll owner differs by pointer type. The host therefore uses
+// `visibleLineRange()`, measured from the projection's own client rectangles, as a feedback loop:
+// scroll, measure which lines landed on screen, correct, and repeat. The loop needs no pixel model
+// of the document, only a step size good enough to converge, which each round re-measures from
+// what the previous one bought.
 //
 // Pure and DOM-free: `ProjectResource` supplies the four editor calls behind `ViewportScroller`,
 // which is also what lets a test drive it over a simulated document whose lines are not all the

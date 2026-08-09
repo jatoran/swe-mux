@@ -1,8 +1,9 @@
 # Continuity ask: raise the Android keyboard only on typing intent
 
-**Delivered in SDK 0.2.21**, vendored as `frontend/vendor/continuity-editor-0.2.21.tgz`
-(sha256 `16a14cbc82856e135b9f3a843877ee9be8310aa9b0d7344bec381d86ac1d5127`, verified against the
-release `SHA256SUMS.txt`). The gate ships as `src/soft_keyboard.js`: the internal textarea is held
+**Delivered in SDK 0.2.21.**
+swe-mux currently vendors SDK 0.2.25 as `frontend/vendor/continuity-editor-0.2.25.tgz`
+(sha256 `47495fb53c50f115933b7623631ddb75b7a68c63999544b6f3153b7e1b84c2b4`).
+The gate ships as `src/soft_keyboard.js`: the internal textarea is held
 at `inputmode="none"` on coarse pointers and lifted only on a resolved tap or an explicit insert,
 with a long-press claim and an adjust-handle grab restoring it. `focus()` stays a pure focus move
 and does not lift the gate, and desktop is untouched. No host change was required.

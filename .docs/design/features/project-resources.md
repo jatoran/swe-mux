@@ -96,11 +96,11 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.20 editor owns mobile touch arbitration. `pointerdown` does not
+- The vendored Continuity 0.2.25 editor owns mobile touch arbitration. `pointerdown` does not
   focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
   cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
   editor's shadow DOM or duplicate caret hit-testing for this behavior.
-- The same release owns two further touch behaviors we cannot reach: Enter continues a list
+- The SDK also owns two further touch behaviors we cannot reach: Enter continues a list
   marker even while an IME composition is open (Android keyboards hold one across ordinary
   typing, and the editor's `beforeinput` router used to skip its line-break entries for
   anything composing, so a mid-line split lost its bullet), and the touch selection action bar
@@ -187,6 +187,9 @@ The file tree and notes collection are utility-drawer tabs.
 - Decorations are positions rather than anchors, so an edit underneath a live set would leave
   it marking the wrong bytes. The set is therefore recomputed on every commit while the bar is
   open, not only when the query changes.
+- The current match is revealed through Continuity's projection-aware range navigation, so
+  headings, wrapped rows, and the coarse-pointer scroll surface cannot leave it outside the
+  visible viewport.
 - Four ways in, matching the places a user is: the visible resource-header button shared by
   workspace-tab and drawer notes, `Ctrl+F` while the editor has focus, a `mux:find` button on the
   touch rail, and a `note.find` command for the palette, a gesture, or a chord of the user's own.
@@ -195,6 +198,9 @@ The file tree and notes collection are utility-drawer tabs.
   everywhere else to get it. The command instead dispatches a cancelable event that the
   resource holding the focused editor claims; an unclaimed event is how "no note is focused"
   is detected, since which editor has focus is not app state.
+- While the bar is open, `F3` advances to the next match and `Shift+F3` returns to the previous
+  match from either the query field or the editor. The keys remain unclaimed when the bar is
+  closed, so swe-mux does not replace browser find navigation outside its own note-find mode.
 - Leaving the bar selects the match the user stopped on, so the next edit happens where they
   were looking rather than where the caret sat before the search.
 
@@ -222,15 +228,11 @@ The file tree and notes collection are utility-drawer tabs.
   tap asked to see, and where the caret is not an interaction surface at all.
 - A pick puts the heading at the top of the viewport, one source row down so the sticky heading
   trail does not cover it, and the section's own content fills the screen below it.
-- The editor's `revealRange` is not how it gets there, for the reason it moves the caret and for
-  a second one: it computes the scroll in the hidden textarea's coordinates while the reader is
-  looking at the projection.
-  The two are different functions of the same source - a projected heading renders at up to
-  1.45em, wrapped rows carry a measured pixel hanging indent, and surplus projection height is
-  applied as a proportional ramp - so the reveal lands short by whatever extra height the
-  projection carries above the target, a screenful deep into a heading-dense note.
-  On a coarse pointer it lands nowhere at all: the touch shield is the scroller there, and
-  `revealRange` scrolls the textarea.
+- The editor's `revealRange` is not how heading jumps get there because revealing a range also
+  makes it the primary selection.
+  Continuity 0.2.25 accurately reveals find results against projected geometry on desktop and
+  coarse pointers, but a heading jump must remain viewport-only and retain one source row for
+  the heading trail.
 - No exported geometry converts pixels to lines outside the editor, so the jump is a feedback
   loop rather than a calculation (`noteScroll.ts`): scroll, ask `visibleLineRange()` which source
   lines that actually put on screen, correct, repeat.

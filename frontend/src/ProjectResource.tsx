@@ -11,7 +11,7 @@ import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useModalFocus } from './modalFocus'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
-import { findMatches, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
+import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
 import { headingIndexAt, headingTrail, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
 import { scrollLineIntoView, type ViewportScroller } from './noteScroll'
 import type { SendToAgentRequest } from './SendToAgentPicker'
@@ -594,8 +594,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const findIndexRef=useRef(0)
   const findInput=useRef<HTMLInputElement|null>(null)
 
-  /** Paint the set and the current match, and bring that one into view. `active` is
-   *  Continuity's own decoration id, so its stronger tint needs no theming from us. */
+  /** Paint the set and the current match, and bring that one into view. Continuity 0.2.25
+   *  reveals against the rendered projection, including wrapped rows and touch scrolling.
+   *  `active` is its own decoration id, so its stronger tint needs no theming from us. */
   const showMatch=(index:number)=>{
     findIndexRef.current=index
     setFindIndex(index)
@@ -773,12 +774,11 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
    * asking to see - the caret is not an interaction surface on a phone at all, so a jump that
    * needs one is a jump that costs half the screen.
    *
-   * `revealRange` is not the way there, for the same reason and for a second one. It sets the
-   * primary selection as part of revealing, which is the caret move again, and it computes the
-   * scroll in the hidden textarea's coordinates while the reader is looking at the projection,
-   * so it lands short of the target by whatever extra height the projection carries above it
-   * (`noteScroll.ts`). The loop below asks the editor which lines it actually put on screen and
-   * corrects until the answer is the heading.
+   * `revealRange` is not the way there because it sets the primary selection as part of
+   * revealing. Continuity 0.2.25 now reveals accurately against projection geometry, but a
+   * heading jump must remain viewport-only and leave one source row above the target for the
+   * trail. The loop below asks the editor which lines it actually put on screen and corrects
+   * until the answer is the heading without moving the caret.
    */
   const jumpToHeading=(heading:OutlineHeading)=>{
     // The panel unmounts on click, taking the focused row with it, so a keyboard user needs
@@ -881,6 +881,15 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
    * policy leaves the chord alone, so it reaches this handler from inside the editor.
    */
   const handleFindKey=(event:KeyboardEvent&{currentTarget:HTMLElement})=>{
+    const direction=findOpen&&!event.ctrlKey&&!event.metaKey&&!event.altKey
+      ?findStepDirection(event.key,event.shiftKey)
+      :null
+    if(direction){
+      event.preventDefault()
+      event.stopPropagation()
+      stepFind(direction==='previous')
+      return
+    }
     if(!autosaved||!editable)return
     if(event.key!=='f'&&event.key!=='F')return
     if(!(event.ctrlKey||event.metaKey)||event.altKey)return

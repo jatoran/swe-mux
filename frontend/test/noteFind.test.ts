@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { findMatches, matchIndexAfter, stepMatchIndex } from '../src/noteFind.ts'
+import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex } from '../src/noteFind.ts'
 import { byteForUtf16Index } from '../src/noteSelection.ts'
 
 test('UTF-16 indices convert to the byte offsets Continuity ranges are expressed in', () => {
@@ -76,4 +76,11 @@ test('stepping through matches wraps at both ends', () => {
   assert.equal(stepMatchIndex(3, 2, false), 0)
   assert.equal(stepMatchIndex(3, 0, true), 2)
   assert.equal(stepMatchIndex(0, 0, false), 0)
+})
+
+test('F3 steps forward and Shift+F3 steps backward', () => {
+  assert.equal(findStepDirection('F3', false), 'next')
+  assert.equal(findStepDirection('F3', true), 'previous')
+  assert.equal(findStepDirection('f3', false), null)
+  assert.equal(findStepDirection('Enter', false), null)
 })
