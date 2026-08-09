@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  deleteQueueMessage,
   isPendingQueueState,
   mapQueueSendError,
   queueHead,
@@ -8,6 +9,32 @@ import {
   senderLabel,
   type QueueMessage,
 } from '../src/queueApi.ts'
+
+test('delete uses the distinct queue DELETE contract', async () => {
+  const realFetch = globalThis.fetch
+  let request: { input: string; method: string | undefined; body: BodyInit | null | undefined } | null = null
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    request = { input: String(input), method: init?.method, body: init?.body }
+    return new Response(
+      JSON.stringify({ deleted: true, message_id: 'm1', already_deleted: false }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }) as typeof fetch
+  try {
+    assert.deepEqual(await deleteQueueMessage('m1'), {
+      deleted: true,
+      message_id: 'm1',
+      already_deleted: false,
+    })
+    assert.deepEqual(request, {
+      input: '/api/queue/messages/m1',
+      method: 'DELETE',
+      body: undefined,
+    })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
 
 const message = (id: string, position: number, state: QueueMessage['state']): QueueMessage => ({
   id,

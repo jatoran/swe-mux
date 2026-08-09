@@ -13,7 +13,7 @@ import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
 import { drawerTab, type DrawerTabId } from './drawerTabs'
 import {
-  drawerTabs, setDrawerSplitRatio,
+  drawerCollapseHostStack, drawerTabs, setDrawerSplitRatio,
   type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
 } from './drawerLayout'
 import { ProcessesTab } from './ProcessesTab'
@@ -34,9 +34,16 @@ import { hasHarnessTranscript } from './harnessRegistry'
 //              the pane tree shrinks instead of being covered. Covering a terminal
 //              you opened the drawer to work with is exactly backwards.
 //
-// The tab strip is inside the drawer on both; desktop additionally has an
-// always-visible icon rail outside it (rendered by App), which is what makes these
-// surfaces discoverable without a menu or a chord.
+// The tab strip is inside the drawer on both. On desktop the icon rail outside it
+// (rendered by App) is what the *closed* drawer looks like, mirroring the collapsed
+// navigation sidebar on the left: it makes these surfaces discoverable without a menu or a
+// chord, and it hands its column back to the drawer on open rather than repeating the tab
+// strip beside it.
+//
+// Losing that rail on open also loses the pointer affordance for closing again, so exactly
+// one pane heading — the drawer's top-right, see `drawerCollapseHostStack` — carries a
+// collapse control. Clicking an already-selected tab still collapses the drawer too; the
+// control exists because that gesture is not discoverable.
 
 type Props = {
   layout: DrawerLayout
@@ -180,6 +187,9 @@ export function UtilityDrawer(props: Props) {
   }
   const focusedTab = presentation.focused_tab
   const stackOrder = drawerTabs(layout)
+  const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
+  // Mobile flattens the tree to one stack, so that stack is trivially its own top-right.
+  const collapseHostId = mobile ? mobileStack.id : drawerCollapseHostStack(layout.root).id
   const tabAvailable = (id: DrawerTabId) => id !== 'transcript' || hasHarnessTranscript(session?.backend)
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
@@ -363,6 +373,11 @@ export function UtilityDrawer(props: Props) {
         id={tabDomId(stack.id, id)}
         key={id}
         role="tab"
+        // The guided tour anchors its Notes step on whichever Notes control is currently
+        // rendered. The launcher rail owns that anchor while the drawer is closed and this
+        // strip owns it while the drawer is open, so exactly one element ever carries it —
+        // a click-gated step has no Next button and an absent anchor strands the tour.
+        data-tutorial={id === 'notes' ? 'project-notes' : undefined}
         data-reorder-id={id}
         data-drawer-tab-id={id}
         data-scope={item.scope}
@@ -420,6 +435,12 @@ export function UtilityDrawer(props: Props) {
         <div class="drawer-pane-heading">
           <h2 class="drawer-panel-title" title={active.title}>{active.heading}</h2>
           <span class="drawer-scope-context">{scopeContext(selected)}</span>
+          {stack.id === collapseHostId && <button
+            class="drawer-collapse"
+            aria-label="Collapse side panel"
+            title="Collapse side panel"
+            onClick={onClose}
+          >×</button>}
         </div>
         {notesHere && renderNoteHost(selected === 'notes')}
         {selected !== 'notes' && renderBody(selected)}
@@ -510,8 +531,6 @@ export function UtilityDrawer(props: Props) {
       <div class="drawer-split-branch drawer-split-second" style={{ flex: `${1 - node.ratio} 1 0` }}>{renderNode(node.second)}</div>
     </div>
   }
-
-  const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
 
   return <>
     {mobile && <button class="utility-drawer-scrim" aria-label="Close panel" onClick={onClose} />}
