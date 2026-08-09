@@ -96,6 +96,14 @@ from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent, StandingActivityKind
+from .network_usage import (
+    NetworkUsage,
+    compact_json_response,
+    compressible_response_middleware,
+    metered_websocket,
+    record_network_response,
+    request_peer,
+)
 from .observation import (
     apply_hook_observation,
     cancel_pending_approval,
@@ -341,7 +349,7 @@ def pointer_report_kind(data: str) -> str | None:
 
 
 def json_response(data: Any, status: int = 200) -> web.Response:
-    return web.json_response(data, status=status)
+    return compact_json_response(data, status=status)
 
 
 def _log_task_failure(task: asyncio.Task[Any]) -> None:
@@ -500,10 +508,12 @@ def create_app(
     if desktop_control_token is not None and desktop_shutdown_event is None:
         raise ValueError("desktop control requires a shutdown event")
     app = web.Application(
-        middlewares=[error_middleware, security_middleware],
+        middlewares=[error_middleware, security_middleware, compressible_response_middleware],
         client_max_size=MAX_ATTACHMENT_BYTES + 1024 * 1024,
     )
     app["config"] = config
+    app["network_usage"] = NetworkUsage()
+    app.on_response_prepare.append(record_network_response)
     # Every client snapshot carries this process-generation identity alongside
     # the session-local revision. Session revisions restart from zero when a
     # daemon adopts supervisor-owned PTYs, so revision alone cannot distinguish
@@ -687,6 +697,8 @@ def create_app(
             web.get("/api/sessions/{sid}/diagnostic-bundle", get_session_diagnostic_bundle),
             web.get("/api/diagnostics/status-health", get_status_health),
             web.get("/api/diagnostics/background", get_background_health),
+            web.get("/api/diagnostics/network", get_network_usage),
+            web.delete("/api/diagnostics/network", reset_network_usage),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/skills", session_skills),
@@ -1234,6 +1246,17 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         len(sessions.sessions),
     )
     yield
+    network_snapshot = cast(NetworkUsage, app["network_usage"]).snapshot()
+    network_totals = network_snapshot["totals"]
+    log.info(
+        "network usage at daemon shutdown after %.1fs: "
+        "http_rx=%d http_tx=%d ws_rx=%d ws_tx=%d",
+        network_snapshot["uptime_seconds"],
+        network_totals["http"]["request_bytes"],
+        network_totals["http"]["response_bytes"],
+        network_totals["websocket"]["received_bytes"],
+        network_totals["websocket"]["sent_bytes"],
+    )
     if reconcile_task:
         if not reconcile_task.done():
             reconcile_task.cancel()
@@ -4209,6 +4232,33 @@ async def get_background_health(request: web.Request) -> web.Response:
     )
 
 
+async def get_network_usage(request: web.Request) -> web.Response:
+    """Application-payload counters for one daemon boot or explicit measurement window."""
+
+    meter: NetworkUsage = request.app["network_usage"]
+    return json_response(meter.snapshot())
+
+
+async def reset_network_usage(request: web.Request) -> web.Response:
+    """Start a fresh measurement window without restarting the daemon or any session."""
+
+    meter: NetworkUsage = request.app["network_usage"]
+    previous = meter.snapshot()
+    totals = previous["totals"]
+    log.info(
+        "network usage counters reset by peer %s after %.1fs: "
+        "http_rx=%d http_tx=%d ws_rx=%d ws_tx=%d",
+        request_peer(request),
+        previous["uptime_seconds"],
+        totals["http"]["request_bytes"],
+        totals["http"]["response_bytes"],
+        totals["websocket"]["received_bytes"],
+        totals["websocket"]["sent_bytes"],
+    )
+    meter.reset()
+    return json_response({"reset": True, "previous": previous})
+
+
 async def patch_session(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     body = await request.json()
@@ -6927,15 +6977,23 @@ async def remove_provider_account(request: web.Request) -> web.Response:
 async def list_processes(request: web.Request) -> web.Response:
     session_id = request.query.get("session")
     include_ended = request.query.get("include_ended", "").lower() in {"1", "true", "yes"}
+    summary = request.query.get("summary", "").lower() in {"1", "true", "yes"}
     # Opt-in because unique-set-size sampling walks every working set. Views the user
     # opened ask for it; the background rail poll does not.
     unique_memory = request.query.get("unique_memory", "").lower() in {"1", "true", "yes"}
     inspector: ProcessInspector = request.app["process_inspector"]
-    return json_response(
-        await inspector.snapshot(session_id, include_ended=include_ended)
-        if session_id
-        else await inspector.snapshot_all(include_ended=include_ended, unique_memory=unique_memory)
-    )
+    if summary and (session_id or include_ended or unique_memory):
+        raise ValueError("summary cannot be combined with session, include_ended, or unique_memory")
+    if session_id:
+        payload = await inspector.snapshot(session_id, include_ended=include_ended)
+    elif summary:
+        payload = await inspector.snapshot_summary_all()
+    else:
+        payload = await inspector.snapshot_all(
+            include_ended=include_ended,
+            unique_memory=unique_memory,
+        )
+    return json_response(payload)
 
 
 async def process_action(request: web.Request) -> web.Response:
@@ -7380,7 +7438,9 @@ async def _proxy_websocket(request: web.Request, target: str, origin: str) -> we
             max_msg_size=PREVIEW_WS_MESSAGE_BYTES,
         )
         selected = (upstream.protocol,) if upstream.protocol else ()
-        downstream = web.WebSocketResponse(
+        downstream = metered_websocket(
+            request,
+            "preview",
             protocols=selected,
             autoclose=False,
             autoping=False,
@@ -8100,7 +8160,9 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     snapshot_generation = str(request.app.get("daemon_generation") or "legacy")
     connection_id = secrets.token_urlsafe(12)
-    ws = web.WebSocketResponse(heartbeat=20, max_msg_size=2 * 1024 * 1024)
+    ws = metered_websocket(
+        request, "pty", heartbeat=20, max_msg_size=2 * 1024 * 1024
+    )
     await ws.prepare(request)
     allow_terminal_responses = (
         session.attachments_seen == 0
@@ -8679,7 +8741,7 @@ async def _handle_pty_client_message(
 
 
 async def events_ws(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse(heartbeat=20)
+    ws = metered_websocket(request, "events", heartbeat=20)
     await ws.prepare(request)
     bus: EventBus = request.app["events"]
     presence: DevicePresenceStore = request.app["device_presence"]

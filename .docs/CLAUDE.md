@@ -93,6 +93,10 @@
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`
+- Changing HTTP/WebSocket traffic accounting, response compression, static precompression,
+  or browser polling cadence: `design/features/remote-access.md`, `design/interfaces.md`,
+  `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing per-project automation opt-in, the enablement dependency graph, or its toggle
   surface: `design/features/automation-enablement.md`,
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
