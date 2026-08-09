@@ -451,8 +451,8 @@ function MicIcon(){
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
 }
 
-/** One workspace-level control: a corner mic while off, the global draft card while on. */
-export function ConversationSurface({
+/** The workspace-level Talk toggle. App places it immediately before Run in each toolbar. */
+export function ConversationToggle({
   conversation,
   configured,
   onOpenSettings,
@@ -461,16 +461,32 @@ export function ConversationSurface({
   configured:boolean
   onOpenSettings:()=>void
 }){
-  if(conversation.phase==='off')return <div class="conversation-layer off">
-    <button
-      class={`conversation-mic-control${configured?'':' setup'}`}
-      aria-label={configured?'Start hands-free conversation':'Set up hands-free conversation'}
-      title={configured
-        ? `Start hands-free conversation${conversation.target?` · target: ${conversation.target.label}`:' · focus an agent or text surface to choose a target'}`
-        : 'Microphone conversation is disabled · open Voice settings'}
-      onClick={configured?()=>conversation.toggle():onOpenSettings}
-    ><MicIcon/><span>{configured?'Talk':'Set up voice'}</span></button>
-  </div>
+  const active=conversation.phase!=='off'
+  const label=!configured
+    ? 'Set up hands-free conversation'
+    : active
+      ? 'Stop hands-free conversation'
+      : 'Start hands-free conversation'
+  return <button
+    class={`conversation-talk-toggle ${active?'active':'off'}${configured?'':' setup'}`}
+    aria-label={label}
+    aria-pressed={configured?active:undefined}
+    title={!configured
+      ? 'Microphone conversation is disabled - open Voice settings'
+      : `${label}${conversation.target?` - target: ${conversation.target.label}`:' - focus an agent or text surface to choose a target'}`}
+    onClick={configured?()=>conversation.toggle():onOpenSettings}
+  ><MicIcon/><span>Talk</span></button>
+}
+
+/** The global draft card exists only while workspace-level capture is running. */
+export function ConversationSurface({
+  conversation,
+  onOpenSettings,
+}:{
+  conversation:Conversation
+  onOpenSettings:()=>void
+}){
+  if(conversation.phase==='off')return null
   return <div class="conversation-layer active"><DictationPanel conversation={conversation} onOpenSettings={onOpenSettings}/></div>
 }
 

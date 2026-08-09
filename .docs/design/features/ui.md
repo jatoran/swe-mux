@@ -797,7 +797,8 @@ responsive controls.
 - **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
   The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
-  Workspace dictation renders outside the pane tree in the fixed `.conversation-layer`, so changing targets or showing its draft cannot change any terminal's geometry (`features/voice.md`).
+  The Talk toggle is app chrome directly before Run on mobile and desktop.
+  Active workspace dictation renders outside the pane tree in the fixed `.conversation-layer`, so changing targets or showing its draft cannot change any terminal's geometry (`features/voice.md`).
   Any new pane-local overlay belongs on the pane anchor; any workspace-global control belongs outside the pane tree.
   Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
   pane declares no columns, so a second item with an auto column is auto-placed into an

@@ -957,11 +957,12 @@ body {
 /* Project Run is a project-level launcher. Imported tasks never impose pane geometry. */
 /* Desktop's primary launcher. Tab strips have no new-tab button, so this is the
    one always-visible way to start a session — styled as a real chip rather than
-   a faint label. When the sidebar collapses there is no room for it in the 40px
-   header column, and the collapsed rail's ▶ button takes over. */
+   a faint label. Talk sits directly before it. When the sidebar collapses there
+   is no room for either control in the 40px header column, and the collapsed
+   rail's ▶ button takes over Run. */
 .app-identity .project-run-header{flex:none;width:auto;min-width:56px;height:calc(21px*var(--ui-scale));padding:0 8px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));background:color-mix(in srgb,var(--accent) 11%,transparent);color:var(--accent);font-size:9px;white-space:nowrap}
 .app-identity .project-run-header:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--accent)}
-.workspace.sidebar-collapsed .project-run-header{display:none}
+.workspace.sidebar-collapsed .project-run-header,.workspace.sidebar-collapsed .conversation-talk-toggle{display:none}
 .sidebar-rail .rail-run{border-color:color-mix(in srgb,var(--accent) 50%,var(--line));color:var(--accent)}
 .sidebar-rail .rail-run:disabled{opacity:.4;cursor:not-allowed}.project-row{grid-template-columns:16px minmax(0,1fr) 25px!important}.project-row-menu{display:none!important}.project-row-run{display:grid!important;place-items:center;font-size:8px}
 @media(min-width:761px) and (hover:hover){.project-row-run{opacity:0;visibility:hidden;pointer-events:none;transition:opacity .1s ease}.project-group:hover>.project-row .project-row-run,.project-group:focus-within>.project-row .project-row-run{opacity:1;visibility:visible;pointer-events:auto}}
@@ -1570,7 +1571,7 @@ body {
   :root.soft-keyboard-open .mobile-unified-active>.preview-pane{height:calc(100% - var(--keyboard-inset,0px))}
   :root.soft-keyboard-open .utility-drawer.overlay,
   :root.soft-keyboard-open .sidebar.open{bottom:var(--keyboard-inset,0px)}
-  /* [nav] [quota] [project name] [Run] [drawer]. Flex, not grid: only the title flexes and
+  /* [nav] [quota] [project name] [Talk] [Run] [drawer]. Flex, not grid: only the title flexes and
      the rest are content-sized, which grid expressed poorly here — an `auto` track next to
      the title's `1fr` absorbed the slack and left the quota chips floating mid-bar. `nowrap`
      is also what guarantees the bar stays one row as chip content changes width. The title is
@@ -1755,13 +1756,17 @@ body {
 .voice-overlay{position:absolute;top:6px;left:6px;right:6px;display:flex;flex-direction:column;gap:5px;pointer-events:none}
 .voice-overlay>*{pointer-events:auto}
 .voice-overlay>.voice-strip{border:1px solid var(--line);box-shadow:4px 5px 0 #0008}
+.conversation-talk-toggle{flex:none;width:auto;min-width:50px;height:calc(21px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:0 7px;border:1px solid color-mix(in srgb,var(--green,#8bd450) 44%,var(--line));background:color-mix(in srgb,var(--green,#8bd450) 8%,transparent);color:var(--green,#8bd450);font:9px 'JetBrains Mono';white-space:nowrap;cursor:pointer}
+.conversation-talk-toggle:hover{background:color-mix(in srgb,var(--green,#8bd450) 17%,transparent);color:var(--text)}
+.conversation-talk-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green,#8bd450) 18%,transparent)}
+.conversation-talk-toggle.setup{border-color:var(--line);background:transparent;color:var(--muted)}
+.conversation-talk-toggle svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.app-identity .conversation-talk-toggle{flex:none;width:auto;min-width:50px;height:calc(21px*var(--ui-scale));padding:0 7px;border:1px solid color-mix(in srgb,var(--green,#8bd450) 44%,var(--line));background:color-mix(in srgb,var(--green,#8bd450) 8%,transparent);color:var(--green,#8bd450)}
+.app-identity .conversation-talk-toggle:hover{background:color-mix(in srgb,var(--green,#8bd450) 17%,transparent);color:var(--text)}
+.app-identity .conversation-talk-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green,#8bd450) 18%,transparent)}
+.app-identity .conversation-talk-toggle.setup{border-color:var(--line);background:transparent;color:var(--muted)}
 .conversation-layer{position:fixed;right:12px;bottom:12px;z-index:24;width:min(620px,calc(100vw - 24px));pointer-events:none}
 .conversation-layer>*{pointer-events:auto}
-.conversation-layer.off{width:auto}
-.conversation-mic-control{min-width:44px;height:calc(38px*var(--ui-scale));display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--green,#8bd450);border-radius:20px;padding:0 13px;background:var(--panel);color:var(--green,#8bd450);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';cursor:pointer}
-.conversation-mic-control:hover{background:var(--panel2);color:var(--text)}
-.conversation-mic-control.setup{border-color:var(--line);color:var(--muted)}
-.conversation-mic-control svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .dictation-panel{display:grid;gap:3px;padding:4px 8px 5px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted)}
 .dictation-panel>header{display:flex;align-items:center;gap:7px;min-width:0}
 .dictation-phase{flex:none}
@@ -1805,9 +1810,8 @@ body {
    stream in. The flash is the arrival signal — honest about being discrete. */
 .dictation-panel.landed .dictation-draft{border-color:var(--green,#8bd450)}
 @media(max-width:760px){
+  .mobile-toolbar>.conversation-talk-toggle{min-width:52px;height:calc(36px*var(--ui-scale));padding:0 6px;font-size:9px}
   .conversation-layer{left:0;right:0;bottom:0;width:auto;padding:0 max(5px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(5px,env(safe-area-inset-left))}
-  .conversation-layer.off{left:auto;right:max(8px,env(safe-area-inset-right));width:auto;padding:0 0 max(8px,env(safe-area-inset-bottom))}
-  .conversation-mic-control{min-width:48px;height:calc(48px*var(--ui-scale));border-radius:24px;font-size:10px}
   .dictation-target button{min-width:44px;height:calc(30px*var(--ui-scale));font-size:10px}
 }
 

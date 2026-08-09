@@ -160,7 +160,8 @@ configuration problem's clothes.
   If a pinned editor unmounts or a following Queue panel retargets in place, the old handle becomes unavailable and Send is disabled rather than inserting into a different surface under the old name.
 - **The dictation surface is app-level.**
   It is a desktop corner card and mobile bottom sheet at z-index 24; panes use lower values and modal surfaces use higher values.
-  The inactive form is a visible mic control.
+  The persistent Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
+  The floating dictation surface exists only while Talk is active.
 - **Per-session Talk controls are gone.**
   `tts:` remains in each Agent pane because playback mode is still per-session.
   `voice.toggleTalk` and `voice.toggleTargetPin` are registered commands, so either may also be bound to a key or touch gesture without making a gesture the only entry point.

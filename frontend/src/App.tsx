@@ -79,7 +79,7 @@ import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
-import { ConversationSurface, useConversation } from './ConversationControl'
+import { ConversationSurface, ConversationToggle, useConversation } from './ConversationControl'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
@@ -3869,6 +3869,7 @@ export function App() {
           or it would close the menu on pointer-down and the click would reopen
           it, so a second tap could never collapse what the first opened. */}
       <button class="mobile-project-name" type="button" data-menu-toggle aria-haspopup="menu" aria-expanded={!!projectMenu} disabled={!activeProject} title={activeProject?`${activeProject.name} — Project actions`:'No Project selected'} onClick={event=>{if(!activeProject)return;if(projectMenu){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(activeProject,rect.left,rect.bottom+4)}} onContextMenu={event=>{if(!activeProject)return;event.preventDefault();if(projectMenu){setProjectMenu(null);return}openProjectMenuAt(activeProject,event.clientX,event.clientY)}}>{activeProject?.name||'No Project'}</button>
+      {voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>}
       {/* Tap opens the launcher; hold repeats the last launch straight away,
           which is the common case once a Project settles on one backend. The
           long-press fires while the finger is down, so the click it is followed
@@ -3896,14 +3897,14 @@ export function App() {
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
-    {voiceStatus&&<ConversationSurface conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>}
+    {voiceStatus&&<ConversationSurface conversation={conversation} onOpenSettings={()=>openSettings('Voice')}/>}
 
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root

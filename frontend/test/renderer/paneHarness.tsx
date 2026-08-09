@@ -61,7 +61,7 @@ render(
   <>{mobile
     ? <div class="mobile-unified-active">{pane}</div>
     : <div class="pane-grid count-1">{pane}</div>}
-    {overlay&&<ConversationSurface conversation={conversation} configured onOpenSettings={() => {}}/>}
+    {overlay&&<ConversationSurface conversation={conversation} onOpenSettings={() => {}}/>}
   </>,
   root,
 )

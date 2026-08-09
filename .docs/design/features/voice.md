@@ -320,7 +320,7 @@ into mobile-voice setup instead.
 - **Read aloud remains session-scoped.** Each Agent pane header carries only its `tts:` chip (off / tap / auto).
   The player strip (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay) floats from the pane's zero-height `.voice-overlay-anchor`.
   It never changes terminal geometry.
-- **Conversation is app-level.** The inactive form is a visible mic control.
+- **Conversation is app-level.** The Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
   While Talk is on, `.conversation-layer` is a corner card on desktop and a bottom sheet on mobile with z-index 24.
   Workspace panes use lower z-index values, while palette and modal layers use higher values.
   The surface stays mounted across Project, pane, and target changes.
@@ -380,7 +380,7 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, and push-to-talk), `ConversationSurface` (global mic/card), and `DictationPanel` (draft surface).
+- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, and push-to-talk), `ConversationToggle` (toolbar control), `ConversationSurface` (global active card), and `DictationPanel` (draft surface).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.
