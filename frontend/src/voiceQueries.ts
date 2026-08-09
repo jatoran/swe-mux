@@ -251,18 +251,18 @@ export function projectListPage(
   return { speech, detail, shownFrom: start, shownThrough: start + page.length, hasMore: remaining > 0 }
 }
 
-const HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
-  reading:['read the last reply','read the last reply verbatim','summarize the last reply','read session 2 reply','mute'],
-  sessions:['list sessions','list active sessions','list pending sessions','list approvals','list questions','list stuck sessions','list failed sessions','status of session 2','list sessions in the current project'],
-  projects:['list projects','open project 2','open project 2 session 1','status of project 2','list sessions in project 2'],
-  navigation:['open session 2 in the current project','open project 2','open project 2 session 1','open a session or project by its visible name','next page','repeat','more detail'],
-  dictation:['send','undo last phrase','cancel','standby','resume','stop listening','pin the current voice target from the Talk panel'],
-  approvals:['open a session awaiting approval','approve','listen to the exact operation','confirm approval','cancel approval'],
+export const VOICE_HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
+  reading:['read the last reply','read the last reply verbatim','summarize the last reply','read Session 2 reply','read a session reply by name'],
+  sessions:['list sessions','list active sessions','list working sessions','list ready sessions','list pending sessions','list approvals','list questions','list rate limited sessions','list stuck sessions','list failed sessions','status of Session 2','list sessions in the current Project','list sessions in Project 2'],
+  projects:['list Projects','open Project 2','open a Project by name','open Project 2 Session 1','status of Project 2','status of the current Project','list sessions in Project 2'],
+  navigation:['open Session 2 in the current Project','open Project 2','open Project 2 Session 1','open Session 1 in Project 2','open a session or Project by its visible name','next page','repeat','more detail'],
+  dictation:['send','undo last phrase','cancel','mute','summary mode','verbatim mode','interrupt agent','standby','resume','stop listening','pin the current voice target from the Talk panel'],
+  approvals:['open a session awaiting approval','approve','review approval','confirm tool use','confirm approval','cancel approval'],
 }
 
 const helpGroup=(category:VoiceHelpCategory):VoiceHelpPage=>{
   const title=category[0].toUpperCase()+category.slice(1)
-  const commands=HELP_COMMANDS[category]
+  const commands=VOICE_HELP_COMMANDS[category]
   const speech=`${title} commands. ${commands.map((command,index)=>`${index?'Next command. ':''}Command ${index+1}. ${command}.`).join(' ')} End of ${category} commands.`
   const detail=`${title} commands\n${commands.map((command,index)=>`${index+1}. ${command}`).join('\n')}`
   return{speech,detail}
@@ -270,7 +270,7 @@ const helpGroup=(category:VoiceHelpCategory):VoiceHelpPage=>{
 
 export function voiceHelpPage(category:VoiceHelpCategory|null):VoiceHelpPage{
   if(category)return helpGroup(category)
-  const categories=Object.keys(HELP_COMMANDS) as VoiceHelpCategory[]
+  const categories=Object.keys(VOICE_HELP_COMMANDS) as VoiceHelpCategory[]
   const pages=categories.map(helpGroup)
   return{
     speech:`Complete voice command list. ${pages.map((page,index)=>`${index?'Next group. ':''}${page.speech}`).join(' ')} End of voice command list.`,

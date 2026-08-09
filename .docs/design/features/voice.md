@@ -286,6 +286,10 @@ executed action — so that number is measured rather than estimated.
   `App.tsx` generates focus commands for every live session and Project, drawer commands from `DRAWER_TABS`, and direct spawn commands for each Project/backend pair.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
+- **Settings exposes the complete current command surface.**
+  Settings → Voice renders configurable capture-control phrases, the fixed grammar shared with spoken help, and the live registry aliases for current Projects, sessions, workspace panels, launch targets, status, and approvals.
+  `voiceCommandReference.ts` groups registry entries for display and omits only the internal `{text}` catch-all because the closed grammar is listed separately.
+  Unavailable guarded commands remain visible with their current requirement, so discovery does not depend on first reaching the required state.
 - **Spoken lookup is a bounded dialog, not open-ended intent inference.**
   The closed grammar covers command help; Project lists; live, active, working, ready, pending, approval, question, rate-limit, stuck, and failed session filters; overall/current/named Project scopes; entity status; navigation; and last-reply reading.
   Natural read-only forms such as `active sessions`, `list approvals`, `do I have pending sessions in the current project`, and `list Project Alpha sessions` normalize into those same typed queries.

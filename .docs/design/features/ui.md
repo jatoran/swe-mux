@@ -302,6 +302,9 @@ responsive controls.
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
   the editor package rather than hand-listed, so it cannot drift from what the editor binds.
+- Voice lists the full spoken control surface in collapsible groups.
+  Fixed query and navigation grammar comes from the same reference used by spoken help, while current Project, session, panel, launch, status, and approval aliases come from the live command registry.
+  Guarded aliases remain listed while unavailable and name the state they require.
 - Appearance exposes one palette picker for the shared browser chrome and xterm theme.
   Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
   The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.

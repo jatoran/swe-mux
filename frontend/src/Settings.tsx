@@ -1,7 +1,7 @@
 import { Fragment } from 'preact'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { displayChord } from './commands'
+import { displayChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
@@ -15,6 +15,8 @@ import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
+import { registeredVoiceReference } from './voiceCommandReference'
+import { VOICE_HELP_COMMANDS, type VoiceHelpCategory } from './voiceQueries'
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { RailEditor } from './RailEditor'
@@ -194,7 +196,7 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
 }
 
-export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General' }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string }) {
+export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General', voiceCommands=[] }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -213,6 +215,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
+  const liveVoiceReference=useMemo(()=>registeredVoiceReference(voiceCommands),[voiceCommands])
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
@@ -850,6 +853,25 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
                 change('voice_commands',VOICE_ACTION_ORDER.map(name=>({action:name,phrases:byAction.get(name)||[]})))
               }} /></label>
             })}
+          </div>
+          <h3>Complete voice command reference</h3>
+          <p>Say a configured wake word before every command. <code>Project N</code> uses the visible sidebar order. <code>Session N</code> uses the selected Project. Braced values such as <code>{'{text}'}</code> are spoken content, not literal words.</p>
+          <div class="voice-command-reference">
+            {(Object.keys(VOICE_HELP_COMMANDS) as VoiceHelpCategory[]).map((category,index)=>{
+              const title=category[0].toUpperCase()+category.slice(1)
+              return <details open={index===0} key={category}>
+                <summary>{title} grammar <span>{VOICE_HELP_COMMANDS[category].length}</span></summary>
+                <div class="voice-reference-phrases">{VOICE_HELP_COMMANDS[category].map(command=><code key={command}>{command}</code>)}</div>
+              </details>
+            })}
+            {liveVoiceReference.map(group=><details key={group.id}>
+              <summary>{group.title} <span>{group.commands.length}</span></summary>
+              <div class="voice-reference-commands">{group.commands.map(command=><article key={command.id}>
+                <strong>{command.label}</strong>
+                {!command.available&&<small>{command.disabledReason||'Unavailable in the current workspace state'}</small>}
+                <div class="voice-reference-phrases">{command.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>
+              </article>)}</div>
+            </details>)}
           </div>
           <h4>Test what the recognizer actually hears</h4>
           <p>Speak the wake word and a command a few times. Each utterance goes through the same transcription and the same matcher the command path uses, so this reports what would really have happened. Choose a trigger word from this, not from how it looks: a good one is two or three syllables, distinctive, rare in ordinary speech, and not the start of a common word. Save any pending changes above first — the test scores against the saved configuration.</p>
