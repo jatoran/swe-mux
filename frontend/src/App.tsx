@@ -450,6 +450,10 @@ export function App() {
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
   const [automationOpen,setAutomationOpen]=useState(false)
   const [projectGroups,setProjectGroups]=useState<ProjectGroup[]>([])
+  // False until the first `/api/project-groups` response lands. Nothing may prune
+  // device-local sidebar state against the empty mount-time arrays: they mean "not
+  // fetched yet", not "the user deleted everything".
+  const [registryLoaded,setRegistryLoaded]=useState(false)
   const dragSessionTargetRef=useRef<{sessionId?:string;stackId?:string;projectId:string}|null>(null)
   type ProjectDrag={id:string;previewIds:string[];overId:string|null;side:DropSide|null}
   type BucketDrag={id:string;previewIds:string[]}
@@ -1074,6 +1078,7 @@ export function App() {
       }
       setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
       setProjectGroups(nextGroups)
+      setRegistryLoaded(true)
       setLayoutMap(current => {
         const next = { ...current }
         const live = new Set(visibleSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
@@ -1541,15 +1546,17 @@ export function App() {
     &&displayProjects.every(project=>collapsedProjects.has(project.id))
     &&projectBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))
   // A deleted Group would otherwise leave its folded flag behind forever, and the
-  // stored blob is what a recreated bucket id would silently inherit.
+  // stored blob is what a recreated bucket id would silently inherit. Gated on
+  // `registryLoaded`: this effect also runs on mount, where the empty group list is
+  // an unfetched snapshot rather than an empty registry, and pruning against it
+  // unfolded every Group on every page load.
   useEffect(()=>{
     const pruned=pruneSidebarOrder(
       sidebarOrder,
-      orderedGroups.map(group=>group.id),
-      projects.map(project=>project.id),
+      registryLoaded?orderedGroups.map(group=>group.id):null,
     )
     if(pruned!==sidebarOrder)setSidebarOrder(pruned)
-  },[projectGroups,projects])
+  },[projectGroups,registryLoaded])
   const activeLayout = layoutMap[projectId] || emptyLayout()
   const paneIds = terminalIds(activeLayout).filter(id => sessions.some(session => session.id === id && !['exited', 'crashed'].includes(session.state)))
   const workspacePanes=paneStacks(activeLayout)

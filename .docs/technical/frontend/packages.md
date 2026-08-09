@@ -68,6 +68,14 @@ if (mobile) updateLayout(projectId, flattenIntoOneStack(layout))
 - Snapshot ordering is `(daemon generation, session revision)`, not arrival order; a new generation resets the revision domain.
 - Project layout is optimistic durable state; focus, sidebar size/collapse, audio unlock, and
   responsive mode are device-local state.
+- **Persisted device-local state may not be reconciled against a daemon snapshot until that
+  snapshot has loaded.** The composition root mounts holding empty arrays for every collection it
+  fetches, so an effect that drops "state for records that no longer exist" runs first against a
+  registry that appears to hold nothing, and its write-back persists the deletion. Represent
+  not-yet-loaded explicitly (`null`, not `[]`) at the pure helper's boundary so the destructive
+  reading is unavailable by construction rather than avoided by ordering: `pruneSidebarOrder`
+  emptied sidebar fold state and the "Recently used" order on every page load until it did.
+  Prefer a bound (a cap, a TTL) over a liveness filter wherever stale entries are inert.
 - Utility-drawer width is one device-local value, with a viewport-derived live cap that preserves 150 px for the main workspace.
   Selected tab and desktop expansion are device-local values keyed by Project; mobile overlay visibility and in-progress resize collapse previews are transient and cannot mutate the desktop expansion map.
 - A never-arranged Project opens on the empty stage. There is no first-open seeding: the two

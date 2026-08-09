@@ -61,6 +61,7 @@ responsive controls.
   language from another. The dot exists because a count alone would let an agent waiting on
   approval vanish behind the fold.
 - Sort modes and fold state (Projects and Groups) are device-local; Group order itself is shared.
+  Device-local means stored per browser, not per visit: every one of them survives a reload, a daemon restart, and a desktop redeploy.
   Root Projects always precede Groups.
   Behavior detail lives in `projects.md`.
 - No sidebar row is indented for pane geometry. Sessions sharing a tabbed pane are marked by a

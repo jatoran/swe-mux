@@ -80,13 +80,29 @@ test('project sort mode set/read, keeping identity when unchanged', () => {
   assert.equal(setProjectSortMode(named, 'activity'), named)
 })
 
-test('pruneSidebarOrder drops Groups and Projects that no longer exist and keeps identity otherwise', () => {
+test('pruneSidebarOrder drops fold state for Groups that no longer exist', () => {
   const stored = prefs({ collapsed: ['g1', 'gone'], recentProjects: ['p1', 'deleted'] })
-  const pruned = pruneSidebarOrder(stored, ['g1'], ['p1'])
-  // Deleted ids must not be inherited or accumulate in the device-local preference.
+  const pruned = pruneSidebarOrder(stored, ['g1'])
+  // A deleted Group id must not be inherited by a recreated Group with the same id.
   assert.deepEqual(pruned.collapsed, ['g1'])
-  assert.deepEqual(pruned.recentProjects, ['p1'])
-  assert.equal(pruneSidebarOrder(stored, ['g1', 'gone'], ['p1', 'deleted']), stored)
+  assert.equal(pruneSidebarOrder(stored, ['g1', 'gone']), stored)
+})
+
+test('pruneSidebarOrder is the identity before the Group registry has loaded', () => {
+  // The caller holds an empty array from mount until the first fetch resolves. Reading
+  // that as an empty registry wiped fold state and the MRU on every page load, and
+  // persisted the wipe, so "not loaded" has to be its own value.
+  const stored = prefs({ collapsed: ['g1'], recentProjects: ['p1', 'p2'] })
+  assert.equal(pruneSidebarOrder(stored, null), stored)
+  // An empty registry that really is empty stays destructive.
+  assert.deepEqual(pruneSidebarOrder(stored, []).collapsed, [])
+})
+
+test('pruneSidebarOrder never touches the recency MRU', () => {
+  // A stale id is inert: `projectRecency` builds a lookup a deleted Project never hits.
+  // Filtering it here is what made an empty snapshot destroy the whole preference.
+  const stored = prefs({ recentProjects: ['p1', 'deleted'] })
+  assert.deepEqual(pruneSidebarOrder(stored, []).recentProjects, ['p1', 'deleted'])
 })
 
 test('custom order is a pass-through of the manual order', () => {
@@ -123,6 +139,19 @@ test('explicit Project recency is persisted as a deduplicated MRU', () => {
   assert.equal(touchProjectRecency(second, 'p2'), second)
   assert.deepEqual(touchProjectRecency(second, 'p1').recentProjects, ['p1', 'p2'])
   assert.deepEqual(loadSidebarOrder('{"recentProjects":["p2","p2",7,"p1",""]}').recentProjects, ['p2', 'p1'])
+})
+
+test('the recency MRU is bounded, dropping the least recent end', () => {
+  // Nothing filters this list against the live Projects, so the cap is the only bound.
+  const ids = Array.from({ length: 140 }, (_, index) => `p${index}`)
+  const filled = ids.reduce(touchProjectRecency, EMPTY_SIDEBAR_ORDER)
+  assert.equal(filled.recentProjects.length, 100)
+  assert.equal(filled.recentProjects[0], 'p139')
+  assert.equal(filled.recentProjects.at(-1), 'p40')
+  // A blob written by a build without the cap is trimmed on read.
+  const stored = JSON.stringify({ recentProjects: ids })
+  assert.equal(loadSidebarOrder(stored).recentProjects.length, 100)
+  assert.equal(loadSidebarOrder(stored).recentProjects[0], 'p0')
 })
 
 test('projectRecency ranks only ids recorded by explicit user actions', () => {
