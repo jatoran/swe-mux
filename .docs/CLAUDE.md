@@ -127,7 +127,9 @@
   `design/features/backends.md`, `design/features/project-actions.md`,
   `development/ROADMAP.md`
 - Changing usage analytics: `design/features/usage.md`
-- Changing read aloud or hands-free conversation: `design/features/voice.md`
+- Changing read aloud or hands-free conversation: `design/features/voice.md`; planned STT latency,
+  wake-word, global-talk, and voice-navigation work + the decisions behind it:
+  `development/VOICE_INTERACTION_ROADMAP.md`
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
