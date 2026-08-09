@@ -88,6 +88,7 @@ def test_current_codex_model_map_is_aggregated_with_proportional_cost() -> None:
         {
             "model": "gpt-5.2-codex",
             "cost_is_estimate": True,
+            "cost_method": "proportional",
             "input_tokens": 500,
             "output_tokens": 125,
             "cache_creation_tokens": 0,
@@ -97,6 +98,7 @@ def test_current_codex_model_map_is_aggregated_with_proportional_cost() -> None:
         }
     ]
     assert normalized["model_daily"][0]["date"] == "2026-07-11"
+    assert normalized["model_daily"][0]["cost_method"] == "proportional"
 
 
 def test_unified_defaults_select_each_provider_from_one_ccusage_executable() -> None:

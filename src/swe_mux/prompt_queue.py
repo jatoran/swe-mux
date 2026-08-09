@@ -53,14 +53,14 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-QUEUE_SCHEMA_VERSION = 2
+QUEUE_SCHEMA_VERSION = 3
 QUEUE_EVENT_LOOP = "prompt-queue-events"
 
 # States exactly per the roadmap. `delivering` is transient but persisted so a
 # daemon death mid-send is distinguishable from one that never started.
 PENDING_STATES = ("draft", "armed", "blocked")
 ACTIVE_STATES = (*PENDING_STATES, "delivering")
-TERMINAL_STATES = ("sent", "failed", "cancelled", "stranded")
+TERMINAL_STATES = ("sent", "failed", "cancelled", "stranded", "deleted")
 ALL_STATES = (*ACTIVE_STATES, *TERMINAL_STATES)
 
 # Phase 5 generalizes the sender model (`ROADMAP.md` Phase 5, "Human/device
@@ -142,7 +142,8 @@ CREATE TABLE IF NOT EXISTS queue_messages (
   updated_at REAL NOT NULL,
   edited_at REAL,
   armed_at REAL,
-  sent_at REAL
+  sent_at REAL,
+  deleted_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_queue_messages_target
   ON queue_messages(target_session_id, position);
@@ -268,7 +269,7 @@ class PromptQueueStore:
             self._db.commit()
 
     def _migrate_schema(self) -> None:
-        """v1 → v2: the Phase 5 sender/relay columns, added in place.
+        """Upgrade queue tables in place through the current schema version.
 
         ``CREATE TABLE IF NOT EXISTS`` no-ops on an existing table, so a plain
         column add in the schema script would only ever reach fresh databases
@@ -285,6 +286,7 @@ class PromptQueueStore:
             ("origin_session_id", "TEXT"),
             ("correlation_id", "TEXT"),
             ("chain_depth", "INTEGER NOT NULL DEFAULT 0"),
+            ("deleted_at", "REAL"),
         )
         for name, declaration in additions:
             if name not in columns:
@@ -319,15 +321,15 @@ class PromptQueueStore:
     # -- ordering helpers (worker thread only) --------------------------------
 
     def _renumber(self, target_session_id: str, ordered_ids: list[str] | None = None) -> None:
-        """Assign gap-free positions across ALL of a target's messages.
+        """Assign gap-free positions across all visible messages for a target.
 
-        Sent/terminal items keep their place in the visible queue ("crossed
-        out, in order"), so renumbering covers every row, preserving current
-        relative order unless ``ordered_ids`` overrides it.
+        Sent/terminal items keep their place in the visible queue. Deleted
+        tombstones retain no visible position and are excluded from ordering.
         """
         if ordered_ids is None:
             rows = self._db.execute(
-                "SELECT id FROM queue_messages WHERE target_session_id=? ORDER BY position",
+                "SELECT id FROM queue_messages WHERE target_session_id=? AND state!='deleted'"
+                " ORDER BY position",
                 (target_session_id,),
             ).fetchall()
             ordered_ids = [str(row["id"]) for row in rows]
@@ -375,7 +377,8 @@ class PromptQueueStore:
                 if existing is not None:
                     return {**_row_to_message(existing), "deduplicated": True}
             rows = self._db.execute(
-                "SELECT id FROM queue_messages WHERE target_session_id=? ORDER BY position",
+                "SELECT id FROM queue_messages WHERE target_session_id=? AND state!='deleted'"
+                " ORDER BY position",
                 (target_session_id,),
             ).fetchall()
             ordered = [str(row["id"]) for row in rows]
@@ -440,7 +443,7 @@ class PromptQueueStore:
     async def messages_for_target(self, target_session_id: str) -> dict[str, Any]:
         def op() -> dict[str, Any]:
             rows = self._db.execute(
-                "SELECT * FROM queue_messages WHERE target_session_id=? "
+                "SELECT * FROM queue_messages WHERE target_session_id=? AND state!='deleted' "
                 "ORDER BY position LIMIT ?",
                 (target_session_id, HISTORY_LIMIT + 64),
             ).fetchall()
@@ -463,7 +466,8 @@ class PromptQueueStore:
                 " SUM(CASE WHEN state='stranded' THEN 1 ELSE 0 END) stranded,"
                 " SUM(CASE WHEN state='failed' THEN 1 ELSE 0 END) failed,"
                 " COUNT(*) total, MAX(updated_at) updated_at"
-                " FROM queue_messages GROUP BY target_session_id ORDER BY updated_at DESC",
+                " FROM queue_messages WHERE state!='deleted' GROUP BY target_session_id"
+                " ORDER BY updated_at DESC",
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -561,7 +565,8 @@ class PromptQueueStore:
                 )
             target = str(row["target_session_id"])
             rows = self._db.execute(
-                "SELECT id FROM queue_messages WHERE target_session_id=? ORDER BY position",
+                "SELECT id FROM queue_messages WHERE target_session_id=? AND state!='deleted'"
+                " ORDER BY position",
                 (target,),
             ).fetchall()
             ordered = [str(item["id"]) for item in rows]
@@ -614,6 +619,50 @@ class PromptQueueStore:
             ).fetchone()
             assert fresh is not None
             return _row_to_message(fresh)
+
+        return await self._run(op)
+
+    async def delete_message(self, message_id: str) -> dict[str, Any]:
+        """Erase and hide a message while retaining a retry-suppression tombstone.
+
+        The content-free row preserves correlation identity and delivery audit
+        linkage. A delivering item cannot be deleted because its PTY write may
+        already be underway.
+        """
+        now = time.time()
+
+        def op() -> dict[str, Any]:
+            row = self._db.execute(
+                "SELECT * FROM queue_messages WHERE id=?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise QueueError("not_found", "no such queue message", status=404)
+            if row["state"] == "delivering":
+                raise QueueError(
+                    "delivery_in_progress",
+                    "a delivering message cannot be deleted",
+                    status=409,
+                    state="delivering",
+                )
+            result = {
+                "id": str(row["id"]),
+                "target_session_id": str(row["target_session_id"]),
+                "previous_state": str(row["state"]),
+                "sender_kind": str(row["sender_kind"]),
+                "already_deleted": row["state"] == "deleted",
+            }
+            if row["state"] == "deleted":
+                return result
+            self._db.execute(
+                "UPDATE queue_messages SET state='deleted', body='', origin_json=NULL,"
+                " payload_json=NULL, constraints_json=NULL, blocked_reasons_json=NULL,"
+                " stranded_reason=NULL, cancel_kind=NULL, retargeted_from_json=NULL,"
+                " deleted_at=?, updated_at=? WHERE id=?",
+                (now, now, message_id),
+            )
+            self._renumber(str(row["target_session_id"]))
+            self._db.commit()
+            return result
 
         return await self._run(op)
 
@@ -953,7 +1002,7 @@ class PromptQueueStore:
 
         def op() -> list[dict[str, Any]]:
             placeholders = ",".join("?" for _ in kinds)
-            conditions = [f"sender_kind IN ({placeholders})"]
+            conditions = ["state!='deleted'", f"sender_kind IN ({placeholders})"]
             parameters: list[Any] = list(kinds)
             if project_id:
                 conditions.append("project_id=?")
@@ -976,7 +1025,8 @@ class PromptQueueStore:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(
                 "SELECT target_session_id, MAX(target_label) label, MAX(project_id) project_id,"
-                " MAX(updated_at) updated_at FROM queue_messages GROUP BY target_session_id"
+                " MAX(updated_at) updated_at FROM queue_messages WHERE state!='deleted'"
+                " GROUP BY target_session_id"
                 " ORDER BY updated_at DESC"
             ).fetchall()
             return [dict(row) for row in rows]
@@ -1316,7 +1366,7 @@ class PromptQueueStore:
         def op() -> None:
             rows = self._db.execute(
                 "SELECT id FROM queue_messages WHERE state IN ('sent','failed','cancelled',"
-                "'stranded') AND updated_at<?",
+                "'stranded','deleted') AND updated_at<?",
                 (cutoff,),
             ).fetchall()
             ids = [str(row["id"]) for row in rows]
@@ -1592,6 +1642,14 @@ class PromptQueueService:
             message_id, str(message["target_session_id"]), str(message["state"])
         )
         return message
+
+    async def delete(self, message_id: str) -> dict[str, Any]:
+        result = await self.store.delete_message(message_id)
+        if not result["already_deleted"]:
+            await self._emit_updated(
+                message_id, str(result["target_session_id"]), "deleted"
+            )
+        return result
 
     async def retarget(self, message_id: str, *, target_session_id: str) -> dict[str, Any]:
         session = self._live_target(target_session_id)

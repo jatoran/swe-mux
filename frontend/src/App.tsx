@@ -32,7 +32,7 @@ import { PreviewPane } from './PreviewPane'
 import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
-import { UsageDashboard } from './UsageDashboard'
+import { UsageDashboard } from './UsageDashboardView'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
@@ -89,7 +89,7 @@ import {
   KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
   nextActiveAfterKill, type KillTombstones,
 } from './sessionKills'
-import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings } from './deviceSettings'
+import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
@@ -105,7 +105,10 @@ import {
   DEFAULT_UI_SCALE, applyUiScale, createUiScaleWheelIntent, uiScaleConfigKey,
   uiScaleForIntent, uiScaleKeyboardIntent, watchUiScaleProfile, type UiScale,
 } from './uiScale'
+import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
+import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
+import { requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -153,6 +156,13 @@ import {
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
 
+// `/events` is authoritative for live changes. These are only visible-tab recovery
+// backstops, so keeping them sub-minute re-sent whole fleet payloads without improving
+// convergence. Process watch stays fresher but uses the reduced summary representation.
+const FLEET_SAFETY_REFRESH_MS=60_000
+const KEYBINDING_SAFETY_REFRESH_MS=60_000
+const PROCESS_SUMMARY_REFRESH_MS=10_000
+
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
   {id:'right',glyph:'→',direction:'horizontal',position:'after'},
@@ -164,6 +174,13 @@ const isAgent = (session: Session) => isAgentBackend(session.backend)
 
 function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
+}
+
+function railVoiceConfirmation(entry: RailVoiceEntry): string {
+  const name=entry.phrases[0]||entry.item.label
+  if(entry.request.action==='pasteText')return 'Pasted into the focused session. Still listening.'
+  if(entry.request.action==='sendKey')return `Pressed ${name}. Still listening.`
+  return `${entry.request.submit?'Ran':'Inserted'} ${name}. Still listening.`
 }
 
 // One naming rule for every surface that shows a session: sidebar rows, workspace
@@ -447,6 +464,7 @@ export function App() {
   // Sound and push channel choices stay intact while the master is muted. Kept in sync
   // through the `mux:settings-changed` event the device-settings cache emits.
   const [alertsEnabled, setAlertsEnabled] = useState(() => alertPreferences().enabled)
+  const [railVoiceRevision,setRailVoiceRevision]=useState(0)
   const [usageOpen, setUsageOpen] = useState(false)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
@@ -544,6 +562,7 @@ export function App() {
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
+  const [claudeMaxColumns, setClaudeMaxColumns] = useState<number>(DEFAULT_CLAUDE_MAX_COLUMNS)
   // Chrome scale as a number. Every other surface reads it as a CSS custom property, but
   // xterm owns its own font and derives the cell grid from it, so the terminal has to be
   // handed the value rather than inheriting it.
@@ -1158,6 +1177,7 @@ export function App() {
     previewUiScaleConfig(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
+    setClaudeMaxColumns(claudeMaxColumnsFrom(config))
     // Value-compared for the same reason as mobileInput below: this feeds
     // TerminalPane's mount effect, so a fresh object identity on an unchanged
     // machine descriptor would dispose and rebuild every live terminal.
@@ -1232,8 +1252,8 @@ export function App() {
     // re-rendering a backgrounded tab) and refresh once on return to foreground.
     const tick = () => { if (!document.hidden) void refresh() }
     const keyTick = () => { if (!document.hidden) loadKeys() }
-    const timer = setInterval(tick, 15000)
-    const keyTimer = setInterval(keyTick, 30000)
+    const timer = setInterval(tick, FLEET_SAFETY_REFRESH_MS)
+    const keyTimer = setInterval(keyTick, KEYBINDING_SAFETY_REFRESH_MS)
     const onVisible = () => { if (!document.hidden) { void refresh(); loadKeys() } }
     document.addEventListener('visibilitychange', onVisible)
     // Backstop for every `void api(...)` call site. Kill, create, and delete are
@@ -1258,7 +1278,7 @@ export function App() {
   // the daemon; this raw fleet sample is never navigation state by itself.
   const loadProcesses = async () => {
     try {
-      const snapshot = await api<FleetSnapshot>('GET','/api/processes')
+      const snapshot = await api<FleetSnapshot>('GET','/api/processes?summary=1')
       setProcessFleet(snapshot)
     } catch { setProcessFleet(null) }
   }
@@ -1266,7 +1286,7 @@ export function App() {
   useEffect(() => {
     void loadProcesses()
     const tick = () => { if (!document.hidden) void loadProcesses() }
-    const timer = setInterval(tick, 8000)
+    const timer = setInterval(tick, PROCESS_SUMMARY_REFRESH_MS)
     const onVisible = () => { if (!document.hidden) void loadProcesses() }
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
@@ -1581,7 +1601,10 @@ export function App() {
   // Keep the sidebar bell in step with the device-settings cache: a local toggle, a
   // remote edit replayed over the /events socket, or a device-class switch all land here.
   useEffect(()=>{
-    const sync=()=>setAlertsEnabled(alertPreferences().enabled)
+    const sync=()=>{
+      setAlertsEnabled(alertPreferences().enabled)
+      setRailVoiceRevision(value=>value+1)
+    }
     window.addEventListener('mux:settings-changed',sync)
     return ()=>window.removeEventListener('mux:settings-changed',sync)
   },[])
@@ -1652,6 +1675,14 @@ export function App() {
   const workspacePanes=paneStacks(activeLayout)
   const paneViewIds=workspacePanes.map(pane=>pane.active_child_id)
   const focusedTabId=leaves(activeLayout).find(leaf=>leaf.id===(focusedViewId||activeId))?.id||null
+  const focusedTerminalSession=focusedTabId?sessions.find(session=>session.id===focusedTabId)||null:null
+  const railVoiceEntries=useMemo(()=>focusedTerminalSession?resolveRailVoiceEntries(
+    loadRailConfig(focusedTerminalSession.project_id),
+    {device:currentProfile(),backend:focusedTerminalSession.backend},
+  ):[],[
+    focusedTerminalSession?.id,focusedTerminalSession?.project_id,focusedTerminalSession?.backend,
+    mobileWorkspace,railVoiceRevision,
+  ])
   const activeStack=focusedTabId?stackForView(activeLayout,focusedTabId):null
   const unpanned = sessions.filter(session => session.project_id === projectId && !['exited', 'crashed'].includes(session.state) && !paneIds.includes(session.id))
   const focusedOutsideLayout=!!active&&!['exited','crashed'].includes(active.state)&&active.project_id===projectId&&!paneIds.includes(active.id)
@@ -3540,10 +3571,42 @@ export function App() {
     })),
     { id: 'clipboard.open', label: 'Open clipboard history', category: 'clipboard', available: true, run: () => showDrawerTab('clipboard') },
     { id: 'clipboard.clear', label: 'Clear unpinned clipboard history', category: 'clipboard', available: true, run: () => void clearClipboardHistory().then(removed => { window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT)); setError(`Cleared ${removed} clipboard entr${removed===1?'y':'ies'}.`) }).catch(cause => setError(cause instanceof Error?cause.message:String(cause))) },
+    ...railVoiceEntries.map((entry):Command=>({
+      id:`terminal.railVoice:${entry.item.id}`,
+      label:`Focused session: ${entry.item.title||entry.item.label}`,
+      category:entry.request.action==='pasteText'?'clipboard':'terminal',
+      available:!!focusedTerminalSession&&!isEndedSession(focusedTerminalSession),
+      disabledReason:'Focus a running session',
+      run:()=>focusedTerminalSession&&requestTerminalAction(focusedTerminalSession.id,entry.request).catch(cause=>setError(cause instanceof Error?cause.message:String(cause))),
+      voice:{
+        phrases:entry.phrases,
+        execute:async()=>{
+          if(!focusedTerminalSession||isEndedSession(focusedTerminalSession))return{detail:'Focus a running session first.'}
+          try{
+            await requestTerminalAction(focusedTerminalSession.id,entry.request)
+            return{detail:railVoiceConfirmation(entry)}
+          }catch(cause){
+            return{detail:cause instanceof Error?cause.message:String(cause)}
+          }
+        },
+      },
+    })),
     ...(['copy', 'paste', 'selectAll', 'clear'] as const).map((action): Command => ({
       id: `terminal.${action}`, label: `${action === 'selectAll' ? 'Select all' : action[0].toUpperCase() + action.slice(1)} in focused terminal`,
       category: 'clipboard', available: !!active, disabledReason: 'No focused terminal',
       run: () => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: activeId, action } })),
+      voice:action==='copy'?{
+        phrases:['copy','copy selection'],
+        execute:async()=>{
+          if(!focusedTerminalSession)return{detail:'Focus a session first.'}
+          try{
+            await requestTerminalAction(focusedTerminalSession.id,{action:'copy'})
+            return{detail:'Copied the terminal selection. Still listening.'}
+          }catch(cause){
+            return{detail:cause instanceof Error?cause.message:String(cause)}
+          }
+        },
+      }:undefined,
     })),
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
@@ -4203,7 +4266,7 @@ export function App() {
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceOverlayNode}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={()=>openSettings('Command rail')} onConfigureWidth={()=>openSettings('Terminals')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>

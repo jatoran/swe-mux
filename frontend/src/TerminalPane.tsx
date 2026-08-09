@@ -38,8 +38,8 @@ import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
 import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
-import { currentProfile, loadRailConfig } from './deviceSettings'
-import { APP_TAIL_KEY, CLAUDE_MAX_DESKTOP_COLUMNS, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
+import { MOBILE_QUERY, currentProfile, loadRailConfig } from './deviceSettings'
+import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
 import { terminalRenderControl } from './terminalRenderPause'
 import { adoptsOwnGeometryOnReveal, geometryMatchesFit, letterboxFontSize } from './terminalLetterbox'
@@ -125,6 +125,17 @@ const BASE_FONT_SIZE = 11
 const LETTERBOX_NOTICE_DELAY_MS = 1500
 
 /**
+ * How long the Claude width-cap notice stays up after a resize that the cap clamped.
+ *
+ * The opposite problem to the letterbox notice above, and so the opposite treatment.
+ * A letterbox that resolves is not worth announcing, so that one waits; a clamped
+ * width never resolves on its own, so this one appears immediately and leaves on a
+ * timer instead. Long enough to read a sentence and reach the button, short enough
+ * that a user who keeps a wide layout is not told about it forever.
+ */
+const WIDTH_CAP_NOTICE_MS = 6000
+
+/**
  * Rows one gesture event may forward to an application that holds the mouse.
  *
  * A sanity bound, not a scroll budget: a full-screen flick asks for a dozen rows at most,
@@ -165,8 +176,18 @@ interface Props {
    * every tab switch, which is the exact cost warm panes exist to remove.
    */
   visible: boolean
+  /**
+   * The configured Claude width envelope in columns, 0 for none. Applied here rather
+   * than in the fit because the cap is a property of the *box*: capping the host and
+   * letting FitAddon measure the clamped result keeps xterm, the grid the daemon is
+   * told about, and the pixels on screen derived from one number, where a capped
+   * column count would leave the host wider than the terminal drawn inside it.
+   */
+  claudeMaxColumns: number
   /** Open the command-rail settings editor (the rail's trailing gear). */
   onConfigureRail?: () => void
+  /** Open the terminal settings, where the Claude width envelope lives. */
+  onConfigureWidth?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
   onBranch?: () => void
 }
@@ -265,7 +286,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, onConfigureRail, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onConfigureWidth, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
   // terminal's construction effect, which must not re-run just because a font moved.
@@ -339,6 +360,47 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const timer=window.setTimeout(()=>setLetterboxSettled(true),LETTERBOX_NOTICE_DELAY_MS)
     return ()=>window.clearTimeout(timer)
   },[letterboxSize])
+  // Whether this device is on the compact projection, tracked live because a desktop
+  // window dragged across the breakpoint has to drop the desktop width envelope with
+  // the rest of the desktop layout. Same query the workspace and the settings
+  // profiles use, so all three flip together.
+  const [compactLayout,setCompactLayout]=useState(()=>
+    typeof window!=='undefined'&&!!window.matchMedia?.(MOBILE_QUERY).matches)
+  useEffect(()=>{
+    const query=window.matchMedia(MOBILE_QUERY)
+    const on=()=>setCompactLayout(query.matches)
+    on()
+    query.addEventListener('change',on)
+    return()=>query.removeEventListener('change',on)
+  },[])
+  const widthCap=claudeWidthCap(session.backend,compactLayout,claudeMaxColumns)
+  // The cap is invisible from inside the terminal. The grid is correct, the pane is
+  // simply narrower than the box holding it, and every symptom of that - a drag that
+  // stops widening the text, margin appearing on both sides - reads as the CLI
+  // refusing to resize rather than as this app declining to ask it to. So the pane
+  // says so, at the drag that raises the question and only then: the notice goes up
+  // whenever a width change comes back clamped, and back down a few seconds later,
+  // which keeps an explanation from becoming furniture on a layout the user has
+  // already accepted. Holds the cap it is describing, or 0 for hidden.
+  const [widthCapNotice,setWidthCapNotice]=useState(0)
+  const widthCapNoticeTimer=useRef(0)
+  const showWidthCapNotice=useRef<(cap:number)=>void>(()=>{})
+  showWidthCapNotice.current=(cap:number)=>{
+    setWidthCapNotice(cap)
+    window.clearTimeout(widthCapNoticeTimer.current)
+    widthCapNoticeTimer.current=window.setTimeout(()=>setWidthCapNotice(0),WIDTH_CAP_NOTICE_MS)
+  }
+  const hideWidthCapNotice=useRef<()=>void>(()=>{})
+  hideWidthCapNotice.current=()=>{
+    window.clearTimeout(widthCapNoticeTimer.current)
+    setWidthCapNotice(0)
+  }
+  useEffect(()=>()=>window.clearTimeout(widthCapNoticeTimer.current),[])
+  // Read from inside the terminal's construction effect, which must not re-run when a
+  // setting moves - the pane would drop its socket and replay the whole buffer to
+  // change a max-width.
+  const widthCapRef=useRef(widthCap)
+  widthCapRef.current=widthCap
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
@@ -369,6 +431,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setKillArmed(false)
     setInputOwnership(UNOWNED)
     setLetterboxSize('')
+    // The pane instance is reused across tab switches, so a notice raised for a Claude
+    // session would otherwise sit over the Codex session that replaced it.
+    hideWidthCapNotice.current()
     clearAppTail('session_switch')
   },[session.id])
   useEffect(()=>{
@@ -1116,6 +1181,27 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         term.options.fontSize = baseFontRef.current
       }
       fitVisiblePane()
+    }
+    // The width of the *track* the host sits in, which is the pane the user drags.
+    // Deliberately not the host's own width: past the cap the host stops moving
+    // altogether, so a pane that is already capped and dragged wider produces no host
+    // resize at all - exactly the case that needs explaining. Zero until the first
+    // measurement, so a restored wide layout explains itself on the first drag rather
+    // than at boot.
+    let lastTrackWidth = 0
+    const judgeWidthCap = () => {
+      const box = host.current
+      const track = box?.parentElement
+      if (!box || !track) return
+      const trackWidth = track.clientWidth
+      const moved = lastTrackWidth > 0 && trackWidth !== lastTrackWidth
+      lastTrackWidth = trackWidth
+      // Recorded before the bail so a pane that resized while hidden does not read as
+      // a fresh drag on the frame it comes back.
+      if (paneIsHidden() || !trackWidth) return
+      const cap = widthCapRef.current
+      if (!claudeWidthCapClamping(box, cap)) { hideWidthCapNotice.current(); return }
+      if (moved) showWidthCapNotice.current(cap)
     }
     const runViewportPass = () => {
       viewportFitOwed = true
@@ -2413,6 +2499,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     host.current.addEventListener('drop', drop)
     const observer = new ResizeObserver(scheduleBurstFit)
     observer.observe(host.current)
+    // The width-cap notice needs its own observer on the *track*, because the one
+    // above watches the host and a capped host is precisely the one that stops
+    // resizing. Separate rather than folded into `scheduleBurstFit` so a drag that the
+    // cap absorbs costs two `clientWidth` reads instead of a fit proposal per frame:
+    // by construction none of those frames can change the grid.
+    const trackObserver = new ResizeObserver(() => judgeWidthCap())
+    if (host.current.parentElement) trackObserver.observe(host.current.parentElement)
     const intersection = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) scheduleFullRedraw()
     })
@@ -2440,7 +2533,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
@@ -2450,7 +2543,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   const copy = async () => {
     const term = termRef.current
-    if (!term?.hasSelection()) { reportError('Copy requires a terminal selection.'); setMenu(null); return }
+    if (!term?.hasSelection()) {
+      const problem = 'Copy requires a terminal selection.'
+      reportError(problem)
+      setMenu(null)
+      throw new Error(problem)
+    }
     const text = term.getSelection()
     // Reported here for the provenance label; the global capture hook would
     // otherwise record the same text as a generic 'app' copy (and is deduped).
@@ -2461,20 +2559,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       setManualClipboard(false)
     } else {
       prepareClipboardFallback(text)
+      setMenu(null)
+      throw new Error('Clipboard access was blocked. Manual copy is ready in the terminal.')
     }
     setMenu(null)
   }
-  const paste = async () => {
+  const paste = async (textOnly=false) => {
     const term = termRef.current
-    if (term) {
-      try {
-        const pasted=await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
-        focusTerminalInputRef.current()
-        if(pasted==='text')showClipboardStatus('Pasted')
-      } catch {
-        setManualPaste(true)
-        requestAnimationFrame(()=>manualPasteRef.current?.focus())
-      }
+    if(!term)throw new Error('The target terminal is not mounted.')
+    try {
+      const pasted=textOnly
+        ?(pasteIntoTerminal(term,session,await navigator.clipboard.readText()),'text' as const)
+        :await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
+      focusTerminalInputRef.current()
+      if(pasted==='text')showClipboardStatus('Pasted')
+    } catch {
+      setManualPaste(true)
+      requestAnimationFrame(()=>manualPasteRef.current?.focus())
+      throw new Error('Clipboard access was blocked. Manual paste is open in the terminal.')
     }
     setMenu(null)
   }
@@ -2520,23 +2622,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const onAction = (event: Event) => {
       const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean;requestId?:string}>).detail
       if (detail.sessionId !== session.id) return
-      if (detail.action === 'copy') void copy()
-      else if (detail.action === 'paste') void paste()
-      else if (detail.action === 'selectAll') { termRef.current?.selectAll(); setMenu(null) }
-      else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
-      else if (detail.action === 'find') find()
-      else if (detail.action === 'toggleKeyboard') toggleKeyboard()
-      else if (detail.action === 'insertText' && detail.text) {
-        void injectText(detail.text, detail.submit).then(()=>{
+      const perform = (operation:()=>void|Promise<void>) => {
+        void Promise.resolve().then(operation).then(()=>{
           if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:true}}))
         }).catch(cause=>{
           if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:false,error:cause instanceof Error?cause.message:String(cause)}}))
         })
       }
+      if (detail.action === 'copy') perform(copy)
+      else if (detail.action === 'paste') perform(()=>paste())
+      else if (detail.action === 'pasteText') perform(()=>paste(true))
+      else if (detail.action === 'selectAll') { termRef.current?.selectAll(); setMenu(null) }
+      else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
+      else if (detail.action === 'find') find()
+      else if (detail.action === 'toggleKeyboard') toggleKeyboard()
+      else if (detail.action === 'insertText' && detail.text) perform(()=>injectText(detail.text!, detail.submit))
       // Rail items rendered outside this pane (the drawer's Commands tab) route
       // here rather than touching xterm: the pane stays the single owner of
       // terminal writes, so broadcast, replay, and read/select mode still apply.
-      else if (detail.action === 'sendKey' && detail.text) sendKey(detail.text)
+      else if (detail.action === 'sendKey' && detail.text) perform(()=>{
+        if(!termRef.current)throw new Error('The target terminal is not mounted.')
+        sendKey(detail.text!)
+      })
       else if (detail.action === 'copyReply') void copyLastReply()
       else if (detail.action === 'copyResume') void copyResumeCommand()
       else if (detail.action === 'branch') onBranch?.()
@@ -2760,12 +2867,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const renderedRailRows=builtRailRows.length?builtRailRows:[{id:'rail-empty',nodes:[]}]
 
   const ownerNotice=inputOwnerNotice(inputOwnership)
-  const claudeHostStyle=session.backend==='claude'?{
+  // No style at all when the cap is off, rather than one carrying `maxWidth:'none'`:
+  // an uncapped Claude pane then has exactly the host every other backend has, so
+  // "the envelope is disabled" and "this build never had an envelope" are the same
+  // code path and cannot diverge. The font declarations exist only to give `ch` a
+  // cell to resolve against, so they go with it.
+  const claudeHostStyle=widthCap?{
     // `justifySelf:center` opts a grid item out of stretch sizing. Keep the width
     // definite before applying the cap or the host becomes shrink-to-fit, with its
     // 100%-wide xterm child feeding the result back into the next FitAddon pass.
     width:'100%',
-    maxWidth:`calc(${CLAUDE_MAX_DESKTOP_COLUMNS}ch + 11px)`,
+    maxWidth:claudeHostMaxWidth(widthCap),
     justifySelf:'center',
     fontFamily:'"Cascadia Mono", Consolas, monospace',
     fontSize:`${baseFont}px`,
@@ -2788,7 +2900,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
        a size this pane never chose, with no explanation anywhere — was the one case that
        said nothing at all. Claiming input is the fix as well as the explanation: the owner
        dictates geometry, so taking it resizes the session to this pane. */
-    :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Resize</button></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+    :letterboxActive&&letterboxSettled&&<div class="terminal-input-owner letterbox-notice" role="status"><span>Showing {letterboxSize} · sized elsewhere</span><button title="Size this session to this pane" onClick={()=>{resizeToPaneRef.current();focusTerminalInputRef.current()}}>Resize</button></div>}{/* Three notices share one slot at the top of the pane, so they are ordered by
+       how much they explain: who has input beats an unexplained grid, which beats a
+       grid the user can widen from Settings. A pane that is both letterboxed and
+       capped is showing another device's size, and naming this device's envelope
+       would be describing something that is not on screen. */}
+  {!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span>{onConfigureWidth&&<button title="Change or remove the Claude width limit in Settings → Terminals" onClick={onConfigureWidth}>Change…</button>}</div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
@@ -2838,6 +2955,9 @@ export const TerminalPane = memo(TerminalPaneImpl, (a, b) =>
   // the single boot transition from "config not loaded yet" to the real value.
   a.windowsPty === b.windowsPty &&
   a.mobileInput === b.mobileInput &&
+  // Without this a width envelope edited in Settings reaches no live pane, and the
+  // setting appears to do nothing until every terminal is rebuilt.
+  a.claudeMaxColumns === b.claudeMaxColumns &&
   // Without this the memo swallows the change and the pane keeps the old font.
   a.uiScale === b.uiScale,
 )

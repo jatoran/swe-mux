@@ -42,6 +42,23 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Expensive/upload/bridge routes use targeted body, response, concurrency, idle, and
   duration limits. No blanket per-user limiter or enterprise audit subsystem exists;
   privileged user actions enter the existing metadata-only EventBus.
+- `GET /api/diagnostics/network` reports in-memory HTTP body and WebSocket application-frame
+  counters for the current daemon boot or explicit measurement window, grouped by bounded
+  route template, socket channel, and peer address.
+  `DELETE /api/diagnostics/network` logs the previous totals and begins a fresh window without
+  restarting the daemon or any session.
+  Reads and resets of this endpoint are excluded from their own counters.
+- HTTP response counts are encoded body bytes after negotiated compression.
+  They exclude headers, TLS, Tailscale, and packet overhead.
+  WebSocket counts are text/binary frame payload bytes before per-message compression and
+  exclude control frames.
+  Use an OS or browser wire capture when transport-exact totals are required.
+- Forwarded peer identity is accepted only from a valid `X-Forwarded-For` address received
+  through a loopback peer, which covers the local Tailscale Serve proxy without trusting a
+  direct tailnet client's header.
+- Dynamic JSON and text responses of at least 1 KiB negotiate compression.
+  Production frontend builds also create gzip siblings for eligible static assets, which
+  aiohttp serves according to `Accept-Encoding`.
 - There is no swe-mux bearer/login path. Tailscale policy decides which devices/users may
   reach the direct listener or optional Serve endpoint; an admitted peer has terminal and
   code-execution authority.
@@ -75,6 +92,8 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 
 - Listener/config policy: `src/swe_mux/config.py`, `src/swe_mux/__main__.py`
 - Browser boundary and status route: `src/swe_mux/server.py`
+- Traffic accounting and dynamic compression: `src/swe_mux/network_usage.py`
+- Static precompression: `frontend/scripts/compress-static.mjs`
 - Tailscale inspection and bounded Serve setup: `src/swe_mux/tailscale.py`
 - Settings/status and browser redirect: `frontend/src/Settings.tsx`,
   `frontend/src/mobileVoice.ts`, `frontend/src/ConversationControl.tsx`

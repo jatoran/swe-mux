@@ -93,6 +93,10 @@
 - Changing background-loop supervision, per-loop cost accounting, event-loop lag sampling,
   or the performance investigation procedure: `development/PERFORMANCE_RUNBOOK.md`,
   `technical/backend/packages.md`, `design/interfaces.md`
+- Changing HTTP/WebSocket traffic accounting, response compression, static precompression,
+  or browser polling cadence: `design/features/remote-access.md`, `design/interfaces.md`,
+  `design/features/processes-and-previews.md`, `development/PERFORMANCE_RUNBOOK.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing per-project automation opt-in, the enablement dependency graph, or its toggle
   surface: `design/features/automation-enablement.md`,
   `design/features/project-resources.md`, `design/data-model.md`, `design/interfaces.md`
@@ -158,6 +162,9 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   App-owned Talk state renders in the focused pane's floating voice overlay, with a fixed top fallback when no terminal pane is visible.
   It names the target, supports an exact-target pin, keeps the draft across focus changes, and retains a device-local user/Mux history.
   Dynamic navigation, direct spawn, typed fleet/help/reply queries, and guarded approvals resolve through voice aliases on the ordinary command registry.
+  With a running session focused, that registry also exposes terminal copy/paste, explicitly voiced safe rail keys, and configured agent skill/slash rail items through `railVoice.ts`.
+  It excludes attachments, keyboard mode, clear-input, arbitrary prompt/text macros, and destructive rail actions.
+  Those commands execute through the mounted terminal owner and report its acknowledgement instead of assuming a PTY action succeeded.
   Spoken navigation uses live hierarchical indexes without requiring a prior list: `Project N` follows visible sidebar order, bare `Session N` follows the selected Project's sidebar session order, `next/previous session` traverses that same Project-scoped order without wrapping, and `Project N Session N` resolves both coordinates atomically.
   Spoken lists retain those canonical addresses, speak five explicitly separated items at a time, and keep five-minute device-local paging context for next/repeat/detail follow-ups.
   Playback leaves capture open; possible speech immediately ducks app audio, waits three frames for echo to drain, then three accepted frames on the quiet mic stop the whole stream before transcription and continue as ordinary dictation or wake-word command input. Rejected echo restores playback. Bare `Mux, stop` stops playback without releasing Talk.

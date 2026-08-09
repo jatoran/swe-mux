@@ -194,6 +194,12 @@ export const cancelQueueMessage = (
   kind: 'cancelled' | 'skipped' | 'revoked',
 ) => api<QueueMessage>('POST', `/api/queue/messages/${messageId}/cancel`, { kind })
 
+export const deleteQueueMessage = (messageId: string) =>
+  api<{ deleted: true; message_id: string; already_deleted: boolean }>(
+    'DELETE',
+    `/api/queue/messages/${messageId}`,
+  )
+
 // ---------------------------------------------------------------- Phase 5
 
 export const fetchAutoStatus = () =>

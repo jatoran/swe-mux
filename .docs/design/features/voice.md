@@ -305,8 +305,17 @@ executed action — so that number is measured rather than estimated.
   Session launch accepts the Project name, the stable visible `Project N` address, or no Project qualifier for the selected Project, and the ordinary spawn path focuses the optimistic new tab immediately.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
+- **Safe command-rail actions join that same registry only while a session is focused.**
+  `railVoice.ts` resolves the focused Project's rail configuration for the current device and backend, deduplicates entries placed on the strip or Commands panel, and adapts only an explicit safe subset to registry commands.
+  The shipped subset is terminal copy/paste plus non-destructive terminal keys: Escape, Enter, Tab, Ctrl+C, arrows, cursor navigation, restore input, newline, and the Markdown insertion helpers.
+  Non-submitting configured agent `skill` and `slash` entries derive deterministic aliases from their command name and preserve the rail item's backend-specific payload, so `Mux, learn` inserts `$learn` in Codex and `/learn` in Claude when that item is configured.
+  A configured entry that submits requires an explicit `voicePhrases` opt-in instead of becoming executable from its label alone.
+  Literal text, prompt templates, clear-input, attachments, keyboard mode, relaunch, branch, clipboard-history UI, reply-copy helpers, and end-session never cross this adapter.
+  Execution goes back through the mounted `TerminalPane` action bus instead of writing to the PTY directly, and Talk waits for an acknowledgement before reporting success.
+  Voice Paste reads clipboard text only and cannot take the visible Paste button's image-attachment branch.
+  A missing pane, missing copy selection, or blocked browser clipboard is therefore reported as a failure instead of a false success.
 - **Settings exposes the complete current command surface.**
-  Settings → Voice renders configurable capture-control phrases, the fixed grammar shared with spoken help, and the live registry aliases for current Projects, sessions, workspace panels, launch targets, status, and approvals.
+  Settings → Voice renders configurable capture-control phrases, the fixed grammar shared with spoken help, and the live registry aliases for current Projects, sessions, workspace panels, launch targets, status, approvals, and the focused session's safe rail actions.
   `voiceCommandReference.ts` groups registry entries for display and omits only the internal `{text}` catch-all because the closed grammar is listed separately.
   Unavailable guarded commands remain visible with their current requirement, so discovery does not depend on first reaching the required state.
 - **Spoken lookup is a bounded dialog, not open-ended intent inference.**

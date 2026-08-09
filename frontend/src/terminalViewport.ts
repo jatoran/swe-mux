@@ -7,14 +7,98 @@ type TerminalHost = { isConnected: boolean; clientWidth: number; clientHeight: n
  * Desktop width envelope for agent TUIs with known layout boundaries.
  *
  * Claude's live-region renderer leaves stale and duplicated cells across large
- * column changes. Past this reading width, a wider pane should add margin rather
- * than keep resizing the PTY. Codex publishes an 80-column minimum in its own
+ * column changes. Past a comfortable reading width, a wider pane should add margin
+ * rather than keep resizing the PTY. Codex publishes an 80-column minimum in its own
  * terminal diagnostics; below it the composer can wrap through visually blank
  * rows, so desktop panes reduce the font before accepting a narrower grid.
+ *
+ * The Claude half is a *setting* rather than a constant. Its evidence is a rendering
+ * defect in a CLI that ships independently of this app, so the number that was right
+ * when it was measured is not necessarily right later - and the cost of being wrong
+ * lands entirely on the user, who cannot tell a deliberate envelope from a broken
+ * resize. The Codex minimum stays fixed: it is that vendor's own published floor
+ * rather than an observation about a renderer, and there is nothing to tune.
  */
-export const CLAUDE_MAX_DESKTOP_COLUMNS = 120
 export const CODEX_MIN_DESKTOP_COLUMNS = 80
 export const CODEX_MIN_DESKTOP_FONT_PX = 8
+
+/** The setting's value for "no cap": a Claude pane fills its box like every other. */
+export const CLAUDE_MAX_COLUMNS_OFF = 0
+
+/**
+ * Mirrors `CLAUDE_MAX_COLUMNS` in `config.py`, pinned by
+ * `tests/test_frontend_claude_width_contract.py`.
+ *
+ * Discrete steps rather than a free number, for the same reason the chrome scale uses
+ * them: there is no useful difference between a 121- and a 123-column envelope, only a
+ * way to land on a value that reads as broken. The range spans "barely wider than
+ * today" to "wider than most windows", with `off` covering everything past that.
+ */
+export const CLAUDE_MAX_COLUMN_STEPS = [0, 100, 120, 140, 160, 200, 240, 320] as const
+
+export type ClaudeMaxColumns = (typeof CLAUDE_MAX_COLUMN_STEPS)[number]
+
+/** Today's behaviour. Installing this build changes nothing on screen. */
+export const DEFAULT_CLAUDE_MAX_COLUMNS: ClaudeMaxColumns = 120
+
+export const claudeMaxColumnsLabel = (columns: ClaudeMaxColumns): string =>
+  columns === CLAUDE_MAX_COLUMNS_OFF ? 'No limit' : `${columns} columns`
+
+/**
+ * A config value as a known step, falling back to the default for anything else -
+ * including a daemon older than this build, which sends no key at all.
+ */
+export function claudeMaxColumnsFrom(config: Record<string, unknown>): ClaudeMaxColumns {
+  const raw = config.claude_max_columns
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) return DEFAULT_CLAUDE_MAX_COLUMNS
+  return CLAUDE_MAX_COLUMN_STEPS.find(step => step === raw) ?? DEFAULT_CLAUDE_MAX_COLUMNS
+}
+
+/**
+ * The column cap this pane's host should carry, or `CLAUDE_MAX_COLUMNS_OFF` for none.
+ *
+ * Compact panes are excluded on the same grounds as the Codex minimum: a desktop
+ * envelope has no business overriding the geometry of a device whose whole screen is
+ * narrower than the smallest value this accepts. That exclusion is inert today and
+ * deliberately stated anyway, so a larger touch device cannot inherit it by accident.
+ */
+export function claudeWidthCap(
+  backend: string,
+  compactLayout: boolean,
+  maxColumns: number,
+): number {
+  if (backend !== 'claude' || compactLayout) return CLAUDE_MAX_COLUMNS_OFF
+  if (!Number.isInteger(maxColumns) || maxColumns <= 0) return CLAUDE_MAX_COLUMNS_OFF
+  return maxColumns
+}
+
+/**
+ * Pixels the host must add on top of the cell grid: xterm reserves a scrollbar
+ * gutter outside the columns it reports, so a host sized to exactly `Nch` renders
+ * N-1 columns.
+ */
+export const CLAUDE_CAP_GUTTER_PX = 11
+
+/** The host's `max-width` at a given cap. `ch` resolves against the host's own font,
+ *  which is set to match xterm's, so the cap follows the terminal font and UI scale. */
+export const claudeHostMaxWidth = (cap: number): string =>
+  `calc(${cap}ch + ${CLAUDE_CAP_GUTTER_PX}px)`
+
+type CappedHost = { clientWidth: number; parentElement: { clientWidth: number } | null }
+
+/**
+ * Whether the cap is currently taking width away from this pane.
+ *
+ * Measured against the track the host sits in rather than derived from the column
+ * count: the cap is a `max-width` over a `width:100%`, so "narrower than the space
+ * available" is exactly the condition, and it stays correct whatever the font, the
+ * gutter, or a future cap unit turn out to be. One pixel of tolerance, because
+ * fractional cell widths make an uncapped host land a hair under its track.
+ */
+export function claudeWidthCapClamping(host: CappedHost | null, cap: number): boolean {
+  if (cap <= CLAUDE_MAX_COLUMNS_OFF || !host?.parentElement) return false
+  return host.parentElement.clientWidth > host.clientWidth + 1
+}
 
 export function terminalWidthPolicyFontSize(
   backend: string,

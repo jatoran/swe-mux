@@ -5,8 +5,15 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   APP_TAIL_KEY,
-  CLAUDE_MAX_DESKTOP_COLUMNS,
+  CLAUDE_MAX_COLUMNS_OFF,
+  CLAUDE_MAX_COLUMN_STEPS,
   CODEX_MIN_DESKTOP_COLUMNS,
+  DEFAULT_CLAUDE_MAX_COLUMNS,
+  claudeHostMaxWidth,
+  claudeMaxColumnsFrom,
+  claudeMaxColumnsLabel,
+  claudeWidthCap,
+  claudeWidthCapClamping,
   CODEX_MIN_DESKTOP_FONT_PX,
   EXPENSIVE_VIEWPORT_PASS_MS,
   VIEWPORT_SETTLE_MAX_MS,
@@ -206,11 +213,89 @@ test('desktop Codex preserves its documented 80-column composer floor by reducin
 })
 
 test('Claude panes stop expanding before its resize-corruption range', () => {
-  assert.equal(CLAUDE_MAX_DESKTOP_COLUMNS, 120)
+  assert.equal(DEFAULT_CLAUDE_MAX_COLUMNS, 120)
   const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'TerminalPane.tsx'), 'utf8')
   assert.match(source, /width:'100%'/)
-  assert.match(source, /maxWidth:`calc\(\$\{CLAUDE_MAX_DESKTOP_COLUMNS\}ch \+ 11px\)`/)
+  assert.match(source, /maxWidth:claudeHostMaxWidth\(widthCap\)/)
   assert.match(source, /justifySelf:'center'/)
+  // The gutter is not decoration: a host sized to exactly Nch renders N-1 columns,
+  // because xterm reserves its scrollbar outside the cell grid it reports.
+  assert.equal(claudeHostMaxWidth(120), 'calc(120ch + 11px)')
+})
+
+test('the width envelope applies to desktop Claude panes and nothing else', () => {
+  assert.equal(claudeWidthCap('claude', false, 120), 120)
+  assert.equal(claudeWidthCap('claude', false, 320), 320)
+  // Every other backend fills its pane. Codex and OMP were never capped, and the
+  // asymmetry is the whole reason a Claude pane looks like it refuses to widen.
+  assert.equal(claudeWidthCap('codex', false, 120), CLAUDE_MAX_COLUMNS_OFF)
+  assert.equal(claudeWidthCap('shell', false, 120), CLAUDE_MAX_COLUMNS_OFF)
+  // A desktop envelope has no business narrowing a phone, which is already below
+  // every step this setting offers. Inert today, stated so a tablet cannot inherit it.
+  assert.equal(claudeWidthCap('claude', true, 120), CLAUDE_MAX_COLUMNS_OFF)
+  // Off, and anything that cannot be a column count, must not become a 0px host.
+  assert.equal(claudeWidthCap('claude', false, CLAUDE_MAX_COLUMNS_OFF), CLAUDE_MAX_COLUMNS_OFF)
+  assert.equal(claudeWidthCap('claude', false, -10), CLAUDE_MAX_COLUMNS_OFF)
+  assert.equal(claudeWidthCap('claude', false, 120.5), CLAUDE_MAX_COLUMNS_OFF)
+  assert.equal(claudeWidthCap('claude', false, Number.NaN), CLAUDE_MAX_COLUMNS_OFF)
+})
+
+test('an unknown or absent width setting falls back to what the app has always done', () => {
+  assert.equal(claudeMaxColumnsFrom({ claude_max_columns: 240 }), 240)
+  assert.equal(claudeMaxColumnsFrom({ claude_max_columns: CLAUDE_MAX_COLUMNS_OFF }), 0)
+  // A daemon older than this build sends no key at all.
+  assert.equal(claudeMaxColumnsFrom({}), DEFAULT_CLAUDE_MAX_COLUMNS)
+  for (const bad of [130, -1, 1.5, '120', true, null] as unknown[]) {
+    assert.equal(
+      claudeMaxColumnsFrom({ claude_max_columns: bad }),
+      DEFAULT_CLAUDE_MAX_COLUMNS,
+      `${String(bad)} must not survive as a cap`,
+    )
+  }
+  assert.ok(CLAUDE_MAX_COLUMN_STEPS.includes(DEFAULT_CLAUDE_MAX_COLUMNS))
+  assert.equal(claudeMaxColumnsLabel(CLAUDE_MAX_COLUMNS_OFF), 'No limit')
+  assert.equal(claudeMaxColumnsLabel(160), '160 columns')
+})
+
+test('the pane can tell a cap that is taking width from one that is not', () => {
+  const clamped = { clientWidth: 800, parentElement: { clientWidth: 1600 } }
+  assert.equal(claudeWidthCapClamping(clamped, 120), true)
+  // Same pane, cap disabled: nothing to explain, whatever the box measures.
+  assert.equal(claudeWidthCapClamping(clamped, CLAUDE_MAX_COLUMNS_OFF), false)
+  // A capped pane in a window too narrow to reach the cap is not being clamped.
+  assert.equal(claudeWidthCapClamping({ clientWidth: 700, parentElement: { clientWidth: 700 } }, 120), false)
+  // Fractional cell widths leave an uncapped host a hair under its track.
+  assert.equal(claudeWidthCapClamping({ clientWidth: 799.5, parentElement: { clientWidth: 800 } }, 120), false)
+  assert.equal(claudeWidthCapClamping(null, 120), false)
+  assert.equal(claudeWidthCapClamping({ clientWidth: 800, parentElement: null }, 120), false)
+})
+
+test('the width envelope reaches live panes and explains itself when it clamps', () => {
+  const root = dirname(fileURLToPath(import.meta.url))
+  const pane = readFileSync(join(root, '..', 'src', 'TerminalPane.tsx'), 'utf8')
+  const app = readFileSync(join(root, '..', 'src', 'App.tsx'), 'utf8')
+  // Three individually inert halves, exactly like the chrome scale: the prop has to
+  // reach the pane, the memo has to let a change through, and the cap must not be a
+  // dependency of the terminal's construction effect - listing it there would drop
+  // the socket and replay the whole buffer to change a max-width.
+  assert.match(app, /claudeMaxColumns=\{claudeMaxColumns\}/)
+  assert.match(app, /setClaudeMaxColumns\(claudeMaxColumnsFrom\(config\)\)/)
+  assert.match(pane, /a\.claudeMaxColumns === b\.claudeMaxColumns &&/)
+  const lifetime = /\n  \}, \[session\.id, keybindings,[^\]]*\]\)/.exec(pane)?.[0] ?? ''
+  assert.ok(lifetime, 'the terminal lifetime effect dep list has moved')
+  assert.doesNotMatch(lifetime, /claudeMaxColumns/)
+  // Uncapped means no host style at all, so a disabled envelope and a build without
+  // one are the same code path.
+  assert.match(pane, /const claudeHostStyle=widthCap\?\{/)
+  // The notice is driven by an observer on the *track*, not on the host. Watching the
+  // host cannot work: past the cap the host stops resizing, so a pane that is already
+  // capped and dragged wider - the case that actually needs explaining - produces no
+  // host resize at all.
+  assert.match(pane, /const trackObserver = new ResizeObserver\(\(\) => judgeWidthCap\(\)\)/)
+  assert.match(pane, /trackObserver\.observe\(host\.current\.parentElement\)/)
+  assert.match(pane, /trackObserver\.disconnect\(\)/)
+  // It never lands on top of a letterbox or ownership notice, which share its slot.
+  assert.match(pane, /!ownerNotice&&!letterboxActive&&widthCapNotice>0/)
 })
 
 test('surface repair debt survives zero-sized frames and completes once measurable', () => {
