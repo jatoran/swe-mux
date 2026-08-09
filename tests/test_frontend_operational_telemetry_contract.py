@@ -22,15 +22,18 @@ def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() ->
 
 
 def test_usage_dashboard_exposes_phase2_evidence_without_identity_overclaim() -> None:
-    dashboard = source("UsageDashboard.tsx")
+    dashboard = source("UsageDashboardView.tsx")
+    quota = source("QuotaAnalytics.tsx")
     assert "/api/telemetry/operational" in dashboard
     assert "quota + resets" in dashboard
-    assert "external/unassigned" in dashboard
-    assert "probabilistic" in dashboard
-    assert "does not prove personal identity" in dashboard
+    assert "/api/telemetry/quota-series" in source("usageAnalytics.ts")
+    assert "external/unassigned" in quota
+    assert "Correlation remains observational" in quota
+    assert "Legacy rows without a provider ID are marked explicitly" in quota
+    assert "not account-specific" in dashboard
     assert "tools + skills" in dashboard
-    assert "unknown/unmapped" in dashboard
-    assert "Project/session" in dashboard
+    assert "unknown or unmapped" in dashboard
+    assert "project/session" in dashboard
     assert "parser_versions" in dashboard
     assert "Token drops alone remain unknown" in dashboard
 
