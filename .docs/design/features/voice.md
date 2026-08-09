@@ -27,9 +27,12 @@ affect the PTY, session state, transcripts, history, or projects.
   toggle (`tts_enabled`) is on. The mode is set through ordinary `PATCH /sessions/{id}` and
   dies with the session.
 - `auto` subscribes to `turn_ended`, debounces one second per session (`DEBOUNCE_SECONDS`),
-  and extracts the completed `last_turn` transcript slice. `last_reply_text` walks backward
-  across turn boundaries so a synthetic provider acknowledgement never becomes the "latest
-  reply".
+  and reads `transcript_view.final_exchange`: the agent's newest assistant segment plus the
+  message it was answering. That is the same reduction the drawer's Transcript tab renders and
+  the rail's Copy reply copies, so what is spoken is what is on screen, cut at the same tool
+  boundary. A synthetic provider acknowledgement is classified out before it can become the
+  "latest reply". Verbatim speaks the segment; a summary is given the prompt alongside it, since
+  a spoken update that opens by restating the wrong question is worse than a long one.
   Every automatic, manual, and trusted application response uses the same segmented stream.
   `streaming_segments` keeps any ordinary reply of at most 420 characters in one coherent clip.
   Longer replies emit one complete opening sentence first whenever it fits the 420-character clip bound, then continue in clips of at most 420 characters.
@@ -443,7 +446,7 @@ and never touches the daemon or an LLM.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
 - `POST /api/sessions/{sid}/voice/generate` - start segmented last-reply synthesis; optional `{content_mode: summary|verbatim, stream_id: UUID}` values are one-shot and do not change the session preference.
 - `POST /api/voice/speak` - start segmented trusted application speech without a model call; accepts an optional client stream ID.
-- `GET  /api/sessions/{sid}/last-reply` — normalized assistant text (no terminal OSC 52).
+- `GET  /api/sessions/{sid}/last-reply` — the newest assistant segment, cut at its tool boundary and identical to the Transcript tab's last agent message (no terminal OSC 52).
 - `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
 - `POST /api/remote/mobile-voice/enable` — configure/repair the Tailscale Serve HTTPS address.
 

@@ -1065,13 +1065,14 @@ responsive controls.
   Scope, origin, state, and completeness remain separate labels.
   Opening it never starts a configured server or executes extension code, and it has no mutation or terminal-insertion action.
   Source drift is measured against the current CLI process generation, not the latest conversation rollover.
-- **What the reader shows is a filtered conversation, not the transcript.** Tool calls are gone
-  entirely — not collapsed, not summarised. So is CLI machinery that both providers write into
+- **What the reader shows is a filtered conversation, not the transcript.** Tool calls are not
+  rendered, and neither is the CLI machinery that both providers write into
   the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
   skill bodies injected mid-conversation, interrupt markers, Claude's `<system-reminder>` spans
   (stripped from the prompt that carries them rather than hiding it), and Codex's
-  `<environment_context>`. The opening `# AGENTS.md instructions` block **stays**: it is the brief
-  the run was given, and reading a Codex conversation without it starts in the middle.
+  `<environment_context>`. A provider control operation's synthetic `No response requested.`
+  acknowledgement goes with them. The opening `# AGENTS.md instructions` block **stays**: it is the
+  brief the run was given, and reading a Codex conversation without it starts in the middle.
   Classification is the daemon's (`transcript_view.conversation_view`), so history search can
   inherit the same distinction later, and it reads Claude's per-record provenance
   (`origin.kind === "human"`, `isMeta`, `interruptedMessageId`) rather than matching wrapper tags,
@@ -1079,10 +1080,20 @@ responsive controls.
   only on positive evidence that it is machinery, because leaking a `<local-command-stdout>` is a
   blemish while hiding something the user typed is the surface lying about the conversation. The
   count of what was withheld is shown, so the filtering is never invisible.
-- An agent's turn arrives as several records whenever a tool call interrupts it. With the tool
-  records gone those fragments are one thing the agent said, so they are **merged into one
-  message** — otherwise the copy button would copy "Let me check the registry." instead of the
-  answer.
+- **A turn is split into segments at its tool calls, and the seam is drawn.** A provider splits a
+  reply across records for two unrelated reasons and they need opposite treatment. Streaming
+  splits one continuous message on no boundary at all, and those fragments are stitched back
+  together. A tool call splits a turn on a real boundary: the narration that introduces a tool
+  ("I'll investigate the sidebar sort.") is a different thing from the conclusion that follows it,
+  and gluing the two together is what used to make the copy button hand back the narration on top
+  of the answer. So the fragments merge only where no tool call sits between them, and each
+  message carries `preceding_tool_calls`. Where it is non-zero the column draws a seam naming the
+  count, on the same principle as `hidden`: a reader seeing two agent messages in a row must not
+  have to guess whether the gap between them is nothing or twenty minutes of tool work. The seam
+  is not drawn under a search, where the neighbours are whatever matched rather than what followed.
+- **The rail's Copy reply is the last agent message in this tab**, by construction rather than by
+  agreement: `/sessions/{id}/last-reply` reads this same reduction (`final_reply_text`), as does
+  read-aloud. The reader is where a doubt about what was copied or spoken gets settled.
 - Reading placement follows one rule: open at the newest message, and let only a reader *already*
   at the bottom be carried along by new ones. Scrolled up, the position holds and the arrival
   becomes a "N new" button. A live log that yanks the column mid-sentence every time an agent

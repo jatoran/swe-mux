@@ -1,3 +1,4 @@
+import { Fragment } from 'preact'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { agentTargetName } from './agentTargets'
 import { api } from './api'
@@ -19,6 +20,7 @@ import {
   transcriptSpeaker,
   transcriptTimestampIso,
   transcriptTimestampLabel,
+  transcriptToolBoundaryLabel,
   TRANSCRIPT_CHANGED_EVENT,
   TRANSCRIPT_EXPANSION_KEY,
   TURN_ENDED_EVENT,
@@ -341,15 +343,22 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     <div class="transcript-tab-body" ref={body} onScroll={onScroll}>
       {messages.length
         ? visibleMessages.length
-          ? visibleMessages.map(message => <Message
-            key={message.message_id}
-            message={message}
-            copied={copied === message.ordinal}
-            expanded={expanded.includes(message.message_id)}
-            query={normalizedQuery}
-            onCopy={item => void copy(item.text, item.ordinal)}
-            onExpand={toggleExpand}
-          />)
+          ? visibleMessages.map((message, index) => <Fragment key={message.message_id}>
+            {/* Only in the unfiltered column. Under a search the neighbours are
+                whatever matched, so "12 tool calls" between them would describe
+                a gap the reader is not looking at. */}
+            {!normalizedQuery && index > 0 && message.preceding_tool_calls > 0 && <p class="transcript-tool-boundary">
+              {transcriptToolBoundaryLabel(message.preceding_tool_calls)}
+            </p>}
+            <Message
+              message={message}
+              copied={copied === message.ordinal}
+              expanded={expanded.includes(message.message_id)}
+              query={normalizedQuery}
+              onCopy={item => void copy(item.text, item.ordinal)}
+              onExpand={toggleExpand}
+            />
+          </Fragment>)
           : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
         : !loading && <p class="drawer-empty">{transcriptEmptyMessage(data?.reason ?? null, session.backend)}</p>}
     </div>

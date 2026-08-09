@@ -13,6 +13,12 @@ export type TranscriptMessage = {
   role: 'user' | 'assistant'
   ts?: string
   text: string
+  /** Tool calls the agent made between the previous message and this one.
+   *
+   * Zero for anything a human typed and for the opening of a turn. Non-zero
+   * wherever a reply resumed after tool use, which is the boundary the daemon
+   * stopped merging across. */
+  preceding_tool_calls: number
 }
 
 /** Why there is nothing to read. `null` means the transcript loaded. */
@@ -211,6 +217,17 @@ export function transcriptMessageText(message: TranscriptMessage): string {
 }
 
 export const transcriptSpeaker = (role: TranscriptMessage['role']): string => role === 'assistant' ? 'agent' : 'you'
+
+/** The marker shown where the daemon stopped merging, or `''` for no boundary.
+ *
+ * Naming the count rather than drawing a bare rule is the point: a reader who
+ * sees two agent messages in a row needs to know whether the gap between them is
+ * nothing or twenty minutes of tool work, and that is the difference between the
+ * second one continuing the first and answering it. */
+export function transcriptToolBoundaryLabel(count: number): string {
+  if (!Number.isFinite(count) || count < 1) return ''
+  return `${count} tool call${count === 1 ? '' : 's'}`
+}
 
 export function transcriptConversationText(messages: TranscriptMessage[]): string {
   return messages.map(message => `${transcriptSpeaker(message.role)}: ${message.text}`).join('\n\n')

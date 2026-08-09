@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import io
 import json
 import time
@@ -12,7 +11,6 @@ from typing import Any, cast
 
 import pytest
 
-from swe_mux.automation import TranscriptSlice
 from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
@@ -32,7 +30,6 @@ from swe_mux.voice import (
     approval_prompt,
     clip_snapshot,
     estimate_duration_seconds,
-    last_reply_text,
     latency_report,
     latency_stages,
     normalize_latency_sample,
@@ -43,42 +40,60 @@ from swe_mux.voice import (
 )
 
 
-def make_slice(messages: list[dict[str, Any]]) -> TranscriptSlice:
-    encoded = json.dumps(messages).encode()
-    return TranscriptSlice(
-        "last_turn",
-        tuple(messages),
-        len(encoded),
-        max(1, len(encoded) // 4),
-        False,
-        hashlib.sha256(encoded).hexdigest(),
-    )
+# Real transcript records rather than stubbed slices. What voice speaks is now
+# the same segment the reader tab shows and the copy button copies, so the
+# segmentation *is* the behaviour under test: a fixture that skipped the parse
+# would assert nothing about the thing that used to be wrong.
+def claude_user(text: str) -> dict[str, Any]:
+    return {
+        "type": "user",
+        "timestamp": "2026-08-09T10:00:00Z",
+        "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+        "origin": {"kind": "human"},
+    }
 
 
-REPLY_MESSAGES: list[dict[str, Any]] = [
-    {"role": "user", "content": [{"type": "text", "text": "fix the failing test"}]},
-    {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash"}]},
-    {
+def claude_assistant(*texts: str) -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "timestamp": "2026-08-09T10:00:01Z",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text} for text in texts],
+        },
+    }
+
+
+CLAUDE_TOOL_USE: dict[str, Any] = {
+    "type": "assistant",
+    "timestamp": "2026-08-09T10:00:02Z",
+    "message": {
         "role": "assistant",
-        "content": [
-            {"type": "text", "text": "## Done\n\nThe test passes now. See `foo.py`."},
-            {"type": "text", "text": "```python\nassert True\n```\nNext I suggest a rerun."},
-        ],
+        "content": [{"type": "tool_use", "name": "Bash", "input": {}}],
     },
+}
+
+REPLY_EVENTS: list[dict[str, Any]] = [
+    claude_user("fix the failing test"),
+    # Narration. It belongs to the tool call that follows it, not to the answer.
+    claude_assistant("I'll run the suite and see what breaks."),
+    CLAUDE_TOOL_USE,
+    claude_assistant("## Done\n\nThe test passes now. See `foo.py`."),
+    # A streaming split with no tool between: one message, so it merges.
+    claude_assistant("```python\nassert True\n```\nNext I suggest a rerun."),
 ]
 
-CONTROL_ACK_MESSAGES: list[dict[str, Any]] = [
-    {"role": "user", "content": [{"type": "text", "text": "complete the implementation"}]},
-    {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Implemented it and all checks pass."}],
-    },
-    {"role": "user", "content": [{"type": "text", "text": "provider control operation"}]},
-    {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "No response requested."}],
-    },
+CONTROL_ACK_EVENTS: list[dict[str, Any]] = [
+    claude_user("complete the implementation"),
+    claude_assistant("Implemented it and all checks pass."),
+    claude_user("provider control operation"),
+    claude_assistant("No response requested."),
 ]
+
+REPLY_TEXT = (
+    "## Done\n\nThe test passes now. See `foo.py`."
+    "\n\n```python\nassert True\n```\nNext I suggest a rerun."
+)
 
 
 class AutomationStoreStub:
@@ -180,11 +195,12 @@ def make_service(
     return service, events, emitted, record
 
 
-def patch_slice(service: VoiceService, messages: list[dict[str, Any]]) -> None:
-    async def build(*_args: Any, **_kwargs: Any) -> TranscriptSlice:
-        return make_slice(messages)
-
-    service.slices.build = build  # type: ignore[method-assign]
+def write_transcript(service: VoiceService, events: list[dict[str, Any]]) -> None:
+    """Put real records where the service reads its session's transcript."""
+    path = service.sessions.sessions["s1"].transcript_path
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
+    )
 
 
 def patch_engine(service: VoiceService, *, fail: str | None = None) -> list[str]:
@@ -254,49 +270,46 @@ def test_streaming_segments_keep_a_comms_sized_reply_coherent() -> None:
     assert streaming_segments(text) == [text]
 
 
-def test_last_reply_text_collects_only_assistant_text() -> None:
-    text = last_reply_text(REPLY_MESSAGES)
-    assert "The test passes now" in text and "Next I suggest a rerun" in text
-    assert "fix the failing test" not in text
-
-
-def test_last_reply_text_skips_provider_control_acknowledgement() -> None:
-    assert last_reply_text(CONTROL_ACK_MESSAGES) == "Implemented it and all checks pass."
-    assert last_reply_text(CONTROL_ACK_MESSAGES[-2:]) == ""
-
-
-async def test_last_reply_route_returns_normalized_agent_text(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def last_reply_response(tmp_path: Path, events: list[dict[str, Any]]) -> dict[str, Any]:
     transcript_path = tmp_path / "transcript.jsonl"
-    transcript_path.write_text("{}\n", encoding="utf-8")
-
-    class SliceStub:
-        async def build(
-            self, _path: Path, _backend: str, kind: str, **_kwargs: Any
-        ) -> TranscriptSlice:
-            assert kind == "last_n_messages"
-            return make_slice(CONTROL_ACK_MESSAGES)
-
-    monkeypatch.setattr("swe_mux.server.TranscriptSliceService", SliceStub)
+    transcript_path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
+    )
     session = SimpleNamespace(
         transcript_path=transcript_path,
-        record=SimpleNamespace(backend="codex", agent_run_id="run-1"),
+        record=SimpleNamespace(backend="claude", agent_run_id="run-1"),
     )
     request = SimpleNamespace(
         app={"sessions": SimpleNamespace(resolve=lambda _sid: session)},
         match_info={"sid": "s1"},
     )
     response = await session_last_reply(cast(Any, request))
-    payload = json.loads(response.text)
-    assert response.status == 200
+    return {"status": response.status, **json.loads(response.text)}
+
+
+async def test_last_reply_route_stops_at_the_tool_boundary(tmp_path: Path) -> None:
+    """The reported defect: narration written before a tool call is not the reply."""
+    payload = await last_reply_response(tmp_path, REPLY_EVENTS)
+    assert payload["status"] == 200
     assert payload["agent_run_id"] == "run-1"
+    assert payload["text"] == REPLY_TEXT
+    assert "I'll run the suite" not in payload["text"]
+
+
+async def test_last_reply_route_skips_provider_control_acknowledgement(tmp_path: Path) -> None:
+    payload = await last_reply_response(tmp_path, CONTROL_ACK_EVENTS)
     assert payload["text"] == "Implemented it and all checks pass."
+
+
+async def test_last_reply_route_reports_a_conversation_with_no_reply(tmp_path: Path) -> None:
+    payload = await last_reply_response(tmp_path, [claude_user("only a question so far")])
+    assert payload["status"] == 409
+    assert "no assistant reply" in payload["error"]
 
 
 async def test_generate_verbatim_produces_ready_clip_and_event(tmp_path: Path) -> None:
     service, _events, emitted, _record = make_service(tmp_path, content="verbatim")
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     spoken = patch_engine(service)
     try:
         clip = await service.generate("s1", trigger="manual")
@@ -320,7 +333,7 @@ async def test_generate_summary_records_call_and_spend(tmp_path: Path) -> None:
     service, _events, _emitted, _record = make_service(
         tmp_path, content="summary", provider=provider, automation_store=ledger
     )
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     patch_engine(service)
     try:
         clip = await service.generate("s1", trigger="manual")
@@ -339,7 +352,7 @@ async def test_summary_budget_exhaustion_fails_closed(tmp_path: Path) -> None:
     service, _events, emitted, _record = make_service(
         tmp_path, content="summary", automation_store=ledger
     )
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     patch_engine(service)
     try:
         with pytest.raises(VoiceError, match="budget"):
@@ -354,7 +367,7 @@ async def test_summary_budget_exhaustion_fails_closed(tmp_path: Path) -> None:
 
 async def test_engine_failure_records_failed_clip(tmp_path: Path) -> None:
     service, _events, emitted, _record = make_service(tmp_path, content="verbatim")
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     patch_engine(service, fail="edge-tts failed after retries: boom")
     try:
         with pytest.raises(VoiceError, match="boom"):
@@ -382,7 +395,7 @@ async def test_session_content_override_beats_global_setting(tmp_path: Path) -> 
         tmp_path, content="summary", provider=provider, automation_store=ledger
     )
     record.voice_content = "verbatim"
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     patch_engine(service)
     try:
         clip = await service.generate("s1", trigger="manual")
@@ -403,7 +416,7 @@ async def test_one_shot_content_override_does_not_change_session_mode(tmp_path: 
         tmp_path, content="summary", provider=provider, automation_store=ledger
     )
     record.voice_content = "summary"
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     patch_engine(service)
     try:
         clip = await service.generate(
@@ -470,7 +483,7 @@ def test_effective_mode_inherits_global_default_until_marked(tmp_path: Path) -> 
 async def test_auto_turn_ended_debounces_and_generates(tmp_path: Path) -> None:
     service, events, emitted, record = make_service(tmp_path, default_mode="auto")
     record.voice_mode = "auto"
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     patch_engine(service)
     import swe_mux.voice as voice_module
 
@@ -501,7 +514,7 @@ async def test_auto_generation_emits_short_audio_segments_in_order(tmp_path: Pat
     service, _events, emitted, _record = make_service(
         tmp_path, content="summary", provider=ProviderStub(speech=speech)
     )
-    patch_slice(service, REPLY_MESSAGES)
+    write_transcript(service, REPLY_EVENTS)
     spoken = patch_engine(service)
     try:
         first = await service.generate("s1", trigger="auto")

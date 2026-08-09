@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from .automation import MAX_SLICE_BYTES, TranscriptSliceService
 from .background_tasks import background
 from .config import Config
 from .event_bus import EventBus
@@ -45,6 +44,7 @@ from .sqlite_store import (
     run_sqlite_operation,
 )
 from .subprocess_flags import background_creation_flags
+from .transcript_view import final_exchange
 
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
@@ -373,38 +373,6 @@ def speechify(text: str, max_chars: int) -> str:
     return text
 
 
-def last_reply_text(messages: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> str:
-    """Text from the newest turn containing a meaningful assistant reply.
-
-    Provider control operations can append a synthetic assistant acknowledgement
-    after the real turn. Walk backward across turn boundaries so those records do
-    not become the user-facing "latest reply".
-    """
-    parts: list[str] = []
-    found_turn = False
-    for message in reversed(messages):
-        role = message.get("role")
-        if role == "user":
-            if found_turn:
-                break
-            continue
-        if role != "assistant":
-            continue
-        message_parts: list[str] = []
-        for block in message.get("content") or []:
-            if block.get("type") != "text":
-                continue
-            value = str(block.get("text") or "")
-            if value.strip().casefold() in {"no response requested."}:
-                continue
-            if value.strip():
-                message_parts.append(value)
-        if message_parts:
-            parts[0:0] = message_parts
-            found_turn = True
-    return "\n\n".join(parts).strip()
-
-
 def estimate_duration_seconds(text: str, rate: str) -> float:
     words = max(1, len(text.split()))
     per_second = 2.6
@@ -652,7 +620,6 @@ class VoiceService:
         self.store = store
         self.automation_store = automation_store
         self.provider = provider
-        self.slices = TranscriptSliceService()
         self.diagnostic: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Any] | None = None
@@ -1092,17 +1059,22 @@ class VoiceService:
     async def _spoken_text(
         self, session: Any, row: dict[str, Any], content_mode: str
     ) -> str:
-        transcript = await self.slices.build(
-            session.transcript_path,
-            session.record.backend,
-            "last_turn",
-            max_bytes=min(self.config.automation_max_input_tokens * 4, MAX_SLICE_BYTES),
+        # The same segment "Copy reply" puts on the clipboard and the reader tab
+        # shows as the last agent message. Speaking a different span than the one
+        # on screen is how a listener ends up hearing "I'll investigate the
+        # sidebar sort" as the answer to a question that was already answered.
+        prompt, reply = await asyncio.to_thread(
+            final_exchange, session.transcript_path, session.record.backend
         )
-        reply = last_reply_text(transcript.messages)
         if not reply:
             raise VoiceError("no assistant reply text was found in the last turn")
         if content_mode == "verbatim":
             return speechify(reply, self.config.tts_verbatim_max_chars)
+        # The summariser still sees what the reply was answering. Without the
+        # prompt it has to guess the subject, and a spoken update that opens by
+        # restating the wrong question is worse than a long one.
+        rendered = f"user: {prompt}\nassistant: {reply}" if prompt else f"assistant: {reply}"
+        encoded = rendered.encode()
         model = self.config.tts_summary_model or self.config.openrouter_cheap_model
         if not model:
             raise VoiceError(
@@ -1116,15 +1088,15 @@ class VoiceService:
             firing_id=f"voice:{row['id']}",
             rule_id=VOICE_RULE_ID,
             model=model,
-            input_hash=transcript.input_hash,
-            input_bytes=transcript.bytes,
+            input_hash=hashlib.sha256(encoded).hexdigest(),
+            input_bytes=len(encoded),
         )
         try:
             completion = await self.provider.complete_json(
                 model=model,
                 messages=[
                     {"role": "system", "content": SUMMARY_PROMPT},
-                    {"role": "user", "content": transcript.render()},
+                    {"role": "user", "content": rendered},
                 ],
                 schema_name="voice_speech",
                 schema=SUMMARY_SCHEMA,

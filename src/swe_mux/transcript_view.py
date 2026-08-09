@@ -280,9 +280,14 @@ def parse_transcript_with_watermark(
 # opposite questions — search wants recall over everything text-shaped, a
 # reading column wants only the conversation.
 #
-# The hard part is not tool calls (Claude writes those as records with no text
-# block, so the parse already drops them; Codex's synthesized `tool_use` blocks
-# are dropped here). It is that both CLIs write their own machinery into the
+# Tool calls are not shown, but they are not forgotten either: they are counted,
+# because tool activity is what separates one thing the agent said from the next.
+# A reply arrives as narration, tool, narration, tool, conclusion, and every
+# record in between is dropped here, so without an explicit count the surviving
+# fragments become adjacent and nothing can tell a continuous message from two
+# unrelated ones. That is what `preceding_tool_calls` carries.
+#
+# The other hard part is that both CLIs write their own machinery into the
 # transcript as `user` records: slash-command expansions, skill bodies, shell
 # escapes, interrupt markers, environment blocks. Rendered verbatim those bury
 # the handful of things the human actually typed.
@@ -325,6 +330,48 @@ _CLAUDE_MACHINERY_PREFIXES = (
 # and seeing it at the top of the conversation is wanted.
 _CODEX_MACHINERY_PREFIXES = ("<environment_context>", "<skill>")
 
+# Codex names a tool invocation in the payload type. Kept in step with the
+# `function_call`/`custom_tool_call` pair `parse_transcript` synthesizes blocks
+# for, so the two reductions cannot disagree about what a tool call is.
+_CODEX_TOOL_CALL_TYPES = frozenset({"function_call", "custom_tool_call"})
+
+# A provider control operation appends a synthetic assistant record after the
+# real turn. It is not something the agent said: left in place it is the last
+# thing the reader sees and the tail of every copied reply.
+_ASSISTANT_ACKNOWLEDGEMENTS = frozenset({"no response requested."})
+
+
+def _tool_calls(event: dict[str, Any], backend: str) -> int:
+    """How many tool invocations this record makes.
+
+    Calls only, never their results. A result cannot occur without the call that
+    produced it, so counting both would double every number, and the two are not
+    reliably paired anyway once a run is interrupted mid-tool.
+
+    Claude and OMP name the call in a content block (which OMP may put in the
+    same record as the text that introduces it, so a record can both be a message
+    and end a segment); Codex names it in the payload type. An unrecognised shape
+    counts zero, which merges a turn exactly as it does today rather than cutting
+    a reply at a boundary that is not there.
+    """
+    if backend == "claude":
+        if event.get("type") != "assistant" or event.get("isSidechain") is True:
+            return 0
+        blocks = _blocks((event.get("message") or {}).get("content"))
+        return sum(1 for block in blocks if block.get("type") == "tool_use")
+    if backend == "omp":
+        if event.get("type") != "message":
+            return 0
+        native = event.get("message") or {}
+        if native.get("role") != "assistant":
+            return 0
+        return sum(1 for block in _blocks(native.get("content")) if block.get("type") == "toolCall")
+    if backend == "codex":
+        if event.get("type") != "response_item":
+            return 0
+        return 1 if (event.get("payload") or {}).get("type") in _CODEX_TOOL_CALL_TYPES else 0
+    return 0
+
 
 def _message_text(blocks: Any) -> str:
     """The text a human would have read, with Claude's reminder spans removed."""
@@ -359,9 +406,16 @@ def _claude_user_is_machinery(event: dict[str, Any], text: str) -> bool:
 def _conversation_records(
     events: list[dict[str, Any]], backend: str
 ) -> tuple[list[dict[str, Any]], int]:
-    """``(kept, hidden_count)`` conversational text records, in file order."""
+    """``(kept, hidden_count)`` conversational text records, in file order.
+
+    Each kept record carries the number of tool calls made since the previous one
+    in ``preceding_tool_calls``. Tool activity inside a record counts as coming
+    *after* its text, which is the order OMP writes it: one record holds the
+    narration and the calls that narration introduces.
+    """
     kept: list[dict[str, Any]] = []
     hidden = 0
+    pending_tools = 0
     # Same precedence rule the indexing parse uses: when a Codex rollout carries
     # current `response_item/message` records, its legacy `event_msg` copies are
     # duplicates of them.
@@ -372,14 +426,18 @@ def _conversation_records(
         for event in events
     )
     for event in events:
+        tools = _tool_calls(event, backend)
         message = _native_conversation_message(event, backend)
         if message is None:
+            pending_tools += tools
             continue
         if backend == "codex" and codex_response_messages and event.get("type") != "response_item":
+            pending_tools += tools
             continue
         text = _message_text(message.get("content"))
         if not text:
             hidden += 1
+            pending_tools += tools
             continue
         if message["role"] == "user":
             machinery = (
@@ -389,31 +447,49 @@ def _conversation_records(
             )
             if machinery:
                 hidden += 1
+                pending_tools += tools
                 continue
+        elif text.casefold() in _ASSISTANT_ACKNOWLEDGEMENTS:
+            hidden += 1
+            pending_tools += tools
+            continue
         kept.append(
             {
                 "message_id": f"offset:{event[_SOURCE_OFFSET_KEY]}",
                 "role": message["role"],
                 "ts": message.get("ts"),
                 "text": text,
+                "preceding_tool_calls": pending_tools,
             }
         )
+        pending_tools = tools
     return kept, hidden
 
 
-def _merge_assistant_runs(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fold an agent's turn back into one message.
+def _merge_assistant_segments(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold each *segment* of an agent's turn into one message.
 
-    Both CLIs split a reply across several records whenever a tool call
-    interrupts it, so one answer arrives as narration, tool, narration, tool,
-    conclusion. With the tool records gone those fragments are one thing the
-    agent said, and copying a fragment is never what the reader wanted. The
-    timestamp kept is the fragment that started the turn.
+    A provider splits a reply across several records for two unrelated reasons,
+    and they need opposite treatment. Streaming splits one continuous message on
+    no boundary at all, and stitching those back together is required — half a
+    sentence is never what the reader wanted. A tool call splits a turn on a real
+    boundary: the narration that introduces a tool is a different thing from the
+    conclusion that follows it, and gluing the two together is what made the copy
+    button hand back "I'll investigate…" on top of the answer.
+
+    So records merge only across the first kind of split, which is exactly the
+    records with no tool calls in front of them. The timestamp kept is the
+    fragment that started the segment.
     """
     merged: list[dict[str, Any]] = []
     for record in records:
         previous = merged[-1] if merged else None
-        if previous and previous["role"] == "assistant" and record["role"] == "assistant":
+        if (
+            previous
+            and previous["role"] == "assistant"
+            and record["role"] == "assistant"
+            and not record["preceding_tool_calls"]
+        ):
             previous["text"] = f"{previous['text']}\n\n{record['text']}"
             continue
         merged.append(dict(record))
@@ -430,11 +506,17 @@ def conversation_view(
     Codex rollout exists in the wild) from stalling a request. Ordinals number
     the returned window for display. ``message_id`` is the stable identity for
     state that must survive appends which move that window.
+
+    ``preceding_tool_calls`` is how much work happened between a message and the
+    one before it. Zero for everything a human typed and for the first message of
+    a turn; non-zero wherever a reply resumed after tool use. It is the count of
+    what is *not* shown, in the same spirit as ``hidden``: a reader is never left
+    to infer that two paragraphs written twenty tool calls apart were one thought.
     """
     size = path.stat().st_size
     max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
     records, hidden = _conversation_records(read_transcript_events(path, max_bytes), backend)
-    messages = _merge_assistant_runs(records)
+    messages = _merge_assistant_segments(records)
     truncated = max_bytes is not None
     if len(messages) > limit:
         messages = messages[-limit:]
@@ -476,6 +558,37 @@ def conversation_view_cached(
         while len(_conversation_cache) > _CONVERSATION_CACHE_MAX:
             _conversation_cache.popitem(last=False)
     return result
+
+
+def final_exchange(path: Path, backend: str) -> tuple[str, str]:
+    """``(prompt, reply)``: the agent's latest reply and what it was answering.
+
+    Deliberately the same reduction the reader tab renders, and not a second walk
+    with its own idea of where a reply starts. "Copy reply copies the last agent
+    message in the Transcript tab" is then the whole specification, true by
+    construction rather than by two implementations agreeing, and the reader is
+    where a doubt about what was copied gets settled.
+
+    Either half is ``""`` when the conversation does not have it yet. Sharing the
+    cached view is also why this is cheap enough to call on the turn boundary
+    that prefetches the clipboard: the tab has usually just paid for it.
+    """
+    prompt = ""
+    reply = ""
+    for message in reversed(conversation_view_cached(path, backend)["messages"]):
+        if not reply:
+            if message["role"] == "assistant":
+                reply = str(message["text"])
+            continue
+        if message["role"] == "user":
+            prompt = str(message["text"])
+            break
+    return prompt, reply
+
+
+def final_reply_text(path: Path, backend: str) -> str:
+    """The agent's latest reply: its newest assistant segment, or ``""``."""
+    return final_exchange(path, backend)[1]
 
 
 def searchable_transcript_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

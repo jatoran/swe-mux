@@ -647,16 +647,21 @@ owner, to the smallest attached one, and announces the result to every client as
 `{type:"geometry", cols, rows, owner_device}` (also sent after `replay_end` and after a
 resync). A client whose own fit differs renders that geometry at a reduced font size
 rather than fitting, which is what keeps two devices from resizing each other in a loop.
-`GET /sessions/{id}/last-reply` returns the newest meaningful Claude/Codex assistant turn for
-gesture-safe clipboard prefetch. Provider control acknowledgements are skipped; the route does
-not type `/copy` into the PTY.
+`GET /sessions/{id}/last-reply` returns the agent's newest assistant *segment* for gesture-safe
+clipboard prefetch: the same last message `/sessions/{id}/transcript` shows, read from the same
+reduction (`transcript_view.final_reply_text`), so the two cannot disagree about where a reply
+starts. A reply that resumed after tool use begins at that tool boundary rather than at the
+narration the agent wrote before it. Provider control acknowledgements are skipped; the route
+does not type `/copy` into the PTY.
 
 `GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
-Transcript tab: `{messages:[{ordinal,role,ts,text}], hidden, truncated, observation_stale_since,
-reason}`. Tool calls and CLI machinery are classified out and agent turns are merged
-(`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld so the
-filtering is never invisible, and `ordinal` numbers the returned window rather than the
-conversation, making it a display key and not an identity. Deliberately **not**
+Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls}], hidden, truncated,
+observation_stale_since, reason}`. Tool calls and CLI machinery are classified out, and an agent's
+turn is merged into one message per *segment*, a segment being a run of records with no tool call
+between them (`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld
+and `preceding_tool_calls` counts the tool calls between a message and the one before it, so
+neither the filtering nor the gap is ever invisible. `ordinal` numbers the returned window rather
+than the conversation, making it a display key and not an identity. Deliberately **not**
 `/history/{id}/transcript`, which reindexes the run's searchable messages and loads its
 annotations on every call: right for opening an entry once, wrong for a surface that refreshes on
 every turn. This route only reads. Bounded twice — newest `limit` messages (default 200, max

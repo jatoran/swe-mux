@@ -20,11 +20,12 @@ import {
   transcriptSpeaker,
   transcriptTimestampIso,
   transcriptTimestampLabel,
+  transcriptToolBoundaryLabel,
   type TranscriptMessage,
 } from '../src/transcriptView.ts'
 
 const message = (over: Partial<TranscriptMessage> = {}): TranscriptMessage =>
-  ({ message_id: 'offset:0', ordinal: 0, role: 'assistant', text: 'built it', ...over })
+  ({ message_id: 'offset:0', ordinal: 0, role: 'assistant', text: 'built it', preceding_tool_calls: 0, ...over })
 
 test('following the bottom survives fractional scroll metrics', () => {
   // Pinned: a browser reports `scrollTop + clientHeight` a pixel or two short of
@@ -65,6 +66,17 @@ test('a copied message is the message, a copied conversation names its speakers'
     message({ ordinal: 1, text: 'built' }),
   ]), 'you: build it\n\nagent: built')
   assert.equal(transcriptConversationText([]), '')
+})
+
+test('the seam between two agent messages names how much work is in it', () => {
+  // Zero is the ordinary case (a human turn, or the start of a reply) and draws
+  // nothing: a rule between every pair of messages would say nothing at all.
+  assert.equal(transcriptToolBoundaryLabel(0), '')
+  assert.equal(transcriptToolBoundaryLabel(1), '1 tool call')
+  assert.equal(transcriptToolBoundaryLabel(31), '31 tool calls')
+  // A daemon that ever sent something else must not render "NaN tool calls".
+  assert.equal(transcriptToolBoundaryLabel(Number.NaN), '')
+  assert.equal(transcriptToolBoundaryLabel(-2), '')
 })
 
 test('long messages fold, ordinary ones do not', () => {

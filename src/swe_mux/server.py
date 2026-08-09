@@ -43,11 +43,9 @@ from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
 from .auto_delivery import AutoDeliveryController
 from .automation import (
-    MAX_SLICE_BYTES,
     OBSERVER_SCHEMAS,
     AutomationEngine,
     RuleValidationError,
-    TranscriptSliceService,
     normalize_event,
     parse_rules,
     serialize_rules,
@@ -211,6 +209,7 @@ from .transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
     conversation_view_cached,
+    final_reply_text,
     parse_transcript_with_watermark,
 )
 from .usage import UsageManager
@@ -221,7 +220,6 @@ from .voice import (
     VoiceStore,
     approval_prompt,
     clip_snapshot,
-    last_reply_text,
 )
 from .win_jobobj import ReaperJob
 
@@ -6480,8 +6478,20 @@ async def voice_interrupt(request: web.Request) -> web.Response:
     return json_response({"ok": True, "already_ended": False})
 
 
+# A parse this misses is a blank reading column, never a wrong one, so the
+# budget is generous: the largest Codex rollout on record (550 MB) parses in
+# about a second, and the byte cap in `conversation_view` bounds the rest.
+# Shared with the reply copy below, which reads the same view.
+CONVERSATION_PARSE_TIMEOUT_SECONDS = 5.0
+
+
 async def session_last_reply(request: web.Request) -> web.Response:
-    """Return normalized assistant text without routing through terminal OSC 52."""
+    """Return normalized assistant text without routing through terminal OSC 52.
+
+    Reads the same reduction the drawer's Transcript tab renders, so what this
+    hands the clipboard is the last agent message a reader can see and check,
+    down to the tool boundary it starts at.
+    """
     session = request.app["sessions"].resolve(request.match_info["sid"])
     if not has_observable_transcript(session.record.backend):
         return json_response({"error": "last reply is available only for agent sessions"}, 409)
@@ -6489,26 +6499,17 @@ async def session_last_reply(request: web.Request) -> web.Response:
     if not path or not path.exists():
         return json_response({"error": "the agent transcript is not available yet"}, 409)
     try:
-        transcript = await TranscriptSliceService().build(
-            path,
-            session.record.backend,
-            "last_n_messages",
-            max_bytes=MAX_SLICE_BYTES,
+        text = await asyncio.wait_for(
+            asyncio.to_thread(final_reply_text, path, session.record.backend),
+            timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
         )
-    except (OSError, TimeoutError, ValueError) as exc:
+    except (OSError, TimeoutError) as exc:
         return json_response({"error": str(exc) or "the agent transcript could not be read"}, 409)
-    text = last_reply_text(transcript.messages)
     if not text:
         return json_response(
             {"error": "no assistant reply text was found in the recent transcript"}, 409
         )
     return json_response({"text": text, "agent_run_id": session.record.agent_run_id})
-
-
-# A parse this misses is a blank reading column, never a wrong one, so the
-# budget is generous: the largest Codex rollout on record (550 MB) parses in
-# about a second, and the byte cap in `conversation_view` bounds the rest.
-CONVERSATION_PARSE_TIMEOUT_SECONDS = 5.0
 
 
 async def session_transcript(request: web.Request) -> web.Response:

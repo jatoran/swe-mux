@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from swe_mux import transcript_view as tv
-from swe_mux.transcript_view import conversation_view, conversation_view_cached
+from swe_mux.transcript_view import (
+    conversation_view,
+    conversation_view_cached,
+    final_reply_text,
+)
 
 
 def write_jsonl(path: Path, events: list[dict[str, Any]]) -> Path:
@@ -108,21 +112,25 @@ def test_claude_fails_open_when_a_record_carries_no_provenance(tmp_path: Path) -
     assert view["hidden"] == 0
 
 
-def test_an_agent_turn_split_by_tool_calls_is_one_message(tmp_path: Path) -> None:
+def claude_tool_use(count: int = 1) -> dict[str, Any]:
+    return {
+        "type": "assistant",
+        "timestamp": "2026-08-02T10:00:02Z",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "name": "Read", "input": {}}] * count,
+        },
+    }
+
+
+def test_a_tool_call_ends_a_message_and_the_boundary_is_counted(tmp_path: Path) -> None:
     """Copying a reply must copy the reply, not the narration before a tool call."""
     path = write_jsonl(
         tmp_path / "claude.jsonl",
         [
             claude_user("audit the drawer", **HUMAN),
             claude_assistant("Let me read the registry."),
-            {
-                "type": "assistant",
-                "timestamp": "2026-08-02T10:00:02Z",
-                "message": {
-                    "role": "assistant",
-                    "content": [{"type": "tool_use", "name": "Read", "input": {}}],
-                },
-            },
+            claude_tool_use(3),
             claude_assistant("Nine tabs, all registered."),
             claude_user("thanks", **HUMAN),
         ],
@@ -130,9 +138,70 @@ def test_an_agent_turn_split_by_tool_calls_is_one_message(tmp_path: Path) -> Non
     view = conversation_view(path, "claude")
     assert [(item["role"], item["text"]) for item in view["messages"]] == [
         ("user", "audit the drawer"),
-        ("assistant", "Let me read the registry.\n\nNine tabs, all registered."),
+        ("assistant", "Let me read the registry."),
+        ("assistant", "Nine tabs, all registered."),
         ("user", "thanks"),
     ]
+    # The count is what tells a reader the two agent messages are not one thought.
+    assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 3, 0]
+    assert final_reply_text(path, "claude") == "Nine tabs, all registered."
+
+
+def test_a_streaming_split_with_no_tool_between_is_still_one_message(tmp_path: Path) -> None:
+    """The other reason a reply arrives in pieces. Half a sentence is not a message."""
+    path = write_jsonl(
+        tmp_path / "claude.jsonl",
+        [
+            claude_user("explain the cache", **HUMAN),
+            claude_assistant("It is keyed on mtime and size."),
+            claude_assistant("Both, because Windows mtime is a timer tick."),
+        ],
+    )
+    view = conversation_view(path, "claude")
+    assert [item["text"] for item in view["messages"]] == [
+        "explain the cache",
+        "It is keyed on mtime and size.\n\nBoth, because Windows mtime is a timer tick.",
+    ]
+    assert final_reply_text(path, "claude").startswith("It is keyed on")
+
+
+def test_a_reply_that_resumes_after_a_tool_is_copied_whole(tmp_path: Path) -> None:
+    """Only the segment is cut at the boundary; streaming inside it still merges."""
+    path = write_jsonl(
+        tmp_path / "claude.jsonl",
+        [
+            claude_user("check it", **HUMAN),
+            claude_assistant("Looking."),
+            claude_tool_use(),
+            claude_assistant("## Verdict"),
+            claude_assistant("It holds."),
+        ],
+    )
+    assert final_reply_text(path, "claude") == "## Verdict\n\nIt holds."
+
+
+def test_a_provider_control_acknowledgement_is_not_the_reply(tmp_path: Path) -> None:
+    """A synthetic ack appended after the real turn is machinery, not an answer."""
+    path = write_jsonl(
+        tmp_path / "claude.jsonl",
+        [
+            claude_user("finish it", **HUMAN),
+            claude_assistant("Implemented it and all checks pass."),
+            claude_assistant("No response requested."),
+        ],
+    )
+    view = conversation_view(path, "claude")
+    assert [item["text"] for item in view["messages"]] == [
+        "finish it",
+        "Implemented it and all checks pass.",
+    ]
+    assert view["hidden"] == 1
+    assert final_reply_text(path, "claude") == "Implemented it and all checks pass."
+
+
+def test_a_conversation_with_no_agent_reply_has_no_final_reply(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "claude.jsonl", [claude_user("are you there?", **HUMAN)])
+    assert final_reply_text(path, "claude") == ""
 
 
 def test_claude_sidechain_records_are_not_the_conversation(tmp_path: Path) -> None:
@@ -203,11 +272,16 @@ def test_omp_keeps_conversation_text_and_drops_protocol_messages_and_tools(
         ],
     )
     view = conversation_view(path, "omp")
+    # OMP puts the narration and the call it introduces in ONE record, so the
+    # boundary is inside a kept message rather than between two of them.
     assert [(item["role"], item["text"]) for item in view["messages"]] == [
         ("user", "verify the harness"),
-        ("assistant", "Checking.\n\nVerified."),
+        ("assistant", "Checking."),
+        ("assistant", "Verified."),
     ]
+    assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 1]
     assert view["hidden"] == 0
+    assert final_reply_text(path, "omp") == "Verified."
 
 
 def test_codex_drops_tool_calls_and_harness_blocks_but_keeps_its_instructions(
@@ -236,6 +310,8 @@ def test_codex_drops_tool_calls_and_harness_blocks_but_keeps_its_instructions(
         ("assistant", "reading the docs"),
     ]
     assert view["hidden"] == 2
+    # Codex names the call in the payload type rather than a content block.
+    assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 1]
 
 
 def test_codex_legacy_event_copies_do_not_double_the_conversation(tmp_path: Path) -> None:
