@@ -407,6 +407,34 @@ def repaints_scrollback(name: object) -> bool:
     return isinstance(name, str) and name in HARNESSES and HARNESSES[name].repaints_scrollback
 
 
+def needs_resize_repaint(name: object) -> bool:
+    """Whether a settled width change leaves this harness's screen needing a pulse.
+
+    An alternate-screen TUI cannot recover from a width change on its own, and the
+    reason is a three-way disagreement no single participant can see:
+
+    - xterm never reflows the alternate buffer. Reflow is gated on the buffer having
+      scrollback, which the alternate buffer does not, so a width change only pads or
+      truncates each line in place and leaves the old wrapping behind.
+    - ConPTY *does* rewrap its console buffer, then emits a diff against its own
+      previous frame. Lines whose content it considers unchanged are never sent.
+    - The child repaints on SIGWINCH, but into a ConPTY buffer that already holds the
+      rewrapped text, so most of that repaint also diffs away to nothing.
+
+    Everyone is individually correct and the browser is left holding cells from the
+    old wrapping with nothing on the way to overwrite them. Growing is the visible
+    direction because rewrapping wider changes little in ConPTY's own buffer, so it
+    emits least exactly when the browser needs most; shrinking pushes text down, which
+    changes enough lines that the emitted diff happens to repair the screen. Hence the
+    hand workaround this replaces: drag wide, then nudge narrower to force a real one.
+
+    Normal-screen harnesses (Codex, OMP) are excluded because they keep appending and
+    repainting their live region, so any gap is overwritten within a frame. Their
+    scrollback problem is the opposite one and is served by `repaints_scrollback`.
+    """
+    return isinstance(name, str) and name in HARNESSES and HARNESSES[name].screen == "alternate"
+
+
 def external_usage_harnesses() -> tuple[str, ...]:
     return tuple(name for name, harness in HARNESSES.items() if harness.external_usage_command)
 

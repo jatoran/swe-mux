@@ -1520,6 +1520,13 @@ class Session:
         # by a misbehaving or malicious page.
         self.last_client_repaint_ts = 0.0
         self.last_client_diagnostic_ts = 0.0
+        # A drag emits geometry changes continuously, and an alternate-screen child
+        # cannot repair its own screen after one (`needs_resize_repaint`). These carry
+        # the trailing-edge debounce that pulses it once the size stops moving: the
+        # deadline is pushed forward by every change, and one task waits it out, so a
+        # gesture of any length costs exactly one pulse after the user lets go.
+        self.resize_repaint_deadline = 0.0
+        self.resize_repaint_task: asyncio.Task[None] | None = None
         # Passive claims refused because another device is actively being typed into:
         # the direct measure of how often a background pane tried to steal the keyboard.
         self.input_claim_denials = 0

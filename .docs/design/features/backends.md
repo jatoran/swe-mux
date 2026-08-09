@@ -49,6 +49,7 @@ The frontend replaces its startup compatibility seed with that response and gate
 | Which harnesses need an external usage command? | `external_usage_harnesses()` | Usage polling and provider-state creation |
 | Which harnesses expose mux-managed accounts? | `provider_account_harnesses()` | Credential inventory, swapping, and quota polling |
 | Does the TUI rewrite content already in scrollback? | `repaints_scrollback` (backend `repaints_scrollback(name)`; published capability; frontend `repaintsScrollback(name)`) | Terminal renderer selection (repainting harnesses stay on the DOM renderer under `auto`); client-requested transcript restatement after a wrapped-ring replay (`features/sessions.md`) |
+| Can the TUI repair its own screen after a width change? | `needs_resize_repaint(name)`, derived from `screen == "alternate"` | Daemon-driven repaint pulse once an arbitrated resize settles (`features/terminal-input.md`) |
 
 `AGENT_BACKENDS` is derived once in `harness.py`; session and voice code do not declare local backend sets.
 Provider-account and external-usage iteration derives from independent descriptor capabilities, because a managed harness can report both through its native transcript without exposing mux-managed accounts.
@@ -66,6 +67,7 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares conversation behavior: `reports_conversation_rollover`, `assigns_conversation_id`, `resolves_transcript_by_cwd`, `reports_transcript_path`, and any rollout-file prefix.
 - Every harness declares PTY delivery etiquette: `submission`, `root_completion`, and `screen`.
 - Every harness declares `repaints_scrollback`, and a new harness should declare it `true` unless its TUI provably never rewrites scrollback: the flag decides whether `auto` may give the pane the WebGL renderer, and the safe default is the DOM renderer.
+  The two repaint traits answer opposite questions and must not be merged: `repaints_scrollback` asks whether a harness floods the retained ring and can replay to an empty-looking screen, while `needs_resize_repaint` asks whether it can repair its own screen after a resize. Claude is `false` for the first and `true` for the second.
   This capability is not a general WebGL-safety claim: Claude does not repaint scrollback but remains DOM-only because its retained alternate-screen surface has a separate live-context corruption mode.
   The same flag gates the daemon's answer to a client `repaint` frame, because a harness that floods the ring with live-region repaint traffic is both the only one whose replay can parse to nothing and the only one that restates its transcript when pulsed (`features/sessions.md`).
 - Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.

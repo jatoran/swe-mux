@@ -467,6 +467,7 @@ responsive controls.
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
   Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
   The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Terminals; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
+  The corruption itself is repaired at its source by the settled-resize repaint pulse (`features/terminal-input.md`), which makes the child restate the screen the user stopped on; the envelope is now a width preference rather than the only defence, and `0` is a reasonable setting.
   A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
   That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.
   `0` removes the host style entirely rather than relaxing its maximum, so a disabled envelope is the same code path as no envelope.

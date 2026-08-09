@@ -10,6 +10,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux import server
 from swe_mux.device_presence import DevicePresenceStore, DeviceReport
 from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
@@ -256,6 +257,82 @@ async def test_client_repaint_request_ignored_for_alternate_screen_harness() -> 
         await ws.send_json({"type": "repaint"})
         await asyncio.sleep(0.1)
         assert resizes == []
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_settled_drag_pulses_an_alternate_screen_child_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fix for a Claude pane that comes back mangled from being dragged wider.
+
+    xterm cannot reflow the alternate buffer and ConPTY only emits what changed in its
+    own already-rewrapped copy, so the browser keeps cells from the old wrapping and
+    nothing arrives to overwrite them (`needs_resize_repaint`). One pulse after the
+    gesture settles is what the user was otherwise doing by hand.
+    """
+    monkeypatch.setattr(server, "RESIZE_REPAINT_SETTLE_SECONDS", 0.05)
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    app = _repaint_test_app(session)
+    events = app["events"].subscribe(name="test")
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 78, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        # A drag: geometry moves on every frame. Nothing is pulsed while it does,
+        # because the screen worth repairing is the one the user stops on.
+        for cols in (76, 74, 72, 70):
+            await ws.send_json({"type": "resize", "cols": cols, "rows": 24})
+        await asyncio.sleep(0.02)
+        # Only the widths the drag itself asked for. A pulse is the off-by-one width
+        # (69) and is the one thing that must not have happened yet.
+        assert resizes == [(78, 24), (76, 24), (74, 24), (72, 24), (70, 24)]
+
+        event = await _next_event_of(events, "terminal_repaint_requested")
+        assert event.payload["reason"] == "resize_settled"
+        assert event.payload["applied"] is True
+        # Every width the drag passed through, then one pulse off the final width and
+        # straight back to it. The session is left at the size it was dragged to.
+        assert resizes == [(78, 24), (76, 24), (74, 24), (72, 24), (70, 24), (69, 24), (70, 24)]
+        assert session.geometry == (70, 24)
+
+        # A settled session is not pulsed again for as long as it stays settled.
+        await asyncio.sleep(0.15)
+        assert resizes[-2:] == [(69, 24), (70, 24)]
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_settled_drag_never_pulses_a_normal_screen_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex and OMP keep repainting their live region, so a gap fills within a frame.
+
+    Pulsing them anyway would spend a full transcript re-render on every drag, which is
+    the cost `repaints_scrollback` deliberately rations behind a client request.
+    """
+    monkeypatch.setattr(server, "RESIZE_REPAINT_SETTLE_SECONDS", 0.05)
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("codex", resizes)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/codex-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 78, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        await ws.send_json({"type": "resize", "cols": 70, "rows": 24})
+        await asyncio.sleep(0.15)
+
+        assert resizes == [(78, 24), (70, 24)]
+        assert session.resize_repaint_task is None
         await ws.close()
 
 
