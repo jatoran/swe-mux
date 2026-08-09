@@ -69,6 +69,10 @@ export interface RailItem {
   submit?: boolean
   /** 'action' items: which built-in handler to run. */
   action?: string
+  /** Deterministic aliases that may expose this item through Talk. Omission is
+   *  deliberate for destructive and UI-only built-ins. Configured skills and
+   *  slash commands receive conservative name-derived aliases separately. */
+  voicePhrases?: string[]
   /** Extra CSS class (e.g. 'term-key' styling, 'kbd-toggle'). */
   className?: string
   /** Restrict to these backends; undefined = all. Unlike position, this is a
@@ -127,32 +131,32 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'copyReply', type: 'action', action: 'copyReply', label: 'Copy reply' },
   { id: 'copyResume', type: 'action', action: 'copyResume', label: 'Copy resume' },
   { id: 'branch', type: 'action', action: 'branch', label: 'Branch', agentOnly: true },
-  { id: 'paste', type: 'action', action: 'paste', label: 'Paste' },
+  { id: 'paste', type: 'action', action: 'paste', label: 'Paste', voicePhrases: ['paste', 'paste clipboard'] },
   // Clipboard history picker. Paired with Paste because it is the paste path on
   // touch, where reading the system clipboard is unreliable or refused outright.
   { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', label: 'Clip' },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
-  { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape' },
-  { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter' },
-  { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab' },
-  { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)' },
-  { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command' },
-  { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command' },
-  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it' },
-  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines' },
+  { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
+  { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter', voicePhrases: ['enter', 'press enter', 'enter key'] },
+  { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab', voicePhrases: ['tab', 'press tab', 'tab key'] },
+  { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)', voicePhrases: ['control c', 'press control c'] },
+  { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
+  { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
+  { id: 'markdownDivider', type: 'key', bytes: agentComposerSequence('\n\n---\n\n'), label: '---', agentOnly: true, title: 'Insert a Markdown divider with blank lines around it', voicePhrases: ['insert markdown divider'] },
+  { id: 'markdownCodeFence', type: 'key', bytes: agentComposerSequence('\n\n```\n'), label: '```', agentOnly: true, title: 'Start a Markdown code fence after two newlines', voicePhrases: ['insert code fence', 'start code fence'] },
   { id: 'clearInput', type: 'key', bytes: '\x15', label: '^U', className: 'term-key', title: 'Clear the current input (Ctrl+U)' },
-  { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)' },
-  { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left' },
-  { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right' },
+  { id: 'restoreInput', type: 'key', bytes: '\x19', label: '^Y', className: 'term-key', title: 'Restore or yank input (Ctrl+Y)', voicePhrases: ['restore input', 'yank input'] },
+  { id: 'left', type: 'key', bytes: '\x1b[D', label: '←', className: 'term-key', title: 'Left', voicePhrases: ['left arrow', 'press left'] },
+  { id: 'right', type: 'key', bytes: '\x1b[C', label: '→', className: 'term-key', title: 'Right', voicePhrases: ['right arrow', 'press right'] },
   // Navigation + editing extras. The strip has no room for them, so they seed into
   // the panel, where room is not the constraint.
-  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', defaultSurface: 'panel' },
-  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', defaultSurface: 'panel' },
-  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', defaultSurface: 'panel' },
-  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', defaultSurface: 'panel' },
+  { id: 'home', type: 'key', bytes: '\x1b[H', label: 'Home', className: 'term-key', title: 'Home / start of line', defaultSurface: 'panel', voicePhrases: ['home key', 'press home'] },
+  { id: 'end', type: 'key', bytes: '\x1b[F', label: 'End', className: 'term-key', title: 'End / end of line', defaultSurface: 'panel', voicePhrases: ['end key', 'press end'] },
+  { id: 'ctrlHome', type: 'key', bytes: '\x1b[1;5H', label: '^Home', className: 'term-key', title: 'Ctrl+Home / top', defaultSurface: 'panel', voicePhrases: ['control home', 'press control home'] },
+  { id: 'ctrlEnd', type: 'key', bytes: '\x1b[1;5F', label: '^End', className: 'term-key', title: 'Ctrl+End / bottom', defaultSurface: 'panel', voicePhrases: ['control end', 'press control end'] },
   // ESC+CR is the one newline sequence both agent composers accept. Raw LF works
   // in Claude but Codex treats it as ordinary input instead of editor.newline.
-  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', defaultSurface: 'panel' },
+  { id: 'newline', type: 'key', bytes: AGENT_NEWLINE, label: '↵ nl', className: 'term-key', title: 'Insert newline without submitting', defaultSurface: 'panel', voicePhrases: ['new line', 'insert new line'] },
   // Opens Claude's interactive /rewind picker (there is no one-shot,
   // conversation-only variant, so this just launches the picker).
   { id: 'rewind', type: 'slash', text: 'rewind', label: 'Rewind…', submit: true, backends: ['claude'], title: 'Open Claude /rewind (interactive checkpoint picker)', defaultSurface: 'panel' },

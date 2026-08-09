@@ -82,14 +82,10 @@ export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=
   }))
 }
 
-/** The chip's own band: its hottest window, so the border escalates even when the
- *  window that is burning is not the one being glanced at. */
-export const chipUsageBand=(windows?:ProviderQuotaWindows|null):UsageBand=>{
-  const values=[windows?.session,windows?.weekly,windows?.fable]
-    .filter((window):window is QuotaWindowDisplay=>!!window)
-    .map(window=>window.used_percent)
-  return values.length?shownUsageBand(Math.max(...values)):'unknown'
-}
+// A `chipUsageBand` once banded a chip by its *hottest* window so the border could escalate on
+// a window the chip was not printing. It went out with the mobile toolbar's multi-window chip:
+// every condensed indicator now draws exactly one number, and a border disagreeing with the
+// digits beside it is the same contradiction `shownUsageBand` exists to prevent.
 
 type PopoverRect={left:number;right:number;top:number;bottom:number}
 export function anchoredPopoverStyle(rect:PopoverRect,compact:boolean,viewport:{width:number;height:number}):Record<string,string> {

@@ -61,6 +61,7 @@ responsive controls.
   language from another. The dot exists because a count alone would let an agent waiting on
   approval vanish behind the fold.
 - Sort modes and fold state (Projects and Groups) are device-local; Group order itself is shared.
+  Device-local means stored per browser, not per visit: every one of them survives a reload, a daemon restart, and a desktop redeploy.
   Root Projects always precede Groups.
   Behavior detail lives in `projects.md`.
 - No sidebar row is indented for pane geometry. Sessions sharing a tabbed pane are marked by a
@@ -128,17 +129,25 @@ responsive controls.
   identifying the row, so it keeps full contrast while the numbers carry the shared
   ok/warn/critical banding. Providers render in the same order as everywhere else.
   Provider marks use inline vector geometry with `currentColor`, so platform emoji substitution cannot replace their configured identity colours.
-- The **collapsed desktop rail** has room for one number, and that number is weekly: the 5-hour
-  session window churns constantly, and `fable` is a sub-window of one provider's plan rather
-  than a measure comparable across providers, so weekly is the one worth a permanent glance.
-- The **mobile toolbar** and expanded sidebar show every window the provider reports, so Claude
+- The **collapsed desktop rail and the mobile toolbar** draw the same square: one per provider,
+  the provider's mark above one number, and that number is weekly. The 5-hour session window
+  churns constantly, and `fable` is a sub-window of one provider's plan rather than a measure
+  comparable across providers, so weekly is the one worth a permanent glance.
+  The phone carries the square rather than the sidebar's breakdown for the same reason the rail
+  does, only more so: the breakdown is three columns of numbers competing with the Project name
+  and two run controls inside one 44 px row, and the question a phone is glanced at for is how
+  much of the week is gone. The full reading is one tap away, in the popover the square opens,
+  which is also where a device that cannot hover reaches what the tooltip says.
+  A single square is banded by the number it prints, never by a hotter window it hides — a border
+  contradicting the digits beside it is the same defect as banding an unrounded value.
+- The **expanded sidebar** shows every window the provider reports, so Claude
   can show `5h/weekly[/fable]` while Codex shows only `weekly` when no 5-hour window is reported.
   Missing windows do not render placeholder dashes.
   The provider identity column has a fixed width so its mark stays left-aligned across rows with different window counts.
   Visible percentage signs distinguish usage readings from reset countdowns, while the tooltip names each reported window.
-  Each window is banded on its own, so the chip says *which* one is hot; the chip's border takes the worst of them.
-  The weekly reset countdown stays on a second line beneath: "22% used" answers a different question from "and it clears in 4d12h", and a phone has no hover tooltip to reach the second one.
-  The chip's tooltip, and therefore its accessible name, names every window and says the countdown is the weekly one.
+  Each window is banded on its own, so the breakdown says *which* one is hot.
+  The weekly reset countdown stays on a second line beneath: "22% used" answers a different question from "and it clears in 4d12h".
+  Every chip's tooltip, and therefore its accessible name, names every window the provider reports and says the countdown is the weekly one — including the mobile square, which draws only one of them.
 - A band always describes the digits actually printed, not the value behind them: a rounded `90`
   colours as 90 even when the true reading is 89.6, or the colour would contradict the number
   beside it at exactly the threshold people watch for.
@@ -198,8 +207,12 @@ responsive controls.
 - Mobile Project long-press is not a context-menu gesture.
   A 325 ms hold with no movement beyond 8 px picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
   Pickup closes open menus, claims the pointer, gives short haptic feedback, lifts the row, and enables insertion preview plus edge auto-scroll inside its current section.
+  Once picked up it also **cancels `touchmove` for the rest of the drag**, without which the sidebar scrolled under the finger and the scroll cancelled the pointer — the row lifted and then nothing happened, which is what "mobile reordering does not work" looked like (`workspace-layout.md` § pointer drag contract).
   `⋮` opens the Project context menu on tap, while desktop right-click retains the same menu.
   Mobile sessions and every other sidebar row never start a sidebar drag; session long-press remains context-menu-only.
+- Both sidebar lists preview a drop as the **landing slot** — a dashed outline of the dragged row, labelled with its name, over the gap it would fall into — rather than as a line at the pointer.
+  What a drag is asking is "which two rows does this end up between", and an outline the shape of the row answers it where a line marks only where the finger is.
+  Sessions add a second, deliberately different preview for the other thing a drop can mean: landing on a row rather than between two merges the pair into one tabbed pane, and shows a blue row highlight instead of the green slot, because the two targets sit a few pixels apart and must not read as one.
 - **No context menu reorders or reshapes anything, on any platform.** Open-in-split,
   new-terminal-in-split, new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and
   move-tab are absent from the session menu on every source (sidebar row, tab, pane bar / `⋯`),
@@ -298,6 +311,8 @@ responsive controls.
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
   inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
+  Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
+  binding cannot compete with browser zoom suppression or leak the same input into xterm.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
@@ -365,6 +380,18 @@ responsive controls.
     `config.py` and `uiScale.ts`) rather than a free number. There is no useful difference
     between 1.13 and 1.15, only a way to land on a value that looks broken, and a hand-edited
     `config.toml` carrying one falls back to `1.0` rather than rendering at it.
+  - `Ctrl+wheel`, `Ctrl++`, and `Ctrl+-` move one step, while `Ctrl+0` restores `1.0`.
+    The capture listener runs before browser zoom, xterm, editors, and configurable command bindings;
+    exact scale inputs are consumed and every other wheel or key combination continues normally.
+    High-resolution wheel streams accumulate into discrete steps, reset on reversal or a pause, and
+    never turn one oversized event into a jump across multiple steps.
+    Every accepted input reports `UI scale <percent>` through the shared bottom-right interaction HUD.
+    Outside Settings the final value is persisted after a short debounce; inside Settings it joins the
+    existing draft so Save and Discard remain atomic with the panel's other changes.
+  - The Appearance selectors, shortcut inputs, config refresh, chrome, and xterm all pass through the
+    same browser scale state.
+    A live selector or shortcut preview therefore changes terminal type without disposing the terminal,
+    and discarding the Settings draft restores both chrome and terminal type together.
   - The split is by device class because the same UI is driven from a desktop browser and a
     phone and one number cannot say "the phone is too small but the desktop is fine". A window
     resolves its value through the same `(max-width:760px)` breakpoint as the mobile workspace
@@ -433,7 +460,11 @@ responsive controls.
 - A retained warm pane keeps parsing but not rendering.
   Its renderer is explicitly paused while hidden and resumed on reveal ahead of the reveal's redraw, because xterm's own pause is geometric and never triggers for a measurable `visibility:hidden` box (`terminalRenderPause.ts`, `technical/frontend/workspace-state.md`).
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
-  Claude's terminal body stops at 120 columns and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Terminals; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
+  A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
+  That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.
+  `0` removes the host style entirely rather than relaxing its maximum, so a disabled envelope is the same code path as no envelope.
   The centered grid item retains an explicit `width:100%` before its maximum is applied.
   Centering without that definite width makes CSS Grid intrinsically size the host from xterm's own fitted child, creating a repeated shrink-and-refit loop.
   Codex panes that would fit fewer than 80 columns reduce their font, down to 8 px, and fit again before attach or resize; this preserves Codex's documented 80-column composer floor for ordinary narrow desktop panes.
@@ -534,14 +565,18 @@ responsive controls.
   along — which hid *which* provider was burning and gave no sense of how long until it
   cleared, and a phone has no hover tooltip to recover either. Providers render in the same
   order as every other surface.
-- Nav is a glyph rather than the `:nav` label. No word survives at this width, and pinning a
+- Nav is a mark rather than the `:nav` label. No word survives at this width, and pinning a
   font size to force one would ignore the user's UI-scale setting, which this button is subject
   to through an `!important` rule. It and the side-panel toggle are one mirrored box (36 × 44
   px): whatever is true of the tap target for one drawer is true of the other. 24 px was too
   narrow to hit reliably — the 44 px height alone does not rescue a target that thin, because a
-  thumb's contact patch is wider than it is tall — and the glyph scales with the box, or a
-  wider button only frames a 9 px `≡` in dead space. Both drawers also open by swipe, so
+  thumb's contact patch is wider than it is tall — and the mark scales with the box, or a
+  wider button only frames a 9 px glyph in dead space. Both drawers also open by swipe, so
   neither toggle is its panel's only entry point.
+  The mark itself is the mirror too: `NavPanelIcon` is `SidePanelIcon` reflected, a frame with
+  its *left* column partitioned off. The pair only reads as a pair if their marks are one mark
+  reflected, and the `≡` it replaced named no panel at all — it was a menu glyph on a button that
+  opens a drawer.
 - Every Run trigger that targets the active Project — mobile toolbar, desktop header, collapsed
   rail — toggles: a second click collapses the menu. Sidebar project rows keep the plain open, so
   clicking another Project's `▶` while a menu is up switches to it rather than only closing.
@@ -886,6 +921,14 @@ responsive controls.
   inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
   rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
   over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- Talk exposes a deliberately smaller rail-derived command set through `railVoice.ts` when a live session is focused.
+  Built-in keys and Paste require explicit `voicePhrases`; non-submitting configured agent skills and slash commands derive aliases from their names.
+  Submitted custom commands require their own explicit voice phrases.
+  Copy is the existing focused-terminal registry command because it is not a rail catalog item.
+  Literal text and prompt macros are excluded, as are destructive and UI-only actions such as clear-input, Attach, keyboard mode, relaunch, and End session.
+  Only items placed on the current device's strip or Commands panel participate, and duplicate placements collapse to one spoken command.
+  The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
+  Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
 - The command-rail editor (`RailEditor.tsx`) shows the two device layouts as columns above a catalog of every command.
   Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
   Each column holds its two surfaces, each surface its rows, each row its draggable chips.

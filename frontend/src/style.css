@@ -186,24 +186,8 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-identity.unverified{color:var(--amber)}
 .account-relink{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 0;color:var(--amber);font-size:8px}
 .account-current{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}.account-current span{grid-row:1/3;color:var(--green);font-size:8px;align-self:center}.account-current strong{font-size:9px;font-weight:500}.account-current small{color:var(--muted)}.account-current.external span,.account-current.external strong{color:var(--amber)}.account-current.unreadable span,.account-current.unreadable strong{color:var(--red)}.account-current.signed_out span,.account-current.signed_out strong{color:var(--muted)}
-/* Mobile quota uses the same two-row reading as the sidebar. No font sizes here: chrome
-   type follows `--ui-font-size`, so the grid condenses through structure and spacing. */
-.toolbar-quota{min-width:0;height:calc(36px*var(--ui-scale));padding:2px 4px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);cursor:pointer}
-.toolbar-quota .quota-grid{height:100%;column-gap:4px}
-.toolbar-quota .quota-grid-0{grid-template-columns:auto}
-.toolbar-quota .quota-grid-1{grid-template-columns:auto max-content}
-.toolbar-quota .quota-grid-2{grid-template-columns:auto repeat(2,max-content)}
-.toolbar-quota .quota-grid-3{grid-template-columns:auto repeat(3,max-content)}
-.toolbar-quota .quota-grid-identity{min-width:4ch}
-.toolbar-quota .quota-grid-metric{min-width:5ch}
-.toolbar-quota:hover,.toolbar-quota:focus-visible{border-color:var(--green)}
-/* Each window is banded individually, so the chip says which one is hot rather than only
-   that something is. The button's own band is the worst of them and drives the border. */
-.toolbar-quota.usage-critical{border-color:var(--red)}
-.toolbar-quota.quota-reset-unread{border-color:#a855f7;background:#6b21a833}
-/* After the per-window bands on purpose: an unreviewed reset makes the whole reading
-   suspect, so it overrides them at equal specificity rather than colouring around them. */
-.toolbar-quota.quota-reset-unread .quota-window{color:#d8b4fe}
+/* The condensed quota square (`.rail-quota`) is styled with the collapsed sidebar rail, which
+   is the other surface that draws it. */
 .account-switcher.compact{display:flex;align-items:center;gap:4px}
 /* The sidebar's status block stays on mobile too. The toolbar chips answer "how much is
    left"; this answers "on which account, and what is the machine doing" — and both open the
@@ -1189,7 +1173,10 @@ body {
 .usage-domain-tabs{display:flex;gap:3px;padding:5px 8px 0;border-bottom:1px solid var(--line);overflow-x:auto}.usage-domain-tabs button{flex:none;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted)}.usage-domain-tabs button.active{border-bottom-color:#a855f7;color:#d8b4fe}.operational-telemetry{display:grid;gap:10px}.telemetry-caveat{margin:0;padding:9px;border:1px solid #a855f766;background:#6b21a81c;color:#d8b4fe}.reset-log,.attribution-log{border:1px solid var(--line)}.reset-log>h3,.attribution-log>h3{margin:0;padding:8px 9px;border-bottom:1px solid var(--line);font:inherit;color:var(--accent);text-transform:uppercase}.reset-log>p,.attribution-log>p{margin:0;padding:12px;color:var(--muted)}.reset-log article,.attribution-log article{display:grid;gap:4px;padding:9px;border-bottom:1px solid var(--line)}.reset-log article:last-child,.attribution-log article:last-child{border-bottom:0}.reset-log article span,.reset-log article small,.attribution-log article span,.attribution-log article small{color:var(--muted)}.reset-log article.confirmed-unexpected{border-left:3px solid #a855f7;background:#6b21a81c}.reset-log article.confirmed-unexpected strong{color:#d8b4fe}.attribution-log details{padding:5px 0}.attribution-log details p{margin:4px 0;color:var(--muted)}
 .usage-view-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px;padding:6px 8px;border:1px solid var(--line);background:var(--bg)}.usage-view-controls label{display:flex;align-items:center;gap:7px;color:var(--muted)}.usage-view-controls select{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--panel);color:var(--text);font:inherit}
 .usage-series{min-width:0;margin-bottom:10px;border:1px solid var(--line);padding:7px;background:var(--bg)}.usage-series-row{min-width:0;display:grid;grid-template-columns:92px minmax(40px,1fr) 96px;align-items:center;gap:8px;min-height:24px}.usage-series-row>span{color:var(--muted)}.usage-series-row>i{height:8px;display:block;background:var(--panel2);overflow:hidden}.usage-series-row>i>b{height:100%;display:block;background:var(--accent)}.usage-series-row>strong{text-align:right;font-weight:inherit}
-@media(max-width:760px){.usage-view-tabs{overflow-x:auto}.usage-view-tabs button{flex:none}.usage-view-controls{gap:6px}.usage-series-row{grid-template-columns:76px minmax(32px,1fr) 76px}.usage-series-row>strong{overflow:hidden;text-overflow:ellipsis}}
+.historical-caveat{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 7%,var(--panel));color:var(--muted)}
+.usage-model-breakdown{display:grid;gap:10px}.model-stack{border:1px solid var(--line);padding:8px;background:var(--bg)}.model-legend,.quota-chart-legend{display:flex;flex-wrap:wrap;gap:5px 12px;margin-bottom:9px;color:var(--muted);font-size:9px}.model-legend span,.quota-chart-legend span{display:flex;align-items:center;gap:5px}.model-legend i,.quota-chart-legend i{width:8px;height:8px;display:inline-block;flex:none}.model-stack-row{display:grid;grid-template-columns:88px minmax(60px,1fr) 100px;align-items:center;gap:8px;min-height:25px}.model-stack-row>span{color:var(--muted)}.model-stack-track{height:11px;display:flex;min-width:1px;background:var(--panel2);overflow:hidden}.model-stack-track>i{display:block;height:100%;min-width:1px}.model-stack-row>strong{text-align:right;font-weight:inherit}
+.quota-controls label:first-child{flex:1 1 260px}.quota-controls label:first-child select{min-width:180px;max-width:100%}.quota-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.quota-chart{min-width:0;border:1px solid var(--line);padding:8px;background:var(--bg)}.quota-chart h3{margin:0 0 7px;color:var(--accent);font:inherit;text-transform:uppercase}.quota-chart svg{display:block;width:100%;min-width:0;overflow:visible}.quota-chart svg text{fill:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}.quota-chart svg polyline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}.quota-grid-line{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}.quota-reset-marker{stroke:#94a3b8;stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}.quota-reset-marker.unexpected{stroke:#f472b6;stroke-width:2}.quota-reset-marker.scheduled{stroke:#a3e635}.quota-chart>p{margin:8px 0;color:var(--muted)}
+@media(max-width:760px){.usage-view-tabs{overflow-x:auto}.usage-view-tabs button{flex:none}.usage-view-controls{gap:6px}.usage-series-row{grid-template-columns:76px minmax(32px,1fr) 76px}.usage-series-row>strong{overflow:hidden;text-overflow:ellipsis}.model-stack-row{grid-template-columns:72px minmax(40px,1fr) 76px}.model-stack-row>strong{overflow:hidden;text-overflow:ellipsis}.quota-chart-grid{grid-template-columns:1fr}.quota-controls label:first-child{flex-basis:100%}.quota-controls label:first-child select{min-width:0}}
 
 .automation-panel{grid-template-rows:auto auto auto minmax(0,1fr) auto}
 .automation-tabs{overflow-x:auto}.automation-tabs button{flex:none}
@@ -1249,6 +1236,9 @@ body {
 .rail-quota.usage-warn>strong{color:var(--yellow,#e5c07b)}
 .rail-quota.usage-critical{border-color:var(--red)}
 .rail-quota.usage-critical>strong{color:var(--red)}
+/* After the usage bands on purpose: an unreviewed reset makes the whole reading suspect, so it
+   overrides them at equal specificity rather than colouring around them. */
+.rail-quota.quota-reset-unread{border-color:#a855f7;background:#6b21a833}
 
 .workspace.sidebar-collapsed .app-identity{justify-content:center;padding:0}.workspace.sidebar-collapsed .app-identity strong,.workspace.sidebar-collapsed .app-identity .daemon-ok{display:none}.workspace.sidebar-collapsed .sidebar{visibility:hidden;border:0}.workspace.sidebar-collapsed .sidebar-resizer{display:none}.sidebar-resizing{cursor:col-resize;user-select:none}.sidebar-resizing iframe{pointer-events:none}
 
@@ -1525,6 +1515,9 @@ body {
 /* Muted rather than amber: a session sized by another view is a fact about the pane, not
    a warning, and it sits on screen for as long as that stays true. */
 .terminal-input-owner.letterbox-notice{border-color:var(--line);color:var(--muted)}
+/* Muted for the same reason, and transient besides (WIDTH_CAP_NOTICE_MS): a configured
+   width envelope is a setting the user can see the effect of, not a fault. */
+.terminal-input-owner.width-cap-notice{border-color:var(--line);color:var(--muted)}
 /* The badge itself never eats terminal input; only its retry button does. */
 .terminal-connection-retry{pointer-events:auto;min-height:0;padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.terminal-connection-retry{min-height:26px;padding:0 10px}}
@@ -1590,10 +1583,13 @@ body {
   /* The two edge toggles are the same box, mirrored: whatever is true of the tap target for
      one drawer is true of the other. 24px was too narrow to hit reliably — the 44px height
      alone does not save a target that thin, since a thumb's contact patch is wider than it is
-     tall. The glyph scales with the box, or a wider button just frames a 9px `≡` in dead space. */
+     tall. Both carry the same 18px mark — one panel frame and its mirror — so a wider button
+     frames a bigger mark rather than more dead space. */
   .mobile-nav-toggle,.mobile-drawer-toggle{position:static;inset:auto;display:grid;place-items:center;min-width:36px;width:36px;height:44px;padding:0;overflow:hidden;z-index:auto;border:1px solid var(--line);background:var(--panel);color:var(--green);cursor:pointer}
-  .mobile-nav-toggle{font-size:15px}
-  .mobile-drawer-toggle>svg{width:18px;height:18px}
+  .mobile-nav-toggle>svg,.mobile-drawer-toggle>svg{width:18px;height:18px}
+  /* The quota squares stand to the same height as Run rather than the rail's compact box, so
+     the bar reads as one row of controls instead of a strip with a shorter inset in it. */
+  .mobile-toolbar .rail-quota{height:calc(36px*var(--ui-scale));align-content:center}
   /* Pressed state only on the drawer toggle: it is the one whose panel can be open while the
      button is still on screen. The sidebar's scrim covers this bar. */
   .mobile-drawer-toggle[aria-expanded="true"]{border-color:var(--accent);color:var(--accent);background:var(--panel2)}
@@ -2048,10 +2044,23 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 @media(pointer:coarse){.pane-voice .voice-mic{display:none}}
 @media(max-width:760px){.voice-strip{min-height:30px}.voice-strip button{height:calc(24px*var(--ui-scale));min-width:26px}.voice-strip .voice-seek{height:calc(20px*var(--ui-scale))}}
 .mux-pointer-drag-ghost{position:fixed;left:0;top:0;z-index:9999;max-width:260px;padding:7px 11px;border:1px solid var(--green);background:var(--panel2);color:var(--text);box-shadow:5px 6px 0 #0008;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font:10px 'Cascadia Mono',Consolas,monospace;will-change:transform}
-.draggable-project,.draggable-tab,.session-row{touch-action:auto}
+/* The landing slot: where the row in the air will come down, drawn over the gap it would take.
+   It is the ghost's counterpart — the ghost is at the pointer and says *what* is moving, this is
+   in the list and says *where* it stops. Dashed and translucent so the rows it straddles stay
+   readable underneath, since the answer being checked is which two rows it lands between. */
+.mux-drop-slot{position:fixed;left:0;top:0;z-index:9998;display:flex;align-items:center;padding:0 8px;border:1px dashed var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;font:9px 'Cascadia Mono',Consolas,monospace;box-shadow:0 0 10px color-mix(in srgb,var(--green) 40%,transparent);will-change:transform}
+/* Touch scrolling stays available from a draggable row; a hold-drag suppresses it for the
+   duration by cancelling `touchmove` itself (see `beginPointerDrag`), which `touch-action:none`
+   could only do by costing the sidebar its scroll everywhere. Text selection is not so lucky:
+   a 325 ms hold over a row's label is also the gesture that raises selection handles, and those
+   would fight the drag they appear in the middle of. */
+.draggable-project,.draggable-tab,.session-row{touch-action:auto;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .pane-stack[data-pointer-drop-indicator]{position:relative}.pane-stack[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:24;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 16%,transparent);box-shadow:inset 0 0 20px color-mix(in srgb,var(--green) 14%,transparent),0 0 8px #0008}.pane-stack[data-pointer-drop-indicator="split-left"]:after{inset:calc(34px*var(--ui-scale)) 72% 0 0}.pane-stack[data-pointer-drop-indicator="split-right"]:after{inset:calc(34px*var(--ui-scale)) 0 0 72%}.pane-stack[data-pointer-drop-indicator="split-top"]:after{inset:calc(34px*var(--ui-scale)) 0 72%}.pane-stack[data-pointer-drop-indicator="split-bottom"]:after{inset:72% 0 0}
 .stack-tabs[data-pointer-drop-indicator="tab-bar"]{position:relative;box-shadow:inset 0 0 0 1px var(--green),inset 0 -3px color-mix(in srgb,var(--green) 72%,transparent);background:color-mix(in srgb,var(--green) 9%,var(--panel))}.stack-tabs[data-pointer-drop-indicator="tab-bar"]:after{content:"";position:sticky;z-index:28;right:2px;flex:0 0 3px;align-self:stretch;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent);pointer-events:none}
-.stack-tab-shell[data-pointer-drop-indicator]:after,.project-group[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.stack-tab-shell[data-pointer-drop-indicator="insert-before"]:after{left:-2px;top:3px;bottom:3px;width:3px}.stack-tab-shell[data-pointer-drop-indicator="insert-after"]:after{right:-2px;top:3px;bottom:3px;width:3px}.project-group[data-pointer-drop-indicator="insert-before"]:after{left:2px;right:2px;top:-3px;height:3px}.project-group[data-pointer-drop-indicator="insert-after"]:after{left:2px;right:2px;bottom:-3px;height:3px}
+/* Tab strips keep the insertion line: a tab is as wide as its label, so a slot outline the size
+   of the dragged tab would be a poor guide to a gap of a different width. The sidebar's rows are
+   uniform and use `.mux-drop-slot` instead. */
+.stack-tab-shell[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.stack-tab-shell[data-pointer-drop-indicator="insert-before"]:after{left:-2px;top:3px;bottom:3px;width:3px}.stack-tab-shell[data-pointer-drop-indicator="insert-after"]:after{right:-2px;top:3px;bottom:3px;width:3px}
 /* Pane tabs use pointer dragging. The outer launcher is a mirror and does not rearrange. */
 .drawer-tabs button{touch-action:none}
 .drawer-tabs button[data-scope="session"]:before,.utility-rail button[data-scope="session"]:before{content:"";position:absolute;z-index:2;right:5px;bottom:5px;width:3px;height:3px;border-radius:50%;background:color-mix(in srgb,var(--muted) 52%,var(--panel2));box-shadow:none;opacity:.8;pointer-events:none}
@@ -2059,7 +2068,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-tabs button[data-pointer-drop-indicator="insert-before"]:after{left:-1px;top:4px;bottom:4px;width:3px}
 .drawer-tabs button[data-pointer-drop-indicator="insert-after"]:after{right:-1px;top:4px;bottom:4px;width:3px}
 .drawer-tabs button.dragging{opacity:.4}
-.session-row[data-pointer-drop-indicator="group-session"],.layout-cluster.stack[data-pointer-drop-indicator="join-stack"]{outline:1px solid var(--blue);outline-offset:-1px;background:color-mix(in srgb,var(--blue) 12%,var(--panel));box-shadow:inset 0 0 12px color-mix(in srgb,var(--blue) 12%,transparent)}.layout-cluster.stack[data-pointer-drop-indicator="join-stack"]{outline-offset:1px}.session-row[data-pointer-drop-indicator="invalid"],.layout-cluster[data-pointer-drop-indicator="invalid"]{outline:1px solid var(--red);outline-offset:-1px;background:color-mix(in srgb,var(--red) 9%,var(--panel))}
+/* Blue, not the insertion slot's green: landing *on* a row is a different act from landing
+   between two of them — it merges the pair into one tabbed pane rather than moving anything —
+   and the two previews appear a few pixels apart, so they must not read as the same thing.
+   There is no "invalid" outline any more: a session cannot be dropped outside its own Project,
+   and the drag now says that by offering no target there rather than by refusing one. */
+.session-row[data-pointer-drop-indicator="group-session"]{outline:1px solid var(--blue);outline-offset:-1px;background:color-mix(in srgb,var(--blue) 12%,var(--panel));box-shadow:inset 0 0 12px color-mix(in srgb,var(--blue) 12%,transparent)}
 /* Collapsible / hideable sidebar projects. Empty Projects keep an inert chevron
    cell so Project names stay aligned; the badge counts live hidden sessions. */
 .project-row .project-collapse-toggle{width:100%;min-width:0;height:100%;padding:0;display:grid;place-items:center;font-size:8px;line-height:1;background:transparent}

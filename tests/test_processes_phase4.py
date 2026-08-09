@@ -516,6 +516,31 @@ async def test_unified_process_snapshot_groups_sessions_and_aggregates_resources
     assert result["daemon"]["pid"] > 0
 
 
+@pytest.mark.asyncio
+async def test_process_summary_keeps_watch_fields_and_omits_inspector_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspector = _fleet_inspector(monkeypatch)
+    process = inspector.owned[(55, 1.0)]
+    process.listeners = [listener_record("127.0.0.1", 3000)]
+    process.conditions = ["large-inspector-only-detail"]
+
+    result = await inspector.snapshot_summary_all()
+
+    item = result["sessions"][0]["processes"][0]
+    assert item == {
+        "pid": 55,
+        "command": "server",
+        "exited_at": None,
+        "cpu_pct": 5.0,
+        "memory_bytes": 1024,
+        "listeners": [listener_record("127.0.0.1", 3000)],
+        "server_eligible": True,
+    }
+    assert "members" not in result["daemon"]
+    assert "ownership_diagnostics" not in result
+
+
 def _fleet_inspector(monkeypatch: pytest.MonkeyPatch) -> Any:
     from swe_mux import processes
 

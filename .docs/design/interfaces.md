@@ -874,6 +874,8 @@ false. Prompt bodies and terminal bytes are never included.
 ```text
 GET /api/diagnostics/status-health
 GET /api/diagnostics/background
+GET /api/diagnostics/network
+DELETE /api/diagnostics/network
 ```
 
 `status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
@@ -923,6 +925,15 @@ This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
 visible instead of merely absent.
 
+`diagnostics/network` reports a daemon-local measurement window with totals, per-peer HTTP and
+WebSocket counters, normalized HTTP route templates, and named WebSocket channels.
+HTTP byte counts are encoded response and request bodies, excluding headers and transport
+overhead.
+WebSocket byte counts are application text/binary frame payloads before per-message compression.
+The DELETE form records the prior totals in the rotating daemon log and resets the in-memory
+window without disrupting live sessions.
+Both forms are excluded from the counters so observing a window does not change it.
+
 ## History and reviews
 
 ```text
@@ -969,7 +980,7 @@ GET    /git/commits/{oid}/changes
 GET    /git/diff
 POST   /git/worktrees
 DELETE /git/worktrees
-GET    /processes
+GET    /processes[?session=&include_ended=1&unique_memory=1&summary=1]
 POST   /processes/action             {session_id, pid, identity_id, action}
 GET    /previews[?session=]
 POST   /previews                     {session_id, url, approved?, attach?, target_session_id?, direction?}
@@ -1026,6 +1037,11 @@ Each process carries stable `attribution_version`, `attribution_source`, `last_a
 Fleet and session responses carry a bounded command-free `ownership_diagnostics` list for rejected causal edges, infrastructure claims, ownership conflicts, and legacy repair.
 `GET /processes` returns running processes only; `include_ended=1` adds records that ended
 during the current daemon run. Ended records never contribute to resource totals.
+`summary=1` returns the fleet projection used by the always-mounted browser watch.
+It retains session and Project ids, process ids, command labels, exit state, CPU, RSS, listeners,
+server eligibility, aggregate totals, system CPU, and daemon totals while omitting process
+identity evidence, ownership diagnostics, parent/connection detail, and daemon members.
+It cannot be combined with `session`, `include_ended`, or `unique_memory`.
 Fleet responses also carry nullable `system_cpu_pct`, normalized to 0–100% whole-machine
 utilization from consecutive cumulative OS CPU-counter samples.
 It is null until two samples establish an interval.
@@ -1062,6 +1078,7 @@ DELETE /provider-accounts/{provider}/{account_id}
 GET|POST /usage
 DELETE /usage/cache
 GET    /telemetry/operational[?provider=&account=&limit=]
+GET    /telemetry/quota-series[?provider=&account=&since=&until=&resolution=raw|daily&limit=]
 PATCH  /telemetry/quota-resets/{reset_id} {resolution: manual_usage|discarded}
 ```
 
@@ -1092,6 +1109,8 @@ probabilistic attributions, tool/skill aggregates, parser coverage, and explicit
 Its interpretation is always `observational_correlation_only`.
 Reset review is durable and audit-preserving: both resolutions remove the row from the active
 alert summary without deleting evidence; `manual_usage` is valid only for Codex rows.
+`/telemetry/quota-series` returns server-filtered account timelines with `interpretation: quota_utilization_not_token_usage`.
+Daily responses merge retained rollups with unpruned samples and keep different verified provider identities in a reused local account slot separate.
 
 ## Agent MCP surface
 
@@ -1109,6 +1128,8 @@ non-loopback → 403; rate overflow → 429 with `Retry-After`.
 Configuration/keybindings, automation/annotations/lineage, events/notifications, voice,
 remote status, filesystem discovery, and preview proxy routes retain their feature-specific
 contracts described in the corresponding `features/` documents.
+The keybinding policy separates `browser_reserved`, `desktop_only`, `application_reserved`,
+and `terminal_reserved`; application-reserved UI scale chords are rejected as configurable bindings.
 
 `GET /events[?after_seq=N][&session=<id>]` is the live event stream. `after_seq` is a resume
 cursor: the client tracks the highest `seq` it has applied and sends it on reconnect, and the

@@ -87,6 +87,11 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Opening or focusing a Project, session, note, file, preview, Queue, or other resource never changes it.
   Agent output, state transitions, session completion, session removal, history timestamps, and background automation never change it.
   A Project without a recorded action is unmeasured and retains manual-order tie-breaking.
+  The list survives a reload, a daemon restart, and a desktop redeploy, and is bounded at the 100 most recent entries.
+  It is never filtered against the registered Projects: an entry for a deleted Project is inert, because the rank lookup a sort consults simply never hits it and the relative order of the live Projects is unaffected.
+  That bound is the only thing that trims it, which is deliberate - the filter it replaced could not tell an empty registry from one that had not been fetched yet, so every page load emptied the list and persisted the result.
+- Device-local Group fold state is pruned against the registered Groups, so a Group id that is deleted and later reused cannot inherit a fold the user never applied.
+  The prune is suppressed until the Group registry has actually loaded, for the same reason.
 - Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
   `.swe-mux/notes/project.md`. The registration is not inferred from Git or current cwd.
 - Add project has two modes of one form: register a folder that exists, or create a new folder

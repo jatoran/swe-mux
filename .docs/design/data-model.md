@@ -59,8 +59,8 @@
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.
   Version 1 is legacy root-relative attribution; version 2 proves current per-edge causal validation or live Job Object membership.
-- `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention
-  summaries. `quota_reset_events` retains reset/correlation evidence plus nullable durable user
+- `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention summaries keyed by local account slot and verified provider account identity.
+  `quota_reset_events` retains reset/correlation evidence plus nullable durable user
   review (`manual_usage | discarded`, timestamp); `quota_attributions` retains correlation
   estimates.
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated

@@ -32,7 +32,7 @@ import { PreviewPane } from './PreviewPane'
 import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
-import { UsageDashboard } from './UsageDashboard'
+import { UsageDashboard } from './UsageDashboardView'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
@@ -68,7 +68,7 @@ import {
   pruneDrawerNotes, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
 import type { WatchScope } from './processWatch'
-import { DRAWER_TAB_ICONS, SidePanelIcon } from './railIcons'
+import { DRAWER_TAB_ICONS, NavPanelIcon, SidePanelIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
@@ -89,7 +89,7 @@ import {
   KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
   nextActiveAfterKill, type KillTombstones,
 } from './sessionKills'
-import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings } from './deviceSettings'
+import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
 import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
@@ -101,8 +101,14 @@ import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } fr
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { eventRequiresFleetRefresh } from './eventRefresh'
 import { applyNoteEditorConfig } from './noteEditorSettings'
-import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
+import {
+  DEFAULT_UI_SCALE, applyUiScale, createUiScaleWheelIntent, uiScaleConfigKey,
+  uiScaleForIntent, uiScaleKeyboardIntent, watchUiScaleProfile, type UiScale,
+} from './uiScale'
+import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
+import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
+import { requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
@@ -124,8 +130,8 @@ import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, softKeyboardHolder, softKeybo
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import {
-  edgeAutoScrollDelta, MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
-  reorderForHover, reorderTargetFromContainer, type DropSide, type PointerDragActivation, type ReorderAxis,
+  DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
+  reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis,
 } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
 import { relativeStackTab } from './workspaceTabs'
@@ -146,9 +152,16 @@ import { activityBadges, sessionDotClass, sessionStatus } from './sessionStatus'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
-  activateContainingStack, activateStackChild, addLeafToStack, addToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addLeafToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, moveTerminalBeside, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
+
+// `/events` is authoritative for live changes. These are only visible-tab recovery
+// backstops, so keeping them sub-minute re-sent whole fleet payloads without improving
+// convergence. Process watch stays fresher but uses the reduced summary representation.
+const FLEET_SAFETY_REFRESH_MS=60_000
+const KEYBINDING_SAFETY_REFRESH_MS=60_000
+const PROCESS_SUMMARY_REFRESH_MS=10_000
 
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
@@ -161,6 +174,13 @@ const isAgent = (session: Session) => isAgentBackend(session.backend)
 
 function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
+}
+
+function railVoiceConfirmation(entry: RailVoiceEntry): string {
+  const name=entry.phrases[0]||entry.item.label
+  if(entry.request.action==='pasteText')return 'Pasted into the focused session. Still listening.'
+  if(entry.request.action==='sendKey')return `Pressed ${name}. Still listening.`
+  return `${entry.request.submit?'Ran':'Inserted'} ${name}. Still listening.`
 }
 
 // One naming rule for every surface that shows a session: sidebar rows, workspace
@@ -444,13 +464,18 @@ export function App() {
   // Sound and push channel choices stay intact while the master is muted. Kept in sync
   // through the `mux:settings-changed` event the device-settings cache emits.
   const [alertsEnabled, setAlertsEnabled] = useState(() => alertPreferences().enabled)
+  const [railVoiceRevision,setRailVoiceRevision]=useState(0)
   const [usageOpen, setUsageOpen] = useState(false)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
   const [automationOpen,setAutomationOpen]=useState(false)
   const [projectGroups,setProjectGroups]=useState<ProjectGroup[]>([])
-  const dragSessionTargetRef=useRef<{sessionId?:string;stackId?:string;projectId:string}|null>(null)
+  // False until the first `/api/project-groups` response lands. Nothing may prune
+  // device-local sidebar state against the empty mount-time arrays: they mean "not
+  // fetched yet", not "the user deleted everything".
+  const [registryLoaded,setRegistryLoaded]=useState(false)
+  const dragSessionTargetRef=useRef<ListDropTarget|null>(null)
   type ProjectDrag={id:string;previewIds:string[];overId:string|null;side:DropSide|null}
   type BucketDrag={id:string;previewIds:string[]}
   type PaneDropZone='tabs'|'left'|'right'|'top'|'bottom'
@@ -541,10 +566,16 @@ export function App() {
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
+  const [claudeMaxColumns, setClaudeMaxColumns] = useState<number>(DEFAULT_CLAUDE_MAX_COLUMNS)
   // Chrome scale as a number. Every other surface reads it as a CSS custom property, but
   // xterm owns its own font and derives the cell grid from it, so the terminal has to be
   // handed the value rather than inheriting it.
   const [uiScale, setUiScale] = useState<UiScale>(DEFAULT_UI_SCALE)
+  const uiScaleRef = useRef<UiScale>(DEFAULT_UI_SCALE)
+  const uiScaleConfigRef = useRef<Record<string, unknown> | null>(null)
+  const uiScalePersistTimer = useRef<number | null>(null)
+  const uiScalePersistGeneration = useRef(0)
+  uiScaleRef.current = uiScale
   const [windowsPty, setWindowsPty] = useState<WindowsPtyCompatibility | undefined>(undefined)
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
@@ -820,6 +851,37 @@ export function App() {
     if(element&&indicator)element.dataset.pointerDropIndicator=indicator
   }
 
+  /** The insertion preview for the sidebar's list drags: an outline of the dragged row, at the
+   *  gap it would land in, carrying its name. A line between two rows says where the pointer is;
+   *  this says what the list will look like, which is the question being asked while a row is in
+   *  the air. It is a body-level element positioned over the list rather than a placeholder
+   *  spliced into it, because the sidebar re-renders on every fleet event and a foreign node
+   *  inside a Preact-managed parent does not survive that diff. */
+  const dropSlotRef=useRef<HTMLDivElement|null>(null)
+  const showDropSlot=(slot:{left:number;width:number;gap:number;height:number;label:string}|null)=>{
+    if(!slot){dropSlotRef.current?.remove();dropSlotRef.current=null;return}
+    let element=dropSlotRef.current
+    if(!element){
+      element=document.createElement('div')
+      element.className='mux-drop-slot'
+      document.body.appendChild(element)
+      dropSlotRef.current=element
+    }
+    if(element.textContent!==slot.label)element.textContent=slot.label
+    element.style.width=`${Math.round(slot.width)}px`
+    element.style.height=`${Math.round(slot.height)}px`
+    // Centred on the gap rather than resting below it: a row cannot occupy a zero-height seam,
+    // and straddling it reads as "this pushes in here" without claiming either neighbour.
+    element.style.transform=`translate3d(${Math.round(slot.left)}px,${Math.round(slot.gap-slot.height/2)}px,0)`
+  }
+  /** The slot for landing beside `row`, from the geometry of the row itself: it is indented
+   *  exactly as far as its own list nesting, which is what makes the preview legible inside a
+   *  pane cluster. `height` is the dragged row's, since that is what lands there. */
+  const dropSlotForRow=(row:HTMLElement,side:DropSide,height:number,label:string)=>{
+    const box=row.getBoundingClientRect()
+    showDropSlot({left:box.left,width:box.width,gap:side==='before'?box.top:box.bottom,height,label})
+  }
+
   const beginPointerDrag=(
     event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
     onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
@@ -835,12 +897,24 @@ export function App() {
     // as a swipe, and only the drag knows which it is. Claimed at activation rather than at
     // pointer-down so a swipe that merely *starts* on a draggable tab still works.
     let releaseDragClaim:(()=>void)|null=null
+    // Touch only, and the reason the hold-to-drag gesture works at all. `preventDefault` on a
+    // *pointer* move does not stop a touch from scrolling — only `touch-action` and a cancelled
+    // `touchmove` do — so without this the sidebar scrolled under the finger and the scroll
+    // cancelled the pointer, which is exactly the shape of "the drag does nothing on a phone".
+    // `touch-action:none` on the row is not the fix either: it would cost the sidebar its
+    // scroll, since a row is most of what there is to put a finger on. Registered at
+    // pointer-down (which precedes `touchstart`) so the sequence is main-thread from the start
+    // and its moves stay cancelable; it only cancels once the drag is real, leaving an ordinary
+    // scroll that merely began on a row untouched.
+    const blockTouchScroll=(touch:TouchEvent)=>{if(active&&touch.cancelable)touch.preventDefault()}
+    if(event.pointerType==='touch')window.addEventListener('touchmove',blockTouchScroll,{passive:false})
     const cleanup=()=>{
       if(activePointerDragCancelRef.current===cancel)activePointerDragCancelRef.current=null
       releaseDragClaim?.();releaseDragClaim=null
       window.removeEventListener('pointermove',move)
       window.removeEventListener('pointerup',up)
       window.removeEventListener('pointercancel',cancelPointer)
+      window.removeEventListener('touchmove',blockTouchScroll)
       window.removeEventListener('blur',cancel)
       window.removeEventListener('keydown',key,true)
       source.removeEventListener('lostpointercapture',lostCapture)
@@ -850,6 +924,7 @@ export function App() {
       document.body.classList.remove('workspace-pointer-dragging')
       source.classList.remove('dragging')
       showPointerDropIndicator(null)
+      showDropSlot(null)
       ghost?.remove()
     }
     const finish=(commit:boolean)=>{
@@ -1074,6 +1149,7 @@ export function App() {
       }
       setPreviews(Object.fromEntries(nextPreviews.items.map(item => [item.id, item])))
       setProjectGroups(nextGroups)
+      setRegistryLoaded(true)
       setLayoutMap(current => {
         const next = { ...current }
         const live = new Set(visibleSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
@@ -1120,6 +1196,25 @@ export function App() {
     utility_rail_display?:'icon'|'title'
   }&Record<string,unknown>
 
+  // Scale previews have to update both authorities in the browser: the root custom
+  // property used by chrome and the numeric prop xterm receives. Settings used to call
+  // `applyUiScale` by itself, which made its live preview stop at the terminal boundary.
+  const previewUiScaleConfig = (config:Record<string,unknown>):UiScale => {
+    uiScaleConfigRef.current=config
+    const next=applyUiScale(config)
+    uiScaleRef.current=next
+    setUiScale(next)
+    return next
+  }
+
+  const previewActiveUiScale = (scale:UiScale):void => {
+    const config={
+      ...(uiScaleConfigRef.current||{}),
+      [uiScaleConfigKey(currentProfile())]:scale,
+    }
+    previewUiScaleConfig(config)
+  }
+
   // One place that turns a daemon config into browser state. The boot path, the
   // Settings-close path, and the configuration_changed handler each applied a
   // *different subset*, so a renderer or scroll-sensitivity change made on
@@ -1128,9 +1223,10 @@ export function App() {
   const applyConfig = (config:AppConfig, includeTheme:boolean) => {
     if (includeTheme) { configureCustomTheme(config.custom_theme); applyTheme(config.theme) }
     applyNoteEditorConfig(config)
-    setUiScale(applyUiScale(config))
+    previewUiScaleConfig(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
+    setClaudeMaxColumns(claudeMaxColumnsFrom(config))
     // Value-compared for the same reason as mobileInput below: this feeds
     // TerminalPane's mount effect, so a fresh object identity on an unchanged
     // machine descriptor would dispose and rebuild every live terminal.
@@ -1154,6 +1250,22 @@ export function App() {
     api<AppConfig>('GET','/api/config')
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
+
+  const scheduleUiScalePersist = (scale:UiScale):void => {
+    const field=uiScaleConfigKey(currentProfile())
+    const generation=++uiScalePersistGeneration.current
+    if(uiScalePersistTimer.current!==null)window.clearTimeout(uiScalePersistTimer.current)
+    uiScalePersistTimer.current=window.setTimeout(()=>{
+      uiScalePersistTimer.current=null
+      void api<AppConfig>('PATCH','/api/config',{[field]:scale}).then(config=>{
+        if(generation===uiScalePersistGeneration.current)applyConfig(config,false)
+      }).catch(cause=>{
+        if(generation!==uiScalePersistGeneration.current)return
+        setError(`UI scale could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)
+        void loadConfig(false)
+      })
+    },300)
+  }
 
   const persistDrawerDisplay=async(surface:'tabs'|'rail',next:'icon'|'title')=>{
     const previous=surface==='tabs'?drawerTabDisplay:utilityRailDisplay
@@ -1189,8 +1301,8 @@ export function App() {
     // re-rendering a backgrounded tab) and refresh once on return to foreground.
     const tick = () => { if (!document.hidden) void refresh() }
     const keyTick = () => { if (!document.hidden) loadKeys() }
-    const timer = setInterval(tick, 15000)
-    const keyTimer = setInterval(keyTick, 30000)
+    const timer = setInterval(tick, FLEET_SAFETY_REFRESH_MS)
+    const keyTimer = setInterval(keyTick, KEYBINDING_SAFETY_REFRESH_MS)
     const onVisible = () => { if (!document.hidden) { void refresh(); loadKeys() } }
     document.addEventListener('visibilitychange', onVisible)
     // Backstop for every `void api(...)` call site. Kill, create, and delete are
@@ -1215,7 +1327,7 @@ export function App() {
   // the daemon; this raw fleet sample is never navigation state by itself.
   const loadProcesses = async () => {
     try {
-      const snapshot = await api<FleetSnapshot>('GET','/api/processes')
+      const snapshot = await api<FleetSnapshot>('GET','/api/processes?summary=1')
       setProcessFleet(snapshot)
     } catch { setProcessFleet(null) }
   }
@@ -1223,7 +1335,7 @@ export function App() {
   useEffect(() => {
     void loadProcesses()
     const tick = () => { if (!document.hidden) void loadProcesses() }
-    const timer = setInterval(tick, 8000)
+    const timer = setInterval(tick, PROCESS_SUMMARY_REFRESH_MS)
     const onVisible = () => { if (!document.hidden) void loadProcesses() }
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
@@ -1254,7 +1366,61 @@ export function App() {
 
   // Chrome scale is stored per device class, so crossing the breakpoint changes
   // which stored value applies — not just the layout.
-  useEffect(() => watchUiScaleProfile(setUiScale), [])
+  useEffect(() => watchUiScaleProfile(scale=>{
+    uiScaleRef.current=scale
+    setUiScale(scale)
+  }), [])
+
+  // Browser-style UI scaling is captured before xterm, editors, command bindings, or
+  // Chromium's page zoom see it. Plain wheel/key input and every non-exact modifier
+  // combination continue down their ordinary paths. Settings keeps the result in its
+  // draft; everywhere else the final step is persisted after a short gesture debounce.
+  useEffect(() => {
+    const wheelIntent=createUiScaleWheelIntent()
+    const consume=(event:KeyboardEvent|WheelEvent)=>{
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    const applyIntent=(intent:ReturnType<typeof uiScaleKeyboardIntent>)=>{
+      if(!intent)return
+      const current=uiScaleRef.current
+      const next=uiScaleForIntent(current,intent)
+      previewActiveUiScale(next)
+      const limit=next===current&&intent!=='reset'?(intent==='increase'?' (maximum)':' (minimum)'):''
+      showInteractionHud(`UI scale ${Math.round(next*100)}%${limit}`)
+      if(next!==current&&!settingsOpen)scheduleUiScalePersist(next)
+    }
+    const onKey=(event:KeyboardEvent)=>{
+      const intent=uiScaleKeyboardIntent(event)
+      if(!intent)return
+      consume(event)
+      applyIntent(intent)
+    }
+    const onWheel=(event:WheelEvent)=>{
+      if(!event.ctrlKey||event.altKey||event.metaKey||event.shiftKey)return
+      consume(event)
+      applyIntent(wheelIntent(event))
+    }
+    window.addEventListener('keydown',onKey,true)
+    window.addEventListener('wheel',onWheel,{capture:true,passive:false})
+    return()=>{
+      window.removeEventListener('keydown',onKey,true)
+      window.removeEventListener('wheel',onWheel,true)
+    }
+  },[settingsOpen])
+
+  // Opening Settings turns an outstanding shortcut preview into ordinary draft state.
+  // The panel will either save it with the rest of the draft or restore the saved config.
+  useEffect(()=>{
+    if(!settingsOpen||uiScalePersistTimer.current===null)return
+    window.clearTimeout(uiScalePersistTimer.current)
+    uiScalePersistTimer.current=null
+    uiScalePersistGeneration.current+=1
+  },[settingsOpen])
+
+  useEffect(()=>()=>{
+    if(uiScalePersistTimer.current!==null)window.clearTimeout(uiScalePersistTimer.current)
+  },[])
 
   useEffect(() => {
     const viewport = window.visualViewport
@@ -1484,7 +1650,10 @@ export function App() {
   // Keep the sidebar bell in step with the device-settings cache: a local toggle, a
   // remote edit replayed over the /events socket, or a device-class switch all land here.
   useEffect(()=>{
-    const sync=()=>setAlertsEnabled(alertPreferences().enabled)
+    const sync=()=>{
+      setAlertsEnabled(alertPreferences().enabled)
+      setRailVoiceRevision(value=>value+1)
+    }
     window.addEventListener('mux:settings-changed',sync)
     return ()=>window.removeEventListener('mux:settings-changed',sync)
   },[])
@@ -1541,20 +1710,30 @@ export function App() {
     &&displayProjects.every(project=>collapsedProjects.has(project.id))
     &&projectBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))
   // A deleted Group would otherwise leave its folded flag behind forever, and the
-  // stored blob is what a recreated bucket id would silently inherit.
+  // stored blob is what a recreated bucket id would silently inherit. Gated on
+  // `registryLoaded`: this effect also runs on mount, where the empty group list is
+  // an unfetched snapshot rather than an empty registry, and pruning against it
+  // unfolded every Group on every page load.
   useEffect(()=>{
     const pruned=pruneSidebarOrder(
       sidebarOrder,
-      orderedGroups.map(group=>group.id),
-      projects.map(project=>project.id),
+      registryLoaded?orderedGroups.map(group=>group.id):null,
     )
     if(pruned!==sidebarOrder)setSidebarOrder(pruned)
-  },[projectGroups,projects])
+  },[projectGroups,registryLoaded])
   const activeLayout = layoutMap[projectId] || emptyLayout()
   const paneIds = terminalIds(activeLayout).filter(id => sessions.some(session => session.id === id && !['exited', 'crashed'].includes(session.state)))
   const workspacePanes=paneStacks(activeLayout)
   const paneViewIds=workspacePanes.map(pane=>pane.active_child_id)
   const focusedTabId=leaves(activeLayout).find(leaf=>leaf.id===(focusedViewId||activeId))?.id||null
+  const focusedTerminalSession=focusedTabId?sessions.find(session=>session.id===focusedTabId)||null:null
+  const railVoiceEntries=useMemo(()=>focusedTerminalSession?resolveRailVoiceEntries(
+    loadRailConfig(focusedTerminalSession.project_id),
+    {device:currentProfile(),backend:focusedTerminalSession.backend},
+  ):[],[
+    focusedTerminalSession?.id,focusedTerminalSession?.project_id,focusedTerminalSession?.backend,
+    mobileWorkspace,railVoiceRevision,
+  ])
   const activeStack=focusedTabId?stackForView(activeLayout,focusedTabId):null
   const unpanned = sessions.filter(session => session.project_id === projectId && !['exited', 'crashed'].includes(session.state) && !paneIds.includes(session.id))
   const focusedOutsideLayout=!!active&&!['exited','crashed'].includes(active.state)&&active.project_id===projectId&&!paneIds.includes(active.id)
@@ -1808,17 +1987,22 @@ export function App() {
   const beginProjectPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,project:Project,peerIds:string[])=>{
     const projectList=event.currentTarget.closest<HTMLElement>('.sidebar-project-list')
     const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
+    const rowHeight=event.currentTarget.getBoundingClientRect().height
     const initial:ProjectDrag={id:project.id,previewIds:displayProjectIds,overId:null,side:null}
     let latestPointer:{clientX:number;clientY:number}|null=null,scrollFrame:number|null=null
     const preview=(pointer:{clientX:number;clientY:number})=>{
       const current=dragProjectRef.current
-      if(!current||!projectList||!peerIds.includes(current.id)){showPointerDropIndicator(null);return}
+      if(!current||!projectList||!peerIds.includes(current.id)){showDropSlot(null);return}
       const target=reorderTargetFromContainer(projectList,current.id,'vertical',pointer.clientY)
-      if(!target){showPointerDropIndicator(null);return}
+      if(!target){showDropSlot(null);return}
       const previewIds=reorderForHover(current.previewIds,current.id,target.id,target.side)
       dragProjectRef.current={...current,previewIds,overId:target.id,side:target.side}
-      const targetElement=Array.from(projectList.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
-      showPointerDropIndicator(targetElement,`insert-${target.side}`)
+      // The section is the drop target, but the row is what lands: a Project with sessions
+      // showing is a tall section, and outlining all of it would promise a move of the whole
+      // block into a gap that only ever receives one row.
+      const targetSection=Array.from(projectList.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).find(item=>item.dataset.reorderId===target.id)||null
+      if(!targetSection){showDropSlot(null);return}
+      dropSlotForRow(targetSection,target.side,rowHeight,project.name)
     }
     const stopAutoScroll=()=>{
       latestPointer=null
@@ -1897,39 +2081,92 @@ export function App() {
       ()=>{dragBucketRef.current=null},
     )
   }
+  /** Reorder a session within its own Project, or group it with a peer into one tabbed pane.
+   *
+   *  The gesture is confined to the Project the session already belongs to: that Project's own
+   *  `.session-list` is the only container consulted, so no pointer position over another
+   *  Project resolves to anything at all. A session cannot change Project by being dragged —
+   *  that would reassign a running PTY's owner, which is not a decision a two-inch gesture over
+   *  a tree should make — and the drag used to say so with a red "invalid" outline and an error
+   *  toast on drop, which is a worse way to say "this was never going to work" than having no
+   *  target there in the first place.
+   *
+   *  The sidebar's session list is the pane tree read depth-first, so landing between two rows
+   *  is a real position and `moveTerminalBeside` honours it exactly. Before this, every drop was
+   *  `groupTerminalsInStack`, which appends: a row aimed at the top of the list arrived at the
+   *  bottom of a pane, and the list looked like it ignored the gesture. */
   const beginSessionPointerDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,session:Session)=>{
-    beginPointerDrag(event,sessionName(session),`session:${session.id}`,
-      ()=>{cancelLongPress();dragSessionTargetRef.current=null},
+    const list=event.currentTarget.closest<HTMLElement>('.project-group')?.querySelector<HTMLElement>(':scope > .session-list')||null
+    const tree=event.currentTarget.closest<HTMLElement>('.project-tree')
+    const rowHeight=event.currentTarget.getBoundingClientRect().height
+    const label=sessionName(session)
+    const projectLayout=()=>layoutValues.current[session.project_id]||layoutMap[session.project_id]||parseLayout(projects.find(item=>item.id===session.project_id)?.layout)
+    // Sessions already sharing this one's pane cannot be joined to it, so their rows are
+    // insertion targets over their whole height: without this, the middle of a sibling tab's row
+    // previewed a group that would have appended the dragged tab to the end of the pane they are
+    // both already in — a move nothing on screen asked for.
+    const paneSiblings=new Set(stackForView(projectLayout(),session.id)?.children.map(child=>child.id)||[])
+    let latestPointer:{clientX:number;clientY:number}|null=null,scrollFrame:number|null=null
+    // Rows a drop may land on: every session row this Project renders, minus those with no
+    // position to hold — a pending terminal is a client-only leaf about to be replaced, and an
+    // unpaned session is not in the pane tree the list order is read from.
+    const targetRows=()=>list?Array.from(list.querySelectorAll<HTMLElement>('[data-sidebar-session-id]')).filter(row=>row.dataset.sidebarReorder!=='off'):[]
+    const clearTarget=()=>{dragSessionTargetRef.current=null;showPointerDropIndicator(null);showDropSlot(null)}
+    const preview=(pointer:{clientX:number;clientY:number})=>{
+      const bounds=list?.getBoundingClientRect()
+      // Leaving the list is not a drop somewhere else, so it is a drop nowhere. Without this the
+      // last slot computed inside the list stays armed and commits on release, reordering a
+      // Project the pointer had already left — the closest this gesture could come to the
+      // cross-Project move it refuses to perform.
+      if(!bounds||pointer.clientX<bounds.left-DROP_LIST_MARGIN||pointer.clientX>bounds.right+DROP_LIST_MARGIN
+        ||pointer.clientY<bounds.top-DROP_LIST_MARGIN||pointer.clientY>bounds.bottom+DROP_LIST_MARGIN){clearTarget();return}
+      const rows=targetRows()
+      const target=listDropTargetForPoint(rows.map(row=>{
+        const box=row.getBoundingClientRect()
+        return {id:row.dataset.sidebarSessionId||'',start:box.top,end:box.bottom}
+      }),session.id,pointer.clientY,id=>!paneSiblings.has(id))
+      const element=target?rows.find(row=>row.dataset.sidebarSessionId===target.id)||null:null
+      if(!target||!element){clearTarget();return}
+      dragSessionTargetRef.current=target
+      if(target.kind==='group'){showDropSlot(null);showPointerDropIndicator(element,'group-session');return}
+      showPointerDropIndicator(null)
+      dropSlotForRow(element,target.side,rowHeight,label)
+    }
+    const stopAutoScroll=()=>{
+      latestPointer=null
+      if(scrollFrame!==null)window.cancelAnimationFrame(scrollFrame)
+      scrollFrame=null
+    }
+    const autoScroll=()=>{
+      scrollFrame=null
+      if(!tree||!latestPointer)return
+      const box=tree.getBoundingClientRect()
+      const delta=edgeAutoScrollDelta(latestPointer.clientY,box.top,box.bottom)
+      if(delta===0)return
+      const before=tree.scrollTop
+      tree.scrollTop+=delta
+      if(tree.scrollTop===before)return
+      preview(latestPointer)
+      scrollFrame=window.requestAnimationFrame(autoScroll)
+    }
+    beginPointerDrag(event,label,`session:${session.id}`,
+      ()=>{cancelLongPress();setContextMenu(null);setProjectMenu(null);dragSessionTargetRef.current=null},
       pointer=>{
-        const hit=document.elementFromPoint(pointer.clientX,pointer.clientY) as HTMLElement|null
-        const sessionTarget=hit?.closest<HTMLElement>('[data-sidebar-session-id]')
-        const targetSessionId=sessionTarget?.dataset.sidebarSessionId
-        if(targetSessionId&&targetSessionId!==session.id){
-          const targetProjectId=sessionTarget.dataset.sidebarProjectId||session.project_id
-          dragSessionTargetRef.current={sessionId:targetSessionId,projectId:targetProjectId}
-          showPointerDropIndicator(sessionTarget,targetProjectId===session.project_id?'group-session':'invalid')
-          return
-        }
-        const stackTarget=hit?.closest<HTMLElement>('[data-sidebar-stack-id]')
-        const stackId=stackTarget?.dataset.sidebarStackId
-        if(stackId){
-          const targetProjectId=stackTarget.dataset.sidebarProjectId||session.project_id
-          dragSessionTargetRef.current={stackId,projectId:targetProjectId}
-          showPointerDropIndicator(stackTarget,targetProjectId===session.project_id?'join-stack':'invalid')
-          return
-        }
-        dragSessionTargetRef.current=null
-        showPointerDropIndicator(null)
+        latestPointer={clientX:pointer.clientX,clientY:pointer.clientY}
+        preview(pointer)
+        if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)
       },
       ()=>{
+        stopAutoScroll()
         const target=dragSessionTargetRef.current;dragSessionTargetRef.current=null
         if(!target)return
-        if(target.projectId!==session.project_id){setError('Move the session into this project before changing its layout group.');return}
-        const current=layoutValues.current[session.project_id]||layoutMap[session.project_id]||parseLayout(projects.find(item=>item.id===session.project_id)?.layout)
-        if(target.sessionId){void updateLayout(session.project_id,groupTerminalsInStack(current,target.sessionId,session.id));return}
-        if(target.stackId){const without=removeLeaf(current,'terminal',session.id);void updateLayout(session.project_id,addToStack(without,target.stackId,session.id))}
+        const current=projectLayout()
+        const next=target.kind==='group'
+          ?groupTerminalsInStack(current,target.id,session.id)
+          :moveTerminalBeside(current,session.id,target.id,target.side)
+        if(next!==current)void updateLayout(session.project_id,next)
       },
-      ()=>{dragSessionTargetRef.current=null},
+      ()=>{stopAutoScroll();dragSessionTargetRef.current=null},
     )
   }
 
@@ -3443,10 +3680,42 @@ export function App() {
     })),
     { id: 'clipboard.open', label: 'Open clipboard history', category: 'clipboard', available: true, run: () => showDrawerTab('clipboard') },
     { id: 'clipboard.clear', label: 'Clear unpinned clipboard history', category: 'clipboard', available: true, run: () => void clearClipboardHistory().then(removed => { window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT)); setError(`Cleared ${removed} clipboard entr${removed===1?'y':'ies'}.`) }).catch(cause => setError(cause instanceof Error?cause.message:String(cause))) },
+    ...railVoiceEntries.map((entry):Command=>({
+      id:`terminal.railVoice:${entry.item.id}`,
+      label:`Focused session: ${entry.item.title||entry.item.label}`,
+      category:entry.request.action==='pasteText'?'clipboard':'terminal',
+      available:!!focusedTerminalSession&&!isEndedSession(focusedTerminalSession),
+      disabledReason:'Focus a running session',
+      run:()=>focusedTerminalSession&&requestTerminalAction(focusedTerminalSession.id,entry.request).catch(cause=>setError(cause instanceof Error?cause.message:String(cause))),
+      voice:{
+        phrases:entry.phrases,
+        execute:async()=>{
+          if(!focusedTerminalSession||isEndedSession(focusedTerminalSession))return{detail:'Focus a running session first.'}
+          try{
+            await requestTerminalAction(focusedTerminalSession.id,entry.request)
+            return{detail:railVoiceConfirmation(entry)}
+          }catch(cause){
+            return{detail:cause instanceof Error?cause.message:String(cause)}
+          }
+        },
+      },
+    })),
     ...(['copy', 'paste', 'selectAll', 'clear'] as const).map((action): Command => ({
       id: `terminal.${action}`, label: `${action === 'selectAll' ? 'Select all' : action[0].toUpperCase() + action.slice(1)} in focused terminal`,
       category: 'clipboard', available: !!active, disabledReason: 'No focused terminal',
       run: () => window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail: { sessionId: activeId, action } })),
+      voice:action==='copy'?{
+        phrases:['copy','copy selection'],
+        execute:async()=>{
+          if(!focusedTerminalSession)return{detail:'Focus a session first.'}
+          try{
+            await requestTerminalAction(focusedTerminalSession.id,{action:'copy'})
+            return{detail:'Copied the terminal selection. Still listening.'}
+          }catch(cause){
+            return{detail:cause instanceof Error?cause.message:String(cause)}
+          }
+        },
+      }:undefined,
     })),
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
@@ -4106,7 +4375,7 @@ export function App() {
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceOverlayNode}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={()=>openSettings('Command rail')} onConfigureWidth={()=>openSettings('Terminals')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
@@ -4180,7 +4449,10 @@ export function App() {
       setFocusedViewId(result.preview.id)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
-  const sessionRow=(session:Session)=>{
+  /** `placement` is whether this row's session sits in the Project's pane tree. An unpaned one
+   *  is a live session the layout has no leaf for, listed after the tree in creation order — it
+   *  holds no position, so it is not a slot another row can be dropped beside. */
+  const sessionRow=(session:Session,placement:'paned'|'unpaned'='paned')=>{
     const spawnedPreviews=Object.values(previews).filter(item=>item.session_id===session.id&&item.listed!==false)
     // Sidebar attention tier for agent rows. The focused row keeps its own
     // `.active` treatment; a row visible in another split pane reads as
@@ -4190,7 +4462,7 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,seenActivity)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});if(!mobileWorkspace)beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});if(!mobileWorkspace)beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session)}
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isObservedHarness(session.backend) ? `agent-status ${session.state}` : 'agent-unobserved'}>{sessionStatus(session)}</small></span>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -4203,14 +4475,15 @@ export function App() {
       const session=sessions.find(item=>item.id===node.id)
       return session?sessionRow(session):null
     }
-    const nodeLayout:PaneLayout={...emptyLayout(),root:node}
-    const ids=terminalIds(nodeLayout)
     const branches=(node.type==='stack'?node.children:[node.first,node.second]).filter(child=>child.type==='leaf'?child.kind==='terminal':terminalIds({...emptyLayout(),root:child}).length>0)
     if(branches.length===0)return null
     if(branches.length===1)return sidebarNode(branches[0])
     const label=node.type==='stack'?'Sessions sharing one tabbed pane':`${node.direction} split branches`
-    const owner=sessions.find(item=>ids.includes(item.id))
-    return <section data-sidebar-stack-id={node.type==='stack'?node.id:undefined} data-sidebar-project-id={node.type==='stack'?owner?.project_id:undefined} class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label}>
+    // A stack used to be a drop target in its own right, hit-tested by id off this section. It
+    // is not one any more: dropping on any *row* of a stack joins that stack, which is the same
+    // outcome aimed at something the eye can actually see, and it leaves no dead strip of
+    // section padding behaving differently from the rows inside it.
+    return <section class={`layout-cluster ${node.type} ${node.type==='split'?node.direction:''}`} role="group" aria-label={label}>
       {branches.map((child,index)=><div class={`layout-branch ${index===0?'first':''} ${index===branches.length-1?'last':''}`} key={child.id}>{sidebarNode(child)}</div>)}
     </section>
   }
@@ -4294,7 +4567,7 @@ export function App() {
       </div>
       {!collapsed&&<div class="session-list">
         {sidebarNode(projectLayout.root)}
-        {unpanedChildren.map(session=>sessionRow(session))}
+        {unpanedChildren.map(session=>sessionRow(session,'unpaned'))}
       </div>}
     </section>
   }
@@ -4302,10 +4575,11 @@ export function App() {
   return <div class="app-shell">
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{attention ? `${attention} agent${attention === 1 ? '' : 's'} awaiting attention` : 'No agents awaiting attention'}</div>
     <div class="mobile-toolbar">
-      {/* A glyph, not `:nav`: no word survives at this width, and pinning a font size to make
+      {/* A mark, not `:nav`: no word survives at this width, and pinning a font size to make
           one fit would ignore the user's UI-scale setting, which this button is subject to via
-          an `!important` rule. One character stays legible at every scale. */}
-      <button class="nav-toggle mobile-nav-toggle" aria-label="Open navigation sidebar" title="Navigation" onClick={() => setSidebarOpen(value => !value)}>≡</button>
+          an `!important` rule. It is `SidePanelIcon` mirrored, because the two edge toggles open
+          mirror-image drawers and the bare `≡` said nothing about which panel it reached. */}
+      <button class="nav-toggle mobile-nav-toggle" aria-label="Open navigation sidebar" title="Navigation" onClick={() => setSidebarOpen(value => !value)}><NavPanelIcon/></button>
       {/* Quota sits beside nav, at the start of the bar: it is glanced at constantly, and the
           two edges are where a thumb reaching for a toggle lands, so it takes neither. */}
       <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
@@ -4836,7 +5110,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 

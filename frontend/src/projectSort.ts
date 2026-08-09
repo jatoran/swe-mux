@@ -22,6 +22,12 @@ export type ProjectSortMode =
 export const SIDEBAR_ORDER_KEY = 'mux.sidebar.order.v1'
 const LEGACY_UNGROUPED_BUCKET_ID = 'ungrouped'
 
+/** Upper bound on the stored MRU. The list is never filtered against the live
+ *  Projects (see `pruneSidebarOrder`), so this cap is the only thing that keeps a
+ *  device-local preference from growing without limit. Far above the number of
+ *  Projects any sidebar can hold, so it bounds the storage rather than the feature. */
+const RECENT_PROJECT_LIMIT = 100
+
 export interface ProjectSortOption {
   id: ProjectSortMode
   label: string
@@ -112,6 +118,7 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
     }
     const recentProjects = Array.isArray(record.recentProjects)
       ? [...new Set(record.recentProjects.filter((id): id is string => typeof id === 'string' && !!id))]
+        .slice(0, RECENT_PROJECT_LIMIT)
       : []
     return {
       projectSort: isProjectSortMode(record.projectSort)
@@ -140,22 +147,28 @@ export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
   })
 }
 
-/** Drop state for Groups and Projects that no longer exist. */
+/** Drop fold state for Groups that no longer exist, so a recreated Group id cannot
+ *  inherit a fold the user never applied to it.
+ *
+ *  `groupIds` is `null` until the daemon's Groups have actually been fetched, and
+ *  then this is the identity. An empty list means "every Group was deleted" and is
+ *  destructive by design, which is exactly why the not-yet-loaded case may not be
+ *  spelled as one: the caller mounts holding `[]`, so encoding "unloaded" that way
+ *  wiped the whole preference on every page load and persisted the wipe.
+ *
+ *  `recentProjects` is deliberately not pruned against the live Projects. A stale id
+ *  is inert: `projectRecency` builds a lookup a deleted Project never hits, and it
+ *  cannot perturb the relative order of the live ones. Filtering it bought nothing
+ *  and cost a destructive write on any empty snapshot; `RECENT_PROJECT_LIMIT` bounds
+ *  the list instead. */
 export function pruneSidebarOrder(
   prefs: SidebarOrderPrefs,
-  bucketIds: string[],
-  projectIds?: string[],
+  groupIds: string[] | null,
 ): SidebarOrderPrefs {
-  const liveBuckets = new Set(bucketIds)
-  const collapsed = prefs.collapsed.filter(bucketId => liveBuckets.has(bucketId))
-  const liveProjects = projectIds ? new Set(projectIds) : null
-  const recentProjects = liveProjects
-    ? prefs.recentProjects.filter(projectId => liveProjects.has(projectId))
-    : prefs.recentProjects
-  return collapsed.length === prefs.collapsed.length
-    && recentProjects.length === prefs.recentProjects.length
-    ? prefs
-    : { ...prefs, collapsed, recentProjects }
+  if (!groupIds) return prefs
+  const liveGroups = new Set(groupIds)
+  const collapsed = prefs.collapsed.filter(groupId => liveGroups.has(groupId))
+  return collapsed.length === prefs.collapsed.length ? prefs : { ...prefs, collapsed }
 }
 
 export function isBucketCollapsed(prefs: SidebarOrderPrefs, bucketId: string): boolean {
@@ -194,12 +207,15 @@ export function setProjectSortMode(
 }
 
 /** Move one Project to the head of the explicit-action MRU without churning state
- *  when it is already first. Opening or focusing anything never calls this helper. */
+ *  when it is already first. Opening or focusing anything never calls this helper.
+ *  The tail past `RECENT_PROJECT_LIMIT` is dropped here rather than by any live-set
+ *  filter, so the list stays bounded without ever being emptied. */
 export function touchProjectRecency(prefs: SidebarOrderPrefs, projectId: string): SidebarOrderPrefs {
   if (!projectId || prefs.recentProjects[0] === projectId) return prefs
   return {
     ...prefs,
-    recentProjects: [projectId, ...prefs.recentProjects.filter(id => id !== projectId)],
+    recentProjects: [projectId, ...prefs.recentProjects.filter(id => id !== projectId)]
+      .slice(0, RECENT_PROJECT_LIMIT),
   }
 }
 
