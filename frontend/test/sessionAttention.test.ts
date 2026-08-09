@@ -18,13 +18,24 @@ test('newly-sighted agents start read at their current activity', () => {
   assert.equal(isUnread(sessions[1], seen), false)
 })
 
-test('off-screen activity after first sighting marks the row unread', () => {
+test('off-screen activity after first sighting marks the row unread once it settles', () => {
   const seen = reconcileSeen({}, [session('a', 'claude', 100)], [])
-  const later = session('a', 'claude', 150)
-  // 'a' is not visible, so its mark is retained and the newer output is unread.
-  const next = reconcileSeen(seen, [later], [])
+  const working = session('a', 'claude', 150)
+  // 'a' is not visible, so its mark is retained and the newer output is unseen —
+  // but the agent is still mid-turn, so there is nothing to catch up on yet.
+  const next = reconcileSeen(seen, [working], [])
   assert.equal(next.a, 100)
-  assert.equal(isUnread(later, next), true)
+  assert.equal(isUnread(working, next), false)
+  // The mark is only advanced for visible sessions, so settling off screen
+  // compares against the pre-run mark and the row turns unread.
+  assert.equal(isUnread(session('a', 'claude', 150, { state: 'idle' }), next), true)
+  assert.equal(isUnread(session('a', 'claude', 150, { state: 'awaiting' }), next), true)
+})
+
+test('a working agent is never unread, however long it has been off screen', () => {
+  const seen: SeenMap = { a: 100 }
+  assert.equal(isUnread(session('a', 'claude', 5_000, { state: 'working' }), seen), false)
+  assert.equal(isUnread(session('a', 'claude', 5_000, { state: 'starting' }), seen), false)
 })
 
 test('a visible session is kept read even as its agent keeps working', () => {
@@ -38,7 +49,7 @@ test('a visible session is kept read even as its agent keeps working', () => {
 test('viewing an unread session clears it', () => {
   const seen = reconcileSeen({ a: 100 }, [session('a', 'claude', 150)], ['a'])
   assert.equal(seen.a, 150)
-  assert.equal(isUnread(session('a', 'claude', 150), seen), false)
+  assert.equal(isUnread(session('a', 'claude', 150, { state: 'idle' }), seen), false)
 })
 
 test('shell and ended agent sessions never participate in unread', () => {
@@ -64,12 +75,18 @@ test('reconcileSeen drops sessions that no longer exist', () => {
 test('project rail activity keeps unread independent from the strongest live state', () => {
   const sessions = [
     session('working', 'claude', 150, { project_id: 'p1', state: 'working' }),
-    session('ready', 'codex', 100, { project_id: 'p1', state: 'idle' }),
+    session('ready', 'codex', 150, { project_id: 'p1', state: 'idle' }),
     session('approval', 'claude', 100, { project_id: 'p1', state: 'awaiting' }),
     session('other', 'codex', 200, { project_id: 'p2', state: 'working' }),
   ]
+  // The strongest state is the approval, while the unseen output belongs to the
+  // settled 'ready' row — the chip has to report both.
   assert.deepEqual(projectRailStatus(sessions, 'p1', { working: 100, ready: 100, approval: 100 }), {
     activity: 'attention', unread: true, liveCount: 3, agentCount: 3,
+  })
+  // The mid-turn row alone raises the activity axis without raising unread.
+  assert.deepEqual(projectRailStatus(sessions, 'p2', { other: 100 }), {
+    activity: 'working', unread: false, liveCount: 1, agentCount: 1,
   })
 })
 

@@ -11,6 +11,16 @@ import { isObservedHarness } from './harnessRegistry.ts'
 // last end-of-life last_activity_ts bump, so they never participate in unread.
 const DEAD: ReadonlyArray<Session['state']> = ['exited', 'crashed']
 
+// Unread means "this agent has finished saying something you have not seen".
+// Only a settled agent qualifies: `idle` is ready for input and `awaiting` wants
+// an approval, and both are states where the user is the one holding things up.
+// A `working` (or `starting`) agent is mid-turn — its output is still growing and
+// there is nothing to catch up on yet — so counting it as unread lit every
+// off-screen agent for the whole length of its run, which is precisely the window
+// in which the row means "nothing for you here". That made the loudest tier in
+// the sidebar the least informative one.
+const SETTLED: ReadonlyArray<Session['state']> = ['idle', 'awaiting']
+
 export type SeenMap = Record<string, number>
 export type ProjectRailActivity = 'attention' | 'working' | 'waiting' | 'running' | 'inactive'
 export interface ProjectRailStatus {
@@ -53,9 +63,15 @@ export function reconcileSeen(prev: SeenMap, sessions: Session[], visibleIds: It
   return changed ? next : prev
 }
 
-/** True when an agent session has produced output the user has not yet seen. */
+/**
+ * True when a settled agent session has produced output the user has not seen.
+ *
+ * The read mark is only advanced while a session is visible, so an agent that
+ * works off screen and then goes idle still compares against the mark from
+ * before its run: it becomes unread the moment it settles, not while it runs.
+ */
 export function isUnread(session: Session, seen: SeenMap): boolean {
-  if (!isAgentSession(session)) return false
+  if (!isAgentSession(session) || !SETTLED.includes(session.state)) return false
   const mark = seen[session.id]
   return mark !== undefined && session.last_activity_ts > mark
 }

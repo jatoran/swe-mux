@@ -13,6 +13,8 @@ Three axes stay separate and are never collapsed:
 - **SessionState** (+ `awaiting_reason`) — what the agent is doing, rendered per session.
 - **`delivery_state`** — whether typed delivery would be safe (`delivery-readiness.md`).
 - **Attention** — unread/pinned UX state (`sessionAttention.ts`), client-side only.
+  It reads SessionState but never feeds it: a row is only unread once its agent has settled
+  (`idle` or `awaiting`), so unread means "finished, and unseen" rather than "producing output".
 
 ## The detection ladder
 

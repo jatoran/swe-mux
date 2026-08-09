@@ -63,20 +63,40 @@ responsive controls.
 - Sort modes and fold state (Projects and Groups) are device-local; Group order itself is shared.
   Root Projects always precede Groups.
   Behavior detail lives in `projects.md`.
-- Only a tabbed pane indents its sessions in the sidebar, and it does so because it draws the
-  bracket that explains the indent. Split branches are siblings at the same depth: the sidebar is
-  a session list, not a pane-geometry diagram, and indenting per split produced unexplained
-  nesting that deepened with every split. Indentation is therefore at most one level.
-- The bracket is drawn per branch and stops at the first and last session rows' centres. A
-  cluster-height spine would dangle past the last session row whenever that session also has a
-  note or preview row beneath it.
-- The bracket is the only marker of tab membership. Rows carried a per-row glyph saying the
-  same thing, which repeated on every row of a group the bracket already encloses and competed
+- No sidebar row is indented for pane geometry. Sessions sharing a tabbed pane are marked by a
+  vertical thread drawn through their status dots instead of by a bracket in a left gutter, so
+  they sit at exactly the depth a session alone in its pane does.
+  The bracket that preceded it had to buy that gutter with an indent across the whole group,
+  which pushed the names of tabbed sessions further from the eye than any other row for a
+  connector nobody needs to read twice.
+  Split branches remain siblings at the same depth and draw nothing: the sidebar is a session
+  list, not a pane-geometry diagram.
+- The thread is broken at each dot rather than run behind it. An unbroken rule would paint a
+  coloured stripe across the dots, and the dot's colour is the status being reported.
+  It is drawn per branch and drops its outer segment at the first and last rows, so it begins
+  and ends on a dot instead of dangling past the note or preview rows a branch may carry.
+  It paints above the rows, because the focused row's selection plate is opaque and would
+  otherwise cut it at that row.
+- The thread is the only marker of tab membership. Rows carried a per-row glyph saying the
+  same thing, which repeated on every row of a group already threaded together and competed
   with the backend glyph and broadcast flag for the name's line.
 - Agent attention edges (`viewing`, `unread`) sit on the row's right and are inset vertically.
-  On the left they shared a gutter with the tree's connector lines, so a row marker read as a
-  branch, and consecutive marked rows merged into one long rule that looked like a stray spine.
-  The left gutter belongs to the tree alone.
+  A vertical rule on the left reads as structure rather than state: consecutive marked rows
+  merge into one long spine, and the left of the row is where the tab thread runs.
+  Per-row state stays on the side nothing structural uses.
+- `unread` requires a **settled** agent — `idle` or `awaiting` — not merely unseen output.
+  A working agent is mid-turn: its output is still growing and there is nothing to catch up on,
+  so counting it as unread brightened every off-screen agent for the entire length of its run,
+  which is precisely the window in which the row means "nothing for you here".
+  Because the read mark only advances while a session is visible, an agent that works off screen
+  compares against its pre-run mark and turns unread the moment it stops.
+  The brightest tier therefore means "finished, and waiting on you".
+- The row's kill control appears on hover, and on keyboard focus via `:focus-visible`; selecting
+  a row does not reveal it.
+  `:focus-within` did reveal it, because clicking a row leaves DOM focus on it, so every selected
+  session wore a hover affordance until focus left the sidebar entirely.
+  Touch raises neither hover nor `:focus-visible`, so there the tapped row keeps the
+  `:focus-within` reveal — it is the only way to reach the control on a phone.
 - The active-Project header exposes **Run** persistently.
   On desktop, each Project row reveals its Run control while the pointer or keyboard focus is anywhere in that Project's row-and-session block; its reserved column preserves row alignment while hidden.
   On mobile, Project rows expose Run persistently and also expose `⋮` immediately left of it, giving Project actions direct tap targets.
