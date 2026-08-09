@@ -268,8 +268,10 @@ The descriptor is the source of truth for all generic surfaces.
   `create_agent_shims` establishes at spawn — one shim dir, in front. `-NoProfile` profiles
   are unaffected (nothing clobbers PATH) and a profile carrying its own `-Command`/`-File`
   cannot be wrapped, so it degrades silently; only explicitly requested cwd-integration still
-  refuses such a profile outright. cmd.exe runs no startup script and WSL cannot use Windows
-  `.cmd` shims at all (`agent-bridge-unavailable`), so neither carries the guard.
+  refuses such a profile outright. The detected cmd.exe profile currently uses `/Q` without
+  `/D`, so registry AutoRun commands can still mutate PATH or command precedence before the
+  prompt; it carries no equivalent guard. WSL cannot use Windows `.cmd` shims at all
+  (`agent-bridge-unavailable`).
 - Transcript records that already existed when observation attaches (resume, promotion after
   first activity, retargeting) are historical: they still populate tokens/context/model and
   tool-name correlation but never emit events or drive state. After catch-up the session is

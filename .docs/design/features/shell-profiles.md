@@ -23,6 +23,21 @@
   integration explicitly on, which still rejects it. Rationale: `backends.md`.
 - WSL translates the canonical Windows Project root through the selected distribution.
 
+## Current compatibility limits
+
+- PowerShell 7 is the primary profile. Windows PowerShell 5.1 accepts the mux bootstrap but
+  differs in language and task semantics; in particular, it rejects `&&` and `||`.
+- The bootstrap repairs PATH ordering but cannot override PowerShell aliases or functions named
+  for an agent command. A profile carrying `-Command`/`-File` also cannot receive the repair.
+- The detected CMD profile uses `/Q` without `/D`; registry AutoRun commands can mutate PATH,
+  install DOSKEY macros, or change cwd before the prompt.
+- WSL is interactive-shell-only for agent integration and remains labelled
+  `agent-bridge-unavailable`.
+- `cwd_strategy = "home"` is accepted by config and exposed in Settings, but only the `wsl`
+  strategy currently has resolver behavior; `home` still starts at the Project root.
+- Git Bash/MSYS/Cygwin and other custom executables are generic profiles, not declared
+  agent-aware compatibility targets.
+
 ## API and CLI
 
 - `GET /api/profiles`

@@ -40,7 +40,8 @@ free of them is what lets a task outlive a rebuild of the app that launched it.
   (PowerShell single-quoting with `''` escapes and a call operator for a quoted command; cmd via
   `list2cmdline` plus metacharacter quoting; POSIX via `shlex`), then handed to that shell. VS
   Code semantics: the args array is quoted and appended, never dropped. A step with no args
-  passes its command string through untouched, so shell syntax such as `&&` still works.
+  passes its command string through untouched, so syntax supported by the target shell is
+  preserved. `&&` works in PowerShell 7, CMD, and POSIX shells but not Windows PowerShell 5.1.
 - `process` steps: resolved on `PATH` by the daemon. A `.cmd`/`.bat` shim (every npm-family entry
   point on Windows) is routed through `%COMSPEC%`, since it is not a real executable.
 - Shell resolution for a step without an explicit `options.shell.executable` uses the Project's

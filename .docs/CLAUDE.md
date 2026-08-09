@@ -121,6 +121,11 @@
 - Changing durable process/quota/reset/compaction/tool evidence or retention:
   `design/features/operational-telemetry.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing shell/profile creation: `design/features/shell-profiles.md`
+- Evaluating or changing host-OS support, Windows shell compatibility, WSL behavior,
+  platform packaging, or the external compatibility matrix:
+  `development/CROSS_PLATFORM_FINDINGS.md`, `design/features/shell-profiles.md`,
+  `design/features/backends.md`, `design/features/project-actions.md`,
+  `development/ROADMAP.md`
 - Changing usage analytics: `design/features/usage.md`
 - Changing read aloud or hands-free conversation: `design/features/voice.md`
 - Changing listeners, Tailscale, browser security, or remote operation:
