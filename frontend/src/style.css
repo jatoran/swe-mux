@@ -1518,6 +1518,9 @@ body {
 /* Muted rather than amber: a session sized by another view is a fact about the pane, not
    a warning, and it sits on screen for as long as that stays true. */
 .terminal-input-owner.letterbox-notice{border-color:var(--line);color:var(--muted)}
+/* Muted for the same reason, and transient besides (WIDTH_CAP_NOTICE_MS): a configured
+   width envelope is a setting the user can see the effect of, not a fault. */
+.terminal-input-owner.width-cap-notice{border-color:var(--line);color:var(--muted)}
 /* The badge itself never eats terminal input; only its retry button does. */
 .terminal-connection-retry{pointer-events:auto;min-height:0;padding:1px 6px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.terminal-connection-retry{min-height:26px;padding:0 10px}}

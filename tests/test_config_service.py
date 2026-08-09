@@ -371,6 +371,36 @@ def test_ui_scale_is_per_device_class_hot_reloadable_and_stepped(tmp_path: Path)
     assert load_config(path).ui_scale_desktop == 1.0
 
 
+def test_claude_width_envelope_is_hot_reloadable_stepped_and_disableable(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    # Today's behaviour: installing this build must not reshape anyone's Claude pane.
+    assert config.claude_max_columns == 120
+
+    hot, restart = update_config(config, {"claude_max_columns": 200})
+    assert hot == {"claude_max_columns"}
+    assert restart == set()
+    assert load_config(path).claude_max_columns == 200
+
+    # 0 is the opt-out, and it has to survive as a stored value rather than being
+    # treated as "unset" - a browser reads a missing key as an older daemon and
+    # restores the default cap.
+    hot, _ = update_config(config, {"claude_max_columns": 0})
+    assert hot == {"claude_max_columns"}
+    assert load_config(path).claude_max_columns == 0
+
+    # A cap between 1 and the smallest step would render a Claude pane unusably
+    # narrow; `True` is the one that matters, since `bool` is an `int` subclass and
+    # would otherwise pass as a 1-column cap.
+    for bad in (1, 79, 130, -1, 5000, True, "120", 120.0):
+        with pytest.raises(ValueError, match="claude_max_columns"):
+            update_config(config, {"claude_max_columns": bad})
+    assert load_config(path).claude_max_columns == 0
+
+
 def test_note_editor_settings_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)
