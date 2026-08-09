@@ -4,7 +4,7 @@ import { api } from './api'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { currentProfile } from './deviceSettings'
 import { setSoundPreferences, soundPreferences } from './sessionSounds'
-import { accountAbbreviation, accountPopoverStyle, chipUsageBand, formatResetRemaining, percent, providerQuotaWindows, quotaGridSegments, quotaSummary, quotaWindowSummary, shownUsageBand, type QuotaWindowDisplay } from './providerAccountDisplay'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, percent, providerQuotaWindows, quotaGridSegments, quotaSummary, quotaWindowSummary, shownUsageBand, type QuotaWindowDisplay } from './providerAccountDisplay'
 import { emitTutorialAction } from './tutorial'
 import { harnessDisplayName } from './harnessRegistry'
 
@@ -180,25 +180,28 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
       </span>)}
     </span>
   }
-  // One chip per provider. The collapsed-sidebar rail has room only for the glyph above a
-  // single weekly percentage. The mobile toolbar uses the same two-row grid as the expanded
-  // sidebar, omitting quota-window columns that the provider does not report.
-  const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>{
-    const windows=quotas[provider]
-    const weekly=windows?.weekly||null
-    const title=form==='rail'?weeklyTitle(provider):toolbarTitle(provider)
-    const band=form==='rail'?shownUsageBand(weekly?.used_percent):chipUsageBand(windows)
-    return <button key={provider} class={`${form==='rail'?'rail-quota':'toolbar-quota'} usage-${band} ${resetUnread&&latestReset?.provider===provider?'quota-reset-unread':''}`} aria-label={title} aria-expanded={open} title={title} onClick={toggle}>
-      {form==='rail'?<><span class={`provider-glyph ${provider}`} aria-hidden="true">{providerGlyph(provider)}</span><strong>{weekly?`${Math.round(weekly.used_percent)}%`:'—'}</strong></>:quotaGrid(provider)}
+  // One square per provider: the glyph above a single weekly percentage. Both condensed
+  // surfaces — the collapsed sidebar rail and the mobile toolbar — wear it, and it is banded by
+  // the number it prints rather than by its hottest window, or the digits would recolour to
+  // contradict themselves. The caller supplies the tooltip because it is also the accessible
+  // name, and the toolbar names every window there even though it draws only one.
+  const quotaChip=(provider:ProviderName,title:string)=>{
+    const weekly=quotas[provider]?.weekly||null
+    return <button key={provider} class={`rail-quota usage-${shownUsageBand(weekly?.used_percent)} ${resetUnread&&latestReset?.provider===provider?'quota-reset-unread':''}`} aria-label={title} aria-expanded={open} title={title} onClick={toggle}>
+      <span class={`provider-glyph ${provider}`} aria-hidden="true">{providerGlyph(provider)}</span><strong>{weekly?`${Math.round(weekly.used_percent)}%`:'—'}</strong>
     </button>
   }
   return <div ref={root} class={`account-switcher ${compact?'compact':''} ${variant==='rail'?'rail':''}`}>
-    {variant==='rail'?providers.map(provider=>quotaChip(provider,'rail'))
-    // The mobile toolbar used to collapse both providers into whichever weekly window was
-    // furthest along. That hid which provider was burning and gave no sense of how long until
-    // it cleared, so it now carries both chips in the same provider order as every other
-    // surface.
-    :variant==='compact'?providers.map(provider=>quotaChip(provider,'toolbar'))
+    {variant==='rail'?providers.map(provider=>quotaChip(provider,weeklyTitle(provider)))
+    // The mobile toolbar carries one chip per provider, in the same provider order as every
+    // other surface — collapsing both into whichever weekly window was furthest along hid which
+    // provider was burning. It wears the same square as the collapsed rail rather than the
+    // expanded sidebar's usage breakdown: that breakdown is three columns of numbers competing
+    // with the Project name and two run controls for one 44px row, and the number a phone is
+    // glanced at for is how much of the week is gone. The breakdown is one tap away, in the
+    // popover this chip opens, which is also where the tooltip's window-by-window text lands
+    // for a device that cannot hover.
+    :variant==='compact'?providers.map(provider=>quotaChip(provider,toolbarTitle(provider)))
     :<div class="account-summary">
       {providers.map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={`${provider} account: ${currentLabel(current,account)}; ${currentSummary(current,account)}; ${state}`} aria-expanded={open} onClick={toggle} title={`${provider} · ${account?quotaTitle(account):currentDescription(current,account)}`}>{quotaGrid(provider)}{state!=='ready'&&<em>{state}</em>}</button>})}
       {resetUnread&&<button class="quota-reset-indicator" title="Confirmed unexpected reset; open for evidence" onClick={show}><span>RESET</span><strong>unexpected quota reset</strong><small>{latestReset?.provider} · {latestReset?.window}</small></button>}

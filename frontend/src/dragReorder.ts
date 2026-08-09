@@ -48,6 +48,45 @@ export function reorderTargetForPoint(items:ReorderRect[],draggedId:string,point
   return next?{id:next.id,side:'before'}:{id:peers[peers.length-1].id,side:'after'}
 }
 
+/** A list whose rows are also drop targets in their own right — sidebar sessions, where landing
+ *  *between* two rows reorders and landing *on* one joins them into a single tabbed pane. */
+export type ListDropTarget={kind:'insert';id:string;side:DropSide}|{kind:'group';id:string}
+
+/** How far outside a list's own box the pointer may stray and still be dropping into it. Past
+ *  it the drag has left, and a list nowhere near the pointer must not commit anything on
+ *  release. Wide enough to forgive the overshoot of aiming at the first or last gap. */
+export const DROP_LIST_MARGIN=16
+
+/** How much of a row's near edge reads as "between rows" rather than "on this row".
+ *
+ *  A fraction alone gives a 44px phone row a 13px landing strip and a 22px desktop row a 7px
+ *  one, so it is clamped at both ends: every row keeps a reachable insertion edge, and no row
+ *  is so generous with it that grouping becomes hard to aim at. */
+export function insertionEdge(height:number,ratio=.3,minimum=5,maximum=12):number{
+  if(!(height>0))return minimum
+  return Math.min(maximum,Math.max(minimum,height*ratio))
+}
+
+/** `groupable` answers whether landing *on* that row would mean anything. A row it rejects is
+ *  pure insertion over its whole height, rather than a middle band that silently does nothing —
+ *  or, worse, does something the preview never showed. */
+export function listDropTargetForPoint(items:ReorderRect[],draggedId:string,point:number,groupable?:(id:string)=>boolean):ListDropTarget|null{
+  const peers=items.filter(item=>item.id!==draggedId).sort((a,b)=>a.start-b.start)
+  if(peers.length===0)return null
+  const hit=peers.find(item=>point>=item.start&&point<item.end)
+  if(hit){
+    const edge=insertionEdge(hit.end-hit.start)
+    if(point<hit.start+edge)return {kind:'insert',id:hit.id,side:'before'}
+    if(point>=hit.end-edge)return {kind:'insert',id:hit.id,side:'after'}
+    if(!groupable||groupable(hit.id))return {kind:'group',id:hit.id}
+    return {kind:'insert',id:hit.id,side:point<(hit.start+hit.end)/2?'before':'after'}
+  }
+  // Gaps between rows, and the space past either end of the list, resolve to the nearest slot:
+  // the pointer is demonstrably not on a row, so there is nothing there to group with.
+  const target=reorderTargetForPoint(peers,draggedId,point)
+  return target?{kind:'insert',id:target.id,side:target.side}:null
+}
+
 export function reorderTargetFromContainer(container:HTMLElement,draggedId:string,axis:ReorderAxis,point:number):ReorderTarget|null{
   const items=Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-reorder-id]')).map(element=>{
     const box=element.getBoundingClientRect()

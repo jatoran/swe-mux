@@ -176,6 +176,13 @@ export const SidePanelIcon = () => <svg {...stroke}>
   <line x1="15" y1="4" x2="15" y2="20" />
 </svg>
 
+/** `SidePanelIcon` mirrored: the navigation sidebar is the same panel on the other edge, and
+ *  the two mobile edge toggles read as one pair only if their marks are one mark reflected. */
+export const NavPanelIcon = () => <svg {...stroke}>
+  <rect x="2" y="4" width="20" height="16" rx="2" />
+  <line x1="9" y1="4" x2="9" y2="20" />
+</svg>
+
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   clipboard: ClipboardHistoryIcon,
