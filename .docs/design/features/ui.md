@@ -310,6 +310,8 @@ responsive controls.
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
   inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
+  Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
+  binding cannot compete with browser zoom suppression or leak the same input into xterm.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
@@ -377,6 +379,18 @@ responsive controls.
     `config.py` and `uiScale.ts`) rather than a free number. There is no useful difference
     between 1.13 and 1.15, only a way to land on a value that looks broken, and a hand-edited
     `config.toml` carrying one falls back to `1.0` rather than rendering at it.
+  - `Ctrl+wheel`, `Ctrl++`, and `Ctrl+-` move one step, while `Ctrl+0` restores `1.0`.
+    The capture listener runs before browser zoom, xterm, editors, and configurable command bindings;
+    exact scale inputs are consumed and every other wheel or key combination continues normally.
+    High-resolution wheel streams accumulate into discrete steps, reset on reversal or a pause, and
+    never turn one oversized event into a jump across multiple steps.
+    Every accepted input reports `UI scale <percent>` through the shared bottom-right interaction HUD.
+    Outside Settings the final value is persisted after a short debounce; inside Settings it joins the
+    existing draft so Save and Discard remain atomic with the panel's other changes.
+  - The Appearance selectors, shortcut inputs, config refresh, chrome, and xterm all pass through the
+    same browser scale state.
+    A live selector or shortcut preview therefore changes terminal type without disposing the terminal,
+    and discarding the Settings draft restores both chrome and terminal type together.
   - The split is by device class because the same UI is driven from a desktop browser and a
     phone and one number cannot say "the phone is too small but the desktop is fine". A window
     resolves its value through the same `(max-width:760px)` breakpoint as the mobile workspace

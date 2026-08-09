@@ -30,6 +30,8 @@ def test_default_bindings_reference_valid_commands() -> None:
         ("a", "require a modifier"),
         ("shift+a", "Shift alone shadows typing"),
         ("ctrl+w", "browser-reserved"),
+        ("ctrl+-", "application-reserved"),
+        ("ctrl+0", "application-reserved"),
         ("ctrl+c", "terminal-reserved"),
         # Ctrl+Enter is the agent newline chord, so a command must not shadow it.
         ("ctrl+enter", "terminal-reserved"),
@@ -83,6 +85,7 @@ def test_keybinding_editor_metadata_exposes_commands_and_reserved_lists() -> Non
     assert "project.activate(9)" in commands
     assert "ctrl+w" in policy["browser_reserved"]
     assert policy["desktop_only"] == ["ctrl+shift+tab", "ctrl+tab"]
+    assert policy["application_reserved"] == ["ctrl+-", "ctrl+0", "ctrl+=", "ctrl+shift+="]
     assert "ctrl+c" in policy["terminal_reserved"]
 
 
@@ -114,3 +117,21 @@ def test_version_two_custom_bindings_preserve_cleared_tab_defaults(tmp_path: Pat
     )
 
     assert _keybindings_payload(Config(data_dir=tmp_path))["bindings"] == {}
+
+
+def test_saved_ui_scale_chord_is_rejected_on_load(tmp_path: Path) -> None:
+    (tmp_path / "keybindings.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "replace_defaults": True,
+                "bindings": {"ctrl+-": "palette.open"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = _keybindings_payload(Config(data_dir=tmp_path))
+
+    assert payload["bindings"] == {}
+    assert payload["rejected"] == {"ctrl+-": "application-reserved chord"}

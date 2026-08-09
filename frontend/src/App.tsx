@@ -101,7 +101,10 @@ import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } fr
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { eventRequiresFleetRefresh } from './eventRefresh'
 import { applyNoteEditorConfig } from './noteEditorSettings'
-import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
+import {
+  DEFAULT_UI_SCALE, applyUiScale, createUiScaleWheelIntent, uiScaleConfigKey,
+  uiScaleForIntent, uiScaleKeyboardIntent, watchUiScaleProfile, type UiScale,
+} from './uiScale'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
@@ -564,6 +567,11 @@ export function App() {
   // xterm owns its own font and derives the cell grid from it, so the terminal has to be
   // handed the value rather than inheriting it.
   const [uiScale, setUiScale] = useState<UiScale>(DEFAULT_UI_SCALE)
+  const uiScaleRef = useRef<UiScale>(DEFAULT_UI_SCALE)
+  const uiScaleConfigRef = useRef<Record<string, unknown> | null>(null)
+  const uiScalePersistTimer = useRef<number | null>(null)
+  const uiScalePersistGeneration = useRef(0)
+  uiScaleRef.current = uiScale
   const [windowsPty, setWindowsPty] = useState<WindowsPtyCompatibility | undefined>(undefined)
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
@@ -1183,6 +1191,25 @@ export function App() {
     utility_rail_display?:'icon'|'title'
   }&Record<string,unknown>
 
+  // Scale previews have to update both authorities in the browser: the root custom
+  // property used by chrome and the numeric prop xterm receives. Settings used to call
+  // `applyUiScale` by itself, which made its live preview stop at the terminal boundary.
+  const previewUiScaleConfig = (config:Record<string,unknown>):UiScale => {
+    uiScaleConfigRef.current=config
+    const next=applyUiScale(config)
+    uiScaleRef.current=next
+    setUiScale(next)
+    return next
+  }
+
+  const previewActiveUiScale = (scale:UiScale):void => {
+    const config={
+      ...(uiScaleConfigRef.current||{}),
+      [uiScaleConfigKey(currentProfile())]:scale,
+    }
+    previewUiScaleConfig(config)
+  }
+
   // One place that turns a daemon config into browser state. The boot path, the
   // Settings-close path, and the configuration_changed handler each applied a
   // *different subset*, so a renderer or scroll-sensitivity change made on
@@ -1191,7 +1218,7 @@ export function App() {
   const applyConfig = (config:AppConfig, includeTheme:boolean) => {
     if (includeTheme) { configureCustomTheme(config.custom_theme); applyTheme(config.theme) }
     applyNoteEditorConfig(config)
-    setUiScale(applyUiScale(config))
+    previewUiScaleConfig(config)
     setXtermScrollback(config.xterm_scrollback_lines)
     setTerminalRenderer(config.terminal_renderer)
     setClaudeMaxColumns(claudeMaxColumnsFrom(config))
@@ -1218,6 +1245,22 @@ export function App() {
     api<AppConfig>('GET','/api/config')
       .then(config=>applyConfig(config,includeTheme))
       .catch(()=>{})
+
+  const scheduleUiScalePersist = (scale:UiScale):void => {
+    const field=uiScaleConfigKey(currentProfile())
+    const generation=++uiScalePersistGeneration.current
+    if(uiScalePersistTimer.current!==null)window.clearTimeout(uiScalePersistTimer.current)
+    uiScalePersistTimer.current=window.setTimeout(()=>{
+      uiScalePersistTimer.current=null
+      void api<AppConfig>('PATCH','/api/config',{[field]:scale}).then(config=>{
+        if(generation===uiScalePersistGeneration.current)applyConfig(config,false)
+      }).catch(cause=>{
+        if(generation!==uiScalePersistGeneration.current)return
+        setError(`UI scale could not be saved: ${cause instanceof Error?cause.message:String(cause)}`)
+        void loadConfig(false)
+      })
+    },300)
+  }
 
   const persistDrawerDisplay=async(surface:'tabs'|'rail',next:'icon'|'title')=>{
     const previous=surface==='tabs'?drawerTabDisplay:utilityRailDisplay
@@ -1318,7 +1361,61 @@ export function App() {
 
   // Chrome scale is stored per device class, so crossing the breakpoint changes
   // which stored value applies — not just the layout.
-  useEffect(() => watchUiScaleProfile(setUiScale), [])
+  useEffect(() => watchUiScaleProfile(scale=>{
+    uiScaleRef.current=scale
+    setUiScale(scale)
+  }), [])
+
+  // Browser-style UI scaling is captured before xterm, editors, command bindings, or
+  // Chromium's page zoom see it. Plain wheel/key input and every non-exact modifier
+  // combination continue down their ordinary paths. Settings keeps the result in its
+  // draft; everywhere else the final step is persisted after a short gesture debounce.
+  useEffect(() => {
+    const wheelIntent=createUiScaleWheelIntent()
+    const consume=(event:KeyboardEvent|WheelEvent)=>{
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    const applyIntent=(intent:ReturnType<typeof uiScaleKeyboardIntent>)=>{
+      if(!intent)return
+      const current=uiScaleRef.current
+      const next=uiScaleForIntent(current,intent)
+      previewActiveUiScale(next)
+      const limit=next===current&&intent!=='reset'?(intent==='increase'?' (maximum)':' (minimum)'):''
+      showInteractionHud(`UI scale ${Math.round(next*100)}%${limit}`)
+      if(next!==current&&!settingsOpen)scheduleUiScalePersist(next)
+    }
+    const onKey=(event:KeyboardEvent)=>{
+      const intent=uiScaleKeyboardIntent(event)
+      if(!intent)return
+      consume(event)
+      applyIntent(intent)
+    }
+    const onWheel=(event:WheelEvent)=>{
+      if(!event.ctrlKey||event.altKey||event.metaKey||event.shiftKey)return
+      consume(event)
+      applyIntent(wheelIntent(event))
+    }
+    window.addEventListener('keydown',onKey,true)
+    window.addEventListener('wheel',onWheel,{capture:true,passive:false})
+    return()=>{
+      window.removeEventListener('keydown',onKey,true)
+      window.removeEventListener('wheel',onWheel,true)
+    }
+  },[settingsOpen])
+
+  // Opening Settings turns an outstanding shortcut preview into ordinary draft state.
+  // The panel will either save it with the rest of the draft or restore the saved config.
+  useEffect(()=>{
+    if(!settingsOpen||uiScalePersistTimer.current===null)return
+    window.clearTimeout(uiScalePersistTimer.current)
+    uiScalePersistTimer.current=null
+    uiScalePersistGeneration.current+=1
+  },[settingsOpen])
+
+  useEffect(()=>()=>{
+    if(uiScalePersistTimer.current!==null)window.clearTimeout(uiScalePersistTimer.current)
+  },[])
 
   useEffect(() => {
     const viewport = window.visualViewport
@@ -5006,7 +5103,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 

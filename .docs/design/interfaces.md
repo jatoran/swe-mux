@@ -1123,6 +1123,8 @@ non-loopback → 403; rate overflow → 429 with `Retry-After`.
 Configuration/keybindings, automation/annotations/lineage, events/notifications, voice,
 remote status, filesystem discovery, and preview proxy routes retain their feature-specific
 contracts described in the corresponding `features/` documents.
+The keybinding policy separates `browser_reserved`, `desktop_only`, `application_reserved`,
+and `terminal_reserved`; application-reserved UI scale chords are rejected as configurable bindings.
 
 `GET /events[?after_seq=N][&session=<id>]` is the live event stream. `after_seq` is a resume
 cursor: the client tracks the highest `seq` it has applied and sends it on reconnect, and the
