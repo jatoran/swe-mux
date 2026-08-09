@@ -1127,14 +1127,13 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 ## Agent MCP surface
 
-`POST /mcp` — streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0,
-protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session). Auth is
-`Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn,
-injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts
-via supervisor meta. Tools are read-only and Project-scoped: `list_sessions`,
-`get_session`, `read_transcript`, `search_history`. Full contract:
-`features/mux-mcp.md`. Unknown token → 401 (session ended or predates the surface);
-non-loopback → 403; rate overflow → 429 with `Retry-After`.
+`POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
+Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
+The Project-scoped tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `notify`, and `request_spawn`.
+Session results expose the stable id, backend-generated `name`, and UI-equivalent `display_name`; an exact unique display name is accepted wherever a tool targets a session.
+`notify` only stages a queue message and `request_spawn` only creates an inert draft.
+The full contract is `features/mux-mcp.md`.
+An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.
 
 ## Other API groups
 

@@ -1200,7 +1200,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         projects=projects,
         history_backfills=history_backfills,
         sessions=sessions,
-        mcp=McpService(sessions, history, agent_messaging),
+        mcp=McpService(sessions, history, agent_messaging, automation_store),
         reaper=reaper,
         supervisor=supervisor_client,
         git_monitor=git_monitor,

@@ -73,7 +73,7 @@ _UNKNOWN_TOKEN = (
 )
 
 
-def session_summary(record: Any) -> dict[str, Any]:
+def session_summary(record: Any, *, display_name: str | None = None) -> dict[str, Any]:
     """Explicit field allowlist for a session record.
 
     Never `record.snapshot()`: snapshots carry `spawn_env` (a raw environment
@@ -82,6 +82,7 @@ def session_summary(record: Any) -> dict[str, Any]:
     return {
         "session_id": record.id,
         "name": record.name,
+        "display_name": display_name or record.name,
         "backend": record.backend,
         "state": record.state,
         "state_detail": record.state_detail,
@@ -107,10 +108,13 @@ def session_summary(record: Any) -> dict[str, Any]:
     }
 
 
-def _history_summary(row: dict[str, Any]) -> dict[str, Any]:
+def _history_summary(
+    row: dict[str, Any], *, display_name: str | None = None
+) -> dict[str, Any]:
     return {
         "session_id": row.get("id"),
         "name": row.get("name"),
+        "display_name": display_name or row.get("name"),
         "backend": row.get("backend"),
         "state": row.get("final_state"),
         "model": row.get("model"),
@@ -160,13 +164,16 @@ TOOLS: list[dict[str, Any]] = [
         "name": "get_session",
         "description": (
             "Status and metadata for one session in your Project, by session id "
-            "or exact name. Live sessions report current state; ended ones "
+            "or exact backend/display name. Live sessions report current state; ended ones "
             "report their final state."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "session_id": {"type": "string", "description": "Session id or exact name"},
+                "session_id": {
+                    "type": "string",
+                    "description": "Session id or exact backend/display name",
+                },
             },
             "required": ["session_id"],
             "additionalProperties": False,
@@ -182,7 +189,10 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "session_id": {"type": "string", "description": "Session id or exact name"},
+                "session_id": {
+                    "type": "string",
+                    "description": "Session id or exact backend/display name",
+                },
                 "max_messages": {
                     "type": "integer",
                     "description": (
@@ -210,7 +220,9 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "target": {
                     "type": "string",
-                    "description": "Session id or exact name of the receiving session",
+                    "description": (
+                        "Session id or exact backend/display name of the receiving session"
+                    ),
                 },
                 "body": {"type": "string", "description": "The message text"},
                 "reason": {
@@ -295,12 +307,19 @@ class McpAuthError(Exception):
 class McpService:
     """The tool implementations, one thin layer over existing services."""
 
-    def __init__(self, sessions: Any, history: Any, messaging: Any = None) -> None:
+    def __init__(
+        self,
+        sessions: Any,
+        history: Any,
+        messaging: Any = None,
+        automation_store: Any = None,
+    ) -> None:
         self.sessions = sessions
         self.history = history
         # Phase 5 write tools. Absent (tests, minimal wiring) the tools still
         # list but answer that they are unavailable — never a partial write.
         self.messaging = messaging
+        self.automation_store = automation_store
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -337,15 +356,128 @@ class McpService:
         # Ungrouped caller: fall back to the git project identity.
         return bool(scope_id) and str(record.project_scope_id or "") == scope_id
 
+    async def _generated_titles(self, run_ids: set[str]) -> dict[str, str]:
+        """Latest generated UI title for each requested run."""
+        if not run_ids or self.automation_store is None:
+            return {}
+        annotations = await self.automation_store.annotations(tag="title", limit=1000)
+        titles: dict[str, str] = {}
+        for annotation in annotations:
+            run_id = str(annotation.get("agent_run_id") or "")
+            title = str(annotation.get("content") or "").strip()
+            if run_id in run_ids and title and run_id not in titles:
+                titles[run_id] = title
+        return titles
+
+    @staticmethod
+    def _record_run_id(record: Any) -> str:
+        return str(record.agent_run_id or record.id)
+
+    @staticmethod
+    def _row_run_id(row: dict[str, Any]) -> str:
+        return str(row.get("agent_run_id") or row.get("id") or "")
+
+    def _record_display_name(self, record: Any, titles: dict[str, str]) -> str:
+        generated = titles.get(self._record_run_id(record))
+        if getattr(record, "auto_named", True) and generated:
+            return generated
+        return str(record.name)
+
+    def _row_display_name(self, row: dict[str, Any], titles: dict[str, str]) -> str:
+        generated = titles.get(self._row_run_id(row))
+        if bool(row.get("auto_named", 1)) and generated:
+            return generated
+        return str(row.get("name") or "")
+
+    async def _live_display_names(self, sessions: list[Any]) -> dict[str, str]:
+        titles = await self._generated_titles(
+            {self._record_run_id(session.record) for session in sessions}
+        )
+        return {
+            session.record.id: self._record_display_name(session.record, titles)
+            for session in sessions
+        }
+
+    async def _resolve_live(self, caller: Any, identity: str) -> tuple[Any, str]:
+        """Resolve an id, backend name, or UI display name without weak matches."""
+        scoped = [
+            session
+            for session in self.sessions.sessions.values()
+            if self._in_scope(caller, session.record)
+        ]
+        by_id = [session for session in scoped if session.record.id == identity]
+        if len(by_id) == 1:
+            names = await self._live_display_names(by_id)
+            return by_id[0], names[by_id[0].record.id]
+
+        names = await self._live_display_names(scoped)
+        matches = [
+            session
+            for session in scoped
+            if session.record.name == identity or names[session.record.id] == identity
+        ]
+        if len(matches) != 1:
+            raise KeyError(identity)
+        return matches[0], names[matches[0].record.id]
+
+    async def _history_display_names(
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        titles = await self._generated_titles({self._row_run_id(row) for row in rows})
+        return {
+            str(row.get("id") or ""): self._row_display_name(row, titles) for row in rows
+        }
+
+    async def _resolve_history(
+        self, caller: Any, identity: str
+    ) -> tuple[dict[str, Any], str]:
+        row = await self.history.history_entry(identity)
+        if row and self._history_row_in_scope(caller, row):
+            names = await self._history_display_names([row])
+            return row, names[str(row.get("id") or "")]
+
+        project_id, _scope_id = self._scope(caller)
+        page = await self.history.history_page(
+            project_id=project_id or "__ungrouped__",
+            limit=LIST_MAX_SESSIONS,
+        )
+        rows = [
+            item
+            for item in page.get("items", [])
+            if self._history_row_in_scope(caller, item)
+        ]
+        names = await self._history_display_names(rows)
+        matches = [
+            item
+            for item in rows
+            if item.get("name") == identity
+            or names[str(item.get("id") or "")] == identity
+        ]
+        if len(matches) != 1:
+            raise KeyError(identity)
+        match = matches[0]
+        return match, names[str(match.get("id") or "")]
+
     # --------------------------------------------------------------- tools
 
     async def list_sessions(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         limit = max(1, min(int(args.get("limit") or 25), LIST_MAX_SESSIONS))
-        live = [
-            {**session_summary(session.record), "ended": False}
+        scoped = [
+            session
             for session in self.sessions.sessions.values()
             if self._in_scope(caller, session.record)
         ][:limit]
+        display_names = await self._live_display_names(scoped)
+        live = [
+            {
+                **session_summary(
+                    session.record,
+                    display_name=display_names[session.record.id],
+                ),
+                "ended": False,
+            }
+            for session in scoped
+        ]
         for item in live:
             if item["session_id"] == caller.record.id:
                 item["you"] = True
@@ -357,11 +489,17 @@ class McpService:
                 limit=limit,
             )
             live_ids = {item["session_id"] for item in live}
-            result["ended_sessions"] = [
-                _history_summary(row)
-                for row in page.get("items", [])
-                if row.get("id") not in live_ids
+            ended_rows = [
+                row for row in page.get("items", []) if row.get("id") not in live_ids
             ][:limit]
+            ended_names = await self._history_display_names(ended_rows)
+            result["ended_sessions"] = [
+                _history_summary(
+                    row,
+                    display_name=ended_names[str(row.get("id") or "")],
+                )
+                for row in ended_rows
+            ]
         return result
 
     async def get_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
@@ -369,17 +507,16 @@ class McpService:
         if not identity:
             raise ValueError("session_id is required")
         try:
-            session = self.sessions.resolve(identity)
+            session, display_name = await self._resolve_live(caller, identity)
         except KeyError:
             session = None
         if session is not None:
-            if not self._in_scope(caller, session.record):
-                raise KeyError(identity)
-            return {**session_summary(session.record), "ended": False}
-        row = await self.history.history_entry(identity)
-        if not row or not self._history_row_in_scope(caller, row):
-            raise KeyError(identity)
-        return _history_summary(row)
+            return {
+                **session_summary(session.record, display_name=display_name),
+                "ended": False,
+            }
+        row, display_name = await self._resolve_history(caller, identity)
+        return _history_summary(row, display_name=display_name)
 
     def _history_row_in_scope(self, caller: Any, row: dict[str, Any]) -> bool:
         project_id, scope_id = self._scope(caller)
@@ -401,23 +538,25 @@ class McpService:
         path: Path | None = None
         backend = ""
         try:
-            session = self.sessions.resolve(identity)
+            session, _display_name = await self._resolve_live(caller, identity)
         except KeyError:
             session = None
         if session is not None:
-            if not self._in_scope(caller, session.record):
-                raise KeyError(identity)
             path = session.transcript_path
             backend = session.record.backend
+            resolved_session_id = session.record.id
         else:
-            row = await self.history.history_entry(identity)
-            if not row or not self._history_row_in_scope(caller, row):
-                raise KeyError(identity)
+            row, _display_name = await self._resolve_history(caller, identity)
             raw = row.get("transcript_path")
             path = Path(raw) if raw else None
             backend = str(row.get("backend") or "")
+            resolved_session_id = str(row.get("id") or identity)
         if path is None or not Path(path).is_file():
-            return {"session_id": identity, "messages": [], "note": "no transcript available"}
+            return {
+                "session_id": resolved_session_id,
+                "messages": [],
+                "note": "no transcript available",
+            }
         try:
             messages = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -436,7 +575,7 @@ class McpService:
             ) from None
         searchable = searchable_transcript_messages(messages)[-max_messages:]
         return {
-            "session_id": identity,
+            "session_id": resolved_session_id,
             "message_count": len(searchable),
             "truncated_to_tail": True,
             "messages": [
@@ -467,8 +606,13 @@ class McpService:
             cursor=str(args.get("cursor") or "") or None,
         )
         items = []
-        for row in page.get("items", []):
-            summary = _history_summary(row)
+        rows = list(page.get("items", []))
+        display_names = await self._history_display_names(rows)
+        for row in rows:
+            summary = _history_summary(
+                row,
+                display_name=display_names[str(row.get("id") or "")],
+            )
             summary["ended"] = row.get("final_state") not in (None, "", "running")
             matches = row.get("matches") or []
             summary["matches"] = [
@@ -502,9 +646,17 @@ class McpService:
         there is no sender argument to forge.
         """
         self.writes += 1
+        target = str(args.get("target") or "")
+        if target:
+            try:
+                target_session, _display_name = await self._resolve_live(caller, target)
+            except KeyError:
+                pass
+            else:
+                target = target_session.record.id
         result = await self._messaging().notify(
             caller,
-            target=str(args.get("target") or ""),
+            target=target,
             body=str(args.get("body") or ""),
             reason=str(args.get("reason") or ""),
             correlation_id=str(args.get("correlation_id") or "") or None,

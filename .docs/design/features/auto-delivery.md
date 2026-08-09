@@ -39,8 +39,11 @@ message on behalf of the user; a per-conversation opt-out remains available.
   correction in `delivery-readiness.md`.
 - **Only an armed head, and only an authorized sender.** A draft was never armed and a
   `blocked` item carries an unresolved refusal — both need a human act first. Messages from
-  other agents are eligible only if the receiving session also opted in to
-  `accept_agent_messages` (`agent-messaging.md`).
+  other agents are eligible unless the receiving session opted *out* of
+  `accept_agent_messages`, which rides along with the same per-run default grant
+  (`agent-messaging.md`). The two remain separate switches - arming is authorization,
+  auto-delivery is who presses send - so cycling one never rewrites the other; only the
+  conversation default writes both, and only for a run that has none.
 - **It can never override.** The controller cannot pass `confirm`: `send_next` rejects a
   confirmation from a non-human initiator (`confirm_requires_user`). Blocked or unknown
   readiness always means "not now", never "anyway".
@@ -92,8 +95,9 @@ status line.
 
 - **Queue panel, `auto:` strip**: a one-line status (on/off, sends left, minutes left, quiet
   hours, why it is off) that discloses the default-on per-conversation toggle and the
-  `accept agent messages armed` toggle. The toggle is unavailable when the install's master
-  switch is off, with the reason stated. Collapsed by default because it is carried permanently
+  `accept agent messages armed` toggle. Both are on by default for a live agent conversation,
+  so the disclosure is an opt-out surface. The auto-delivery toggle alone is unavailable when
+  the install's master switch is off, with the reason stated. Collapsed by default because it is carried permanently
   above the queue in a narrow column; it used to cost three wrapped lines there.
 - **Per-item schedule**: `+5m` / `+15m` / `+1h` presets and `Clear schedule`, behind the
   row's `⋯`; a scheduled item shows its time in the row.

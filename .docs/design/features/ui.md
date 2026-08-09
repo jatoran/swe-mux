@@ -131,6 +131,14 @@ responsive controls.
   equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
+- The sidebar footer reads `menu` at the left edge, `projects` at the right, and the two
+  install-wide icon switches - the alerts bell and a settings cog - clustered between them.
+  The cog opens Settings directly; `menu → All Settings…` stays, because a named row is
+  searchable and reachable from the keyboard while an icon is not, and the app menu is where
+  someone already looking for a global action goes. Settings had been three interactions deep
+  for the one panel that is opened most often. The two icons sit adjacent rather than spread
+  by `space-between`: evenly distributed, four buttons read as four unrelated controls instead
+  of two labelled ends around a pair of toggles.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
@@ -296,6 +304,15 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
+  A caller that names a section still wins - Voice from the read-aloud chip, Accounts from the
+  account switcher, Command rail from a pane - because that caller knows where the user needs
+  to be; only an unqualified open restores the remembered tab.
+  It is a device preference rather than App state so it survives a reload, and it is validated
+  against the live tab list, so a renamed or removed tab degrades to General instead of
+  rendering an empty panel.
+  The panel is opened, scanned, and closed many times in a session, and landing on General
+  every time re-charges the navigation that reached the tab someone actually lives in.
 - Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
@@ -423,6 +440,11 @@ responsive controls.
     editable from either device — sizing the phone from the desktop is the point, since the
     phone is the harder device to type on — and the panel says which of the two the window
     you are looking at is currently using.
+  - The sidebar row layout is deliberately **not** split by device class.
+    It lives in one canonical `sessionRows` settings domain, and mobile differs only by the
+    `mobileFields` flag inside that one blob.
+    Sound and notification behaviour genuinely differ per device; a row layout does not, and a
+    second copy would only be a thing to keep in sync by hand.
   - Excluded from it entirely: only the note editor, whose typography is its own
     `--continuity-*` setting under Notes. The terminal was excluded at first — it has its own
     font size and its cell grid feeds cross-device viewport arbitration
@@ -845,8 +867,11 @@ responsive controls.
   `proc` did neither, and remains in the drawer.
 - The Queue tab's `auto:` line is a status as much as a control: on/off and the bounds
   actually in force (sends left, minutes left, quiet hours, why it is off), disclosing the
-  toggle and the separate "accept agent messages armed" switch. It is unavailable — with the
-  reason shown — when the install's master switch is off (`features/auto-delivery.md`).
+  toggle and the separate "accept agent messages armed" switch. Both are checked by default
+  for a live agent conversation, so the disclosure reads as an opt-*out*. Only the
+  auto-delivery toggle is unavailable - with the reason shown - when the install's master
+  switch is off; arming is authorization and stays editable regardless of who presses send
+  (`features/auto-delivery.md`).
 - That same `auto:` disclosure carries the two **install-wide** controls that must be one
   gesture away on any device — pause all auto-delivery and report an unsafe delivery —
   below a rule that marks them as not per-session. They are here, on the one queue surface
@@ -1631,9 +1656,54 @@ individually auditable in production: a layer that never fires in months of logs
 candidate, one that fires daily is load-bearing. Alongside them, every honored transcript
 restatement is logged as `terminal_repaint_requested` with its trigger reason.
 
+## Configurable session rows
+
+A sidebar session row is a fixed gutter holding the state indicator, plus two lines.
+Each line has a left-aligned and a right-aligned section, and each section is an ordered list of field slots.
+The layout is user-configurable in Settings → Appearance → Session rows.
+
+- **The indicator is not a field.**
+  It sits outside both sections, is always drawn, and its colour, pulse, and hollow "engaged" variant are not configurable.
+  Only its *shape* is: hexagon (default), circle, or square.
+- **The row never prints the state word.**
+  The indicator already carries it, so `working`, `ready`, and `turn complete` are duplication rather than information.
+  The `state` field exists for anyone who wants it back but is defined as never notable, so it renders only in `always` mode.
+- **Placement and visibility are one decision.**
+  A field placed in no section is off; there is no separate enable flag, and therefore no "enabled but nowhere" state.
+- **Every placed field is `when notable` or `always`.**
+  Notability is per field: a branch that differs from the project's most common branch, a diff with changed lines, a queue with items, a model that differs from the project default, an account when more than one is live, a duration past its per-state threshold.
+  The default configuration is almost entirely `when notable`, so a quiet fleet shows a title and a duration and anything visible has earned its place.
+- **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
+- **Sections meet but never overlap.**
+  As the sidebar narrows they slide together to a minimum gap, then the left section sheds whole low-priority tokens at container-query breakpoints before anything truncates.
+  Shedding beats ellipsis because truncation degrades every token at once, while shedding keeps the survivors fully legible.
+- **The empty bottom line is kept on desktop and dropped on mobile.**
+  Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
+- **One duration field, whose meaning shifts with state.**
+  Working, awaiting, and starting report elapsed time in state; `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
+  Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
+  A ready session's number is static, so a settled fleet re-renders on no clock at all.
+- **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, or off.
+
+Mobile shares the one layout rather than keeping a second one.
+`mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title.
+Both screens want the same information in the same order; only how much of it fits differs.
+
+The state indicator is SVG rather than a styled element.
+A hexagon is expressible as `clip-path`, a *hollow* hexagon is not, and a gauge that follows a hexagon's outline is not expressible in CSS at all.
+In SVG all three are one path: `pathLength="100"` normalizes every shape's perimeter, so one `stroke-dashoffset` calculation fills a circle, a square, and a hexagon identically, clockwise from twelve o'clock.
+Colour still arrives through the existing `.state-dot` state classes, so themes keep overriding one palette.
+
 ## Key files
 
 - `frontend/src/App.tsx`
+- `frontend/src/sessionRowConfig.ts`
+- `frontend/src/sessionRowFields.ts`
+- `frontend/src/sessionRowPrefs.ts`
+- `frontend/src/SessionRowBody.tsx`
+- `frontend/src/SessionRowSettings.tsx`
+- `frontend/src/StateIndicator.tsx`
+- `frontend/src/dotShapes.ts`
 - `frontend/src/ProjectsManager.tsx`
 - `frontend/src/Settings.tsx`
 - `frontend/src/GuidedTutorial.tsx`

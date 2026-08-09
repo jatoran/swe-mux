@@ -40,6 +40,11 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   records go out through an explicit field allowlist (`session_summary`) — never
   `record.snapshot()`, which carries `spawn_env`. Any message or excerpt that trips the
   clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
+- **Session names match the UI.** Session summaries preserve the backend-generated `name`
+  and also expose `display_name`, computed with the browser's rule: the latest title annotation
+  wins only while the session is auto-named. Exact, unique display names resolve anywhere a
+  session target is accepted; duplicate display names resolve nothing rather than selecting a
+  plausible-but-wrong session. Stable session IDs remain the unambiguous identity.
 - **A session's identity includes which conversation it is on.** `agent_run_seq` counts the
   in-CLI `/clear`/`/new` replacements a session has been through (`backends.md`), so a caller
   holding a remembered `agent_run_id` can distinguish "a different session" from "the same
@@ -62,11 +67,11 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 
 | Tool | Returns |
 |---|---|
-| `list_sessions` | live sessions in the caller's Project (caller marked `you`); optionally recently ended agent sessions |
-| `get_session` | status + metadata for one session by id or exact name, live or ended, including `agent_run_id` + `agent_run_seq` |
-| `read_transcript` | bounded tail of a session's transcript (role, ts, text) |
-| `search_history` | FTS over the Project's archived Claude/Codex conversations, keyset-paginated |
-| `notify` | stages a message in another Project session's queue (draft unless the receiver opted in); returns the message id, state, and chain depth |
+| `list_sessions` | live sessions in the caller's Project (caller marked `you`), with raw and display names; optionally recently ended agent sessions |
+| `get_session` | status + metadata for one session by id, exact backend name, or exact display name, live or recently ended, including `agent_run_id` + `agent_run_seq` |
+| `read_transcript` | bounded tail of a session's transcript (role, ts, text), addressed by id, backend name, or display name |
+| `search_history` | FTS over the Project's archived Claude/Codex conversations, with raw and display names, keyset-paginated |
+| `notify` | stages a message in another Project session's queue addressed by id, backend name, or display name; returns the message id, state, and chain depth |
 | `request_spawn` | writes an inert spawn draft into the Project's observation inbox; returns the request id and starts nothing |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,

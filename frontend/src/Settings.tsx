@@ -5,6 +5,7 @@ import { displayChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
+import { SessionRowSettings } from './SessionRowSettings'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
@@ -164,6 +165,24 @@ const tabForSection = (section:string):SettingsTab => ({
   Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Alerts:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
 
+// Which tab Settings opens on when nothing asked for a specific one. Persisted per
+// device rather than held in App state so it survives a reload - Settings is opened,
+// scanned, and closed dozens of times a session, and landing on General every time
+// re-costs the navigation that brought you to the tab you actually live in. An
+// explicit `initialSection` (Voice from the TTS chip, Accounts from the switcher,
+// …) always wins: that caller knows where the user needs to be.
+const SETTINGS_TAB_KEY='mux.settings.tab.v1'
+const rememberedTab = ():SettingsTab => {
+  let stored:string|null=null
+  try { stored=localStorage.getItem(SETTINGS_TAB_KEY) } catch { return 'general' }
+  // Validated against the live tab list, so a tab that is renamed or removed
+  // degrades to General instead of rendering an empty panel.
+  return settingsTabs.some(tab=>tab.id===stored)?stored as SettingsTab:'general'
+}
+const rememberTab = (tab:SettingsTab) => {
+  try { localStorage.setItem(SETTINGS_TAB_KEY,tab) } catch { /* private mode */ }
+}
+
 // The note editor's own binding table, enumerated from the editor package so the
 // list can never drift from what it actually binds. `isBrowserSafe` is false for
 // the chords Chromium claims first (Ctrl+R, Ctrl+K, …): the default browser-safe
@@ -201,7 +220,7 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
 }
 
-export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General', voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
+export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -229,7 +248,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
-  const [activeTab,setActiveTab] = useState<SettingsTab>(()=>tabForSection(initialSection))
+  const [activeTab,setActiveTab] = useState<SettingsTab>(()=>initialSection?tabForSection(initialSection):rememberedTab())
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
   const [noteChordQuery,setNoteChordQuery] = useState('')
   const [closeIntent,setCloseIntent] = useState<CloseIntent|null>(null)
@@ -274,9 +293,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }).catch(error => setStatus(error.message))
   }, [])
 
+  // A caller that names a section while the panel is already open still redirects it.
+  // Without a section there is nothing to redirect *to* - the remembered tab was already
+  // chosen at mount, and re-applying it here would yank the user off a tab they just picked.
   useEffect(() => {
-    setActiveTab(tabForSection(initialSection))
+    if (initialSection) setActiveTab(tabForSection(initialSection))
   },[initialSection])
+
+  useEffect(()=>rememberTab(activeTab),[activeTab])
 
   // Ctrl+wheel/+/- is owned by App so it can intercept before xterm and browser zoom.
   // While Settings is open, reflect that active-profile preview into this panel's draft
@@ -928,6 +952,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
+          <SessionRowSettings />
           <h3>Side panel tabs</h3>
           <label>Drawer tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <label>Right rail<select value={draft.utility_rail_display} onChange={e=>change('utility_rail_display',e.currentTarget.value as Config['utility_rail_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>

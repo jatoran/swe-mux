@@ -1,0 +1,56 @@
+// The session state indicator: one shape, drawn as SVG so the shape, the hollow
+// "standing" variant, and the context gauge that wraps it are all the same
+// primitive.
+//
+// Why SVG and not CSS: a hexagon is `clip-path`, a hollow hexagon is not (a
+// clipped border follows the box, not the polygon), and a gauge that follows a
+// hexagon's outline is nothing CSS can express at all. In SVG all three fall out
+// of one path: `pathLength="100"` normalizes every shape's perimeter to the same
+// scale, so `stroke-dashoffset` fills a circle, a square, and a hexagon by the
+// same arithmetic, clockwise from twelve o'clock.
+//
+// Colour still comes from CSS (`--dot`), so themes keep overriding one variable
+// rather than a set of fills.
+
+import { hasRunningActivity, sessionDotClass } from './sessionStatus.ts'
+import { shapePath } from './dotShapes.ts'
+import type { DotShape } from './sessionRowConfig.ts'
+import type { Session } from './types'
+
+/** Outer radius of the gauge ring, chosen to leave room for its own stroke. */
+const RING_RADIUS = 9
+/** Radius of the filled core. Sized so a bare indicator matches the former dot. */
+const CORE_RADIUS = 5.2
+
+export interface StateIndicatorProps {
+  session: Session | undefined
+  shape: DotShape
+  /** Context pressure drawn as an outline around the shape. Omit to draw none. */
+  gauge?: { pct: number; peak: number } | null
+  /** Extra classes for surfaces that position the indicator themselves. */
+  class?: string
+}
+
+const band = (pct: number): string => (pct >= 0.9 ? ' crit' : pct >= 0.7 ? ' hot' : '')
+
+/**
+ * The indicator. `sessionDotClass` still supplies the state classes, so every
+ * existing colour rule, pulse, and reduced-motion override keeps applying and
+ * the hollow `standing` variant keeps meaning "engaged, but you can type".
+ */
+export function StateIndicator({ session, shape, gauge, class: extra }: StateIndicatorProps) {
+  const hollow = Boolean(session && session.state === 'idle' && hasRunningActivity(session))
+  const outline = shapePath(shape, RING_RADIUS)
+  const pct = gauge ? Math.max(0, Math.min(1, gauge.pct)) : 0
+  const peak = gauge ? Math.max(0, Math.min(1, gauge.peak)) : 0
+  return <span class={`${sessionDotClass(session)} state-indicator shape-${shape}${extra ? ` ${extra}` : ''}`}>
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {gauge && <path class="ind-track" d={outline} />}
+      {gauge && <path class={`ind-fill${band(pct)}`} d={outline} pathLength={100} stroke-dasharray="100" stroke-dashoffset={100 - pct * 100} />}
+      {/* The peak sits on the same normalized outline as a 1.5-unit dash, so it
+          follows whichever shape is selected without any per-shape geometry. */}
+      {gauge && peak > pct && <path class="ind-peak" d={outline} pathLength={100} stroke-dasharray="1.5 98.5" stroke-dashoffset={-peak * 100} />}
+      <path class={hollow ? 'ind-core hollow' : 'ind-core'} d={shapePath(shape, hollow ? CORE_RADIUS : CORE_RADIUS - 0.6)} />
+    </svg>
+  </span>
+}

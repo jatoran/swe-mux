@@ -1409,7 +1409,9 @@ async def _begin_root_turn(
         return
     state["root_turn_active"] = True
     state["root_completion_seen"] = False
-    state["turn_started_at"] = time.time()
+    # Same clock the turn is *closed* against, so the two ends of one measurement
+    # cannot come from different time sources under the replay harness.
+    state["turn_started_at"] = _session_now(session)
     state["turn_saw_activity"] = False
     await events.emit("turn_started", session_id=session.record.id, source=source, scope="root")
 
@@ -1434,6 +1436,44 @@ def _background_wait_reason(session: Session) -> str | None:
         if pty_tail_waiting_on_background(tail, backend=session.record.backend)
         else None
     )
+
+
+#: Turns longer than this are treated as an unclosed boundary rather than a real
+#: measurement. A `turn_started` whose completion was missed stays open until some
+#: later evidence closes it, which would otherwise report "this turn took 9 hours"
+#: on a session that was simply idle overnight.
+MAX_TURN_DURATION_SECONDS = 6 * 60 * 60
+
+
+def _record_turn_duration(
+    session: Session, state: dict[str, Any], payload: dict[str, Any]
+) -> None:
+    """Stamp the completed turn's wall-clock duration on the record and event.
+
+    The record field is what a sidebar reads for a ready session ("the last turn
+    took 72s"); the event field is what consumers that never hold a record read.
+    A turn with no recorded start, or one long enough to be a missed boundary,
+    leaves the previous measurement alone rather than replacing it with a lie.
+    """
+    started = float(state.get("turn_started_at") or 0.0)
+    state["turn_started_at"] = 0.0
+    # A harness that reports its own turn duration is more authoritative than the
+    # daemon's wall clock, which also counts the lag before the boundary was seen.
+    reported = payload.get("duration_ms")
+    if isinstance(reported, int | float) and not isinstance(reported, bool) and reported > 0:
+        session.record.last_turn_ms = float(reported)
+        return
+    if started <= 0.0:
+        return
+    elapsed = max(0.0, _session_now(session) - started)
+    if elapsed > MAX_TURN_DURATION_SECONDS:
+        log.debug(
+            "discarding implausible turn duration",
+            extra={"session": session.record.id, "seconds": round(elapsed, 1)},
+        )
+        return
+    session.record.last_turn_ms = round(elapsed * 1000.0, 1)
+    payload["duration_ms"] = session.record.last_turn_ms
 
 
 async def _finish_root_turn(
@@ -1464,6 +1504,7 @@ async def _finish_root_turn(
     )
     state["root_turn_active"] = False
     state["root_completion_seen"] = True
+    _record_turn_duration(session, state, payload)
     if transition_proof(source, inferred) == "inferred":
         # Recovery inferences stay visible in the event stream, not only the ledger.
         payload.setdefault("inferred", True)
@@ -1547,7 +1588,7 @@ async def _complete_empty_hook_turn(session: Session, events: EventBus) -> None:
     if not state.get("root_turn_active") or state.get("turn_saw_activity"):
         return
     started = float(state.get("turn_started_at") or 0.0)
-    if time.time() - started > EMPTY_HOOK_TURN_WINDOW_SECONDS:
+    if _session_now(session) - started > EMPTY_HOOK_TURN_WINDOW_SECONDS:
         return
     await _finish_root_turn(
         session, events, source="transcript", force=True, evidence="local_command_record"

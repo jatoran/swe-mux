@@ -189,11 +189,17 @@ class AutoDeliveryController:
         ttl_minutes: int | None = None,
         max_sends: int | None = None,
         by: str,
+        accept_agent_messages: bool | None = None,
     ) -> dict[str, Any]:
         """Write a grant while ``_policy_lock`` is held.
 
         The grant records the run it was made against. A replacement run gets
         its own default grant and starts with a fresh expiry and send budget.
+
+        ``accept_agent_messages`` is left alone unless a caller states it. Only
+        the conversation-default path does: re-arming a grant the user turned
+        off and on again must not silently undo their separate decision about
+        who may arm messages at this session.
         """
         session = self.sessions.sessions.get(session_id)
         if session is None:
@@ -208,6 +214,11 @@ class AutoDeliveryController:
         now = time.time()
         ttl = max(1, int(ttl_minutes or self.config.auto_delivery_session_ttl_minutes))
         cap = max(1, int(max_sends or self.config.auto_delivery_max_consecutive))
+        accept: dict[str, Any] = (
+            {}
+            if accept_agent_messages is None
+            else {"accept_agent_messages": int(bool(accept_agent_messages))}
+        )
         policy = await self.queue.store.set_auto_policy(
             session_id,
             enabled=1,
@@ -218,6 +229,7 @@ class AutoDeliveryController:
             disabled_reason=None,
             enabled_at=now,
             updated_by=by,
+            **accept,
         )
         # A proving period starts the first time the capability is ever armed.
         counters = await self.queue.store.counters()
@@ -258,10 +270,12 @@ class AutoDeliveryController:
     ) -> dict[str, Any]:
         """Whether `mux.notify` may stage *armed* messages at this session.
 
-        Off (the default) an agent-authored message still arrives — as an inert
-        draft the human arms. This is the receiver-side half of the A→B
-        contract and is deliberately independent of auto-delivery: arming is
-        authorization, auto-delivery is who presses send.
+        On by default for a live agent conversation, alongside the rest of the
+        default grant. Turned off, an agent-authored message still arrives — as
+        an inert draft the human arms — and the opt-out holds for that run.
+        This is the receiver-side half of the A→B contract and is deliberately
+        independent of auto-delivery: arming is authorization, auto-delivery is
+        who presses send, and the install master switch still gates the latter.
         """
         session = self.sessions.sessions.get(session_id)
         if session is None:
@@ -294,7 +308,9 @@ class AutoDeliveryController:
         """Materialize the default bounded grant for each live agent run.
 
         A row bound to the current run is authoritative, including an explicit
-        opt-out, expiry, or exhausted budget. A new run starts enabled again.
+        opt-out, expiry, or exhausted budget. A new run starts enabled again,
+        and accepting agent-authored messages armed comes back with it — both
+        are per-run defaults, so an opt-out is scoped to the run that made it.
         The only cross-run hold is an ambiguous failed delivery: that state
         still requires the promised human verification and manual re-enable.
         """
@@ -327,7 +343,9 @@ class AutoDeliveryController:
                     # available. Do not immediately undo that explicit act.
                     continue
                 by_session[str(session_id)] = await self._enable_session_unlocked(
-                    str(session_id), by=DEFAULT_POLICY_BY
+                    str(session_id),
+                    by=DEFAULT_POLICY_BY,
+                    accept_agent_messages=True,
                 )
                 changed = True
             if changed:

@@ -20,12 +20,13 @@ below is therefore attributable and enforceable *for well-behaved callers* —
 see the same-host boundary note in `design/features/agent-messaging.md` for
 what that does and does not mean against a compromised same-host process.
 
-Receiver-side policy decides how much a message is worth on arrival: by default
-an agent-authored message lands as an inert ``draft`` the human arms. A session
-whose operator opted in (``accept_agent_messages``) receives it ``armed``, at
-which point it still waits for head-of-line order and delivery readiness like
-any other queue item — it never interrupts an active turn and never bypasses an
-approval or question prompt.
+Receiver-side policy decides how much a message is worth on arrival. A live
+agent conversation accepts agent-authored messages ``armed`` by default, as part
+of the per-run grant in ``auto_delivery.py`` — armed still waits for
+head-of-line order and delivery readiness like any other queue item, so it never
+interrupts an active turn and never bypasses an approval or question prompt.
+A session whose operator turned ``accept_agent_messages`` off for that run
+receives an inert ``draft`` instead, which only a human can arm.
 """
 
 from __future__ import annotations

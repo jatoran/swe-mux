@@ -955,12 +955,12 @@ body {
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}.sidebar-footer .project-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:left;white-space:nowrap;font:9px 'Cascadia Mono',Consolas,monospace}.sidebar-footer .project-trigger:hover{border:0;background:transparent;color:#a8eab3}.sidebar-footer .project-trigger span{margin-right:6px;color:#8ee69a}
-.sidebar-footer .notify-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
-.sidebar-footer .notify-trigger:hover{border:0;background:transparent;color:#a8eab3}
+.sidebar-footer .notify-trigger,.sidebar-footer .settings-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer .notify-trigger:hover,.sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notify-trigger.off{color:#5a6470}
 .sidebar-footer .notify-trigger.off:hover{color:#8ee69a}
-.sidebar-footer .notify-trigger svg{display:block}
-@media(max-width:760px){.sidebar-footer .notify-trigger{min-height:44px}}
+.sidebar-footer .notify-trigger svg,.sidebar-footer .settings-trigger svg{display:block}
+@media(max-width:760px){.sidebar-footer .notify-trigger,.sidebar-footer .settings-trigger{min-height:44px}}
 .project-resource:has(>.resource-error){grid-template-rows:auto auto [resource-editor] minmax(0,1fr)}.resource-actions{display:flex!important;grid-auto-flow:column!important;gap:4px!important}.resource-actions button{min-width:29px;padding:0 8px;cursor:pointer}.resource-actions button:last-child{font-size:15px}.file-tree{min-height:0;overflow:auto;padding:3px 0}.file-tree-branch{display:block}.file-tree-row{width:100%;min-height:30px;display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:6px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding-right:9px;background:transparent;color:var(--text);text-align:left;cursor:pointer}.file-tree-row:hover{background:var(--panel2)}.file-tree-row span,.file-tree-row small{color:var(--muted)}.file-tree-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.file-tree-row.directory strong{color:color-mix(in srgb,var(--text) 88%,var(--green))}.file-tree-loading{margin:0;min-height:28px;display:flex;align-items:center;padding:0 9px;color:var(--muted);font-size:8px}
 .resource-retry{min-height:0;padding:1px 7px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.resource-retry{min-height:28px;padding:0 10px}}
@@ -1280,7 +1280,13 @@ body {
 @media(max-width:700px){.send-agent-targets{max-height:200px}.control-plane-modal-body .send-agent-option,.control-plane-modal-body .send-agent-submit{grid-template-columns:24px minmax(0,1fr)}.control-plane-modal-body .send-agent-message{min-height:150px}}
 
 /* Unified note discovery: the footer is the global entry point; editors remain contextual. */
-.sidebar-footer{justify-content:space-between}
+/* menu pinned left, projects pinned right, and the icon switches (alerts, settings)
+   as one cluster between them. `space-between` would have spread every button
+   evenly, which reads as four unrelated controls rather than two labelled ends
+   around a pair of toggles. */
+.sidebar-footer{justify-content:flex-start}
+.sidebar-footer .menu-trigger{margin-right:auto}
+.sidebar-footer .project-trigger{margin-left:auto}
 .sidebar-footer .notes-shelf-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;margin-left:auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:right;font:inherit}
 .sidebar-footer .notes-shelf-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notes-shelf-trigger span{margin-right:6px;color:#8ee69a}
@@ -2788,3 +2794,103 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .git-review-footer{max-height:34vh;overflow:auto}.git-review-footer button{min-height:38px}
 }
 @media(prefers-reduced-motion:reduce){.git-review-modal *{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+
+/* ── Configurable session rows ──────────────────────────────────────────────
+   Two lines, each a left and a right section. The sections are flex siblings
+   with a mandatory gap: they slide together as the sidebar narrows and stop,
+   so they meet but never overlap. The left section sheds whole low-priority
+   tokens at container breakpoints before anything truncates, because
+   ellipsizing every token at once turns a row of facts into a row of prefixes.
+
+   The state indicator is SVG (StateIndicator.tsx). Colour still arrives through
+   the `.state-dot` state classes so themes keep overriding one palette, but the
+   shape, its hollow "standing" variant, and the context gauge that follows the
+   shape's outline are all geometry CSS cannot express on a bordered box. */
+.session-list{container-type:inline-size}
+.state-dot.state-indicator{
+  width:calc(13px*var(--ui-scale));height:calc(13px*var(--ui-scale));
+  background:none!important;border:0!important;border-radius:0!important;box-shadow:none!important;
+  display:inline-flex;align-items:center;justify-content:center;flex:none;--dot:#727b88
+}
+.state-dot.state-indicator svg{width:100%;height:100%;display:block;overflow:visible}
+.state-dot.state-indicator.running,.state-dot.state-indicator.idle{--dot:#7fc95a}
+.state-dot.state-indicator.working{--dot:var(--blue)}
+.state-dot.state-indicator.starting{--dot:#ae91d3}
+.state-dot.state-indicator.awaiting{--dot:var(--amber)}
+.state-dot.state-indicator.crashed{--dot:var(--red)}
+.state-dot.state-indicator.exited{--dot:#69717d}
+.ind-core{fill:var(--dot)}
+/* The standing variant is a hollow shape, not a dimmed one: `prefers-reduced-motion`
+   disables the working pulse, so a motion-only distinction would collapse for
+   exactly the users who need it most. */
+.ind-core.hollow{fill:none;stroke:var(--dot);stroke-width:2.4;stroke-linejoin:round}
+.ind-track{fill:none;stroke:#2b352f;stroke-width:1.6;stroke-linejoin:round}
+.ind-fill{fill:none;stroke:#6f8a7e;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:butt}
+.ind-fill.hot{stroke:var(--amber)}
+/* Only one element in a row may go red, and the indicator owns that vocabulary. */
+.ind-fill.crit{stroke:var(--red)}
+.ind-peak{fill:none;stroke:#9fb3a8;stroke-width:2.6;opacity:.55}
+.session-row .state-dot.state-indicator{align-self:center;margin-top:0}
+
+.session-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.row-line{display:flex;align-items:baseline;gap:10px;min-width:0}
+.row-line.top{font-size:12px}
+.row-line.bottom{font:9px 'Cascadia Mono',Consolas,monospace;color:var(--muted);min-height:12px}
+/* The blank bottom line is kept on desktop — constant row height is what makes
+   the list scannable — but dropped on mobile, where vertical space is the
+   scarce resource and identity-only rows are the point. */
+@media(max-width:760px){.row-line.bottom.empty{display:none;min-height:0}}
+.row-section{display:flex;align-items:baseline;min-width:0;white-space:nowrap}
+.row-section.left{flex:1 1 auto;overflow:hidden}
+/* Fixed rather than flexible so a value changing from `22m` to `1h30` cannot
+   reflow its neighbours; jitter in a live list is most of what reads as noise. */
+.row-section.right{flex:0 0 auto;font-variant-numeric:tabular-nums}
+.row-token{display:inline-flex;align-items:baseline;min-width:0;flex:0 1 auto}
+.row-section.left .row-token:last-child{overflow:hidden}
+.row-sep{color:#5c6f61;opacity:.7;white-space:pre;flex:none}
+.row-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-text.muted{color:#5c6f61}
+.row-text.warn{color:var(--amber)}
+.row-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.row-diff .add{color:#5f9e6a}.row-diff .del{color:#a5605a}
+.row-gauge,.row-diffbar{display:inline-flex;gap:1.5px;align-self:center;flex:none}
+.row-gauge i,.row-diffbar i{width:4px;height:7px;border-radius:1px;background:#2b352f;display:block}
+.row-gauge i.on{background:#6f8a7e}
+.row-gauge.hot i.on{background:var(--amber)}
+.row-gauge.crit i.on{background:var(--red)}
+.row-gauge i.peak{box-shadow:inset 0 0 0 1px #9fb3a8}
+.row-diffbar i.add{background:#5f9e6a}.row-diffbar i.del{background:#a5605a}
+.row-pips{display:inline-flex;gap:2px;align-self:center;flex:none}
+.row-pips i{width:3px;height:3px;border-radius:50%;background:#697381;display:block}
+.session-row.active .row-title{color:var(--text)}
+.session-row .activity-badges{align-self:center}
+/* Width shedding: whole tokens leave, lowest priority first, so what survives
+   stays fully legible instead of every token losing its tail at once. */
+@container (max-width:270px){.row-section.left .shed-1{display:none}}
+@container (max-width:230px){.row-section.left .shed-2{display:none}}
+@container (max-width:195px){.row-section.left .shed-3,.row-section.right .shed-1{display:none}}
+@media(prefers-reduced-motion:reduce){.state-dot.state-indicator{animation:none!important}}
+
+/* Settings → Appearance → Session rows. */
+.session-row-settings h4{margin:14px 0 4px;font-size:11px}
+.session-row-settings h5{margin:0 0 3px;color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+.session-row-preview{width:100%;max-width:420px;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+.session-row-preview .session-row{cursor:default}
+.row-line-editor{margin:8px 0 4px;padding:8px;border:1px solid var(--line);border-radius:6px}
+.row-line-editor>h4{margin-top:0}
+.row-line-editor>p{margin:0 0 6px;color:var(--muted);font-size:9px}
+.row-section-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:6px}
+.row-section-editor ul{list-style:none;margin:0;padding:0;display:grid;gap:3px}
+.row-section-empty{margin:0;color:var(--muted);font-size:9px}
+.row-slot{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:5px;padding:3px 5px;border:1px solid var(--line);border-radius:4px;background:var(--panel2)}
+.row-slot-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
+.row-slot select{font-size:9px}
+.row-slot-actions{display:flex;gap:2px}
+.row-slot-actions button{width:20px;height:20px;padding:0;border:1px solid var(--line);border-radius:3px;background:var(--panel);color:var(--muted);cursor:pointer;font-size:10px}
+.row-slot-actions button:hover:not(:disabled){color:var(--text)}
+.row-slot-actions button:disabled{opacity:.35;cursor:default}
+.row-slot-actions button.danger:hover:not(:disabled){color:var(--red)}
+.row-field-pool{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:7px;color:var(--muted);font-size:9px}
+.row-field-pool button{padding:2px 6px;border:1px dashed var(--line);border-radius:4px;background:transparent;color:var(--muted);cursor:pointer;font-size:9px}
+.row-field-pool button:hover{border-style:solid;color:var(--text)}
+@media(max-width:760px){.row-section-grid{grid-template-columns:minmax(0,1fr)}}

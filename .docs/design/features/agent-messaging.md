@@ -23,12 +23,15 @@ session outside its Project, and cannot claim to be anyone else.
   privileged), `agent` (from the MCP token), `rule`, `queue_draft`. The HTTP route derives
   the human kinds from the transport; the MCP tools derive `agent` from the token. No API
   anywhere accepts a sender argument.
-- **The receiver decides how much a message is worth.** By default an agent-authored
-  message lands as an inert `draft` that a human arms. A session whose operator turned on
-  `accept_agent_messages` receives it `armed` — at which point it still waits for
-  head-of-line order and delivery readiness, and is only actually delivered by a human
-  "Send now" or by that session's own auto-delivery opt-in (`auto-delivery.md`). Arming is
-  authorization; auto-delivery is who presses send. The two toggles are independent.
+- **The receiver decides how much a message is worth.** `accept_agent_messages` is part of
+  the per-run default grant a live agent conversation receives (`auto-delivery.md`), so an
+  agent-authored message lands `armed` - at which point it still waits for head-of-line
+  order and delivery readiness, and is only actually delivered by a human "Send now" or by
+  that session's own auto-delivery grant, which the install master switch still gates. A
+  session whose operator turned the toggle off receives an inert `draft` that only a human
+  can arm, and that opt-out holds for the run that made it. Arming is authorization;
+  auto-delivery is who presses send. The two toggles remain independent - turning
+  auto-delivery off and on again does not rewrite this one.
 - **Every bound lives in the daemon operation, not in the tool** (CP §7.1), so the browser,
   the CLI, and any later client inherit them:
 
@@ -118,7 +121,9 @@ MCP  request_spawn(prompt, backend?, name?, reason?)
 `agent_messaging_enabled`, `agent_message_max_chars`, `agent_message_hourly_budget`,
 `agent_message_pending_per_target`, `agent_message_max_chain_depth`,
 `request_spawn_enabled` (`config.py`). Per-session `accept_agent_messages` is runtime state
-in `queue_auto_policy`.
+in `queue_auto_policy`, defaulted on per run by the conversation-default grant rather than by
+a config key - it is a per-conversation decision, and the config file is the wrong place for
+state that has to be flippable instantly and per session.
 
 ## Key files
 
