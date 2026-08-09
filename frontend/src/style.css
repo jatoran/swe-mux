@@ -40,7 +40,14 @@
 /* Desktop keeps only the mode chip and the mic here; speak / verbatim / autoplay / settings
    are the strip's job one row below. On touch the strip is harder to hit, so they show. */
 .pane-voice .mobile-voice-action { display:none }
-.pane-grid { grid-row:1/-1;min-width:0;min-height:0;display:grid;gap:1px;background:#293039 }.pane-grid.count-1 { grid-template-columns:1fr }.pane-grid.count-2 { grid-template-columns:repeat(2,minmax(0,1fr)) }.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr)) }.terminal-pane { position:relative;min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) auto auto minmax(0,1fr);background:#0a0c0f;box-shadow:inset 0 0 0 1px transparent }.terminal-pane>.pane-bar { grid-row:1 }.terminal-pane>.voice-strip { grid-row:2 }.terminal-pane>.dictation-panel { grid-row:3 }.terminal-pane>.terminal-surface { grid-row:4 }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #536348 }.terminal-pane.focused>.pane-bar { background:#141a14 }
+.pane-grid { grid-row:1/-1;min-width:0;min-height:0;display:grid;gap:1px;background:#293039 }.pane-grid.count-1 { grid-template-columns:1fr }.pane-grid.count-2 { grid-template-columns:repeat(2,minmax(0,1fr)) }.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr)) }.terminal-pane { position:relative;min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f;box-shadow:inset 0 0 0 1px transparent }.terminal-pane>.pane-bar { grid-row:1 }
+/* grid-column:1 is MANDATORY, not tidiness. This grid declares no columns, so two items
+   sharing row 2 with an auto column cannot both take column 1: auto-placement gives the
+   second an implicit column 2 and splits the pane in half. The terminal then fits xterm to
+   a fraction of the pane width and resizes the PTY to it, destroying the agent's TUI —
+   which no longer reflows back when the overlay closes. Anything else added to this row
+   must pin the column too. */
+.terminal-pane>.voice-overlay-anchor,.terminal-pane>.terminal-surface { grid-row:2;grid-column:1 }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #536348 }.terminal-pane.focused>.pane-bar { background:#141a14 }
 .pane-grid.zoomed { grid-template-columns:1fr;grid-template-rows:1fr }.pane-grid.zoomed>.terminal-pane:not(.zoom-target) { display:none }
 .empty-stage { grid-row:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background-image:linear-gradient(#ffffff025 1px,transparent 1px),linear-gradient(90deg,#ffffff025 1px,transparent 1px);background-size:32px 32px }.hero-terminal { width:70px;height:54px;border:1px solid #3b4537;border-radius:10px;background:#111610;box-shadow:0 12px 45px #000,0 0 35px #82cf5012;display:flex;align-items:center;justify-content:center;gap:6px;font:20px 'JetBrains Mono';color:var(--green);margin-bottom:24px }.hero-cursor { height:20px;width:2px;background:var(--green);animation:blink 1.1s steps(1) infinite }.empty-stage h1 { font-size:23px;letter-spacing:-.035em;margin:0 0 8px }.empty-stage p { width:min(460px,80%);color:#7d8795;font-size:13px;line-height:1.55;margin:0 0 22px }.empty-stage button,.modal-footer button { height:calc(34px*var(--ui-scale));padding:0 14px;border:1px solid #333a43;background:#171b21;border-radius:7px;margin:0 4px;cursor:pointer;font-size:11px }.primary { background:var(--green)!important;color:#11160e!important;border-color:var(--green)!important;font-weight:700!important }.primary:hover { background:#b3f887!important }
 /* Overlay band. A full-screen dialog must sit above every piece of persistent
@@ -476,15 +483,15 @@ body {
 .pane-grid {
   background:var(--line);
 }
-/* Header, the optional read-aloud strip, the optional dictation draft, then the terminal
-   surface. The rows are placed explicitly so an unrendered middle track collapses to
-   nothing instead of the surface sliding up into it.
+/* Header, then the terminal surface. The voice surfaces share the surface's track instead
+   of adding their own, because they float over it (`.voice-overlay-anchor`) — a pane whose
+   row count changed with a voice toggle resized the PTY under a live agent.
    This declaration wins over the one in the base layer, so the two must list the SAME
-   number of tracks: the surface is placed on the last row by index, and a template short
-   one track leaves it in an `auto` implicit row while the real `1fr` track stays empty —
-   which reads as a band of dead black space eating the terminal's height. */
+   number of tracks: the surface is placed by row index, and a template short one track
+   leaves it in an `auto` implicit row while the real `1fr` track stays empty — which
+   reads as a band of dead black space eating the terminal's height. */
 .terminal-pane {
-  grid-template-rows:calc(34px*var(--ui-scale)) auto auto minmax(0,1fr);
+  grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr);
 }
 /* A recently-viewed terminal kept mounted behind the active tab (warmPanes.ts), so
    returning to it costs no buffer replay. Keep its box measurable while removing it
@@ -1497,9 +1504,7 @@ body {
      still laid out and still hit-testable underneath, which is the worst version of hidden:
      `getBoundingClientRect` reports them exactly where they should be while `elementFromPoint`
      returns the terminal. A stacking layer of their own is what actually keeps them on top. */
-  :root.soft-keyboard-open .terminal-pane>.pane-bar,
-  :root.soft-keyboard-open .terminal-pane>.voice-strip,
-  :root.soft-keyboard-open .terminal-pane>.dictation-panel{position:relative;z-index:2}
+  :root.soft-keyboard-open .terminal-pane>.pane-bar{position:relative;z-index:2}
   /* Peek at the top of the grid. The slide shows the bottom of a grid taller than the space
      left over, and on a fresh agent session that is the wrong half: the composer is pinned to
      the bottom of the alternate screen while the conversation fills from the top, so a first
@@ -1565,14 +1570,15 @@ body {
   .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:auto minmax(0,1fr) auto;padding:5px 6px 1px 10px}
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
   .mobile-unified-active>.terminal-pane>.pane-bar .pane-state{max-width:min(28vw,120px)}
-  .mobile-unified-active>.terminal-pane>.voice-strip,
-  .mobile-unified-active>.terminal-pane>.dictation-panel{flex:0 0 auto}
+  .mobile-unified-active>.terminal-pane>.voice-overlay-anchor{flex:0 0 auto}
   /* Touch metrics for the draft row. 16px text is deliberate: anything smaller makes
      mobile Safari/Chrome zoom the viewport when the textarea takes focus, which on this
      layout means the pane bar and the terminal both jump. */
   .dictation-panel{padding:5px 7px 6px}
   .dictation-actions button{height:calc(30px*var(--ui-scale));min-width:34px;padding:0 8px;font-size:10px}
-  .dictation-draft{height:calc(60px*var(--ui-scale));padding:6px 7px;font-size:16px;line-height:1.35;user-select:text;-webkit-user-select:text;touch-action:auto}
+  /* Font size only — the min/max that bound the auto-grow are in `em`, so they follow it
+     without being restated. 16px keeps mobile browsers from zooming the viewport on focus. */
+  .dictation-draft{padding:6px 7px;font-size:16px;user-select:text;-webkit-user-select:text;touch-action:auto}
   /* Touch-sized voice chips, and the settings shortcut the strip has no room for. Metrics are
      tuned so the whole group fits unscrolled at 390–412 px (where phones actually are); the
      group still scrolls below that rather than clipping the pane tools. */
@@ -1686,13 +1692,29 @@ body {
 .voice-strip .voice-content.summary{color:var(--green,#8bd450)}
 .voice-strip .voice-flag{flex:none;color:var(--green,#8bd450);border:1px solid currentColor;border-radius:3px;padding:0 3px;line-height:calc(14px*var(--ui-scale))}
 .voice-strip .voice-error{flex:none;color:var(--error,#f07178);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}
+/* The gear is the last item on both floating surfaces: the route into everything Voice
+   settings owns that the strip and the panel have no room for. It replaced the header's
+   touch-only `audio…` chip, so it renders on every device. */
+.voice-strip .voice-settings-open,.dictation-actions .dictation-settings{flex:none;font-size:12px;line-height:1}
 
-/* Dictation draft. Renders under the read-aloud strip, only for the pane that owns the
-   microphone. Its height is FIXED on purpose: the terminal host is the pane's 1fr row, so
-   a panel that grew with the draft would resize the PTY on every phrase and reflow the
-   agent's TUI. It costs the same rows for as long as Talk is on — one resize each way,
-   exactly like the strip above it. */
-.dictation-panel{display:grid;gap:3px;padding:4px 8px 5px;border-bottom:1px solid var(--line);background:var(--panel);font:9px 'JetBrains Mono';color:var(--muted)}
+/* Both voice surfaces — the read-aloud player strip and the dictation draft — FLOAT over
+   the top of the terminal rather than taking rows from it. The terminal host is the pane's
+   1fr track, so an in-flow strip resizes the PTY every time read aloud or Talk is toggled,
+   and the agent's TUI reflows and repaints around a transient UI affordance.
+   The anchor is what makes that free. It is a real grid/flex item sharing the surface's
+   track, but zero-height, so neither layout gives it any space and the stack hangs from it
+   with `position:absolute`. One rule covers the desktop grid and the mobile flex column,
+   and its stacking context is what lifts the stack over the terminal. Because nothing
+   resizes any more, the draft is free to grow with its content (`.dictation-draft`).
+   z-index 11 is deliberate: over the terminal host, under the find bar (12), the scroll
+   buttons (14), and the file-drop overlay (18), each of which must stay reachable.
+   The stack itself is click-through so the gap between two floating cards still belongs to
+   the terminal; only the cards take pointer events. */
+.voice-overlay-anchor{position:relative;z-index:11;height:0}
+.voice-overlay{position:absolute;top:6px;left:6px;right:6px;display:flex;flex-direction:column;gap:5px;pointer-events:none}
+.voice-overlay>*{pointer-events:auto}
+.voice-overlay>.voice-strip{border:1px solid var(--line);box-shadow:4px 5px 0 #0008}
+.dictation-panel{display:grid;gap:3px;padding:4px 8px 5px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted)}
 .dictation-panel>header{display:flex;align-items:center;gap:7px;min-width:0}
 .dictation-phase{flex:none}
 .dictation-phase.listening{color:var(--green,#8bd450)}
@@ -1712,8 +1734,12 @@ body {
 .dictation-actions .dictation-stop{color:var(--error,#f07178)}
 .dictation-actions button.active{color:var(--amber)}
 /* Always editable, never a mode: this textarea *is* the draft, so there is no read-only
-   state and no edit button to find. Click it and type. */
-.dictation-draft{box-sizing:border-box;width:100%;height:calc(56px*var(--ui-scale));min-height:0;resize:none;overflow-y:auto;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:10px/1.45 'JetBrains Mono';caret-color:var(--green,#8bd450)}
+   state and no edit button to find. Click it and type.
+   It grows with the draft between one line and the cap, then scrolls. Growing is only
+   affordable because the panel floats: an in-flow panel doing this would have resized the
+   PTY on every phrase. The inline height comes from JS (`DictationPanel`); min/max here
+   are what bound it, so a runaway draft can never cover the whole terminal. */
+.dictation-draft{box-sizing:border-box;width:100%;min-height:calc(1.45em + 10px);max-height:calc(7.25em + 10px);resize:none;overflow-y:auto;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:10px/1.45 'JetBrains Mono';caret-color:var(--green,#8bd450)}
 .dictation-draft:focus{outline:0;border-color:var(--green,#8bd450)}
 .dictation-draft::placeholder{color:#5c6672}
 /* faster-whisper returns whole utterances, never partial words, so there is no text to

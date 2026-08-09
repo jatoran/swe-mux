@@ -775,12 +775,31 @@ responsive controls.
   variable-length chip set, so the tools would silently drop under the status line. Overflow is
   absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade, never by growing
   the bar. Phones drop the cwd column and cap the status width so the group keeps room.
-- An agent pane is up to four rows: header, read-aloud player strip, dictation draft, terminal
-  surface. Only the terminal surface is elastic (`minmax(0,1fr)`); the two voice rows are
-  `auto` and exist only while their feature is on. Neither may size to its content while it is
-  open — a row whose height tracks live data resizes the PTY under it, which reflows the
-  agent's TUI, so both are fixed-height with internal scroll (`features/voice.md`). Prose of
-  unbounded length belongs in a row of this kind, never in the header chip group.
+- **A pane is two rows — header and terminal surface — and nothing a feature toggles may add
+  a third.** The pane's remaining height is the PTY's row count, so an in-flow strip that
+  appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and
+  repaint. The read-aloud player strip and the dictation draft therefore *float*: both hang
+  from one zero-height `.voice-overlay-anchor` that shares the surface's track, so they cost
+  no rows in the desktop grid or the mobile flex column, and toggling either changes nothing
+  about terminal geometry (`features/voice.md`). Anything else that wants to appear over a
+  terminal on a toggle belongs on the same anchor.
+  Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
+  pane declares no columns, so a second item with an auto column is auto-placed into an
+  implicit column 2 and the pane splits in half. This contract is enforced by
+  `test/renderer/pane-layout.spec.ts` (`npm run test:renderer`), which asserts the surface
+  rect is identical with the overlay up and down. It exists because two regressions of
+  exactly this shape shipped — a template one track short, then that missing column — and
+  neither is reachable by `tsc` or the unit suite, while both resize the PTY under a live
+  agent and leave its TUI reflowed after the overlay closes.
+- Floating pane furniture is ordered by a fixed z-band inside the pane: terminal host, voice
+  overlay (11), find bar (12), scroll-to-latest and peek buttons (14), file-drop overlay (18).
+  A new overlay picks its place in that band rather than topping it, because every one of
+  these has to stay reachable while the others are up. Overlay containers are click-through
+  (`pointer-events:none`) with their cards opting back in, so the space between floating
+  cards still belongs to the terminal.
+- Prose of unbounded length belongs on a floating surface of this kind, never in the header
+  chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
+  placed there can only ever show a truncated tail.
 - Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
   below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
   buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).

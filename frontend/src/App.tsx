@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
-import { api, openWebSocket } from './api'
+import { api, openWebSocket, type ApiError } from './api'
 import {
   deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
   isObservedHarness, type HarnessRegistryPayload,
@@ -82,6 +82,10 @@ import { ConversationChip, DictationPanel, useConversation } from './Conversatio
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
+import {
+  KILL_TOMBSTONE_TTL_MS, applyKillTombstones, expiredKillIds, killRemovedTheSession,
+  nextActiveAfterKill, type KillTombstones,
+} from './sessionKills'
 import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
@@ -870,6 +874,9 @@ export function App() {
   }
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawnPlacement>>({})
+  // Sessions this client has already taken off screen while their DELETE finishes.
+  // See sessionKills.ts for why the fleet and layout reconcilers both have to honour it.
+  const pendingKills=useRef<KillTombstones>({})
   const spawning = useRef(false)
   const relaunching = useRef(false)
   const longPressTimer = useRef<number | null>(null)
@@ -995,6 +1002,17 @@ export function App() {
     if(announce&&(fresh.length||freshAutomation.length)){setNotificationUnread(count=>count+fresh.length+freshAutomation.length);const latest=fresh[fresh.length-1];const observer=freshAutomation[freshAutomation.length-1];setNotificationToast(observer?{ts:observer.created_at,channel:'ui',delivery_id:observer.id,session_id:observer.session_id,session_name:'automation',type:observer.kind}:latest)}
   }
 
+  // Safety net under the kill request's own deadline. The request always settles and
+  // clears its tombstone, but a phone that freezes the tab mid-flight can lose the
+  // continuation entirely (see liveness.ts), and a tombstone with nothing behind it
+  // hides a session that is still running - the one failure worse than a slow close.
+  const expireStaleKills = () => {
+    const expired = expiredKillIds(pendingKills.current, Date.now())
+    if (!expired.length) return
+    for (const sessionId of expired) delete pendingKills.current[sessionId]
+    setError('A session close never reported back; restoring whatever the daemon still has.')
+  }
+
   const refresh = (): Promise<void> => {
     if (refreshInFlight.current) {
       refreshQueued.current = true
@@ -1010,9 +1028,14 @@ export function App() {
       ])
       installHarnessRegistry(nextHarnesses)
       setHarnessRegistryRevision(current=>current+1)
+      // The daemon still reports a session being killed as live for the whole
+      // teardown window, so every consumer of this GET has to see the fleet the
+      // operator sees - the row, the layout leaf, and the live set they are reconciled against.
+      expireStaleKills()
+      const visibleSessions=applyKillTombstones(nextSessions,pendingKills.current)
       setSessions(current => {
         const optimistic=current.filter(session=>session.pending&&pendingSpawns.current[session.id]&&!pendingSpawns.current[session.id].resolvedId)
-        return reconcileSessionSnapshots(current,nextSessions,optimistic)
+        return reconcileSessionSnapshots(current,visibleSessions,optimistic)
       })
       setProjects(nextProjects)
       // A project with a layout PATCH in flight is deliberately skipped below, so
@@ -1027,7 +1050,7 @@ export function App() {
       setProjectGroups(nextGroups)
       setLayoutMap(current => {
         const next = { ...current }
-        const live = new Set(nextSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
+        const live = new Set(visibleSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
         const livePreviews = new Set(nextPreviews.items.map(item => item.id))
         for (const project of nextProjects) {
           // This GET may have been snapshotted before an in-flight layout PATCH
@@ -2228,9 +2251,32 @@ export function App() {
       return next
     })
   }
+  /** DELETE a session, treating "the daemon no longer has it" as the outcome we wanted.
+   *  A double-tap, a second client that got there first, and a session that exited on
+   *  its own between the click and the request all land on 404, and none of them is a
+   *  reason to put a row back that has nothing behind it. Deadlined so the caller's
+   *  tombstone can never outlive the request that owns it. */
+  const deleteSessionOnce = async (sessionId: string) => {
+    try {
+      await api('DELETE', `/api/sessions/${sessionId}`, undefined, { timeoutMs: KILL_TOMBSTONE_TTL_MS })
+    } catch (cause) {
+      if (!killRemovedTheSession((cause as ApiError).status)) throw cause
+    }
+  }
+
+  // Bulk close stays synchronous on purpose: hiding is refused while live work is
+  // attached, so the sessions have to be genuinely gone before `hideProject` can run.
+  // The tombstones are still worth taking - they keep a refresh landing mid-close from
+  // flickering the rows back into a project that is on its way off the sidebar.
   const closeWorkAndHideProject=async(project:Project)=>{
     const {liveSessions}=openWorkFor(project)
-    await Promise.all(liveSessions.map(session=>api('DELETE',`/api/sessions/${session.id}`)))
+    for(const session of liveSessions)pendingKills.current[session.id]={sessionId:session.id,projectId:project.id,startedAt:Date.now()}
+    setSessions(items=>applyKillTombstones(items,pendingKills.current))
+    try{
+      await Promise.all(liveSessions.map(session=>deleteSessionOnce(session.id)))
+    }finally{
+      for(const session of liveSessions)delete pendingKills.current[session.id]
+    }
     let layout=layoutMap[project.id]||parseLayout(project.layout)
     for(const session of liveSessions)layout=removeLeaf(layout,'terminal',session.id)
     for(const leaf of leaves(layout,'preview'))layout=removeLeaf(layout,'preview',leaf.id)
@@ -2238,8 +2284,22 @@ export function App() {
     await hideProject(project)
   }
 
+  /**
+   * Close a session on screen now; let the daemon catch up underneath.
+   *
+   * The daemon's half is unavoidably slow: it types the backend's exit keys, waits
+   * out an agent that may be mid-turn and never sees them, force-kills the tree, then
+   * persists the run - and none of that is a reason to keep showing a tab the operator
+   * has already closed. So the row, the leaf, and the focus move immediately and the
+   * DELETE settles in the background, guarded by a tombstone (`sessionKills.ts`).
+   *
+   * The layout PATCH deliberately waits for the daemon to agree. The tombstone already
+   * keeps the leaf out of every reconcile, so deferring the write costs nothing on
+   * screen and means a failed kill has no persisted state to undo: the next refresh
+   * simply finds the session still live and puts it back where it was.
+   */
   const killNow = async (session: Session) => {
-    await api('DELETE', `/api/sessions/${session.id}`)
+    if (pendingKills.current[session.id]) return
     setConfirmKillId(null)
     setContextMenu(null)
     const currentLayout = resolveLayout(
@@ -2247,24 +2307,42 @@ export function App() {
       projects.find(project => project.id === session.project_id)?.layout,
     )
     let nextLayout = removeLeaf(currentLayout, 'terminal', session.id)
-    const surviving = sessions.filter(item => item.id !== session.id && item.project_id === session.project_id && !['exited', 'crashed'].includes(item.state))
-    const survivingIds = new Set(surviving.map(item => item.id))
-    const nextActiveId = activeId === session.id
-      ? visibleTerminalIds(nextLayout).find(id => survivingIds.has(id))
-        ?? terminalIds(nextLayout).find(id => survivingIds.has(id))
-        ?? surviving[0]?.id
-        ?? null
-      : activeId
+    const nextActiveId = nextActiveAfterKill({
+      layout: nextLayout, sessions, killedId: session.id,
+      projectId: session.project_id, activeId,
+    })
     if (nextActiveId && terminalIds(nextLayout).includes(nextActiveId)) {
       nextLayout = activateContainingStack(nextLayout, nextActiveId)
+    }
+    pendingKills.current[session.id] = {
+      sessionId: session.id, projectId: session.project_id, startedAt: Date.now(),
     }
     setSessions(items => items.filter(item => item.id !== session.id))
     delete startupOrigins.current[session.id]
     delete clientStartupTimingValues.current[session.id]
     setClientStartupTimings(current=>{const next={...current};delete next[session.id];return next})
     if (activeId === session.id) setActiveId(nextActiveId)
+    if (focusedViewId === session.id) setFocusedViewId(nextActiveId)
     if (zoomedId === session.id) setZoomedId(null)
-    await updateLayout(session.project_id, nextLayout)
+    layoutValues.current[session.project_id] = nextLayout
+    setLayoutMap(current => ({ ...current, [session.project_id]: nextLayout }))
+    let removed = true
+    try {
+      await deleteSessionOnce(session.id)
+    } catch (cause) {
+      removed = false
+      const reason = cause instanceof Error ? cause.message : String(cause)
+      setError(`Could not close ${sessionName(session)}: ${reason}`)
+    } finally {
+      delete pendingKills.current[session.id]
+    }
+    // Re-derived rather than replayed: a drag or a tab open may have landed in the
+    // window this kill was waiting out, and `removeLeaf` on an id that is already gone
+    // is a no-op, so this persists the current layout minus the session either way.
+    if (removed) {
+      const settled = layoutValues.current[session.project_id] ?? nextLayout
+      await updateLayout(session.project_id, removeLeaf(settled, 'terminal', session.id))
+    }
     await refresh()
   }
 
@@ -3510,7 +3588,6 @@ export function App() {
     const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
     const conversationAvailable=!!voiceStatus?.stt_enabled&&agentVoice
     const voiceStripVisible=voiceAvailable&&voiceMode!=='off'
-    const audioSettingsVisible=voiceMode!=='off'||conversation.sessionId===session.id
     // Read-aloud and conversation controls live in the pane header beside note/proc, and the
     // playback strip (seek, clip nav, generate) expands as a row directly beneath it. They
     // used to lead the bottom command rail, but that rail is a horizontal scroller the user
@@ -3522,18 +3599,26 @@ export function App() {
       {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
       {conversationAvailable&&<ConversationChip session={session} conversation={conversation}/>}
       {!conversationAvailable&&<button class="conversation-chip mobile-voice-action" aria-label="Set up hands-free conversation" title="Microphone conversation is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>talk:setup</button>}
-      {/* speak / verbatim-summary / autoplay used to be repeated here for touch, because the
-          playback strip was buried at the bottom of the pane. The strip is now the row
-          immediately below this bar, so those chips would sit a few pixels from the controls
-          they duplicate — they render only when the strip renders. The strip owns them. */}
-      {(voiceAvailable||conversationAvailable)&&audioSettingsVisible&&<button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>}
+      {/* speak / verbatim-summary / autoplay were repeated here for touch while the playback
+          strip was buried at the bottom of the pane; the strip owns them now. The `audio…`
+          settings chip went the same way once both floating surfaces grew their own gear —
+          three routes to one Settings section is two too many. */}
     </>:null
-    const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />:null
-    // The dictation draft is a row of its own under the player strip, not a chip in the
+    const openVoiceSettings=()=>openSettings('Voice')
+    const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
+    // The dictation draft is its own surface under the player strip, not a chip in the
     // header: it is prose of unbounded length, and `.pane-voice` is a fixed-chip scroller
     // in a bar that must never wrap, so a readout there could only ever be an ellipsis.
     // Only the pane that owns the microphone renders it — capture is a device singleton.
-    const dictationNode=conversation.sessionId===session.id?<DictationPanel conversation={conversation}/>:null
+    const dictationNode=conversation.sessionId===session.id
+      ?<DictationPanel conversation={conversation} onOpenSettings={openVoiceSettings}/>
+      :null
+    // Both voice surfaces hang off one zero-height anchor so they float over the terminal
+    // instead of taking rows from it: an in-flow strip resizes the PTY every time read aloud
+    // or Talk is toggled, and the agent's TUI reflows around it (see `voice.md`).
+    const voiceOverlayNode=voiceStripNode||dictationNode
+      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{dictationNode}</div></div>
+      :null
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
@@ -3551,8 +3636,7 @@ export function App() {
             opened is now the drawer's Processes tab, which pins this session's row first, and the
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
-      {voiceStripNode}
-      {dictationNode}
+      {voiceOverlayNode}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
@@ -4082,7 +4166,7 @@ export function App() {
       {confirmHideId===projectMenu.project.id&&<>
         <div class="context-subtitle">CLOSE OPEN WORK TO HIDE</div>
         <div class="context-note">{describeOpenWork(openWorkFor(projectMenu.project))||'No live work'} still attached. Hiding would strand it off-screen.</div>
-        <button class="danger" onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setConfirmHideId(null);void closeWorkAndHideProject(target)}}>Close it &amp; hide</button>
+        <button class="danger" onClick={()=>{const target=projectMenu.project;setProjectMenu(null);setConfirmHideId(null);void closeWorkAndHideProject(target).catch(cause=>{setError(cause instanceof Error?cause.message:String(cause));void refresh()})}}>Close it &amp; hide</button>
         <button onClick={()=>setConfirmHideId(null)}>Cancel</button>
       </>}
       <label class="context-select">Group<select value={projectMenu.project.group_id||''} onChange={event=>{const target=projectMenu.project;const group_id=event.currentTarget.value||null;void api<Project>('PATCH',`/api/projects/${target.id}`,{group_id}).then(updated=>setProjects(items=>items.map(item=>item.id===updated.id?updated:item)));setProjectMenu(null)}}><option value="">Ungrouped</option>{projectGroups.map(group=><option value={group.id}>{group.name}</option>)}</select></label>

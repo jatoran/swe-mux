@@ -279,7 +279,7 @@ export function ConversationChip({session,conversation}:{session:Session;convers
  * agent's TUI. It costs the terminal the same rows for the whole time Talk is on,
  * one resize each way, exactly like the read-aloud strip above it.
  */
-export function DictationPanel({conversation}:{conversation:Conversation}){
+export function DictationPanel({conversation,onOpenSettings}:{conversation:Conversation;onOpenSettings:()=>void}){
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
   const [landed,setLanded]=useState(false)
   // Whisper returns whole utterances, never partial words, so there is no stream to
@@ -296,18 +296,27 @@ export function DictationPanel({conversation}:{conversation:Conversation}){
   // append, so an offset from before the append stays meaningful).
   useLayoutEffect(()=>{
     const element=draftRef.current
-    if(!element||element.value===conversation.draft)return
-    const focused=document.activeElement===element
-    const caretAtEnd=element.selectionStart>=element.value.length
-    const start=element.selectionStart
-    const end=element.selectionEnd
-    element.value=conversation.draft
-    if(focused){
-      const limit=element.value.length
-      if(caretAtEnd)element.setSelectionRange(limit,limit)
-      else element.setSelectionRange(Math.min(start,limit),Math.min(end,limit))
+    if(!element)return
+    if(element.value!==conversation.draft){
+      const focused=document.activeElement===element
+      const caretAtEnd=element.selectionStart>=element.value.length
+      const start=element.selectionStart
+      const end=element.selectionEnd
+      element.value=conversation.draft
+      if(focused){
+        const limit=element.value.length
+        if(caretAtEnd)element.setSelectionRange(limit,limit)
+        else element.setSelectionRange(Math.min(start,limit),Math.min(end,limit))
+      // Only chase the tail when the user is not in the text: while they are editing, the
+      // browser already keeps the caret in view, and forcing the bottom would yank them
+      // away from a correction they are making in the middle of a long draft.
+      }else element.scrollTop=element.scrollHeight
     }
-    element.scrollTop=element.scrollHeight
+    // Grow to fit, bounded by the min/max in CSS. Affordable only because the panel floats
+    // — measuring requires collapsing to `auto` first, and `scrollHeight` excludes the
+    // border that `box-sizing:border-box` makes the inline height responsible for.
+    element.style.height='auto'
+    element.style.height=`${element.scrollHeight+element.offsetHeight-element.clientHeight}px`
   },[conversation.draft])
   const send=()=>conversation.send()
   return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">
@@ -320,6 +329,7 @@ export function DictationPanel({conversation}:{conversation:Conversation}){
         <button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>
         <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
         <button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop</button>
+        <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
     </header>
     <textarea

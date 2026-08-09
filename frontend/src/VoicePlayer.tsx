@@ -15,7 +15,7 @@ const formatSeconds = (value: number) => {
 // verbatim/summary switch, and the per-device autoplay switch. Everything else
 // (mode, engine, voices) lives in the pane chip, context menu, and Settings so the
 // strip stays one row.
-export function VoicePlayer({ session, status, mode, onSession }: { session: Session; status: VoiceStatus; mode: 'on_demand' | 'auto'; onSession: (session: Session) => void }) {
+export function VoicePlayer({ session, status, mode, onSession, onOpenSettings }: { session: Session; status: VoiceStatus; mode: 'on_demand' | 'auto'; onSession: (session: Session) => void; onOpenSettings: () => void }) {
   const [clips, setClips] = useState<VoiceClip[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -113,5 +113,9 @@ export function VoicePlayer({ session, status, mode, onSession }: { session: Ses
     {mode === 'auto' && <span class="voice-flag" title="Every completed reply generates audio automatically">auto</span>}
     {clip?.status === 'failed' && <span class="voice-error" title={clip.error || 'generation failed'}>failed</span>}
     {error && <span class="voice-error" title={error}>{error.length > 42 ? `${error.slice(0, 42)}…` : error}</span>}
+    {/* Trailing, so the controls the strip exists for keep the leading slots. It is the
+        route out of the strip into everything the strip cannot hold: engine, voice, model,
+        content default, budget, cache. */}
+    <button class="voice-settings-open" aria-label="Open Voice settings" title="Open Voice settings (engine, voice, budget, cache)" onClick={onOpenSettings}>⚙</button>
   </div>
 }

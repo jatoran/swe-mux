@@ -195,40 +195,45 @@ into mobile-voice setup instead.
 
 - Every voice affordance lives at the **top** of an agent pane. The pane header carries a
   `.pane-voice` group — the `tts:` chip (off / tap / auto) and the `talk:` Conversation toggle
-  — between the cwd and the note/proc/⋯ tools. When TTS is active, the one-row player strip
-  (play/pause, seek bar, clip navigation, on-demand generate, verbatim/summary switch, device
-  autoplay toggle) expands as its own row *directly beneath* that header, so enabling read
-  aloud shortens the terminal rather than overlaying it. The session context menu and command
-  palette expose the same playback operations; Settings → Voice owns engines, voice,
-  language/model, content, budget, and cache config.
+  — between the cwd and the note/proc/⋯ tools. The session context menu and command palette
+  expose the same playback operations; Settings → Voice owns engines, voice, language/model,
+  content, budget, and cache config.
 - The chips are in the header and not the bottom command rail because that rail is a
   horizontal scroller the user pages through to reach terminal keys: voice chips both occupied
   its most valuable leading slots and scrolled out of reach. The header group is itself a
   scroller, which is what keeps a long chip set from pushing the pane tools out of a bar that
   must never wrap — see `ui.md`.
-- **The dictation draft is a row, not a chip.** While Talk is active, the owning pane grows a
-  `.dictation-panel` row under the player strip carrying the phase, the status line, the
-  actions (send / undo / clear / standby / stop), and the draft itself. The draft lived in the
-  header until it was clear that a chip scroller can only ever show a truncated tail of a
-  spoken sentence; the header keeps the `talk:` switch and its state colour and nothing else.
-  Three properties are load-bearing:
-  - **Fixed height.** The terminal host is the pane's `1fr` row, so a panel sized to its
-    content would resize the PTY on every phrase and reflow the agent's TUI. The panel costs
-    the same rows for as long as Talk is on: one resize when it opens, one when it closes.
+- **Both working surfaces float; neither takes a row.** The player strip (play/pause, seek,
+  clip navigation, on-demand generate, verbatim/summary, device autoplay) and the dictation
+  panel hang from one zero-height `.voice-overlay-anchor` sharing the terminal surface's
+  track, stacked strip-over-panel and inset from the pane's top edge. **The pane's remaining
+  height is the PTY's row count**: an in-flow strip meant every read-aloud or Talk toggle
+  resized the terminal under a live agent and made its TUI reflow and repaint, which is the
+  one cost a transient UI affordance must not impose. The container is click-through, so the
+  gap between the two cards still belongs to the terminal.
+- **The dictation draft is a surface, not a chip.** It carries the phase, the status line, the
+  actions (send / undo / clear / standby / stop / Settings), and the draft itself. The draft
+  lived in the header until it was clear that a chip scroller can only ever show a truncated
+  tail of a spoken sentence; the header keeps the `talk:` switch and its state colour and
+  nothing else. Three properties are load-bearing:
   - **Always editable, no edit mode.** The draft is a live `<textarea>` — click or tap it and
     type. Capture keeps running while typing; an utterance that lands mid-edit appends at the
     end with the caret and selection preserved. Without this a single misrecognized word meant
     re-dictating the whole prompt, since `cancel`/`undo` are the only spoken corrections.
+  - **Grows with the draft, bounded.** One line to five, then internal scroll. This is only
+    affordable because the panel floats; the same behaviour in flow would have resized the
+    PTY on every phrase.
   - **Voice stays primary.** `Mux, send` and the panel's Send button are the same submission,
     and nothing in the panel needs to be touched for hands-free use. `Ctrl`/`Cmd`+`Enter` sends
     from the textarea; `Escape` returns the keyboard to the terminal.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- On touch, the group exposes `audio…` Settings only while that session's TTS or Talk switch is active, since an all-off header should stay quiet and the setup chips already provide the route into Voice settings.
-  It does **not** repeat `speak`, summary/verbatim, or autoplay: those render
-  only when the player strip renders, and the strip is now the very next row. `tts:setup` and
-  `talk:setup` replace their chips when the global feature is disabled, so an unavailable
-  feature stays discoverable.
+- Each floating surface ends with a **gear** into Settings → Voice, on every device. It
+  replaced the header's touch-only `audio…` chip: with a route on both surfaces, a third one
+  in the header was duplication. The header does **not** repeat `speak`, summary/verbatim, or
+  autoplay either — those render only where the strip renders. `tts:setup` and `talk:setup`
+  replace their chips when the global feature is disabled, so an unavailable feature stays
+  discoverable.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
 
 ## Session sounds (unrelated audio path)
