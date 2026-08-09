@@ -156,9 +156,12 @@ from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
 from .prompt_queue import (
+    SUBMIT_DELAY_SECONDS,
+    SUBMIT_SEQUENCE,
     PromptQueueService,
     PromptQueueStore,
     QueueError,
+    paste_payload,
     stage_seed_argv,
 )
 from .provider_accounts import (
@@ -6234,7 +6237,24 @@ async def voice_submit(request: web.Request) -> web.Response:
         raise ValueError("voice prompt contains terminal control characters")
     if not voice.claim_submission(utterance_id):
         return json_response({"ok": True, "duplicate": True})
-    _record_operator_input(request.app["events"], session, f"{text}\r", source="voice")
+    if "\n" in text:
+        # Recognition never produces a newline; an edited dictation draft can. Sent
+        # raw, the first newline submits the prompt early and the remainder is typed
+        # at whatever the agent shows next, so multi-line text takes the queue's
+        # delivery bytes instead: bracketed paste with newlines as CR, then a
+        # separate Enter after the same settle delay. Single-line prompts keep the
+        # one-write path they have always used.
+        _record_operator_input(
+            request.app["events"], session, paste_payload(text), source="voice"
+        )
+        await asyncio.sleep(SUBMIT_DELAY_SECONDS)
+        if session.record.state in {"exited", "crashed"}:
+            return json_response({"error": "the agent session ended during delivery"}, 409)
+        _record_operator_input(
+            request.app["events"], session, SUBMIT_SEQUENCE, source="voice"
+        )
+    else:
+        _record_operator_input(request.app["events"], session, f"{text}\r", source="voice")
     await request.app["events"].emit(
         "voice_prompt_submitted",
         session_id=session.record.id,

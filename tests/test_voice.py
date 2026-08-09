@@ -559,6 +559,48 @@ async def test_voice_submit_writes_prompt_and_enter_once_and_marks_human_input(
         service.store.close()
 
 
+async def test_voice_submit_pastes_a_multiline_draft_instead_of_submitting_early(
+    tmp_path: Path,
+) -> None:
+    """An edited dictation draft can hold newlines; a raw newline submits early.
+
+    Recognition never emits one, so this only happens once the draft is editable —
+    and getting it wrong sends the agent half a prompt and types the rest at
+    whatever it shows next.
+    """
+    service, events, emitted, record = make_service(tmp_path)
+    writes: list[str] = []
+    session = SimpleNamespace(
+        record=record,
+        pty=SimpleNamespace(write=writes.append),
+        input_revision=0,
+        last_input_event_ts=0.0,
+        last_input_report_ts=0.0,
+    )
+
+    class Request:
+        match_info = {"sid": "s1"}
+        app = {
+            "voice": service,
+            "sessions": SimpleNamespace(resolve=lambda _sid: session),
+            "events": events,
+        }
+
+        async def json(self) -> dict[str, str]:
+            return {"utterance_id": "voice-2", "text": "first line\nsecond line"}
+
+    try:
+        response = await voice_submit(cast(Any, Request()))
+        await asyncio.sleep(0)
+        assert json.loads(response.text)["duplicate"] is False
+        assert writes == ["\x1b[200~first line\rsecond line\x1b[201~", "\r"]
+        assert "\n" not in "".join(writes)
+        assert session.input_revision == 2
+        assert "voice_prompt_submitted" in {event.type for event in emitted}
+    finally:
+        service.store.close()
+
+
 async def test_store_prune_removes_oldest_ready_clips_beyond_cap(tmp_path: Path) -> None:
     store = VoiceStore(tmp_path / "mux.db")
     try:

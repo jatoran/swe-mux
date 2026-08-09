@@ -78,7 +78,7 @@ import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
-import { ConversationControl } from './ConversationControl'
+import { ConversationChip, DictationPanel, useConversation } from './ConversationControl'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
@@ -776,7 +776,6 @@ export function App() {
     window.addEventListener('pointercancel',stop,{once:true})
   }
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
-  const [talkActiveSessionId,setTalkActiveSessionId]=useState<string|null>(null)
   const [profiles, setProfiles] = useState<ShellProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
@@ -3235,6 +3234,9 @@ export function App() {
   }, [mobileWorkspace, mobileGestures, swipeAwayClose])
 
   const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? mergeSessionSnapshot(item,next) : item))
+  // One controller for the whole browser: the microphone is a device singleton, so
+  // the pane chips and the dictation panel are views onto this, not instances of it.
+  const conversation = useConversation(voiceStatus, updateSession)
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
     const current=clientStartupTimingValues.current[sessionId]||{}
     if(current[milestone]!==undefined)return
@@ -3508,7 +3510,7 @@ export function App() {
     const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
     const conversationAvailable=!!voiceStatus?.stt_enabled&&agentVoice
     const voiceStripVisible=voiceAvailable&&voiceMode!=='off'
-    const audioSettingsVisible=voiceMode!=='off'||talkActiveSessionId===session.id
+    const audioSettingsVisible=voiceMode!=='off'||conversation.sessionId===session.id
     // Read-aloud and conversation controls live in the pane header beside note/proc, and the
     // playback strip (seek, clip nav, generate) expands as a row directly beneath it. They
     // used to lead the bottom command rail, but that rail is a horizontal scroller the user
@@ -3518,7 +3520,7 @@ export function App() {
     const paneVoice=agentVoice&&voiceStatus?<>
       {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
-      {conversationAvailable&&<ConversationControl session={session} status={voiceStatus} onSession={updateSession} onActiveChange={active=>setTalkActiveSessionId(current=>active?session.id:current===session.id?null:current)}/>}
+      {conversationAvailable&&<ConversationChip session={session} conversation={conversation}/>}
       {!conversationAvailable&&<button class="conversation-chip mobile-voice-action" aria-label="Set up hands-free conversation" title="Microphone conversation is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>talk:setup</button>}
       {/* speak / verbatim-summary / autoplay used to be repeated here for touch, because the
           playback strip was buried at the bottom of the pane. The strip is now the row
@@ -3527,6 +3529,11 @@ export function App() {
       {(voiceAvailable||conversationAvailable)&&audioSettingsVisible&&<button class="mobile-voice-action voice-settings" title="Open all Voice settings" onClick={()=>openSettings('Voice')}>audio…</button>}
     </>:null
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} />:null
+    // The dictation draft is a row of its own under the player strip, not a chip in the
+    // header: it is prose of unbounded length, and `.pane-voice` is a fixed-chip scroller
+    // in a bar that must never wrap, so a readout there could only ever be an ellipsis.
+    // Only the pane that owns the microphone renders it — capture is a device singleton.
+    const dictationNode=conversation.sessionId===session.id?<DictationPanel conversation={conversation}/>:null
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
@@ -3545,6 +3552,7 @@ export function App() {
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceStripNode}
+      {dictationNode}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} onConfigureRail={()=>openSettings('Command rail')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane

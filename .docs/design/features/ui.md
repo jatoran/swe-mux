@@ -775,6 +775,12 @@ responsive controls.
   variable-length chip set, so the tools would silently drop under the status line. Overflow is
   absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade, never by growing
   the bar. Phones drop the cwd column and cap the status width so the group keeps room.
+- An agent pane is up to four rows: header, read-aloud player strip, dictation draft, terminal
+  surface. Only the terminal surface is elastic (`minmax(0,1fr)`); the two voice rows are
+  `auto` and exist only while their feature is on. Neither may size to its content while it is
+  open — a row whose height tracks live data resizes the PTY under it, which reflows the
+  agent's TUI, so both are fixed-height with internal scroll (`features/voice.md`). Prose of
+  unbounded length belongs in a row of this kind, never in the header chip group.
 - Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
   below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
   buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).

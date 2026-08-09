@@ -143,7 +143,9 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
 - **Conversation (STT):** browser VAD capture (`conversation.ts`) → mono 16 kHz WAV →
   `voice/transcribe` → faster-whisper (`turbo`, CUDA→CPU fallback; audio discarded after) →
   wake-word + command-phrase **suffix** → idempotent `voice/submit` writes `{text}\r` to the
-  PTY. Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
+  PTY (a multi-line edited draft goes as bracketed paste + a separate Enter instead). The draft
+  is an utterance log shown in the pane's `.dictation-panel` row, editable in place.
+  Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
   `voice_commands` in config, editable in Settings → Voice; `buildVoiceMatcher` compiles them).
   Fixed action set: `send`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/
   `help`/`standby`/`resume`/`stop`. `standby` keeps the mic on but ignores everything except a

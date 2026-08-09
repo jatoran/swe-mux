@@ -98,8 +98,18 @@ affect the PTY, session state, transcripts, history, or projects.
 ### Capture pipeline (browser, `frontend/src/conversation.ts`)
 
 - `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
-  auto gain) and a `ScriptProcessorNode`, and stays armed across silence. Exactly one pane
-  owns capture per browser; a `mux:conversation-claim` event stops any other pane.
+  auto gain) and a `ScriptProcessorNode`, and stays armed across silence. The microphone is a
+  device singleton, so the controller that owns it (`useConversation`) is held **once at the
+  app root**, not once per pane: the Talk chip in every agent pane header and the dictation
+  panel under the owning pane are views of that one controller, and starting capture on a
+  second pane stops the first by construction. Capture is released when the workspace
+  unmounts, so a reload never leaves the browser's recording indicator lit.
+- The **draft is an append log of utterances**, not a string (`conversationDraft.ts`): `undo`
+  must take back exactly the last phrase recognized, and a typed correction must survive the
+  next utterance landing on top of it. A typed edit flattens the log to one segment, because
+  per-phrase undo would otherwise start removing wording the user can no longer see; speech
+  after an edit appends as its own segment, so the correction survives and `undo` takes back
+  only the new speech.
 - **Conversation mode and read aloud are independent switches and neither one moves the
   other.** Talk is mic → transcribe → PTY and needs only `stt_enabled`, so starting it does not
   require read aloud, does not set the pane to `auto`, and does not enable device autoplay.
@@ -151,10 +161,13 @@ affect the PTY, session state, transcripts, history, or projects.
   capture down and releases the mic (only a Talk-button gesture can re-open it, since browsers
   forbid silent re-acquire). The draft buffer survives standby.
 - `POST voice/submit` is reconnect-safe: an idempotent `utterance_id` (`claim_submission`, a
-  512-entry dedup ring) prevents double-sends, control characters are rejected, and text plus
-  one Enter (`{text}\r`) is written atomically while advancing the human-input boundary
-  (`voice_prompt_submitted`). `POST voice/interrupt` writes a lone `\x03`. Both require a live
-  Claude/Codex session.
+  512-entry dedup ring) prevents double-sends, control characters are rejected, and the
+  human-input boundary is advanced (`voice_prompt_submitted`). Single-line text plus one Enter
+  (`{text}\r`) is written atomically. A **multi-line** body takes the queue's delivery bytes
+  instead (`paste_payload` + `SUBMIT_DELAY_SECONDS` + a separate `\r`): recognition never emits
+  a newline, but an edited draft can, and a raw newline submits the prompt early — sending the
+  agent half a message and typing the rest at whatever it shows next. `POST voice/interrupt`
+  writes a lone `\x03`. Both require a live Claude/Codex session.
 - Speech detected during playback triggers barge-in **before** transcription, so the user can
   talk over the agent; the `interrupt` command additionally sends the Ctrl-C.
 
@@ -191,8 +204,26 @@ into mobile-voice setup instead.
 - The chips are in the header and not the bottom command rail because that rail is a
   horizontal scroller the user pages through to reach terminal keys: voice chips both occupied
   its most valuable leading slots and scrolled out of reach. The header group is itself a
-  scroller, which is what keeps a long chip set (or a live transcript readout) from pushing the
-  pane tools out of a bar that must never wrap — see `ui.md`.
+  scroller, which is what keeps a long chip set from pushing the pane tools out of a bar that
+  must never wrap — see `ui.md`.
+- **The dictation draft is a row, not a chip.** While Talk is active, the owning pane grows a
+  `.dictation-panel` row under the player strip carrying the phase, the status line, the
+  actions (send / undo / clear / standby / stop), and the draft itself. The draft lived in the
+  header until it was clear that a chip scroller can only ever show a truncated tail of a
+  spoken sentence; the header keeps the `talk:` switch and its state colour and nothing else.
+  Three properties are load-bearing:
+  - **Fixed height.** The terminal host is the pane's `1fr` row, so a panel sized to its
+    content would resize the PTY on every phrase and reflow the agent's TUI. The panel costs
+    the same rows for as long as Talk is on: one resize when it opens, one when it closes.
+  - **Always editable, no edit mode.** The draft is a live `<textarea>` — click or tap it and
+    type. Capture keeps running while typing; an utterance that lands mid-edit appends at the
+    end with the caret and selection preserved. Without this a single misrecognized word meant
+    re-dictating the whole prompt, since `cancel`/`undo` are the only spoken corrections.
+  - **Voice stays primary.** `Mux, send` and the panel's Send button are the same submission,
+    and nothing in the panel needs to be touched for hands-free use. `Ctrl`/`Cmd`+`Enter` sends
+    from the textarea; `Escape` returns the keyboard to the terminal.
+  faster-whisper returns whole utterances rather than partial words, so the panel signals
+  arrival with a brief border flash instead of animating a stream it does not receive.
 - On touch, the group exposes `audio…` Settings only while that session's TTS or Talk switch is active, since an all-off header should stay quiet and the setup chips already provide the route into Voice settings.
   It does **not** repeat `speak`, summary/verbatim, or autoplay: those render
   only when the player strip renders, and the strip is now the very next row. `tts:setup` and
@@ -234,6 +265,8 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx` — Talk button, capture→transcribe→command loop.
+- `frontend/src/ConversationControl.tsx` — `useConversation` (the app-root capture controller
+  and command loop), `ConversationChip` (header switch), `DictationPanel` (draft row).
+- `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — VAD capture, WAV encoding, `Mux` command parser.
 - `frontend/src/mobileVoice.ts`, `frontend/src/Settings.tsx` — mobile setup + configuration UI.
