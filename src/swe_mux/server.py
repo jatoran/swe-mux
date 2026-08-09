@@ -156,6 +156,7 @@ from .project_watcher import ProjectFileWatcher
 from .projects import ProjectManager
 from .prompt_library import PromptLibrary, PromptScope
 from .prompt_queue import (
+    NON_OVERRIDABLE_REASONS,
     SUBMIT_DELAY_SECONDS,
     SUBMIT_SEQUENCE,
     PromptQueueService,
@@ -180,6 +181,7 @@ from .session import (
     clear_all_standing_activity,
     clear_standing_activity,
     pty_tail_explain,
+    pty_tail_state,
     session_is_unwitnessed,
 )
 from .session_attachments import (
@@ -217,6 +219,7 @@ from .voice import (
     VoiceError,
     VoiceService,
     VoiceStore,
+    approval_prompt,
     clip_snapshot,
     last_reply_text,
 )
@@ -737,8 +740,10 @@ def create_app(
             web.post("/api/voice/stt-latency", voice_latency),
             web.delete("/api/voice/stt-latency", voice_latency),
             web.post("/api/sessions/{sid}/voice/submit", voice_submit),
+            web.post("/api/sessions/{sid}/voice/approval", voice_approval),
             web.post("/api/sessions/{sid}/voice/interrupt", voice_interrupt),
             web.post("/api/sessions/{sid}/voice/generate", voice_generate),
+            web.post("/api/voice/speak", voice_speak),
             web.get("/api/voice/clips", list_voice_clips),
             web.get("/api/voice/clips/{clip_id}/audio", voice_clip_audio),
             web.delete("/api/voice/clips/{clip_id}", delete_voice_clip),
@@ -6323,6 +6328,25 @@ async def voice_submit(request: web.Request) -> web.Response:
         raise ValueError("voice prompt must contain 1–20000 characters")
     if any(ord(character) < 32 and character not in {"\t", "\n"} for character in text):
         raise ValueError("voice prompt contains terminal control characters")
+    fleet = request.app.get("fleet")
+    readiness_reasons = set(fleet.readiness.evaluate(session)["reasons"]) if fleet else set()
+    if session.record.state in {"exited", "crashed"}:
+        readiness_reasons.add("session_ended")
+    if session.record.state == "awaiting":
+        if session.record.awaiting_reason == "approval":
+            readiness_reasons.add("approval_required")
+        elif session.record.awaiting_reason in {"question", "elicitation"}:
+            readiness_reasons.add("awaiting_user_input")
+    protected = sorted(readiness_reasons & NON_OVERRIDABLE_REASONS)
+    if protected:
+        return json_response(
+            {
+                "error": "voice delivery is protected until the agent prompt is safe",
+                "code": "delivery_protected",
+                "reasons": protected,
+            },
+            409,
+        )
     if not voice.claim_submission(utterance_id):
         return json_response({"ok": True, "duplicate": True})
     if "\n" in text:
@@ -6350,6 +6374,65 @@ async def voice_submit(request: web.Request) -> web.Response:
         characters=len(text),
     )
     return json_response({"ok": True, "duplicate": False, "characters": len(text)})
+
+
+def _current_voice_approval(session: Any) -> tuple[str, str] | None:
+    if (
+        not delivers_prompts_through_pty(session.record.backend)
+        or not session.record.agent_run_id
+        or session.record.state != "awaiting"
+        or session.record.awaiting_reason != "approval"
+    ):
+        return None
+    try:
+        tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+    except (AttributeError, OSError, ValueError):
+        return None
+    if pty_tail_state(tail, backend=session.record.backend) != "approval":
+        return None
+    return approval_prompt(tail)
+
+
+async def voice_approval(request: web.Request) -> web.Response:
+    """Prepare or consume one confirmation for one currently visible approval."""
+    voice: VoiceService = request.app["voice"]
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    body = await request.json()
+    action = str(body.get("action") or "").strip()
+    if action == "cancel":
+        voice.cancel_approval(session.record.id)
+        return json_response({"ok": True, "cancelled": True})
+    current = _current_voice_approval(session)
+    if current is None:
+        return json_response({"error": "the focused session is not showing an approval"}, 409)
+    operation, fingerprint = current
+    run_id = str(session.record.agent_run_id or "")
+    if action == "prepare":
+        challenge = voice.prepare_approval(session.record.id, run_id, operation, fingerprint)
+        return json_response(
+            {
+                "confirmation_id": challenge.confirmation_id,
+                "operation": challenge.operation,
+                "expires_at": challenge.expires_at,
+            }
+        )
+    if action != "confirm":
+        raise ValueError("voice approval action must be prepare, confirm, or cancel")
+    confirmation_id = str(body.get("confirmation_id") or "")
+    try:
+        challenge = voice.consume_approval(
+            session.record.id, confirmation_id, run_id, fingerprint
+        )
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 409)
+    _record_operator_input(request.app["events"], session, "\r", source="voice")
+    await request.app["events"].emit(
+        "voice_approval_confirmed",
+        session_id=session.record.id,
+        source="voice",
+        operation=challenge.operation,
+    )
+    return json_response({"ok": True, "operation": challenge.operation})
 
 
 async def voice_interrupt(request: web.Request) -> web.Response:
@@ -6548,6 +6631,14 @@ async def voice_generate(request: web.Request) -> web.Response:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     try:
         clip = await voice.generate(session.record.id, trigger="manual")
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 409)
+    return json_response(clip)
+
+
+async def voice_speak(request: web.Request) -> web.Response:
+    try:
+        clip = await request.app["voice"].speak(str((await request.json()).get("text") or ""))
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
     return json_response(clip)

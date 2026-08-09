@@ -127,9 +127,9 @@
   `design/features/backends.md`, `design/features/project-actions.md`,
   `development/ROADMAP.md`
 - Changing usage analytics: `design/features/usage.md`
-- Changing read aloud or hands-free conversation: `design/features/voice.md`; planned STT latency,
-  wake-word, global-talk, and voice-navigation work + the decisions behind it:
-  `development/VOICE_INTERACTION_ROADMAP.md`
+- Changing read aloud or hands-free conversation: `design/features/voice.md`;
+  completed voice-interaction phases and their decisions:
+  `development/archive/VOICE_INTERACTION_ROADMAP.md`
 - Changing listeners, Tailscale, browser security, or remote operation:
   `design/features/remote-access.md`
 - Planning remaining work: `development/ROADMAP.md`; control-plane plan + completion
@@ -154,6 +154,8 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `dictation` = `turbo` with beam 5 above 3 s), decoded from memory with no disk write →
   wake-word + command-phrase **suffix**, which a speculative transcript can use to short-circuit the remaining tail → one workspace-level draft targeting the focused Agent or text surface.
   The app-level `.conversation-layer` names that target, supports an exact-target pin, and keeps the draft across focus changes.
+  Dynamic navigation, direct spawn, fleet status, and guarded approvals resolve only through voice aliases on the ordinary command registry.
+  Playback leaves capture open but permits only the exact `mute` command from an utterance that began during TTS.
   Agent Send uses idempotent `voice/submit`; note, Scratchpad, Markdown, and Queue-composer Send inserts at the caret without staging or delivering a queue item.
   Capture always decodes through session-free `/api/voice/transcribe`.
   Wake words and the phrase→action map are user-configurable (`voice_wake_words` /

@@ -200,6 +200,10 @@ write, and process interrupts — those are not *operator* input, and advancing 
 operator-quiet clock for them would mask a different hole. The WS path keeps its own
 throttled accounting.
 
+Voice prompt submission is an explicit human send, but it may not override `NON_OVERRIDABLE_REASONS`.
+The handler evaluates current readiness and maps stabilized approval/question states to the same protected reason codes before it claims the utterance id or writes bytes.
+Approval answering is a separate guarded route and rechecks the current PTY screen immediately before its one Enter write.
+
 Transcript classification records schema version, recognized and unknown counts, bounded
 unknown signatures, and a degraded status after sustained drift. Claude discovery follows
 the CLI's current project-directory encoding. Codex discovery honors `CODEX_HOME` and rejects

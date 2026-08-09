@@ -12,6 +12,8 @@ import { bargeInPlayback, getPlayback, playClip, unlockPlayback } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
 import type { ConversationTarget } from './conversationTarget'
+import { extractWakeIntent } from './voiceIntents'
+import type { VoiceCommandResult } from './commands'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -70,6 +72,7 @@ export function useConversation(
   status:VoiceStatus|null,
   onSession:(session:Session)=>void,
   followingTarget:ConversationTarget|null,
+  onIntent?:(spoken:string)=>VoiceCommandResult|Promise<VoiceCommandResult>,
 ):Conversation{
   const wake=primaryWake(status?.wake_words)
   const matcher=useMemo(
@@ -108,6 +111,7 @@ export function useConversation(
   const matcherRef=useRef(matcher);matcherRef.current=matcher
   const wakeRef=useRef(wake);wakeRef.current=wake
   const onSessionRef=useRef(onSession);onSessionRef.current=onSession
+  const onIntentRef=useRef(onIntent);onIntentRef.current=onIntent
 
   const listeningDetail=()=>`Listening. Say “${wakeRef.current}, send” to submit.`
   // Matched exactly when the detector resolves, so the readiness line is replaced only
@@ -200,7 +204,13 @@ export function useConversation(
     return target?.kind==='session'&&conversationTargetAvailable(target)?target:null
   }
 
-  const handleTranscript=async(parsed:ParsedMuxVoice)=>{
+  const speakSystem=async(text:string)=>{
+    if(!statusRef.current?.enabled)return
+    const clip=await api<VoiceClip>('POST','/api/voice/speak',{text})
+    unlockPlayback();await playClip(clip.id,'system')
+  }
+
+  const handleTranscript=async(parsed:ParsedMuxVoice,rawText='')=>{
     if(!enabledRef.current)return
     const wakeWord=wakeRef.current
     if(standbyRef.current){
@@ -215,6 +225,20 @@ export function useConversation(
     if(parsed.command==='standby'){
       enterStandby(true);setPhase('standby')
       setDetail(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
+    }
+    if(parsed.command===null&&onIntentRef.current){
+      const spoken=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
+      if(spoken!==null){
+        try{
+          const outcome=await onIntentRef.current(spoken)
+          setPhase('listening');setDetail(outcome.detail)
+          if(outcome.speech){
+            try{await speakSystem(outcome.speech)}
+            catch(cause){setDetail(`${outcome.detail} Read aloud failed: ${cause instanceof Error?cause.message:String(cause)}`)}
+          }
+        }catch(cause){reportFailure(cause)}
+        return
+      }
     }
     if(parsed.command==='cancel'){
       setDraft(clearDraft());setPhase('listening');setDetail('Voice message cleared. Still listening.');return
@@ -277,7 +301,7 @@ export function useConversation(
     void api('POST','/api/voice/stt-latency',sample,{timeoutMs:4000}).catch(()=>{})
   }
 
-  type Decoded={parsed:ParsedMuxVoice;postAt:number;responseAt:number;server:ServerTimings}
+  type Decoded={parsed:ParsedMuxVoice;text:string;postAt:number;responseAt:number;server:ServerTimings}
   const decode=async(audio:Blob,marks:CaptureMarks,profile:'command'|'dictation',signal?:AbortSignal):Promise<Decoded>=>{
     const postAt=performance.now()
     const response=await fetch('/api/voice/transcribe',{
@@ -292,7 +316,8 @@ export function useConversation(
     const payload=await response.json() as {text?:string;error?:string;timings?:ServerTimings}
     const responseAt=performance.now()
     if(!response.ok)throw new Error(payload.error||`transcription failed (${response.status})`)
-    return {parsed:matcherRef.current.parse(String(payload.text||'')),postAt,responseAt,server:payload.timings||{}}
+    const text=String(payload.text||'')
+    return {parsed:matcherRef.current.parse(text),text,postAt,responseAt,server:payload.timings||{}}
   }
 
   const transcribe=async(audio:Blob,marks:CaptureMarks)=>{
@@ -307,7 +332,11 @@ export function useConversation(
     let decoded:Decoded
     try{decoded=await decode(audio,marks,'dictation')}
     finally{clearTimeout(slow)}
-    try{await handleTranscript(decoded.parsed)}
+    try{
+      if(marks.playbackAtStart&&decoded.parsed.command!=='mute'){
+        setPhase('listening');setDetail(`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`)
+      }else await handleTranscript(decoded.parsed,decoded.text)
+    }
     finally{
       reportLatency(buildLatencySample({
         marks,postAt:decoded.postAt,responseAt:decoded.responseAt,actionAt:performance.now(),
@@ -331,7 +360,7 @@ export function useConversation(
    */
   const speculate=async(audio:Blob,marks:CaptureMarks)=>{
     const capture=captureRef.current
-    if(!enabledRef.current||!capture||standbyRef.current)return
+    if(!enabledRef.current||!capture||standbyRef.current||marks.playbackAtStart)return
     const controller=new AbortController()
     speculationRef.current={utteranceId:marks.utteranceId,controller}
     let decoded:Decoded
@@ -342,7 +371,7 @@ export function useConversation(
     finally{if(speculationRef.current?.utteranceId===marks.utteranceId)speculationRef.current=null}
     if(!decoded.parsed.command)return
     if(!capture.commitSpeculative(marks.utteranceId))return
-    try{await handleTranscript(decoded.parsed)}
+    try{await handleTranscript(decoded.parsed,decoded.text)}
     finally{
       reportLatency(buildLatencySample({
         marks:{...marks,speculative:true},postAt:decoded.postAt,responseAt:decoded.responseAt,
@@ -377,7 +406,7 @@ export function useConversation(
     unlockPlayback()
     const capture=new PersistentVoiceCapture({
       playbackActive:()=>getPlayback().playing,
-      onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}bargeInPlayback();setPhase('hearing');setDetail('Listening…')},
+      onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the
       // decode does, or the pause reads as a failure.

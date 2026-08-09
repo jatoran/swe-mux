@@ -681,6 +681,11 @@ fact, including for sessions that no longer exist.
 
 ## UI reflection
 
+`frontend/src/fleetStatus.ts` is a read-only consumer of this contract.
+It recomputes from each current session snapshot, preserves measurement source and activity age on every projected field, and supplies a closed predicate set for deterministic voice targeting.
+It never infers an approval from spoken wording and never caches state separately from the session ledger.
+The guarded approval route requires both stabilized `awaiting(approval)` and a fresh `pty_tail_state(...)=approval` reading before prepare and again before confirmation.
+
 `frontend/src/sessionStatus.ts` is the single mapping from `SessionState` (+
 `awaiting_reason`) to the rendered indicator: `stateDotClass` (total, distinct per state,
 neutral fallback for pending tabs) and `sessionStatus`/`awaitingLabel` (distinct

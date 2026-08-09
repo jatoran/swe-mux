@@ -787,7 +787,9 @@ POST   /sessions/{id}/voice/generate
 POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
 POST   /voice/transcribe                 same body and headers, no session
 POST   /sessions/{id}/voice/submit       {utterance_id, text}
+POST   /sessions/{id}/voice/approval     {action: prepare|confirm|cancel, confirmation_id?}
 POST   /sessions/{id}/voice/interrupt
+POST   /voice/speak                      {text}
 GET    /voice/stt-latency
 POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
@@ -818,8 +820,17 @@ a restart.
 
 Submit is agent-only, rejects control characters, caps text at 20,000 characters, deduplicates
 bounded recent `utterance_id` values, writes text plus one Enter, and advances the ordinary
-human-input revision. Interrupt sends one Ctrl-C and records the same boundary. Neither route
-approves provider prompts or derives authorization from delivery readiness.
+human-input revision.
+It refuses the prompt queue's non-overridable readiness reasons before claiming an utterance id.
+Interrupt sends one Ctrl-C and records the same boundary.
+
+Approval `prepare` requires a focused session whose stabilized state and current PTY screen both say approval.
+It returns a one-use 20-second confirmation id plus the bounded operation text actually visible on that screen.
+`confirm` rechecks the session, agent run, approval classifier, expiry, and screen fingerprint before writing Enter.
+`cancel` invalidates only the challenge.
+There is no bulk form.
+
+`/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS engine without transcript reading, summarization, or a model call.
 
 Automatic completed-reply synthesis emits ordered `voice_clip_ready` events sharing
 `stream_id`, `segment_index`, and `segment_count`; each ready segment is independently playable.

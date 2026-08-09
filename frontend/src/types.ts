@@ -78,7 +78,7 @@ export type VoiceMode = 'off' | 'on_demand' | 'auto'
 
 export interface VoiceClip {
   id:string; session_id:string; agent_run_id?:string|null; created_at:number
-  trigger:'auto'|'manual'; content_mode:'summary'|'verbatim'; engine:string; voice:string
+  trigger:'auto'|'manual'|'system'; content_mode:'summary'|'verbatim'; engine:string; voice:string
   text:string; format:string; size_bytes:number; duration_hint_s?:number|null
   status:'ready'|'failed'; error?:string|null; model?:string|null; cost_usd?:number|null
 }

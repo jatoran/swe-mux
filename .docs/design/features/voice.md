@@ -98,9 +98,8 @@ affect the PTY, session state, transcripts, history, or projects.
 - `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
   auto gain) and stays armed across silence. The microphone is a
   device singleton, so the controller that owns it (`useConversation`) is held **once at the
-  app root**, not once per pane: the Talk chip in every agent pane header and the dictation
-  panel under the owning pane are views of that one controller, and starting capture on a
-  second pane stops the first by construction. Capture is released when the workspace
+  app root**, not once per pane. The global Talk control and floating dictation panel are views
+  of that one controller. Capture is released when the workspace
   unmounts, so a reload never leaves the browser's recording indicator lit.
 - Audio arrives through an **`AudioWorklet`** that batches ~32 ms of microphone blocks on the
   audio thread and posts them to the main thread. A `ScriptProcessorNode` runs its callback on
@@ -166,6 +165,11 @@ affect the PTY, session state, transcripts, history, or projects.
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
   command registry, which fires on press and cannot express a hold; window blur ends it, so a key
   released over another window cannot latch the microphone open.
+- **Playback keeps the microphone open under a constrained duplex policy.**
+  Silero probability is accepted during playback only when both probability and RMS clear the playback thresholds; the energy fallback retains its raised RMS floor.
+  Capture records whether playback was active when an utterance began and disables speculative decoding for that utterance.
+  After transcription, only the exact deterministic `mute` command may act; all other text is discarded as possible speaker echo.
+  The default fleet rundown is therefore one line, with detail available by explicit command.
 - **The endpoint is acknowledged before any text exists**, by flipping the phase to `heard`.
   Silence after speaking reads as broken; the same silence after an acknowledgement reads as
   thinking.
@@ -223,7 +227,7 @@ affect the PTY, session state, transcripts, history, or projects.
 
 ### Latency instrumentation
 
-Phase 1 of `development/VOICE_INTERACTION_ROADMAP.md` is judged on one number — end of speech to
+Phase 1 of `development/archive/VOICE_INTERACTION_ROADMAP.md` is judged on one number — end of speech to
 executed action — so that number is measured rather than estimated.
 
 - A sample is assembled from both halves of the path. The browser is the only party that knows
@@ -268,10 +272,23 @@ executed action — so that number is measured rather than estimated.
   transcript with no speech recognized is recorded as a trial rather than discarded, since it is
   the strongest evidence against a trigger word. Good wake words are two to three syllables,
   phonetically distinctive, rare in ordinary speech, and not a prefix of a common word.
-- The **action set is fixed** (each is wired to code); only its trigger phrases change:
+- The **capture-control action set is fixed** (each is wired to code); only its trigger phrases change:
   `send`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`,
   `standby`, `resume`, `stop`. Defaults ship `mux`/`mucks`/`max` as wake words with phrases
   matching the historical grammar.
+- **Workspace commands use the existing command registry.**
+  `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
+  `App.tsx` generates focus commands for every live session and Project, drawer commands from `DRAWER_TABS`, and direct spawn commands for each Project/backend pair.
+  The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
+  A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
+- **Fleet status is a model-free read projection.**
+  `fleetStatus.ts` recomputes from the same session and Project snapshots the UI already receives.
+  Each projected field retains provenance, observation age, and confidence.
+  Spoken one-line and detailed rundowns are fixed templates, and state-referential navigation uses a closed predicate set over the same projection.
+- **Approval is a two-step mutation.**
+  The first command requires the focused session to show a stabilized approval, extracts and restates the current operation, and creates a one-use 20-second challenge.
+  The second command rechecks session id, agent-run id, PTY approval classification, and the exact prompt fingerprint before writing Enter.
+  Cancel only removes the voice challenge and leaves the provider prompt unchanged; no approve-all command exists.
 - **Three run states.** Active (default) buffers speech and runs every command.
   `standby` keeps the mic and transcription running but **discards every utterance except a `resume` (or `stop`) command**, so it stays listening yet does nothing until woken.
   `stop` fully tears capture down and releases the mic; only an explicit mic-control or bound-command gesture can re-open it because browsers forbid silent reacquisition.
@@ -290,10 +307,13 @@ executed action — so that number is measured rather than estimated.
   (`{text}\r`) is written atomically. A **multi-line** body takes the queue's delivery bytes
   instead (`paste_payload` + `SUBMIT_DELAY_SECONDS` + a separate `\r`): recognition never emits
   a newline, but an edited draft can, and a raw newline submits the prompt early — sending the
-  agent half a message and typing the rest at whatever it shows next. `POST voice/interrupt`
+  agent half a message and typing the rest at whatever it shows next. Before claiming the id,
+  the handler rejects the prompt queue's non-overridable readiness reasons, including approval,
+  question, ended-run, and non-agent targets. `POST voice/interrupt`
   writes a lone `\x03`. Both require a live Claude/Codex session.
-- Speech detected during playback triggers barge-in **before** transcription, so the user can
-  talk over the agent; the `interrupt` command additionally sends the Ctrl-C.
+- Speech that begins during playback is transcribed only to recognize the exact `mute` command.
+  Other commands and dictation are discarded as possible echo; the `interrupt` command remains
+  available after muting and additionally sends Ctrl-C.
 
 ## Mobile secure context (why HTTPS is required)
 
@@ -357,8 +377,10 @@ and never touches the daemon or an LLM.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
   record one browser-measured sample, start a fresh run.
 - `POST /api/sessions/{sid}/voice/submit` — idempotent voice prompt commit to the PTY.
+- `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
 - `POST /api/sessions/{sid}/voice/generate` — synthesize one clip of the last reply on demand.
+- `POST /api/voice/speak` - synthesize trusted application text without a model call.
 - `GET  /api/sessions/{sid}/last-reply` — normalized assistant text (no terminal OSC 52).
 - `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
 - `POST /api/remote/mobile-voice/enable` — configure/repair the Tailscale Serve HTTPS address.
@@ -379,6 +401,7 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
+- `frontend/src/voiceIntents.ts`, `frontend/src/fleetStatus.ts` - deterministic command resolution and fleet speech projection.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
 - `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, and push-to-talk), `ConversationToggle` (toolbar control), `ConversationSurface` (global active card), and `DictationPanel` (draft surface).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.

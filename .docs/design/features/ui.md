@@ -1493,6 +1493,7 @@ Detailed UI behavior belongs with the owning feature:
 - Quota/context/tool evidence: `operational-telemetry.md`
 - Automation navigation and diagnostics: `automation.md`
 - Project task discovery and trust: `project-actions.md`
+- Global Talk, registry-backed navigation, fleet speech, and guarded approvals: `voice.md`
 
 ## Diagnostics
 

@@ -176,7 +176,12 @@ configuration problem's clothes.
 The routing model is four sinks, not one: a session's PTY, a text surface, the app, and fleet status.
 Target-follows-focus is the default binding for the first two, not the architecture.
 
-## Phase 4 — Command and navigation layer
+## Phase 4 - Command and navigation layer (built 2026-08-09)
+
+The finished bridge keeps the registry as the action authority.
+`voiceIntents.ts` normalizes spoken text, resolves declared command aliases and `{text}` slots, reports confidence, and returns numbered candidates instead of guessing.
+`App.tsx` generates `session.focus:<id>`, `project.focus:<id>`, `drawer.show:<tabId>`, and direct `session.spawn:<project>:<backend>` commands.
+Focus commands retarget the Phase 3 dictation sink, and spawn commands send project, backend, and optional spoken seed text directly to the existing session API without opening a modal.
 
 The registry does the heavy lifting. `available` and `disabledReason` become spoken refusals for
 free, and `searchCommands` is already a fuzzy matcher.
@@ -203,7 +208,12 @@ free, and `searchCommands` is already a fuzzy matcher.
 - Optional: a local embedding match over configured phrases for phrasing variance, offline and in
   milliseconds. This is the non-model answer to the only problem a router would have solved.
 
-## Phase 5 — Fleet status, model-free
+## Phase 5 - Fleet status, model-free (built 2026-08-09)
+
+`fleetStatus.ts` projects the current Project and session snapshots on every render.
+State, awaiting reason, delivery readiness, and activity each retain their source, observation age, and confidence.
+One-line and detailed speech are templates over that projection, and the same projection supplies the closed state predicates used by phrases such as "the one waiting for approval" and "the stuck one".
+No model call and no second status cache exist on this path.
 
 - **One read-model projection** composing the existing control plane into a small snapshot, with
   per-field freshness and provenance, invalidated by the events that already drive the UI.
@@ -216,19 +226,30 @@ free, and `searchCommands` is already a fuzzy matcher.
   system defines a closed set of roughly eight predicates, so these are templates over fields that
   already exist.
 
-## Phase 6 — Guarded mutations
+## Phase 6 - Guarded mutations (built 2026-08-09)
+
+Voice can navigate to sessions whose stabilized status says they are awaiting approval.
+An approval first prepares a one-use 20-second challenge that restates the operation extracted from the current PTY screen.
+Confirmation succeeds only if the session, agent run, approval screen, and prompt fingerprint are all unchanged immediately before Enter is written.
+Ordinary voice submission also inherits the prompt queue's non-overridable readiness reasons.
+There is no bulk approval command.
 
 - Voice may surface and navigate to approvals.
 - Answering one requires a two-step confirmation that restates the actual operation.
 - No blanket "approve all", ever.
 
-## Cross-cutting: prototype full duplex early
+## Cross-cutting: full-duplex prototype (built 2026-08-09)
 
 Once anything is read back, TTS plays while the mic is open, and a phone speaker with imperfect
 echo cancellation will transcribe the agent's own voice.
 This is the single most likely thing to make hands-free feel broken, and the answer decides
 whether Phase 5 rundowns are spoken in full or reduced to one line with detail on request.
 Prototype it before building rundown content.
+
+The prototype keeps capture open during playback and applies a playback-specific RMS plus Silero probability gate.
+An utterance that began while TTS was playing may issue only the exact deterministic `mute` command; every other transcript is discarded as possible speaker echo.
+Speculative decode is disabled for those utterances.
+This is intentionally constrained duplex, so fleet status speaks one line by default and requires an explicit detailed-status request for the full rundown.
 
 ## Rejected
 

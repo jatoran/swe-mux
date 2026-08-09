@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
 import {
-  deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
+  allBackendNames, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
   isObservedHarness, type HarnessRegistryPayload,
 } from './harnessRegistry'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
@@ -103,6 +103,8 @@ import { eventRequiresFleetRefresh } from './eventRefresh'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
+import { numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
+import { buildFleetReadModel, fleetRundown, fleetRundownDetail } from './fleetStatus'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
@@ -1556,9 +1558,33 @@ export function App() {
     focusedAgentSession?.id||null,
   ),[focusedInsertTarget,voiceSessionCandidates,focusedAgentSession?.id])
   const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? mergeSessionSnapshot(item,next) : item))
+  const commandRegistryRef=useRef<Command[]>([])
+  const pendingVoiceCandidates=useRef<VoiceIntentCandidate[]>([])
+  const [approvalConfirmation,setApprovalConfirmation]=useState<{sessionId:string;confirmationId:string;operation:string}|null>(null)
+  const handleVoiceIntent=async(spoken:string)=>{
+    const selected=selectNumberedCandidate(pendingVoiceCandidates.current,spoken)
+    const resolution=selected
+      ?{match:selected,candidates:[selected],confidence:selected.confidence}
+      :resolveVoiceIntent(commandRegistryRef.current,spoken)
+    if(!resolution.match){
+      pendingVoiceCandidates.current=resolution.candidates
+      if(resolution.candidates.length){
+        const list=numberedCandidates(resolution.candidates)
+        const wake=voiceStatus?.wake_words?.[0]||'Mux'
+        return {detail:`More than one command matches. ${list}`,speech:`I found more than one. ${list} Say ${wake}, option 1 or ${wake}, option 2.`}
+      }
+      return {detail:`No voice command matched “${spoken}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list commands” for the fixed commands.`}
+    }
+    pendingVoiceCandidates.current=[]
+    const {command,text}=resolution.match
+    if(command.voice?.execute)return await command.voice.execute(text)
+    const ran=runCommand(commandRegistryRef.current,command.id)
+    if(ran!=='ran')return{detail:command.disabledReason||`${command.label} is unavailable.`}
+    return {detail:`${command.label}. Still listening.`}
+  }
   // Capture is a workspace flag. Focus only changes this commit target; it never
   // restarts the microphone or clears the draft, and pinning freezes the target.
-  const conversation = useConversation(voiceStatus, updateSession, conversationTarget)
+  const conversation = useConversation(voiceStatus, updateSession, conversationTarget, handleVoiceIntent)
 
   // Sessions on screen right now (visible pane of the displayed project) count as
   // "read": their sidebar rows stay muted even while their agent keeps working.
@@ -2993,6 +3019,17 @@ export function App() {
     commitDrawerLayout(next,drawerTabId)
     setDrawerAnnouncement(`${drawerTab(drawerTabId).label} moved ${edge}`)
   }
+  const fleetVoiceModel=buildFleetReadModel(sessions,projects)
+  const sessionVoiceAliases=(session:Session):string[]=>{
+    if(session.awaiting_reason==='approval')return ['go to the one waiting for approval','show approvals','open approval']
+    if(session.awaiting_reason==='question'||session.awaiting_reason==='elicitation')return ['go to the one waiting for an answer','show questions']
+    if(session.awaiting_reason==='rate_limit')return ['go to the rate limited one']
+    if(session.delivery_readiness?.state==='unknown'||((session.state==='working'||session.state==='running')&&Date.now()/1000-session.last_activity_ts>300))return ['go to the stuck one']
+    if(session.state==='working'||session.state==='running')return ['go to the working one']
+    if(session.state==='idle')return ['go to the idle one']
+    if(session.state==='crashed')return ['go to the crashed one']
+    return []
+  }
 
   const commands: Command[] = [
     { id: 'palette.open', label: 'Open command palette', category: 'view', available: true, run: () => setPaletteOpen(true) },
@@ -3083,6 +3120,10 @@ export function App() {
       id: `drawer.${tab.id}`, label: `Side panel: ${tab.label}`, category: tab.id === 'notifications' ? 'view' : 'clipboard',
       available: true, run: () => showDrawerTab(tab.id),
     })),
+    ...DRAWER_TABS.map((tab): Command => ({
+      id:`drawer.show:${tab.id}`,label:`Open ${tab.label}`,category:'view',available:true,
+      run:()=>showDrawerTab(tab.id),voice:{phrases:[`open ${tab.label}`,`show ${tab.label}`,`go to ${tab.label}`]},
+    })),
     // Tab order is persistent state a drag can scramble, so it needs a way back that is not
     // "drag five tabs into place from memory".
     { id: 'drawer.resetLayout', label: 'Reset side panel layout', category: 'view', available: !isDefaultDrawerLayout(drawerLayout), disabledReason: 'Side panel layout is already at its default', run: resetDrawerArrangement },
@@ -3112,6 +3153,44 @@ export function App() {
     { id: 'voice.cycleMode', label: `Read aloud: cycle focused session mode${active && isAgent(active) ? ` (now ${voiceModeLabel(effectiveVoiceMode(active))})` : ''}`, category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) cycleVoiceMode(active); setContextMenu(null) } },
     { id: 'voice.speak', label: 'Read aloud: speak focused session’s last reply', category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) void speakLastReply(active); setContextMenu(null) } },
     { id: 'voice.autoplayDevice', label: `Read aloud: turn device autoplay ${autoplayEnabled() ? 'off' : 'on'}`, category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { setAutoplayEnabled(!autoplayEnabled()); setContextMenu(null) } },
+    { id:'voice.fleetStatus',label:'Speak fleet status',category:'voice',available:true,run:()=>{},voice:{
+      phrases:['fleet status','status report','what is running'],
+      execute:()=>{const speech=fleetRundown(fleetVoiceModel);return{detail:speech,speech}},
+    }},
+    { id:'voice.fleetStatusDetail',label:'Speak detailed fleet status',category:'voice',available:true,run:()=>{},voice:{
+      phrases:['detailed fleet status','full status report','status details'],
+      execute:()=>{const speech=fleetRundownDetail(fleetVoiceModel);return{detail:speech,speech}},
+    }},
+    { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
+      phrases:['approve','review approval','confirm tool use'],
+      execute:async()=>{
+        if(!active)throw new Error('Focus a session waiting for approval first.')
+        const prepared=await api<{confirmation_id:string;operation:string}>('POST',`/api/sessions/${active.id}/voice/approval`,{action:'prepare'})
+        setApprovalConfirmation({sessionId:active.id,confirmationId:prepared.confirmation_id,operation:prepared.operation})
+        const speech=`Approve the currently highlighted choice for ${prepared.operation}? Say ${conversation.wake}, confirm approval.`
+        return{detail:speech,speech}
+      },
+    }},
+    { id:'voice.approval.confirm',label:'Confirm reviewed approval',category:'voice',available:!!approvalConfirmation,disabledReason:'Review one focused approval first',run:()=>{},voice:{
+      phrases:['confirm approval','yes approve it'],
+      execute:async()=>{
+        const confirmation=approvalConfirmation
+        if(!confirmation)throw new Error('Review one focused approval first.')
+        let result:{operation:string}
+        try{result=await api<{operation:string}>('POST',`/api/sessions/${confirmation.sessionId}/voice/approval`,{action:'confirm',confirmation_id:confirmation.confirmationId})}
+        finally{setApprovalConfirmation(null)}
+        return{detail:`Approved ${result.operation}. Still listening.`,speech:`Approved ${result.operation}.`}
+      },
+    }},
+    { id:'voice.approval.cancel',label:'Cancel voice approval confirmation',category:'voice',available:!!approvalConfirmation,disabledReason:'No voice approval is pending',run:()=>{},voice:{
+      phrases:['cancel approval','do not approve'],
+      execute:async()=>{
+        const confirmation=approvalConfirmation
+        try{if(confirmation)await api('POST',`/api/sessions/${confirmation.sessionId}/voice/approval`,{action:'cancel'})}
+        finally{setApprovalConfirmation(null)}
+        return{detail:'Voice approval cancelled. The tool prompt is unchanged.',speech:'Approval cancelled.'}
+      },
+    }},
     { id: 'session.open', label: 'Open selected session in focused pane', category: 'session', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void selectSession(commandSession) },
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
     { id: 'session.regenerateTitle', label: 'Regenerate generated title', category: 'session', available: !!commandSession && isAgent(commandSession) && commandSession.auto_named !== false && !isEndedSession(commandSession), disabledReason: 'Select a live auto-named agent session', run: () => commandSession && void regenerateSessionTitle(commandSession) },
@@ -3170,7 +3249,24 @@ export function App() {
       category: 'project', available: project.id !== projectId, disabledReason: 'Project is already active',
       run: () => { const layout=layoutMap[project.id]||emptyLayout();const first=leaves(layout)[0]||null;setProjectId(project.id);setFocusedViewId(first?.id||null);setActiveId(terminalIds(layout)[0]||null) },
     })),
+    ...projects.map((project):Command=>({
+      id:`project.focus:${project.id}`,label:`Focus project: ${project.name}`,category:'project',available:true,
+      run:()=>selectProject(project.id),voice:{phrases:[`go to project ${project.name}`,`open project ${project.name}`,`switch to ${project.name}`]},
+    })),
+    ...sessions.filter(session=>!session.pending&&!isEndedSession(session)).map((session):Command=>({
+      id:`session.focus:${session.id}`,label:`Focus session: ${sessionName(session)}`,category:'session',available:true,
+      run:()=>void selectSession(session),voice:{phrases:[`go to session ${sessionName(session)}`,`open session ${sessionName(session)}`,`focus ${sessionName(session)}`,...sessionVoiceAliases(session)]},
+    })),
+    ...projects.flatMap(project=>allBackendNames().map((backend):Command=>({
+      id:`session.spawn:${project.id}:${backend}`,label:`New ${harnessDisplayName(backend)} in ${project.name}`,category:'session',available:true,
+      run:()=>void spawnTerminal(project.id,false,undefined,undefined,'after',backend),
+      voice:{
+        phrases:[`new ${harnessDisplayName(backend)} in ${project.name}`,`new ${harnessDisplayName(backend)} in ${project.name} {text}`,`new ${backend} in ${project.name}`,`new ${backend} in ${project.name} {text}`,...(backend==='shell'?[`new terminal in ${project.name}`,`new terminal in ${project.name} {text}`]:[])],
+        execute:async text=>{await spawnTerminal(project.id,false,undefined,undefined,'after',backend,{seedText:text||undefined});return{detail:`Started ${harnessDisplayName(backend)} in ${project.name}${text?' with the spoken seed':''}. Still listening.`}},
+      },
+    }))),
   ]
+  commandRegistryRef.current=commands
   const shownCommands = searchCommands(commands, paletteQuery)
   useEffect(() => setPaletteIndex(0), [paletteQuery, paletteOpen])
   useEffect(()=>{if(!paletteOpen)return;const frame=requestAnimationFrame(()=>{paletteInput.current?.focus();paletteInput.current?.setSelectionRange(paletteInput.current.value.length,paletteInput.current.value.length)});return()=>cancelAnimationFrame(frame)},[paletteOpen])

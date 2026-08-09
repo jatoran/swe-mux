@@ -17,12 +17,13 @@ from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterResult
-from swe_mux.server import session_last_reply, voice_submit
+from swe_mux.server import session_last_reply, voice_approval, voice_submit
 from swe_mux.voice import (
     VOICE_RULE_ID,
     VoiceError,
     VoiceService,
     VoiceStore,
+    approval_prompt,
     clip_snapshot,
     estimate_duration_seconds,
     last_reply_text,
@@ -623,6 +624,43 @@ def test_voice_submission_idempotency_is_bounded(tmp_path: Path) -> None:
         service.store.close()
 
 
+async def test_system_speech_is_synthesized_without_a_model(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    spoken = patch_engine(service)
+    try:
+        clip = await service.speak("Three sessions: one active.")
+        assert clip["session_id"] == "system"
+        assert clip["trigger"] == "system"
+        assert clip["content_mode"] == "verbatim"
+        assert spoken == ["Three sessions: one active."]
+    finally:
+        service.store.close()
+
+
+def test_approval_challenge_is_bound_to_the_exact_prompt(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        operation, fingerprint = approval_prompt(
+            "Bash command\n  npm test\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No"
+        )
+        assert operation == "npm test"
+        codex_operation, _ = approval_prompt(
+            "Run command\nuv run pytest\nAllow Codex to run this command?\n1. Yes\n2. No"
+        )
+        assert codex_operation == "Run command uv run pytest"
+        challenge = service.prepare_approval("s1", "run-1", operation, fingerprint)
+        with pytest.raises(VoiceError, match="prompt changed"):
+            service.consume_approval(
+                "s1", challenge.confirmation_id, "run-1", "different"
+            )
+        with pytest.raises(VoiceError, match="missing or was already used"):
+            service.consume_approval(
+                "s1", challenge.confirmation_id, "run-1", fingerprint
+            )
+    finally:
+        service.store.close()
+
+
 async def test_voice_submit_writes_prompt_and_enter_once_and_marks_human_input(
     tmp_path: Path,
 ) -> None:
@@ -701,6 +739,85 @@ async def test_voice_submit_pastes_a_multiline_draft_instead_of_submitting_early
         assert "\n" not in "".join(writes)
         assert session.input_revision == 2
         assert "voice_prompt_submitted" in {event.type for event in emitted}
+    finally:
+        service.store.close()
+
+
+async def test_voice_submit_refuses_a_protected_approval_prompt(tmp_path: Path) -> None:
+    service, events, _emitted, record = make_service(tmp_path)
+    record.state = "awaiting"
+    record.awaiting_reason = "approval"
+    writes: list[str] = []
+    session = SimpleNamespace(record=record, pty=SimpleNamespace(write=writes.append))
+
+    class Request:
+        match_info = {"sid": "s1"}
+        app = {
+            "voice": service,
+            "sessions": SimpleNamespace(resolve=lambda _sid: session),
+            "events": events,
+        }
+
+        async def json(self) -> dict[str, str]:
+            return {"utterance_id": "protected-1", "text": "type this"}
+
+    try:
+        response = await voice_submit(cast(Any, Request()))
+        payload = json.loads(response.text)
+        assert response.status == 409
+        assert payload["code"] == "delivery_protected"
+        assert payload["reasons"] == ["approval_required"]
+        assert writes == []
+    finally:
+        service.store.close()
+
+
+async def test_voice_approval_requires_prepare_and_rechecks_the_screen(tmp_path: Path) -> None:
+    service, events, emitted, record = make_service(tmp_path)
+    record.state = "awaiting"
+    record.awaiting_reason = "approval"
+    tail = bytearray(
+        "Bash command\n  npm test\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No".encode()
+    )
+    writes: list[str] = []
+    session = SimpleNamespace(
+        record=record,
+        pty=SimpleNamespace(write=writes.append),
+        scrollback=SimpleNamespace(tail_bytes=lambda _limit: bytes(tail)),
+        input_revision=0,
+        last_input_event_ts=0.0,
+        last_input_report_ts=0.0,
+    )
+
+    class Request:
+        match_info = {"sid": "s1"}
+        app = {
+            "voice": service,
+            "sessions": SimpleNamespace(resolve=lambda _sid: session),
+            "events": events,
+        }
+        body: dict[str, str] = {"action": "prepare"}
+
+        async def json(self) -> dict[str, str]:
+            return self.body
+
+    request = Request()
+    try:
+        prepared = json.loads((await voice_approval(cast(Any, request))).text)
+        assert prepared["operation"] == "npm test"
+        assert writes == []
+        request.body = {
+            "action": "confirm",
+            "confirmation_id": prepared["confirmation_id"],
+        }
+        confirmed = await voice_approval(cast(Any, request))
+        await asyncio.sleep(0)
+        assert confirmed.status == 200
+        assert writes == ["\r"]
+        assert "voice_approval_confirmed" in {event.type for event in emitted}
+        duplicate = await voice_approval(cast(Any, request))
+        assert duplicate.status == 409
+        assert writes == ["\r"]
     finally:
         service.store.close()
 

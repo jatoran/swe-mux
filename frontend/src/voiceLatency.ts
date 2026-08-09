@@ -24,6 +24,8 @@ export type CaptureMarks = {
   audioMs: number
   /** True while a decode started before the endpoint was certain. */
   speculative?: boolean
+  /** Playback was active when speech began, so only the exact mute command is safe. */
+  playbackAtStart?: boolean
 }
 
 /** The daemon's half, echoed back on the transcribe response. */

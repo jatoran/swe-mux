@@ -96,6 +96,12 @@ export function encodeWav(samples:Float32Array,sampleRate=16_000):Blob{
 
 export type CaptureDetector='silero'|'energy'
 
+/** Reject likely speaker echo without closing the microphone during playback. */
+export function playbackSafeProbability(probability:number,rms:number,playing:boolean):number{
+  if(!playing)return probability
+  return probability>=.8&&rms>=.035?probability:0
+}
+
 export type CaptureHandlers={
   onSpeechStart():void
   /** The endpoint fired. Raised before any text exists, so the UI can acknowledge instantly. */
@@ -152,6 +158,7 @@ export class PersistentVoiceCapture{
   private utterance:Float32Array[]=[]
   private noiseFloor=0.004
   private utteranceId=''
+  private utterancePlayback=false
   private pending:Promise<void>=Promise.resolve()
   private stopped=false
   /** Push-to-talk suspends endpointing entirely; the key release is the endpoint. */
@@ -211,6 +218,7 @@ export class PersistentVoiceCapture{
     this.pushToTalk=true
     if(!this.gate.speaking){
       this.utteranceId=newUtteranceId()
+      this.utterancePlayback=this.handlers.playbackActive()
       this.utterance=this.preRoll.splice(0)
       this.handlers.onSpeechStart()
     }
@@ -295,11 +303,13 @@ export class PersistentVoiceCapture{
 
   private async probability(frame:Float32Array):Promise<number>{
     const silero=this.silero
-    if(this.detector==='silero'&&silero?.ready)return silero.probability(frame)
+    const rms=frameRms(frame)
+    if(this.detector==='silero'&&silero?.ready){
+      return playbackSafeProbability(await silero.probability(frame),rms,this.handlers.playbackActive())
+    }
     // Energy fallback, reduced to the same 0/1 signal the gate consumes. The raised
     // floor during playback is what keeps the agent's own read-aloud from
     // self-triggering the microphone.
-    const rms=frameRms(frame)
     if(!this.gate.speaking)this.noiseFloor=this.noiseFloor*.97+Math.min(rms,.04)*.03
     const threshold=Math.max(.012,this.noiseFloor*3.2,this.handlers.playbackActive()?.035:0)
     return rms>threshold?1:0
@@ -321,6 +331,7 @@ export class PersistentVoiceCapture{
     for(const event of events){
       if(event.type==='speech-start'){
         this.utteranceId=newUtteranceId()
+        this.utterancePlayback=this.handlers.playbackActive()
         // The pre-roll already holds this frame, so it is not appended again.
         this.utterance=this.preRoll.splice(0)
         this.handlers.onSpeechStart()
@@ -357,6 +368,7 @@ export class PersistentVoiceCapture{
         encodedAt:performance.now(),
         audioMs:chunks.length*VAD_FRAME_MS,
         speculative,
+        playbackAtStart:this.utterancePlayback,
       })
     }catch(cause){this.handlers.onError(cause instanceof Error?cause.message:String(cause))}
   }
@@ -364,6 +376,6 @@ export class PersistentVoiceCapture{
   private resetUtterance():void{
     this.gate=new SpeechGate(this.gateConfig)
     this.silero?.reset()
-    this.utterance=[];this.utteranceId=''
+    this.utterance=[];this.utteranceId='';this.utterancePlayback=false
   }
 }

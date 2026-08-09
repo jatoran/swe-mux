@@ -1,12 +1,24 @@
 export type CommandCategory = 'session' | 'pane' | 'project' | 'terminal' | 'view' | 'input' | 'clipboard' | 'git' | 'history' | 'voice'
 
+export type VoiceCommandResult = {
+  detail: string
+  speech?: string
+}
+
+export type CommandVoice = {
+  /** Deterministic spoken aliases. `{text}` captures the remaining utterance. */
+  phrases: string[]
+  execute?: (text: string) => VoiceCommandResult | Promise<VoiceCommandResult>
+}
+
 export type Command = {
   id: string
   label: string
   category: CommandCategory
   available: boolean
   disabledReason?: string
-  run: () => void
+  run: () => unknown | Promise<unknown>
+  voice?: CommandVoice
 }
 
 export type CommandRunResult = 'ran' | 'disabled' | 'unknown'

@@ -390,9 +390,10 @@ attribution.
   analytics without explicit consent.
 - [x] Bound utterance size and duration, delete temporary WAV input after every outcome,
   and commit buffered speech only through explicit wake commands.
-- [ ] Take voice from per-pane dictation to hands-free operation: STT latency, wake-word
+- [x] Take voice from per-pane dictation to hands-free operation: STT latency, wake-word
   selection, a global talk surface, voice navigation over the command registry, and a
-  model-free spoken fleet status. Plan and decisions: `VOICE_INTERACTION_ROADMAP.md`.
+  model-free spoken fleet status. Completed plan and decisions:
+  `archive/VOICE_INTERACTION_ROADMAP.md`.
 
 ### Searchable session archive
 

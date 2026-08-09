@@ -12,6 +12,7 @@ one place.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -62,6 +63,7 @@ STT_TIMEOUT_SECONDS = 60.0
 STT_MAX_BYTES = 2 * 1024 * 1024
 STT_MAX_SECONDS = 35.0
 STT_LATENCY_SAMPLES = 200
+VOICE_APPROVAL_TTL_SECONDS = 20.0
 # Capture always resamples to this rate, and decoding runs from the raw PCM rather
 # than a file, so the utterance is never resampled twice and never touches the disk.
 STT_SAMPLE_RATE = 16_000
@@ -174,7 +176,50 @@ $recognizer.Dispose()
 
 
 class VoiceError(RuntimeError):
-    """Typed, user-visible read-aloud failure. Never affects the PTY lifecycle."""
+    """Typed, user-visible voice failure. Never affects the PTY lifecycle."""
+
+
+@dataclass(frozen=True)
+class VoiceApprovalChallenge:
+    confirmation_id: str
+    session_id: str
+    agent_run_id: str
+    operation: str
+    fingerprint: str
+    expires_at: float
+
+
+_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_APPROVAL_CHOICE = re.compile(r"^(?:[❯>›*]\s*)?\d+[.)]?\s+", re.IGNORECASE)
+
+
+def approval_prompt(tail: str) -> tuple[str, str]:
+    """Extract a bounded operation label and fingerprint from the current PTY screen."""
+    normalized = _ANSI_ESCAPE.sub("", tail).replace("\r", "")
+    lines = [re.sub(r"\s+", " ", line).strip() for line in normalized.splitlines()]
+    lines = [line for line in lines if line]
+    markers = ("proceed", "allow codex", "do you want", "would you like", "confirm")
+    choice_index = next(
+        (index for index, line in enumerate(lines) if _APPROVAL_CHOICE.match(line)),
+        len(lines),
+    )
+    marker_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if index <= choice_index and any(marker in line.casefold() for marker in markers)
+    ]
+    prompt_index = max(marker_indexes, default=choice_index)
+    before = lines[max(0, prompt_index - 6) : prompt_index]
+    useful = [
+        line for line in before
+        if not _APPROVAL_CHOICE.match(line)
+        and line.casefold() not in {"bash command", "tool use", "approval required"}
+    ]
+    operation = " ".join(useful[-3:]).strip() or "the currently highlighted operation"
+    operation = operation[-400:]
+    prompt_frame = [operation, *lines[prompt_index : min(len(lines), choice_index + 8)]]
+    fingerprint = hashlib.sha256("\n".join(prompt_frame).encode("utf-8")).hexdigest()
+    return operation, fingerprint
 
 
 @dataclass(frozen=True)
@@ -610,6 +655,7 @@ class VoiceService:
         self._submitted_ids: deque[str] = deque(maxlen=512)
         self._submitted_id_set: set[str] = set()
         self._stt_latency: deque[dict[str, Any]] = deque(maxlen=STT_LATENCY_SAMPLES)
+        self._approval_challenges: dict[str, VoiceApprovalChallenge] = {}
 
     @property
     def clip_directory(self) -> Path:
@@ -637,6 +683,39 @@ class VoiceService:
         self._submitted_ids.append(utterance_id)
         self._submitted_id_set.add(utterance_id)
         return True
+
+    def prepare_approval(
+        self, session_id: str, agent_run_id: str, operation: str, fingerprint: str
+    ) -> VoiceApprovalChallenge:
+        challenge = VoiceApprovalChallenge(
+            confirmation_id=str(uuid.uuid4()),
+            session_id=session_id,
+            agent_run_id=agent_run_id,
+            operation=operation,
+            fingerprint=fingerprint,
+            expires_at=time.time() + VOICE_APPROVAL_TTL_SECONDS,
+        )
+        self._approval_challenges[session_id] = challenge
+        return challenge
+
+    def consume_approval(
+        self,
+        session_id: str,
+        confirmation_id: str,
+        agent_run_id: str,
+        fingerprint: str,
+    ) -> VoiceApprovalChallenge:
+        challenge = self._approval_challenges.pop(session_id, None)
+        if challenge is None or challenge.confirmation_id != confirmation_id:
+            raise VoiceError("voice approval confirmation is missing or was already used")
+        if challenge.expires_at < time.time():
+            raise VoiceError("voice approval confirmation expired")
+        if challenge.agent_run_id != agent_run_id or challenge.fingerprint != fingerprint:
+            raise VoiceError("the approval prompt changed; review it again")
+        return challenge
+
+    def cancel_approval(self, session_id: str) -> None:
+        self._approval_challenges.pop(session_id, None)
 
     def record_stt_latency(self, raw: Any) -> dict[str, Any]:
         """Store one end-to-end latency sample and log it durably.
@@ -803,6 +882,27 @@ class VoiceService:
                     first = clip_snapshot(segment_row)
             await self._prune()
             return first or {}
+
+    async def speak(self, text: str) -> dict[str, Any]:
+        """Synthesize trusted application text without involving a language model."""
+        if not self.config.tts_enabled:
+            raise VoiceError("read aloud is off")
+        spoken = re.sub(r"\s+", " ", text).strip()
+        if not spoken or len(spoken) > 2_000:
+            raise VoiceError("system speech must contain 1-2000 characters")
+        if any(ord(character) < 32 for character in spoken):
+            raise VoiceError("system speech contains control characters")
+        row = self._new_clip_row("system", "system", None, "verbatim")
+        try:
+            await self._synthesize_clip(row, spoken)
+        except (VoiceError, TimeoutError, OSError) as exc:
+            message = str(exc)[:500] or exc.__class__.__name__
+            row["error"] = message
+            await self.store.add_clip(row)
+            raise VoiceError(message) from exc
+        await self.store.add_clip(row)
+        await self._prune()
+        return clip_snapshot(row)
 
     def _new_clip_row(
         self, session_id: str, trigger: str, agent_run_id: str | None, content_mode: str

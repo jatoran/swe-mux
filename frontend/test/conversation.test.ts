@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { buildVoiceMatcher, parseMuxVoice } from '../src/conversation.ts'
+import { buildVoiceMatcher, parseMuxVoice, playbackSafeProbability } from '../src/conversation.ts'
 
 assert.deepEqual(parseMuxVoice('Please run the focused tests. Mux send that.'),{
   command:'send',text:'Please run the focused tests.',
@@ -40,5 +40,10 @@ assert.deepEqual(swe.parse('Swee ship it'),{command:'send',text:''})
 assert.deepEqual(swe.parse('sway wake up'),{command:'resume',text:''})
 assert.deepEqual(swe.parse('Swe send'),{command:null,text:'Swe send'})
 assert.deepEqual(swe.parse('go ahead and merge'),{command:null,text:'go ahead and merge'})
+
+assert.equal(playbackSafeProbability(.95,.02,true),0)
+assert.equal(playbackSafeProbability(.7,.08,true),0)
+assert.equal(playbackSafeProbability(.95,.08,true),.95)
+assert.equal(playbackSafeProbability(.4,.01,false),.4)
 
 console.log('conversation tests passed')
