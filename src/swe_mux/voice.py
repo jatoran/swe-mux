@@ -803,7 +803,13 @@ class VoiceService:
         except VoiceError:
             pass  # the failure is already recorded and emitted
 
-    async def generate(self, session_id: str, *, trigger: str) -> dict[str, Any]:
+    async def generate(
+        self,
+        session_id: str,
+        *,
+        trigger: str,
+        content_mode: str | None = None,
+    ) -> dict[str, Any]:
         session = self.sessions.sessions.get(session_id)
         if not session:
             raise VoiceError("session is not live")
@@ -817,14 +823,27 @@ class VoiceService:
             return {}  # a clip for this session is already being generated
         async with lock:
             stream_id = str(uuid.uuid4())
-            content_mode = self.effective_content(record)
-            row = self._new_clip_row(session_id, trigger, record.agent_run_id, content_mode)
+            if content_mode is not None and content_mode not in {"summary", "verbatim"}:
+                raise VoiceError("content mode must be summary or verbatim")
+            selected_content = content_mode or self.effective_content(record)
+            row = self._new_clip_row(
+                session_id, trigger, record.agent_run_id, selected_content
+            )
             try:
-                spoken = await self._spoken_text(session, row)
+                spoken = await self._spoken_text(session, row, selected_content)
             except (VoiceError, OpenRouterError, TimeoutError, OSError) as exc:
                 message = str(exc)[:500] or exc.__class__.__name__
                 row["error"] = message
                 self.diagnostic = message
+                log.warning(
+                    "voice reply preparation failed session=%s run=%s "
+                    "trigger=%s content=%s error=%s",
+                    session_id,
+                    record.agent_run_id,
+                    trigger,
+                    selected_content,
+                    message,
+                )
                 await self.store.add_clip(row)
                 await self.events.emit(
                     "voice_clip_failed",
@@ -841,7 +860,7 @@ class VoiceService:
             first: dict[str, Any] | None = None
             for index, segment in enumerate(segments):
                 segment_row = row if index == 0 else self._new_clip_row(
-                    session_id, trigger, record.agent_run_id, content_mode
+                    session_id, trigger, record.agent_run_id, selected_content
                 )
                 if index > 0:
                     # Summary accounting belongs to the first clip only; repeating it on
@@ -853,6 +872,16 @@ class VoiceService:
                     message = str(exc)[:500] or exc.__class__.__name__
                     segment_row["error"] = message
                     self.diagnostic = message
+                    log.warning(
+                        "voice reply synthesis failed session=%s run=%s "
+                        "trigger=%s content=%s segment=%d error=%s",
+                        session_id,
+                        record.agent_run_id,
+                        trigger,
+                        selected_content,
+                        index,
+                        message,
+                    )
                     await self.store.add_clip(segment_row)
                     await self.events.emit(
                         "voice_clip_failed",
@@ -881,6 +910,15 @@ class VoiceService:
                 if first is None:
                     first = clip_snapshot(segment_row)
             await self._prune()
+            log.info(
+                "voice reply generated session=%s run=%s clip=%s trigger=%s content=%s segments=%d",
+                session_id,
+                record.agent_run_id,
+                first["id"] if first else "",
+                trigger,
+                selected_content,
+                len(segments),
+            )
             return first or {}
 
     async def speak(self, text: str) -> dict[str, Any]:
@@ -899,9 +937,11 @@ class VoiceService:
             message = str(exc)[:500] or exc.__class__.__name__
             row["error"] = message
             await self.store.add_clip(row)
+            log.warning("voice system speech failed clip=%s error=%s", row["id"], message)
             raise VoiceError(message) from exc
         await self.store.add_clip(row)
         await self._prune()
+        log.info("voice system speech generated clip=%s characters=%d", row["id"], len(spoken))
         return clip_snapshot(row)
 
     def _new_clip_row(
@@ -953,7 +993,9 @@ class VoiceService:
         row["status"] = "ready"
         self.diagnostic = None
 
-    async def _spoken_text(self, session: Any, row: dict[str, Any]) -> str:
+    async def _spoken_text(
+        self, session: Any, row: dict[str, Any], content_mode: str
+    ) -> str:
         transcript = await self.slices.build(
             session.transcript_path,
             session.record.backend,
@@ -963,7 +1005,7 @@ class VoiceService:
         reply = last_reply_text(transcript.messages)
         if not reply:
             raise VoiceError("no assistant reply text was found in the last turn")
-        if self.effective_content(session.record) == "verbatim":
+        if content_mode == "verbatim":
             return speechify(reply, self.config.tts_verbatim_max_chars)
         model = self.config.tts_summary_model or self.config.openrouter_cheap_model
         if not model:

@@ -50,7 +50,7 @@ test('turning read aloud off for a session cuts that session mid-clip', async ()
 
   voice.stopSessionPlayback('session-a')
   assert.equal(element().paused, true)
-  assert.deepEqual(voice.getPlayback(), { clipId: null, playing: false, position: 0, duration: 0 })
+  assert.deepEqual(voice.getPlayback(), { clipId: null, playing: false, position: 0, duration: 0, origin: null })
 })
 
 test('stopping the speaking session advances to a queued clip from another session', async () => {
@@ -102,5 +102,14 @@ test('a halted clip restarts from the beginning rather than resuming', async () 
   await voice.playClip('clip-d', 'session-d')
   assert.equal(voice.getPlayback().position, 0)
   assert.equal(voice.getPlayback().playing, true)
+  voice.stopAllPlayback()
+})
+
+test('playback explicitly distinguishes trusted application speech from agent text', async () => {
+  await voice.playClip('clip-system', 'system', 'system')
+  assert.equal(voice.getPlayback().origin, 'system')
+  voice.stopAllPlayback()
+  await voice.playClip('clip-agent', 'session-a')
+  assert.equal(voice.getPlayback().origin, 'agent')
   voice.stopAllPlayback()
 })

@@ -9,6 +9,7 @@ const commands = [
   command('session.focus:a','Focus Alpha',['go to alpha','open alpha']),
   command('session.focus:b','Focus Beta',['go to beta','open beta']),
   command('session.spawn','New Claude in Alpha',['new claude in alpha','new claude in alpha {text}']),
+  command('voice.query','Voice query',['{text}']),
 ]
 
 assert.equal(normalizeSpokenText('Okay, please open Project Two!'),'open project 2')
@@ -16,7 +17,7 @@ assert.equal(extractWakeIntent('Mux, go to alpha',['mux']),'go to alpha')
 assert.equal(extractWakeIntent('Go to alpha',['mux']),null)
 assert.equal(resolveVoiceIntent(commands,'go to alpha').match?.command.id,'session.focus:a')
 assert.equal(resolveVoiceIntent(commands,'new claude in alpha fix the tests').match?.text,'fix the tests')
-assert.equal(resolveVoiceIntent(commands,'open nowhere').match,null)
+assert.equal(resolveVoiceIntent(commands,'open nowhere').match?.command.id,'voice.query')
 
 const ambiguous = resolveVoiceIntent([
   command('a','First',['open it']), command('b','Second',['open it']),

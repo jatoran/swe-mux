@@ -167,9 +167,9 @@ affect the PTY, session state, transcripts, history, or projects.
   released over another window cannot latch the microphone open.
 - **Playback keeps the microphone open under a constrained duplex policy.**
   Silero probability is accepted during playback only when both probability and RMS clear the playback thresholds; the energy fallback retains its raised RMS floor.
-  Capture records whether playback was active when an utterance began and disables speculative decoding for that utterance.
-  After transcription, only the exact deterministic `mute` command may act; all other text is discarded as possible speaker echo.
-  The default fleet rundown is therefore one line, with detail available by explicit command.
+  Capture records whether playback was active and whether the clip was agent or trusted application speech when an utterance began, then disables speculative decoding for that utterance.
+  Agent speech permits only exact `mute`.
+  Trusted application speech permits the closed read-only lookup/navigation grammar after stopping the current clip; dictation, mutation, and approval confirmation remain blocked.
 - **The endpoint is acknowledged before any text exists**, by flipping the phase to `heard`.
   Silence after speaking reads as broken; the same silence after an acknowledgement reads as
   thinking.
@@ -278,9 +278,21 @@ executed action — so that number is measured rather than estimated.
   matching the historical grammar.
 - **Workspace commands use the existing command registry.**
   `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
+  The registry's low-priority catch-all delegates only to the closed grammar in `voiceQueries.ts`; literal command aliases and literal slot templates always outrank it.
   `App.tsx` generates focus commands for every live session and Project, drawer commands from `DRAWER_TABS`, and direct spawn commands for each Project/backend pair.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
+- **Spoken lookup is a bounded dialog, not open-ended intent inference.**
+  The closed grammar covers command help; Project lists; live, active, working, ready, pending, approval, question, rate-limit, stuck, and failed session filters; overall/current/named Project scopes; entity status; navigation; and last-reply reading.
+  `pending sessions` is an input alias for sessions needing a human answer or approval; spoken output uses `needing you` so it cannot be confused with pending Queue messages.
+  Result lists speak at most five entries, support `next`, `repeat`, and `more detail`, and assign `Session N` or `Project N` handles for 90 seconds.
+  A handle is frozen to the exact entity id, and a session handle also freezes the agent-run id; reply reading refuses a handle whose run changed.
+  Resolution priority is current focus, an exact unique visible name, then a valid recent ordinal; ambiguity produces a numbered list instead of guessing.
+  Project ordinals follow visible sidebar order.
+- **Last-reply reading supports a one-shot content choice.**
+  `read the last reply` uses the session/global effective mode, while an explicit `summary` or `verbatim` applies to that clip only and does not mutate the session preference.
+  Reading may target the focused Agent, an exact visible session name, or a valid recent session ordinal.
+  Summary remains the only model-backed lookup; fleet, help, status, navigation, and verbatim speech remain deterministic.
 - **Fleet status is a model-free read projection.**
   `fleetStatus.ts` recomputes from the same session and Project snapshots the UI already receives.
   Each projected field retains provenance, observation age, and confidence.
@@ -311,9 +323,10 @@ executed action — so that number is measured rather than estimated.
   the handler rejects the prompt queue's non-overridable readiness reasons, including approval,
   question, ended-run, and non-agent targets. `POST voice/interrupt`
   writes a lone `\x03`. Both require a live Claude/Codex session.
-- Speech that begins during playback is transcribed only to recognize the exact `mute` command.
-  Other commands and dictation are discarded as possible echo; the `interrupt` command remains
-  available after muting and additionally sends Ctrl-C.
+- Playback carries an explicit `agent` or `system` origin into the capture marks.
+  Speech that begins during agent-reply playback may only recognize exact `mute`; every other transcript is discarded as possible echo.
+  Trusted application speech from help, fleet, and navigation lists may be interrupted by the closed read-only lookup/navigation grammar, which first stops playback and then resolves the command.
+  Dictation, mutations, and approval confirmation are always rejected during playback.
 
 ## Mobile secure context (why HTTPS is required)
 
@@ -379,7 +392,7 @@ and never touches the daemon or an LLM.
 - `POST /api/sessions/{sid}/voice/submit` — idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
-- `POST /api/sessions/{sid}/voice/generate` — synthesize one clip of the last reply on demand.
+- `POST /api/sessions/{sid}/voice/generate` - synthesize one clip of the last reply on demand; optional `{content_mode: summary|verbatim}` is one-shot and does not change the session preference.
 - `POST /api/voice/speak` - synthesize trusted application text without a model call.
 - `GET  /api/sessions/{sid}/last-reply` — normalized assistant text (no terminal OSC 52).
 - `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
@@ -401,7 +414,7 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
-- `frontend/src/voiceIntents.ts`, `frontend/src/fleetStatus.ts` - deterministic command resolution and fleet speech projection.
+- `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, and fleet speech projection.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
 - `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, and push-to-talk), `ConversationToggle` (toolbar control), `ConversationSurface` (global active card), and `DictationPanel` (draft surface).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.

@@ -6629,8 +6629,16 @@ async def session_agent_environment(request: web.Request) -> web.Response:
 async def voice_generate(request: web.Request) -> web.Response:
     voice: VoiceService = request.app["voice"]
     session = request.app["sessions"].resolve(request.match_info["sid"])
+    body = await request.json() if request.can_read_body else {}
+    content_mode = body.get("content_mode")
+    if content_mode is not None and content_mode not in {"summary", "verbatim"}:
+        raise ValueError("content_mode must be summary or verbatim")
     try:
-        clip = await voice.generate(session.record.id, trigger="manual")
+        clip = await voice.generate(
+            session.record.id,
+            trigger="manual",
+            content_mode=content_mode,
+        )
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
     return json_response(clip)

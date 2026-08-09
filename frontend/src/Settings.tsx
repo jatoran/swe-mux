@@ -837,6 +837,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />
           <h3>Wake words and commands</h3>
           <p>Add every spelling your recognizer actually produces (comma separated) — the matcher does not invent variants. <code>Standby</code> keeps the mic on but ignores speech until you say a <code>resume</code> command; <code>stop</code> turns Conversation mode off and releases the mic. Leave a command blank to disable its voice trigger.</p>
+          <p>Fleet and reading queries are built in and deterministic: list active or pending sessions overall or in a Project, list Projects, ask for session or Project status, open numbered results, and read a named or numbered session’s last reply in the current, summary, or verbatim mode. Say <code>list voice commands</code> to hear the full groups and examples.</p>
           <label>Wake words<input value={(draft.voice_wake_words||[]).join(', ')} placeholder="mux, mucks, max" onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /></label>
           <div class="voice-commands">
             {VOICE_ACTION_ORDER.map(action=>{

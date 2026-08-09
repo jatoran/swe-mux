@@ -92,7 +92,7 @@ import {
 import { currentProfile, loadDrawerTabOrder, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
-import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceMode, VoiceStatus } from './types'
+import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
@@ -102,9 +102,13 @@ import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { eventRequiresFleetRefresh } from './eventRefresh'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
-import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
-import { numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
-import { buildFleetReadModel, fleetRundown, fleetRundownDetail } from './fleetStatus'
+import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
+import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
+import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
+import {
+  parseVoiceQuery, projectListPage, sessionListPage, spokenSessionStatus, voiceHelpText,
+  voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
+} from './voiceQueries'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
@@ -158,6 +162,12 @@ function isEndedSession(session: Session) {
 // re-implementation because the copies drifted — the workspace tab strip read
 // `session.name` directly and so was the one place a generated title never appeared.
 const sessionName=(session:Session):string=>agentTargetName(session)
+
+const SPOKEN_LIST_TTL_MS=90_000
+type SpokenSessionHandle={id:string;agentRunId:string|null}
+type SpokenListContext=
+  | {kind:'sessions';items:SpokenSessionHandle[];pageFrom:number;shownThrough:number;expiresAt:number;lastSpeech:string}
+  | {kind:'projects';ids:string[];pageFrom:number;shownThrough:number;expiresAt:number;lastSpeech:string}
 
 // Compact standing-activity glyphs for dense surfaces (sidebar rows, tab
 // strips): the dot's color never changes — green keeps meaning "ready" — so
@@ -1560,6 +1570,8 @@ export function App() {
   const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? mergeSessionSnapshot(item,next) : item))
   const commandRegistryRef=useRef<Command[]>([])
   const pendingVoiceCandidates=useRef<VoiceIntentCandidate[]>([])
+  const spokenListContext=useRef<SpokenListContext|null>(null)
+  const voiceQueryHandler=useRef<(query:VoiceQuery)=>Promise<VoiceCommandResult>>(async()=>({detail:'Voice queries are still loading.'}))
   const [approvalConfirmation,setApprovalConfirmation]=useState<{sessionId:string;confirmationId:string;operation:string}|null>(null)
   const handleVoiceIntent=async(spoken:string)=>{
     const selected=selectNumberedCandidate(pendingVoiceCandidates.current,spoken)
@@ -1570,8 +1582,7 @@ export function App() {
       pendingVoiceCandidates.current=resolution.candidates
       if(resolution.candidates.length){
         const list=numberedCandidates(resolution.candidates)
-        const wake=voiceStatus?.wake_words?.[0]||'Mux'
-        return {detail:`More than one command matches. ${list}`,speech:`I found more than one. ${list} Say ${wake}, option 1 or ${wake}, option 2.`}
+        return {detail:`More than one command matches. ${list}`,speech:`I found more than one. ${list} Choose option 1 or option 2 after this finishes.`}
       }
       return {detail:`No voice command matched “${spoken}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list commands” for the fixed commands.`}
     }
@@ -3020,6 +3031,224 @@ export function App() {
     setDrawerAnnouncement(`${drawerTab(drawerTabId).label} moved ${edge}`)
   }
   const fleetVoiceModel=buildFleetReadModel(sessions,projects)
+  const fleetItemById=new Map(fleetVoiceModel.sessions.map(item=>[item.session.id,item]))
+  const freshSpokenContext=():SpokenListContext|null=>{
+    const context=spokenListContext.current
+    if(!context||context.expiresAt<Date.now()){
+      spokenListContext.current=null
+      return null
+    }
+    return context
+  }
+  const rememberSessionPage=(items:FleetSession[],pageFrom:number,page:{shownThrough:number;speech:string})=>{
+    spokenListContext.current={
+      kind:'sessions',
+      items:items.map(item=>({id:item.session.id,agentRunId:item.session.agent_run_id||null})),
+      pageFrom,
+      shownThrough:page.shownThrough,
+      expiresAt:Date.now()+SPOKEN_LIST_TTL_MS,
+      lastSpeech:page.speech,
+    }
+  }
+  const rememberProjectPage=(items:Project[],pageFrom:number,page:{shownThrough:number;speech:string})=>{
+    spokenListContext.current={
+      kind:'projects',ids:items.map(item=>item.id),pageFrom,shownThrough:page.shownThrough,
+      expiresAt:Date.now()+SPOKEN_LIST_TTL_MS,lastSpeech:page.speech,
+    }
+  }
+  type SessionResolution={item:FleetSession|null;expectedRun:string|null;candidates:FleetSession[];error:string}
+  type ProjectResolution={item:Project|null;candidates:Project[];error:string}
+  const resolveSessionReference=(reference:string):SessionResolution=>{
+    const normalized=normalizeSpokenText(reference)
+    if(normalized==='current'||normalized==='focused'||normalized==='this'){
+      const targetId=normalized==='focused'
+        ?focusedAgentSession?.id
+        :conversation.target?.kind==='session'?conversation.target.id:focusedAgentSession?.id
+      const item=targetId?fleetItemById.get(targetId)||null:null
+      return item?{item,expectedRun:item.session.agent_run_id||null,candidates:[],error:''}
+        :{item:null,expectedRun:null,candidates:[],error:'Focus an agent session first.'}
+    }
+    const named=fleetVoiceModel.sessions.filter(item=>normalizeSpokenText(sessionName(item.session))===normalized)
+    if(named.length===1)return{item:named[0],expectedRun:named[0].session.agent_run_id||null,candidates:[],error:''}
+    if(named.length>1)return{item:null,expectedRun:null,candidates:named,error:'More than one session has that name.'}
+    if(/^\d+$/.test(normalized)){
+      const context=freshSpokenContext()
+      const index=Number(normalized)-1
+      if(!context||context.kind!=='sessions'||index<0||index>=context.shownThrough){
+        return{item:null,expectedRun:null,candidates:[],error:'That session number is not in the current spoken list. List sessions again.'}
+      }
+      const handle=context.items[index]
+      const item=handle?fleetItemById.get(handle.id)||null:null
+      return item?{item,expectedRun:handle.agentRunId,candidates:[],error:''}
+        :{item:null,expectedRun:null,candidates:[],error:'That session is no longer available. List sessions again.'}
+    }
+    return{item:null,expectedRun:null,candidates:[],error:`No session named ${reference} is available.`}
+  }
+  const resolveProjectReference=(reference:string):ProjectResolution=>{
+    const normalized=normalizeSpokenText(reference)
+    if(normalized==='current'||normalized==='this')return activeProject
+      ?{item:activeProject,candidates:[],error:''}
+      :{item:null,candidates:[],error:'No project is selected.'}
+    const named=projects.filter(project=>normalizeSpokenText(project.name)===normalized)
+    if(named.length===1)return{item:named[0],candidates:[],error:''}
+    if(named.length>1)return{item:null,candidates:named,error:'More than one project has that name.'}
+    if(/^\d+$/.test(normalized)){
+      const context=freshSpokenContext()
+      const index=Number(normalized)-1
+      if(!context||context.kind!=='projects'||index<0||index>=context.shownThrough){
+        return{item:null,candidates:[],error:'That project number is not in the current spoken list. List projects again.'}
+      }
+      const item=projects.find(project=>project.id===context.ids[index])||null
+      return item?{item,candidates:[],error:''}:{item:null,candidates:[],error:'That project is no longer available. List projects again.'}
+    }
+    return{item:null,candidates:[],error:`No project named ${reference} is available.`}
+  }
+  const sessionFilterLabel=(filter:VoiceSessionFilter)=>({
+    live:'live',active:'active',working:'working',ready:'ready',needs_me:'needing you',approval:'awaiting approval',
+    question:'awaiting your answer',rate_limited:'rate limited',stuck:'stuck',failed:'failed',
+  })[filter]
+  const resolveVoiceScope=(scope:VoiceScope):{project:Project|null;error:string}=>{
+    if(scope.kind==='all')return{project:null,error:''}
+    if(scope.kind==='current')return activeProject?{project:activeProject,error:''}:{project:null,error:'No project is selected.'}
+    const result=resolveProjectReference(scope.reference)
+    return result.item?{project:result.item,error:''}:{project:null,error:result.error}
+  }
+  const ambiguousSessions=(items:FleetSession[],message:string):VoiceCommandResult=>{
+    const page=sessionListPage(items)
+    rememberSessionPage(items,0,page)
+    return{detail:`${message} ${page.detail}`,speech:`${message} ${page.speech}`}
+  }
+  const ambiguousProjects=(items:Project[],message:string):VoiceCommandResult=>{
+    const page=projectListPage(items)
+    rememberProjectPage(items,0,page)
+    return{detail:`${message} ${page.detail}`,speech:`${message} ${page.speech}`}
+  }
+  voiceQueryHandler.current=async(query:VoiceQuery):Promise<VoiceCommandResult>=>{
+    if(query.kind==='help'){
+      const speech=voiceHelpText(query.category)
+      return{detail:speech,speech}
+    }
+    if(query.kind==='list_projects'){
+      if(!displayProjects.length)return{detail:'No projects are registered.',speech:'No projects are registered.'}
+      const page=projectListPage(displayProjects)
+      rememberProjectPage(displayProjects,0,page)
+      return{detail:page.detail,speech:page.speech}
+    }
+    if(query.kind==='repeat'){
+      const context=freshSpokenContext()
+      return context?{detail:context.lastSpeech,speech:context.lastSpeech}
+        :{detail:'There is no recent spoken list to repeat.',speech:'There is no recent spoken list to repeat.'}
+    }
+    if(query.kind==='next'){
+      const context=freshSpokenContext()
+      if(!context)return{detail:'There is no recent spoken list. List sessions or projects first.',speech:'There is no recent spoken list. List sessions or projects first.'}
+      if(context.kind==='projects'){
+        const items=context.ids.map(id=>projects.find(project=>project.id===id)).filter((item):item is Project=>!!item)
+        if(items.length!==context.ids.length)return{detail:'The project list changed. List projects again.',speech:'The project list changed. List projects again.'}
+        const page=projectListPage(items,context.shownThrough)
+        rememberProjectPage(items,context.shownThrough,page)
+        return{detail:page.detail,speech:page.speech}
+      }
+      const items=context.items.map(handle=>fleetItemById.get(handle.id)).filter((item):item is FleetSession=>!!item)
+      if(items.length!==context.items.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
+      const page=sessionListPage(items,context.shownThrough)
+      rememberSessionPage(items,context.shownThrough,page)
+      return{detail:page.detail,speech:page.speech}
+    }
+    if(query.kind==='detail'){
+      const context=freshSpokenContext()
+      if(!context){
+        const speech=fleetRundownDetail(fleetVoiceModel)
+        return{detail:speech,speech}
+      }
+      if(context.kind==='projects'){
+        const lines=context.ids.slice(context.pageFrom,context.shownThrough).map((id,index)=>{
+          const project=projects.find(item=>item.id===id)
+          if(!project)return''
+          const live=fleetVoiceModel.sessions.filter(item=>item.session.project_id===id&&!isEndedSession(item.session)).length
+          return `Project ${context.pageFrom+index+1}, ${project.name}, has ${live} live session${live===1?'':'s'}.`
+        }).filter(Boolean)
+        const speech=lines.length?lines.join(' '):'The project list changed. List projects again.'
+        context.lastSpeech=speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS
+        return{detail:speech,speech}
+      }
+      const items=context.items.map(handle=>fleetItemById.get(handle.id)).filter((item):item is FleetSession=>!!item)
+      if(items.length!==context.items.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
+      const page=sessionListPage(items,context.pageFrom,context.shownThrough-context.pageFrom,true)
+      context.lastSpeech=page.speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS
+      return{detail:page.detail,speech:page.speech}
+    }
+    if(query.kind==='list_sessions'){
+      const scope=resolveVoiceScope(query.scope)
+      if(scope.error)return{detail:scope.error,speech:scope.error}
+      const items=fleetVoiceModel.sessions.filter(item=>(!scope.project||item.session.project_id===scope.project.id)&&voiceSessionFilterMatches(item,query.filter))
+      if(!items.length){
+        const speech=`No ${sessionFilterLabel(query.filter)} sessions${scope.project?` in ${scope.project.name}`:' overall'}.`
+        return{detail:speech,speech}
+      }
+      const page=sessionListPage(items)
+      rememberSessionPage(items,0,page)
+      return{detail:page.detail,speech:page.speech}
+    }
+    if(query.kind==='open'){
+      if(query.entity==='project'){
+        const result=resolveProjectReference(query.reference)
+        if(result.candidates.length)return ambiguousProjects(result.candidates,result.error)
+        if(!result.item)return{detail:result.error,speech:result.error}
+        const ran=runCommand(commandRegistryRef.current,`project.focus:${result.item.id}`)
+        const speech=ran==='ran'?`Opened project ${result.item.name}.`:`Project ${result.item.name} cannot be opened.`
+        return{detail:speech,speech}
+      }
+      const result=resolveSessionReference(query.reference)
+      if(result.candidates.length)return ambiguousSessions(result.candidates,result.error)
+      if(!result.item)return{detail:result.error,speech:result.error}
+      if(isEndedSession(result.item.session))return{detail:'That session has ended and cannot be opened.',speech:'That session has ended and cannot be opened.'}
+      const ran=runCommand(commandRegistryRef.current,`session.focus:${result.item.session.id}`)
+      const speech=ran==='ran'?`Opened session ${sessionName(result.item.session)} in ${result.item.projectName}.`:'That session cannot be opened.'
+      return{detail:speech,speech}
+    }
+    if(query.kind==='read_reply'){
+      const result=resolveSessionReference(query.reference)
+      if(result.candidates.length)return ambiguousSessions(result.candidates,result.error)
+      if(!result.item)return{detail:result.error,speech:result.error}
+      const session=result.item.session
+      if(!isAgent(session))return{detail:'Read reply requires an agent session.',speech:'Read reply requires an agent session.'}
+      if(result.expectedRun!==null&&(session.agent_run_id||null)!==result.expectedRun){
+        return{detail:'That numbered session started a new agent run. List sessions again before reading it.',speech:'That numbered session started a new agent run. List sessions again before reading it.'}
+      }
+      if(!voiceStatus?.enabled)return{detail:'Read aloud is off. Enable it in Settings, Voice.',speech:'Read aloud is off. Enable it in Settings, Voice.'}
+      unlockPlayback()
+      const body=query.mode==='current'?{}:{content_mode:query.mode as VoiceContent}
+      const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`,body)
+      await playClip(clip.id,session.id)
+      const mode=query.mode==='current'?(session.voice_content||voiceStatus.content):query.mode
+      return{detail:`Reading ${sessionName(session)}'s last reply ${mode}.`}
+    }
+    if(query.kind==='status'){
+      if(query.entity==='session'){
+        const result=resolveSessionReference(query.reference)
+        if(result.candidates.length)return ambiguousSessions(result.candidates,result.error)
+        if(!result.item)return{detail:result.error,speech:result.error}
+        const speech=`${sessionName(result.item.session)} in ${result.item.projectName} is ${spokenSessionStatus(result.item,true)}.`
+        return{detail:speech,speech}
+      }
+      const projectResult=query.entity==='project'?resolveProjectReference(query.reference):null
+      if(projectResult?.candidates.length)return ambiguousProjects(projectResult.candidates,projectResult.error)
+      if(projectResult&&!projectResult.item)return{detail:projectResult.error,speech:projectResult.error}
+      const scope=query.entity==='fleet'?resolveVoiceScope(query.scope):{project:projectResult?.item||null,error:''}
+      if(scope.error)return{detail:scope.error,speech:scope.error}
+      const scopedSessions=scope.project?sessions.filter(session=>session.project_id===scope.project?.id):sessions
+      const model=buildFleetReadModel(scopedSessions,projects)
+      const speech=`${scope.project?`${scope.project.name}. `:''}${fleetRundown(model)}`
+      const live=model.sessions.filter(item=>!isEndedSession(item.session))
+      if(live.length){
+        const page=sessionListPage(live)
+        rememberSessionPage(live,0,{...page,speech})
+      }
+      return{detail:speech,speech}
+    }
+    return{detail:'That voice query is not available.'}
+  }
   const sessionVoiceAliases=(session:Session):string[]=>{
     if(session.awaiting_reason==='approval')return ['go to the one waiting for approval','show approvals','open approval']
     if(session.awaiting_reason==='question'||session.awaiting_reason==='elicitation')return ['go to the one waiting for an answer','show questions']
@@ -3155,11 +3384,19 @@ export function App() {
     { id: 'voice.autoplayDevice', label: `Read aloud: turn device autoplay ${autoplayEnabled() ? 'off' : 'on'}`, category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { setAutoplayEnabled(!autoplayEnabled()); setContextMenu(null) } },
     { id:'voice.fleetStatus',label:'Speak fleet status',category:'voice',available:true,run:()=>{},voice:{
       phrases:['fleet status','status report','what is running'],
-      execute:()=>{const speech=fleetRundown(fleetVoiceModel);return{detail:speech,speech}},
+      execute:text=>voiceQueryHandler.current(parseVoiceQuery(text||'fleet status')||{kind:'status',entity:'fleet',reference:'',scope:{kind:'all'}}),
     }},
     { id:'voice.fleetStatusDetail',label:'Speak detailed fleet status',category:'voice',available:true,run:()=>{},voice:{
       phrases:['detailed fleet status','full status report','status details'],
       execute:()=>{const speech=fleetRundownDetail(fleetVoiceModel);return{detail:speech,speech}},
+    }},
+    { id:'voice.query',label:'Ask a deterministic voice lookup',category:'voice',available:true,run:()=>{},voice:{
+      phrases:['{text}'],
+      execute:text=>{
+        const query=parseVoiceQuery(text)
+        if(!query)return{detail:`No voice command matched “${text}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list commands” for help.`}
+        return voiceQueryHandler.current(query)
+      },
     }},
     { id:'voice.approval.prepare',label:'Review focused approval',category:'voice',available:!!active&&active.state==='awaiting'&&active.awaiting_reason==='approval',disabledReason:'Focus a session waiting for approval first',run:()=>{},voice:{
       phrases:['approve','review approval','confirm tool use'],

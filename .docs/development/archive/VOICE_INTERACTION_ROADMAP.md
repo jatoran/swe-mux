@@ -215,6 +215,11 @@ State, awaiting reason, delivery readiness, and activity each retain their sourc
 One-line and detailed speech are templates over that projection, and the same projection supplies the closed state predicates used by phrases such as "the one waiting for approval" and "the stuck one".
 No model call and no second status cache exist on this path.
 
+The post-phase spoken dialog adds a closed typed query grammar in `voiceQueries.ts`.
+It filters session status overall or by current/named/numbered Project, speaks at most five numbered results, and keeps exact id plus agent-run handles for 90 seconds so `next`, `repeat`, `more detail`, `open session 2`, `status of session 2`, and `read session 2 reply` remain deterministic.
+Exact visible names remain available without a handle.
+Explicit last-reply `summary` or `verbatim` is a one-shot request and does not mutate the session's saved content mode.
+
 - **One read-model projection** composing the existing control plane into a small snapshot, with
   per-field freshness and provenance, invalidated by the events that already drive the UI.
 - **A templated spoken rundown** from that structured data.
@@ -247,7 +252,8 @@ whether Phase 5 rundowns are spoken in full or reduced to one line with detail o
 Prototype it before building rundown content.
 
 The prototype keeps capture open during playback and applies a playback-specific RMS plus Silero probability gate.
-An utterance that began while TTS was playing may issue only the exact deterministic `mute` command; every other transcript is discarded as possible speaker echo.
+Playback is explicitly tagged as agent or trusted application speech.
+An utterance that began during agent speech may issue only exact deterministic `mute`; trusted application lists may be interrupted by the closed read-only lookup/navigation grammar, while dictation, mutation, and approval confirmation remain blocked.
 Speculative decode is disabled for those utterances.
 This is intentionally constrained duplex, so fleet status speaks one line by default and requires an explicit detailed-status request for the full rundown.
 

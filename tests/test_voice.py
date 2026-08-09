@@ -17,7 +17,7 @@ from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterResult
-from swe_mux.server import session_last_reply, voice_approval, voice_submit
+from swe_mux.server import session_last_reply, voice_approval, voice_generate, voice_submit
 from swe_mux.voice import (
     VOICE_RULE_ID,
     VoiceError,
@@ -375,6 +375,54 @@ async def test_session_content_override_beats_global_setting(tmp_path: Path) -> 
         assert len(provider.calls) == 1
     finally:
         service.store.close()
+
+
+async def test_one_shot_content_override_does_not_change_session_mode(tmp_path: Path) -> None:
+    ledger = AutomationStoreStub()
+    provider = ProviderStub()
+    service, _events, _emitted, record = make_service(
+        tmp_path, content="summary", provider=provider, automation_store=ledger
+    )
+    record.voice_content = "summary"
+    patch_slice(service, REPLY_MESSAGES)
+    patch_engine(service)
+    try:
+        clip = await service.generate(
+            "s1", trigger="manual", content_mode="verbatim"
+        )
+        assert clip["content_mode"] == "verbatim"
+        assert record.voice_content == "summary"
+        assert provider.calls == []
+        with pytest.raises(VoiceError, match="content mode"):
+            await service.generate("s1", trigger="manual", content_mode="brief")
+    finally:
+        service.store.close()
+
+
+async def test_voice_generate_route_forwards_validated_one_shot_mode() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class VoiceStub:
+        async def generate(self, session_id: str, **kwargs: Any) -> dict[str, Any]:
+            calls.append({"session_id": session_id, **kwargs})
+            return {"id": "clip-1"}
+
+    request = SimpleNamespace(
+        app={
+            "voice": VoiceStub(),
+            "sessions": SimpleNamespace(
+                resolve=lambda _sid: SimpleNamespace(record=SimpleNamespace(id="s1"))
+            ),
+        },
+        match_info={"sid": "s1"},
+        can_read_body=True,
+        json=lambda: asyncio.sleep(0, result={"content_mode": "verbatim"}),
+    )
+    response = await voice_generate(cast(Any, request))
+    assert response.status == 200
+    assert calls == [
+        {"session_id": "s1", "trigger": "manual", "content_mode": "verbatim"}
+    ]
 
 
 def test_effective_mode_inherits_global_default_until_marked(tmp_path: Path) -> None:

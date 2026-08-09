@@ -47,7 +47,10 @@ function phraseMatch(spoken: string, phrase: string): { text: string; confidence
   const remainder = before ? spoken.slice(before.length).trim() : spoken
   if (after && remainder !== after && !remainder.endsWith(` ${after}`)) return null
   const text = after ? remainder.slice(0, remainder.length - after.length).trim() : remainder
-  return text ? { text, confidence: .98 } : null
+  if (!text) return null
+  // A catch-all `{text}` query is the final deterministic grammar fallback.
+  // Literal slot templates such as `new Claude in Alpha {text}` must outrank it.
+  return { text, confidence: before || after ? .98 : .9 }
 }
 
 /** Resolve only aliases declared by the command registry. No action exists here. */

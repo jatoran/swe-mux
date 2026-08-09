@@ -14,6 +14,7 @@ import { conversationTargetAvailable, effectiveConversationTarget, toggleConvers
 import type { ConversationTarget } from './conversationTarget'
 import { extractWakeIntent } from './voiceIntents'
 import type { VoiceCommandResult } from './commands'
+import { safeDuringSystemPlayback } from './voiceQueries'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -205,9 +206,21 @@ export function useConversation(
   }
 
   const speakSystem=async(text:string)=>{
-    if(!statusRef.current?.enabled)return
+    if(!statusRef.current?.enabled)throw new Error('Read aloud is off. Enable it in Settings, Voice.')
     const clip=await api<VoiceClip>('POST','/api/voice/speak',{text})
-    unlockPlayback();await playClip(clip.id,'system')
+    unlockPlayback();await playClip(clip.id,'system','system')
+  }
+
+  const runRegistryIntent=async(spoken:string)=>{
+    const handler=onIntentRef.current
+    if(!handler)return false
+    const outcome=await handler(spoken)
+    setPhase('listening');setDetail(outcome.detail)
+    if(outcome.speech){
+      try{await speakSystem(outcome.speech)}
+      catch(cause){setDetail(`${outcome.detail} Read aloud failed: ${cause instanceof Error?cause.message:String(cause)}`)}
+    }
+    return true
   }
 
   const handleTranscript=async(parsed:ParsedMuxVoice,rawText='')=>{
@@ -230,12 +243,7 @@ export function useConversation(
       const spoken=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
       if(spoken!==null){
         try{
-          const outcome=await onIntentRef.current(spoken)
-          setPhase('listening');setDetail(outcome.detail)
-          if(outcome.speech){
-            try{await speakSystem(outcome.speech)}
-            catch(cause){setDetail(`${outcome.detail} Read aloud failed: ${cause instanceof Error?cause.message:String(cause)}`)}
-          }
+          await runRegistryIntent(spoken)
         }catch(cause){reportFailure(cause)}
         return
       }
@@ -257,6 +265,7 @@ export function useConversation(
       bargeInPlayback();setPhase('listening');setDetail('Playback stopped. Still listening.');return
     }
     if(parsed.command==='read'){
+      try{if(await runRegistryIntent('read last reply'))return}catch(cause){reportFailure(cause);return}
       const session=sessionTarget()
       if(!session){setPhase('listening');setDetail('Read reply needs an agent target. Draft kept.');return}
       if(!statusRef.current?.enabled){setPhase('listening');setDetail('Read aloud is off — enable it in Settings → Voice. Still listening.');return}
@@ -278,6 +287,7 @@ export function useConversation(
       return
     }
     if(parsed.command==='help'){
+      try{if(await runRegistryIntent('list voice commands'))return}catch(cause){reportFailure(cause);return}
       setPhase('listening');setDetail(`${wakeWord} commands: send, cancel, undo, mute, read reply, summary, verbatim, interrupt, standby/resume, stop.`);return
     }
     if(parsed.command==='interrupt'){
@@ -334,7 +344,18 @@ export function useConversation(
     finally{clearTimeout(slow)}
     try{
       if(marks.playbackAtStart&&decoded.parsed.command!=='mute'){
-        setPhase('listening');setDetail(`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`)
+        const spoken=marks.playbackOriginAtStart==='system'
+          ?extractWakeIntent(decoded.text,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
+          :null
+        if(spoken!==null&&safeDuringSystemPlayback(spoken)){
+          bargeInPlayback()
+          await handleTranscript({command:null,text:''},decoded.text)
+        }else{
+          setPhase('listening')
+          setDetail(marks.playbackOriginAtStart==='system'
+            ?'Playback command ignored. Only read-only lookup and navigation can interrupt application speech.'
+            :`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`)
+        }
       }else await handleTranscript(decoded.parsed,decoded.text)
     }
     finally{
@@ -406,6 +427,7 @@ export function useConversation(
     unlockPlayback()
     const capture=new PersistentVoiceCapture({
       playbackActive:()=>getPlayback().playing,
+      playbackOrigin:()=>getPlayback().origin,
       onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the

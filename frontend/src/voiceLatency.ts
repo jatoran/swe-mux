@@ -24,8 +24,10 @@ export type CaptureMarks = {
   audioMs: number
   /** True while a decode started before the endpoint was certain. */
   speculative?: boolean
-  /** Playback was active when speech began, so only the exact mute command is safe. */
+  /** Playback was active when speech began, activating the origin-specific echo policy. */
   playbackAtStart?: boolean
+  /** Trusted app speech can accept read-only navigation; agent speech cannot. */
+  playbackOriginAtStart?: 'agent' | 'system' | null
 }
 
 /** The daemon's half, echoed back on the transcribe response. */

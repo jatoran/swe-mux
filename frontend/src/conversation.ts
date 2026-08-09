@@ -118,6 +118,7 @@ export type CaptureHandlers={
   /** Reports how capture settled, once the detector is known. */
   onDetector(detector:CaptureDetector,diagnostic:string):void
   playbackActive():boolean
+  playbackOrigin?():'agent'|'system'|null
 }
 
 const newUtteranceId=():string=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -159,6 +160,7 @@ export class PersistentVoiceCapture{
   private noiseFloor=0.004
   private utteranceId=''
   private utterancePlayback=false
+  private utterancePlaybackOrigin:'agent'|'system'|null=null
   private pending:Promise<void>=Promise.resolve()
   private stopped=false
   /** Push-to-talk suspends endpointing entirely; the key release is the endpoint. */
@@ -219,6 +221,7 @@ export class PersistentVoiceCapture{
     if(!this.gate.speaking){
       this.utteranceId=newUtteranceId()
       this.utterancePlayback=this.handlers.playbackActive()
+      this.utterancePlaybackOrigin=this.handlers.playbackOrigin?.()||null
       this.utterance=this.preRoll.splice(0)
       this.handlers.onSpeechStart()
     }
@@ -332,6 +335,7 @@ export class PersistentVoiceCapture{
       if(event.type==='speech-start'){
         this.utteranceId=newUtteranceId()
         this.utterancePlayback=this.handlers.playbackActive()
+        this.utterancePlaybackOrigin=this.handlers.playbackOrigin?.()||null
         // The pre-roll already holds this frame, so it is not appended again.
         this.utterance=this.preRoll.splice(0)
         this.handlers.onSpeechStart()
@@ -369,6 +373,7 @@ export class PersistentVoiceCapture{
         audioMs:chunks.length*VAD_FRAME_MS,
         speculative,
         playbackAtStart:this.utterancePlayback,
+        playbackOriginAtStart:this.utterancePlaybackOrigin,
       })
     }catch(cause){this.handlers.onError(cause instanceof Error?cause.message:String(cause))}
   }
@@ -376,6 +381,6 @@ export class PersistentVoiceCapture{
   private resetUtterance():void{
     this.gate=new SpeechGate(this.gateConfig)
     this.silero?.reset()
-    this.utterance=[];this.utteranceId='';this.utterancePlayback=false
+    this.utterance=[];this.utteranceId='';this.utterancePlayback=false;this.utterancePlaybackOrigin=null
   }
 }

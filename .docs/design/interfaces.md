@@ -783,7 +783,7 @@ It does not change tailnet policy or make swe-mux public.
 
 ```text
 GET    /voice
-POST   /sessions/{id}/voice/generate
+POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim}
 POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
 POST   /voice/transcribe                 same body and headers, no session
 POST   /sessions/{id}/voice/submit       {utterance_id, text}
@@ -831,6 +831,9 @@ It returns a one-use 20-second confirmation id plus the bounded operation text a
 There is no bulk form.
 
 `/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS engine without transcript reading, summarization, or a model call.
+
+`/sessions/{id}/voice/generate` reads the latest assistant reply using the session/global effective content mode unless `content_mode` is supplied.
+The request override is validated, applies to one clip only, and never mutates the session's persistent read-aloud preference.
 
 Automatic completed-reply synthesis emits ordered `voice_clip_ready` events sharing
 `stream_id`, `segment_index`, and `segment_count`; each ready segment is independently playable.
