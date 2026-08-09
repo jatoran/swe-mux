@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict'
-import { BARGE_IN_CONFIRM_FRAMES, buildVoiceMatcher, isPlaybackControl, nextBargeInFrameCount, parseMuxVoice, playbackSafeProbability } from '../src/conversation.ts'
+import {
+  BARGE_IN_CONFIRM_FRAMES,
+  PLAYBACK_PROBE_CONFIRM_FRAMES,
+  PLAYBACK_PROBE_REJECT_FRAMES,
+  PLAYBACK_PROBE_SETTLE_FRAMES,
+  PlaybackSpeechProbe,
+  buildVoiceMatcher,
+  isPlaybackControl,
+  nextBargeInFrameCount,
+  parseMuxVoice,
+  playbackProbeCandidate,
+} from '../src/conversation.ts'
 
 assert.deepEqual(parseMuxVoice('Please run the focused tests. Mux send that.'),{
   command:'send',text:'Please run the focused tests.',
@@ -50,10 +61,34 @@ assert.deepEqual(swe.parse('sway wake up'),{command:'resume',text:''})
 assert.deepEqual(swe.parse('Swe send'),{command:null,text:'Swe send'})
 assert.deepEqual(swe.parse('go ahead and merge'),{command:null,text:'go ahead and merge'})
 
-assert.equal(playbackSafeProbability(.95,.02,true),0)
-assert.equal(playbackSafeProbability(.7,.08,true),0)
-assert.equal(playbackSafeProbability(.95,.08,true),.95)
-assert.equal(playbackSafeProbability(.4,.01,false),.4)
+assert.equal(playbackProbeCandidate(.5,.02,.004),true,'quiet speech must be able to interrupt playback')
+assert.equal(playbackProbeCandidate(.49,.08,.004),false)
+assert.equal(playbackProbeCandidate(.9,.007,.004),false)
+
+const confirmedProbe=new PlaybackSpeechProbe()
+assert.deepEqual(confirmedProbe.step(false,true),{action:'none',collect:false})
+assert.deepEqual(confirmedProbe.step(true,true),{action:'duck',collect:false})
+for(let index=0;index<PLAYBACK_PROBE_SETTLE_FRAMES;index++){
+  assert.deepEqual(confirmedProbe.step(true,true),{action:'none',collect:false})
+}
+for(let index=1;index<PLAYBACK_PROBE_CONFIRM_FRAMES;index++){
+  assert.deepEqual(confirmedProbe.step(true,true),{action:'none',collect:true})
+}
+assert.deepEqual(confirmedProbe.step(true,true),{action:'confirm',collect:true})
+assert.equal(confirmedProbe.probing,false)
+
+const rejectedProbe=new PlaybackSpeechProbe()
+assert.deepEqual(rejectedProbe.step(true,true),{action:'duck',collect:false})
+for(let index=0;index<PLAYBACK_PROBE_SETTLE_FRAMES;index++)rejectedProbe.step(false,true)
+for(let index=1;index<PLAYBACK_PROBE_REJECT_FRAMES;index++){
+  assert.deepEqual(rejectedProbe.step(false,true),{action:'none',collect:false})
+}
+assert.deepEqual(rejectedProbe.step(false,true),{action:'restore',collect:false})
+assert.equal(rejectedProbe.probing,false)
+
+const endedProbe=new PlaybackSpeechProbe()
+assert.deepEqual(endedProbe.step(true,true),{action:'duck',collect:false})
+assert.deepEqual(endedProbe.step(true,false),{action:'restore',collect:false})
 let bargeFrames=0
 bargeFrames=nextBargeInFrameCount(bargeFrames,.9)
 bargeFrames=nextBargeInFrameCount(bargeFrames,.9)

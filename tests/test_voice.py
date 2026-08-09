@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import time
 import wave
 from pathlib import Path
@@ -1068,5 +1069,34 @@ def test_service_records_and_clears_latency_samples(tmp_path: Path) -> None:
         assert service.stt_latency_report()["count"] == 2
         service.clear_stt_latency()
         assert service.stt_latency_report()["count"] == 0
+    finally:
+        service.store.close()
+
+
+def test_service_validates_and_logs_barge_in_diagnostics(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        with caplog.at_level(logging.INFO, logger="swe_mux.voice"):
+            sample = service.record_barge_in_diagnostic(
+                {
+                    "outcome": "confirmed",
+                    "detector": "silero",
+                    "origin": "system",
+                    "peakProbability": 1.4,
+                    "peakRms": 0.023456,
+                }
+            )
+        assert sample == {
+            "outcome": "confirmed",
+            "detector": "silero",
+            "origin": "system",
+            "peak_probability": 1.0,
+            "peak_rms": 0.0235,
+        }
+        assert '"outcome": "confirmed"' in caplog.text
+        with pytest.raises(VoiceError, match="outcome"):
+            service.record_barge_in_diagnostic({"outcome": "maybe"})
     finally:
         service.store.close()

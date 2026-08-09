@@ -26,6 +26,7 @@ let unlocked = false
 // speaker echo. Some mobile Chromium builds do not emit `ended` for a zero-frame
 // WAV, so this cannot depend on that event to clear the public playback state.
 let unlocking = false
+let playbackDucked = false
 let queue: QueueItem[] = []
 const suppressedStreams = new Set<string>()
 const requestedStreams = new Map<string,{sessionId:string|null;origin:PlaybackOrigin}>()
@@ -144,6 +145,7 @@ async function playClipAudio(clipId:string,origin:PlaybackOrigin):Promise<void>{
   currentClipId = clipId
   unlocked = true
   audio.src = clipAudioUrl(clipId)
+  audio.muted = playbackDucked
   state = { clipId, playing: false, position: 0, duration: 0, origin }
   notify()
   await audio.play()
@@ -191,11 +193,19 @@ export function bargeInPlayback():void{
   haltCurrentClip()
 }
 
+/** Sidechain mute used only while capture verifies a possible human interruption. */
+export function setPlaybackDucked(active:boolean):void{
+  playbackDucked=active&&!!currentClipId
+  if(audioElement)audioElement.muted=playbackDucked
+}
+
 // Hard stop: unlike pausePlayback (which keeps the clip loaded so the play button
 // resumes it), this abandons the clip so the strip shows nothing playing and a
 // later play starts from the beginning.
 function haltCurrentClip():void{
   audioElement?.pause()
+  playbackDucked=false
+  if(audioElement)audioElement.muted=false
   currentClipId=null
   currentStreamId=null
   currentSessionId=null
