@@ -31,6 +31,7 @@ SQLite connection:
 - `quota_samples`: append-only raw observations within the configured retention window.
 - `quota_sample_rollups`: daily first/last/min/max/error summaries produced before old raw
   samples are pruned.
+  The primary key includes the verified provider account UUID, so a reused local account slot cannot merge different credential owners into one day.
 - `quota_reset_events`: before/after evidence, expected/observed time, classification,
   confirmation, confidence, suppression reason, and nullable durable user review status/time.
 - `quota_attributions`: estimate/range, explicit external remainder, overlapping session
@@ -152,6 +153,7 @@ records must be sanitized into the versioned fixture corpus.
 
 ```text
 GET /api/telemetry/operational?provider=&account=&limit=
+GET /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily&limit=
 PATCH /api/telemetry/quota-resets/{reset_id} {resolution: manual_usage|discarded}
 GET /api/provider-accounts
 GET /api/processes[?session=]
@@ -162,6 +164,10 @@ The operational snapshot is bounded to 1–1,000 rows per collection and returns
 `interpretation: observational_correlation_only`. Provider-account responses include the
 latest confirmed reset summary. Process snapshots expose evidence states
 `active|exited|escaped|suspected_orphan|stale|inaccessible`, stable attribution provenance, derived server eligibility, and bounded ownership diagnostics.
+The quota-series endpoint applies provider, local account, and epoch-range filters in SQLite instead of truncating a global sample list in the browser.
+Daily resolution combines retained rollups with current raw samples and returns one series per verified provider identity.
+Raw resolution defaults to the last seven days when `since` is omitted.
+Its `interpretation` is `quota_utilization_not_token_usage`.
 
 ## Configuration
 
@@ -185,7 +191,7 @@ or session lifecycle.
 - History summaries/migrations: `src/swe_mux/history.py`
 - Composition/API: `src/swe_mux/server.py`
 - Process UI: `frontend/src/ProcessPanel.tsx`
-- Telemetry UI: `frontend/src/UsageDashboard.tsx`, `frontend/src/ProviderAccounts.tsx`
+- Telemetry UI: `frontend/src/UsageDashboardView.tsx`, `frontend/src/QuotaAnalytics.tsx`, `frontend/src/ProviderAccounts.tsx`
 - Fixtures/tests: `tests/fixtures/telemetry/v1/`, `tests/test_operational_telemetry_phase2.py`,
   `tests/test_live_agent_conformance.py`
 

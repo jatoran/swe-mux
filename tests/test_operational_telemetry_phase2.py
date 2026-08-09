@@ -1071,6 +1071,113 @@ async def test_retention_compacts_old_quota_samples_and_bounds_process_evidence(
     store.close()
 
 
+async def test_quota_series_keeps_verified_account_owners_separate(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    start = 1_720_000_000.0
+    for offset, owner, session, weekly in (
+        (0, "provider-owner-a", 10.0, 20.0),
+        (300, "provider-owner-a", 15.0, 21.0),
+        (600, "provider-owner-b", 40.0, 50.0),
+    ):
+        await store.record_quota_sample(
+            provider="codex",
+            account_id="account-slot",
+            provider_account_uuid=owner,
+            quota={
+                "session": {"used_percent": session},
+                "weekly": {"used_percent": weekly},
+                "status": "ready",
+            },
+            sampled_at=start + offset,
+            account_active=True,
+            auth_state="saved",
+        )
+
+    daily = await store.quota_series(
+        provider="codex",
+        account_id="account-slot",
+        since=start - 1,
+        until=start + 1000,
+        resolution="daily",
+    )
+    assert daily["interpretation"] == "quota_utilization_not_token_usage"
+    assert [item["provider_account_uuid"] for item in daily["series"]] == [
+        "provider-owner-a",
+        "provider-owner-b",
+    ]
+    first_point = daily["series"][0]["points"][0]
+    assert first_point["samples"] == 2
+    assert first_point["session_first"] == 10.0
+    assert first_point["session_last"] == 15.0
+    assert all(item["identity"] == "verified" for item in daily["series"])
+
+    raw = await store.quota_series(
+        provider="codex",
+        account_id="account-slot",
+        since=start + 550,
+        resolution="raw",
+    )
+    assert len(raw["series"]) == 1
+    assert raw["series"][0]["provider_account_uuid"] == "provider-owner-b"
+    assert raw["series"][0]["points"][0]["session"]["used_percent"] == 40.0
+    store.close()
+
+
+async def test_retention_rollups_preserve_verified_account_owner(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path, retention_days=1)
+    old = time.time() - 3 * 86400
+    for offset, owner, used in (
+        (0, "provider-owner-a", 20.0),
+        (300, "provider-owner-b", 30.0),
+    ):
+        await store.record_quota_sample(
+            provider="codex",
+            account_id="account-slot",
+            provider_account_uuid=owner,
+            quota={"session": None, "weekly": {"used_percent": used}, "status": "ready"},
+            sampled_at=old + offset,
+            account_active=True,
+            auth_state="saved",
+        )
+
+    await store.prune()
+    result = await store.quota_series(account_id="account-slot", resolution="daily")
+    assert {item["provider_account_uuid"] for item in result["series"]} == {
+        "provider-owner-a",
+        "provider-owner-b",
+    }
+    store.close()
+
+
+def test_legacy_quota_rollups_migrate_without_claiming_verified_identity(
+    phase2_path: Path,
+) -> None:
+    db = sqlite3.connect(phase2_path)
+    db.execute(
+        "CREATE TABLE quota_sample_rollups (provider TEXT NOT NULL,account_id TEXT NOT NULL,"
+        "day TEXT NOT NULL,samples INTEGER NOT NULL,errors INTEGER NOT NULL,"
+        "session_min REAL,session_max REAL,session_first REAL,session_last REAL,"
+        "weekly_min REAL,weekly_max REAL,weekly_first REAL,weekly_last REAL,"
+        "PRIMARY KEY(provider,account_id,day))"
+    )
+    db.execute(
+        "INSERT INTO quota_sample_rollups VALUES "
+        "('codex','account-a','2026-01-01',2,0,10,20,10,20,30,40,30,40)"
+    )
+    db.commit()
+    db.close()
+
+    store = OperationalTelemetryStore(phase2_path)
+    row = store._db.execute("SELECT * FROM quota_sample_rollups").fetchone()
+    assert row["provider_account_uuid"] == ""
+    assert row["samples"] == 2
+    store.close()
+
+
 async def test_root_turn_quota_refresh_is_selected_account_only_and_globally_rate_limited(
     phase2_path: Path,
 ) -> None:
@@ -1120,6 +1227,7 @@ def test_operational_telemetry_route_is_registered(phase2_path: Path) -> None:
     app = create_app(Config(data_dir=phase2_path.with_suffix(".data")))
     routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
     assert ("GET", "/api/telemetry/operational") in routes
+    assert ("GET", "/api/telemetry/quota-series") in routes
     assert ("PATCH", "/api/telemetry/quota-resets/{reset_id}") in routes
 
 

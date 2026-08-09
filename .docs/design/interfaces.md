@@ -1073,6 +1073,7 @@ DELETE /provider-accounts/{provider}/{account_id}
 GET|POST /usage
 DELETE /usage/cache
 GET    /telemetry/operational[?provider=&account=&limit=]
+GET    /telemetry/quota-series[?provider=&account=&since=&until=&resolution=raw|daily&limit=]
 PATCH  /telemetry/quota-resets/{reset_id} {resolution: manual_usage|discarded}
 ```
 
@@ -1103,6 +1104,8 @@ probabilistic attributions, tool/skill aggregates, parser coverage, and explicit
 Its interpretation is always `observational_correlation_only`.
 Reset review is durable and audit-preserving: both resolutions remove the row from the active
 alert summary without deleting evidence; `manual_usage` is valid only for Codex rows.
+`/telemetry/quota-series` returns server-filtered account timelines with `interpretation: quota_utilization_not_token_usage`.
+Daily responses merge retained rollups with unpruned samples and keep different verified provider identities in a reused local account slot separate.
 
 ## Agent MCP surface
 

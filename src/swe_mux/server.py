@@ -766,6 +766,7 @@ def create_app(
             web.post("/api/usage/refresh", refresh_usage),
             web.delete("/api/usage/cache", clear_usage_cache),
             web.get("/api/telemetry/operational", operational_telemetry),
+            web.get("/api/telemetry/quota-series", quota_telemetry_series),
             web.patch("/api/telemetry/quota-resets/{reset_id}", review_quota_reset),
             web.get("/api/provider-accounts", get_provider_accounts),
             web.get("/api/provider-accounts/audit", get_provider_account_audit),
@@ -6820,13 +6821,37 @@ async def clear_usage_cache(request: web.Request) -> web.Response:
 
 async def operational_telemetry(request: web.Request) -> web.Response:
     telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    try:
+        limit = int(request.query.get("limit", 200))
+    except ValueError:
+        raise web.HTTPBadRequest(text="limit must be an integer") from None
     return json_response(
         await telemetry.snapshot(
             provider=request.query.get("provider"),
             account_id=request.query.get("account"),
-            limit=int(request.query.get("limit", 200)),
+            limit=limit,
         )
     )
+
+
+async def quota_telemetry_series(request: web.Request) -> web.Response:
+    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    try:
+        limit = int(request.query.get("limit", 3650))
+    except ValueError:
+        raise web.HTTPBadRequest(text="limit must be an integer") from None
+    try:
+        result = await telemetry.quota_series(
+            provider=request.query.get("provider"),
+            account_id=request.query.get("account"),
+            since=_query_epoch(request, "since"),
+            until=_query_epoch(request, "until"),
+            resolution=request.query.get("resolution", "daily"),
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    return json_response(result)
 
 
 async def review_quota_reset(request: web.Request) -> web.Response:
