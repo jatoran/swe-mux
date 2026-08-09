@@ -8,7 +8,7 @@
     "postinstall": "node scripts/patch-xterm-webgl.mjs && node scripts/patch-xterm-requestmode.mjs",
     "prebuild": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "build": "tsc && vite build",
-    "postbuild": "node scripts/verify-bundle.mjs",
+    "postbuild": "node scripts/compress-static.mjs && node scripts/verify-bundle.mjs",
     "precheck": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",
     "check": "tsc --noEmit",
     "pretest": "node scripts/patch-xterm-webgl.mjs --check && node scripts/patch-xterm-requestmode.mjs --check",

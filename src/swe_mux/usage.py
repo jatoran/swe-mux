@@ -55,6 +55,13 @@ def _number(item: dict[str, Any], *names: str) -> float:
     return 0.0
 
 
+def _has_number(item: dict[str, Any], *names: str) -> bool:
+    return any(
+        isinstance(item.get(name), (int, float)) and not isinstance(item.get(name), bool)
+        for name in names
+    )
+
+
 def _items(payload: dict[str, Any], *names: str) -> list[dict[str, Any]]:
     for name in names:
         value = payload.get(name)
@@ -77,7 +84,11 @@ def _normalize_row(item: dict[str, Any], *, key: str, value: str) -> dict[str, A
         _number(item, "totalTokens", "total_tokens")
         or input_tokens + output_tokens + cache_create + cache_read
     )
-    cost = _number(item, "totalCost", "total_cost", "costUSD", "cost_usd", "cost")
+    cost_fields = ("totalCost", "total_cost", "costUSD", "cost_usd", "cost")
+    cost = _number(item, *cost_fields)
+    cost_method = item.get("__cost_method")
+    if cost_method not in {"source_estimate", "proportional", "unavailable"}:
+        cost_method = "source_estimate" if _has_number(item, *cost_fields) else "unavailable"
     return {
         key: value,
         "input_tokens": input_tokens,
@@ -87,11 +98,18 @@ def _normalize_row(item: dict[str, Any], *, key: str, value: str) -> dict[str, A
         "total_tokens": total,
         "cost_usd": round(cost, 6),
         "cost_is_estimate": True,
+        "cost_method": cost_method,
     }
 
 
 def _sum_rows(rows: list[dict[str, Any]], key: str, value: str) -> dict[str, Any]:
-    result: dict[str, Any] = {key: value, "cost_is_estimate": True}
+    methods = {str(row.get("cost_method") or "unavailable") for row in rows}
+    cost_method = next(iter(methods)) if len(methods) == 1 else "mixed"
+    result: dict[str, Any] = {
+        key: value,
+        "cost_is_estimate": True,
+        "cost_method": cost_method,
+    }
     for field in (
         "input_tokens",
         "output_tokens",
@@ -129,9 +147,12 @@ def _daily_model_items(item: dict[str, Any]) -> list[dict[str, Any]]:
         if (
             day_cost
             and day_tokens
-            and not _number(metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost")
+            and not _has_number(
+                metrics, "totalCost", "total_cost", "costUSD", "cost_usd", "cost"
+            )
         ):
             row["costUSD"] = day_cost * model_tokens / day_tokens
+            row["__cost_method"] = "proportional"
         result.append(row)
     return result
 

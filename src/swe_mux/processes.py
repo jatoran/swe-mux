@@ -1468,6 +1468,49 @@ class ProcessInspector:
             "ownership_diagnostics": list(self._ownership_diagnostics),
         }
 
+    async def snapshot_summary_all(self) -> dict[str, Any]:
+        """Return the fields used by always-mounted resource and process-watch surfaces.
+
+        Full ownership evidence, process identity, parent lineage, connections, and daemon
+        members belong to the explicitly opened inspector. Re-sending them on the app's
+        background watch interval made an idle remote browser consume more bandwidth than an
+        active terminal.
+        """
+
+        snapshot = await self.snapshot_all()
+        if not snapshot.get("available"):
+            return snapshot
+        process_fields = {
+            "pid",
+            "command",
+            "exited_at",
+            "cpu_pct",
+            "memory_bytes",
+            "listeners",
+            "server_eligible",
+        }
+        sessions = []
+        for group in snapshot["sessions"]:
+            sessions.append(
+                {
+                    "session_id": group["session_id"],
+                    "project_id": group.get("project_id"),
+                    "processes": [
+                        {key: value for key, value in process.items() if key in process_fields}
+                        for process in group["processes"]
+                    ],
+                }
+            )
+        daemon = dict(snapshot["daemon"])
+        daemon.pop("members", None)
+        return {
+            "available": True,
+            "system_cpu_pct": snapshot.get("system_cpu_pct"),
+            "sessions": sessions,
+            "daemon": daemon,
+            "totals": snapshot["totals"],
+        }
+
     def _owned_live(
         self, session_id: str, pid: int, identity_id: str | None = None
     ) -> tuple[Any, OwnedProcess]:

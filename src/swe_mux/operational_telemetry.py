@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 4
+TELEMETRY_SCHEMA_VERSION = 5
 TOOL_PARSER_VERSION = "phase2-v1"
 TOOL_PARSER_VERSIONS = {
     "claude": f"claude-{TOOL_PARSER_VERSION}",
@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS quota_samples (
   error TEXT,
   account_active INTEGER NOT NULL,
   auth_state TEXT NOT NULL,
+  provider_account_uuid TEXT,
   UNIQUE(provider,account_id,sampled_at)
 );
 CREATE INDEX IF NOT EXISTS idx_quota_samples_account
@@ -169,6 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_quota_samples_account
 CREATE TABLE IF NOT EXISTS quota_sample_rollups (
   provider TEXT NOT NULL,
   account_id TEXT NOT NULL,
+  provider_account_uuid TEXT NOT NULL DEFAULT '',
   day TEXT NOT NULL,
   samples INTEGER NOT NULL,
   errors INTEGER NOT NULL,
@@ -180,7 +182,7 @@ CREATE TABLE IF NOT EXISTS quota_sample_rollups (
   weekly_max REAL,
   weekly_first REAL,
   weekly_last REAL,
-  PRIMARY KEY(provider,account_id,day)
+  PRIMARY KEY(provider,account_id,provider_account_uuid,day)
 );
 
 CREATE TABLE IF NOT EXISTS quota_reset_events (
@@ -439,6 +441,32 @@ class OperationalTelemetryStore:
             # Recording the verified provider account makes a sample
             # self-describing and detectable in the data.
             self._db.execute("ALTER TABLE quota_samples ADD COLUMN provider_account_uuid TEXT")
+        rollup_columns = {
+            str(row["name"])
+            for row in self._db.execute("PRAGMA table_info(quota_sample_rollups)").fetchall()
+        }
+        if "provider_account_uuid" not in rollup_columns:
+            self._db.execute(
+                "ALTER TABLE quota_sample_rollups RENAME TO quota_sample_rollups_legacy"
+            )
+            self._db.execute(
+                "CREATE TABLE quota_sample_rollups ("
+                "provider TEXT NOT NULL,account_id TEXT NOT NULL,"
+                "provider_account_uuid TEXT NOT NULL DEFAULT '',day TEXT NOT NULL,"
+                "samples INTEGER NOT NULL,errors INTEGER NOT NULL,"
+                "session_min REAL,session_max REAL,session_first REAL,session_last REAL,"
+                "weekly_min REAL,weekly_max REAL,weekly_first REAL,weekly_last REAL,"
+                "PRIMARY KEY(provider,account_id,provider_account_uuid,day))"
+            )
+            self._db.execute(
+                "INSERT INTO quota_sample_rollups("
+                "provider,account_id,provider_account_uuid,day,samples,errors,"
+                "session_min,session_max,session_first,session_last,weekly_min,weekly_max,"
+                "weekly_first,weekly_last) SELECT provider,account_id,'',day,samples,errors,"
+                "session_min,session_max,session_first,session_last,weekly_min,weekly_max,"
+                "weekly_first,weekly_last FROM quota_sample_rollups_legacy"
+            )
+            self._db.execute("DROP TABLE quota_sample_rollups_legacy")
         process_columns = {
             str(row["name"])
             for row in self._db.execute("PRAGMA table_info(process_evidence)").fetchall()
@@ -1514,6 +1542,172 @@ class OperationalTelemetryStore:
 
         return await self._run(op)
 
+    async def quota_series(
+        self,
+        *,
+        provider: str | None = None,
+        account_id: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        resolution: str = "daily",
+        limit: int = 3650,
+    ) -> dict[str, Any]:
+        """Return bounded, account-aware quota timelines.
+
+        Quota readings are provider utilization percentages, not ccusage token
+        totals. Daily results combine retained rollups with the unpruned sample
+        window while keeping verified provider identities distinct when a local
+        account slot changes owner.
+        """
+        if resolution not in {"raw", "daily"}:
+            raise ValueError("resolution must be raw or daily")
+        if until is not None and since is not None and until < since:
+            raise ValueError("until must not precede since")
+        limit = max(1, min(limit, 3650 if resolution == "daily" else 2000))
+        if resolution == "raw" and since is None:
+            since = time.time() - 7 * 86400
+
+        def op() -> dict[str, Any]:
+            raw_filters: list[str] = []
+            raw_args: list[Any] = []
+            if provider:
+                raw_filters.append("provider=?")
+                raw_args.append(provider)
+            if account_id:
+                raw_filters.append("account_id=?")
+                raw_args.append(account_id)
+            if since is not None:
+                raw_filters.append("sampled_at>=?")
+                raw_args.append(since)
+            if until is not None:
+                raw_filters.append("sampled_at<=?")
+                raw_args.append(until)
+            raw_where = " WHERE " + " AND ".join(raw_filters) if raw_filters else ""
+
+            grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+            if resolution == "raw":
+                rows = self._db.execute(
+                    f"SELECT * FROM quota_samples{raw_where} ORDER BY sampled_at",  # noqa: S608
+                    tuple(raw_args),
+                ).fetchall()
+                for row in rows:
+                    point = _quota_public(dict(row))
+                    owner = str(point.get("provider_account_uuid") or "")
+                    series_key = (str(point["provider"]), str(point["account_id"]), owner)
+                    grouped.setdefault(series_key, []).append(point)
+            else:
+                rollup_filters: list[str] = []
+                rollup_args: list[Any] = []
+                if provider:
+                    rollup_filters.append("provider=?")
+                    rollup_args.append(provider)
+                if account_id:
+                    rollup_filters.append("account_id=?")
+                    rollup_args.append(account_id)
+                if since is not None:
+                    rollup_filters.append("day>=?")
+                    rollup_args.append(time.strftime("%Y-%m-%d", time.gmtime(since)))
+                if until is not None:
+                    rollup_filters.append("day<=?")
+                    rollup_args.append(time.strftime("%Y-%m-%d", time.gmtime(until)))
+                rollup_where = (
+                    " WHERE " + " AND ".join(rollup_filters) if rollup_filters else ""
+                )
+                points: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+                for row in self._db.execute(
+                    f"SELECT * FROM quota_sample_rollups{rollup_where}",  # noqa: S608
+                    tuple(rollup_args),
+                ).fetchall():
+                    item = dict(row)
+                    owner = str(item.get("provider_account_uuid") or "")
+                    rollup_key = (
+                        str(item["provider"]),
+                        str(item["account_id"]),
+                        owner,
+                        str(item["day"]),
+                    )
+                    points[rollup_key] = item
+
+                ranked_query = (
+                    "WITH ranked AS (SELECT *,date(sampled_at,'unixepoch') day,"
+                    "COALESCE(provider_account_uuid,'') owner,"
+                    "ROW_NUMBER() OVER (PARTITION BY provider,account_id,"
+                    "COALESCE(provider_account_uuid,''),date(sampled_at,'unixepoch') "
+                    "ORDER BY sampled_at,id) first_rank,"
+                    "ROW_NUMBER() OVER (PARTITION BY provider,account_id,"
+                    "COALESCE(provider_account_uuid,''),date(sampled_at,'unixepoch') "
+                    "ORDER BY sampled_at DESC,id DESC) last_rank FROM quota_samples"
+                    f"{raw_where}) SELECT provider,account_id,owner provider_account_uuid,day,"
+                    "COUNT(*) samples,SUM(CASE WHEN status!='ready' THEN 1 ELSE 0 END) errors,"
+                    "MIN(session_used) session_min,MAX(session_used) session_max,"
+                    "MAX(CASE WHEN first_rank=1 THEN session_used END) session_first,"
+                    "MAX(CASE WHEN last_rank=1 THEN session_used END) session_last,"
+                    "MIN(weekly_used) weekly_min,MAX(weekly_used) weekly_max,"
+                    "MAX(CASE WHEN first_rank=1 THEN weekly_used END) weekly_first,"
+                    "MAX(CASE WHEN last_rank=1 THEN weekly_used END) weekly_last "
+                    "FROM ranked GROUP BY provider,account_id,owner,day"
+                )
+                for row in self._db.execute(ranked_query, tuple(raw_args)).fetchall():
+                    item = dict(row)
+                    sample_day_key = (
+                        str(item["provider"]),
+                        str(item["account_id"]),
+                        str(item.get("provider_account_uuid") or ""),
+                        str(item["day"]),
+                    )
+                    points[sample_day_key] = item
+                for (item_provider, item_account, owner, _day), point in points.items():
+                    grouped.setdefault((item_provider, item_account, owner), []).append(point)
+
+            series = []
+            for (item_provider, item_account, owner), values in sorted(grouped.items()):
+                sort_key = "sampled_at" if resolution == "raw" else "day"
+                ordered = sorted(values, key=lambda item: item[sort_key])[-limit:]
+                series.append(
+                    {
+                        "provider": item_provider,
+                        "account_id": item_account,
+                        "provider_account_uuid": owner or None,
+                        "identity": "verified" if owner else "legacy_unverified",
+                        "points": ordered,
+                    }
+                )
+
+            reset_filters: list[str] = []
+            reset_args: list[Any] = []
+            if provider:
+                reset_filters.append("provider=?")
+                reset_args.append(provider)
+            if account_id:
+                reset_filters.append("account_id=?")
+                reset_args.append(account_id)
+            if since is not None:
+                reset_filters.append("observed_at>=?")
+                reset_args.append(since)
+            if until is not None:
+                reset_filters.append("observed_at<=?")
+                reset_args.append(until)
+            reset_where = " WHERE " + " AND ".join(reset_filters) if reset_filters else ""
+            resets = [
+                dict(row)
+                for row in self._db.execute(
+                    f"SELECT * FROM quota_reset_events{reset_where} "  # noqa: S608
+                    "ORDER BY observed_at DESC LIMIT 1000",
+                    tuple(reset_args),
+                ).fetchall()
+            ]
+            return {
+                "schema_version": TELEMETRY_SCHEMA_VERSION,
+                "interpretation": "quota_utilization_not_token_usage",
+                "resolution": resolution,
+                "since": since,
+                "until": until,
+                "series": series,
+                "resets": resets,
+            }
+
+        return await self._run(op)
+
     async def snapshot(
         self, *, provider: str | None = None, account_id: str | None = None, limit: int = 200
     ) -> dict[str, Any]:
@@ -1659,23 +1853,31 @@ class OperationalTelemetryStore:
 
         def op() -> dict[str, int]:
             old = self._db.execute(
-                "SELECT provider,account_id,date(sampled_at,'unixepoch') day,COUNT(*) samples,"
+                "SELECT provider,account_id,COALESCE(provider_account_uuid,'') "
+                "provider_account_uuid,date(sampled_at,'unixepoch') day,COUNT(*) samples,"
                 "SUM(CASE WHEN status!='ready' THEN 1 ELSE 0 END) errors,"
                 "MIN(session_used) session_min,MAX(session_used) session_max,"
                 "(SELECT session_used FROM quota_samples q2 WHERE q2.provider=q.provider "
                 "AND q2.account_id=q.account_id AND date(q2.sampled_at,'unixepoch')="
-                "date(q.sampled_at,'unixepoch') ORDER BY q2.sampled_at LIMIT 1) session_first,"
+                "date(q.sampled_at,'unixepoch') AND COALESCE(q2.provider_account_uuid,'')="
+                "COALESCE(q.provider_account_uuid,'') ORDER BY q2.sampled_at LIMIT 1) "
+                "session_first,"
                 "(SELECT session_used FROM quota_samples q2 WHERE q2.provider=q.provider "
                 "AND q2.account_id=q.account_id AND date(q2.sampled_at,'unixepoch')="
-                "date(q.sampled_at,'unixepoch') ORDER BY q2.sampled_at DESC LIMIT 1) session_last,"
+                "date(q.sampled_at,'unixepoch') AND COALESCE(q2.provider_account_uuid,'')="
+                "COALESCE(q.provider_account_uuid,'') ORDER BY q2.sampled_at DESC LIMIT 1) "
+                "session_last,"
                 "MIN(weekly_used) weekly_min,MAX(weekly_used) weekly_max,"
                 "(SELECT weekly_used FROM quota_samples q2 WHERE q2.provider=q.provider "
                 "AND q2.account_id=q.account_id AND date(q2.sampled_at,'unixepoch')="
-                "date(q.sampled_at,'unixepoch') ORDER BY q2.sampled_at LIMIT 1) weekly_first,"
+                "date(q.sampled_at,'unixepoch') AND COALESCE(q2.provider_account_uuid,'')="
+                "COALESCE(q.provider_account_uuid,'') ORDER BY q2.sampled_at LIMIT 1) weekly_first,"
                 "(SELECT weekly_used FROM quota_samples q2 WHERE q2.provider=q.provider "
                 "AND q2.account_id=q.account_id AND date(q2.sampled_at,'unixepoch')="
-                "date(q.sampled_at,'unixepoch') ORDER BY q2.sampled_at DESC LIMIT 1) weekly_last "
-                "FROM quota_samples q WHERE sampled_at<? GROUP BY provider,account_id,day",
+                "date(q.sampled_at,'unixepoch') AND COALESCE(q2.provider_account_uuid,'')="
+                "COALESCE(q.provider_account_uuid,'') ORDER BY q2.sampled_at DESC LIMIT 1) "
+                "weekly_last FROM quota_samples q WHERE sampled_at<? GROUP BY provider,"
+                "account_id,provider_account_uuid,day",
                 (quota_cutoff,),
             ).fetchall()
             for row in old:
@@ -1683,9 +1885,10 @@ class OperationalTelemetryStore:
                     # Named columns so a future rollup column cannot silently
                     # break this write (or a rolled-back build's copy of it).
                     "INSERT OR REPLACE INTO quota_sample_rollups"
-                    "(provider,account_id,day,samples,errors,session_min,session_max,"
+                    "(provider,account_id,provider_account_uuid,day,samples,errors,"
+                    "session_min,session_max,"
                     "session_first,session_last,weekly_min,weekly_max,weekly_first,"
-                    "weekly_last) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "weekly_last) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     tuple(row),
                 )
             deleted_samples = self._db.execute(

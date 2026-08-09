@@ -192,7 +192,7 @@ after its most fragile input (it hooks *events*, not hooks — see §10).
 | **Tier 0 / Tier 1 / Tier 2** | Deterministic facts / cheap-model semantic index (the scan timeline) / strong-model analysis. Named after cost and cadence, not model brand. |
 | **Scan timeline** | The Tier 1 semantic index: periodic/event-triggered cheap-model records of what each session is doing, forming a per-session behavioral timeline. |
 | **Return path** | The inverse arrow: how accumulated insight reaches the coding agent, primarily a queryable **mux MCP** read surface the agent pulls from (§7). |
-| **mux MCP** | The agent-facing transport for the return path: MCP tools that are thin callers over the same typed daemon operations the browser/CLI/mailbox use. A transport, never a permission model — authority stays in the daemon op (§7.1). Ships as **v0** (read/discovery, buildable now) then **v1** (memory tools, needs steps 1–5). |
+| **mux MCP** | The agent-facing transport for the return path: MCP tools that are thin callers over the same typed daemon operations the browser/CLI/mailbox use. A transport, never a permission model; authority stays in the daemon op (§7.1). Ships as **v0** (read/discovery), **v0.5** (situational-awareness reads over shipped services, §7.5), **v1** (memory tools, needs steps 1–5), and finally **session control** (§7.6, the only part carrying authority). |
 | **Enablement DAG** | The per-project opt-in dependency graph: a consumer cannot be enabled unless its substrate dependencies are enabled for that project (§8). |
 | **Automation layer** | Umbrella term for rules + observers when one word is needed. |
 | **Native hooks** | Reserved exclusively for the CLIs' own hook systems (Claude Code hooks, Codex `notify`). They are an event *source*, nothing more. |
@@ -818,8 +818,11 @@ different risk classes. They must not be gated together:
 | Ask | Risk | Disposition |
 |---|---|---|
 | See active, prior, and concurrent sessions | read-only | MCP v0. No gate. |
+| Read a session's conversation from either end, and your own superseded runs | read-only | MCP v0.5 (§7.5), step 2.6. No gate. |
 | Notify a specific existing session | writes into another agent's input | Phase 5 queue op, surfaced as an MCP tool. |
-| Spawn a new session to receive the message | creates a new actor, spend, and account use | Gated (§16), reachable only as a draft. |
+| Spawn a new session to receive the message | creates a new actor, spend, and account use | Gated (§16); drafted today, and the grant decision moves to step 9 (§7.6). |
+| Interrupt another session's current turn | discards in-flight work; is a PTY write | Step 9 (§7.6), behind the readiness predicate and the authority grant. |
+| End a session, including your own | destroys a running actor | Step 9 (§7.6), graceful-first, drafted by default, never erasing the record. |
 
 `mux.notify(target, body)` is a tool-shaped caller over the Phase 5 A→B message
 operation: the message enters the target's queue, waits for receiver-side readiness,
@@ -904,6 +907,14 @@ very different dependency profiles:
   project card, or the scan timeline. v0 is also the entirety of the "agents can see
   concurrent sessions" utility, which is useful on its own and is the cheapest way to
   prove the transport, identity, and restart-tolerance decisions above.
+- **v0.5, the gap between them, buildable now.** Bidirectional transcript paging (the
+  *beginning* of a conversation, not only its tail), reads of the caller's **own superseded
+  runs**, the run brief on `get_session`, the shipped project card, a bounded ground-truth Git
+  read, `message_status` for a `notify` sender, and the observation inbox read-only. Every one
+  is a read over a service that already shipped, so this is a tool-surface phase and not a
+  substrate phase. It needs Phase 5.4's run boundary, because reading across a rollover
+  without naming the run is the precise failure the retrieval gate exists to prevent. Ships as
+  `ROADMAP.md` Phase 5.6 / step 2.6.
 - **v1 — genuinely late.** `provenance`, `priorResolutions`, `deadEnds`,
   `verifiedStatus`, plus Project-scoped `memorySources` / exact `readMemory` over the
   provider sources the Phase 6 Agent Context drawer can already inspect. The semantic
@@ -912,16 +923,74 @@ very different dependency profiles:
   the Phase 7 operations rather than a second filesystem implementation.
 
 Ship v0 as its own small phase, add `notify`/`requestSpawn` when the Phase 5 queue
-lands, and keep v1 in step 8 where it belongs.
+lands, ship the v0.5 reads once the run boundary exists, and keep v1 in step 8 where it
+belongs. Session control (§7.6) is later still and is the only part of the surface that
+carries authority rather than answers.
 
 **Roadmap composition.** The MCP surface is a natural extension of the typed daemon
 operations Phase 7 already wants (browser, CLI, mailbox routed through shared typed
 ops — MCP is one more consumer). Agent Context inspection, manual root-file overwrite,
 and governed instruction rendering are Phase 6; the queue-draft path is Phase 4/5. The
 return path is a read API layered over machinery already
-scheduled, not a new pillar. In `ROADMAP.md` it lands in three places: **Phase 4.5**
+scheduled, not a new pillar. In `ROADMAP.md` it lands in five places: **Phase 4.5**
 (v0 read/discovery), the Phase 5 agent-to-agent section (`notify`/`requestSpawn` as
-callers over the queue), and **Phase 7.5** (v1 memory tools, this document's step 8).
+callers over the queue), **Phase 5.6** (v0.5 situational-awareness reads, step 2.6),
+**Phase 7.5** (v1 memory tools, this document's step 8), and **Phase 7.6** (session control,
+step 9, the one part that is not a read).
+
+### 7.6 Session control: the first agent-reachable actuation
+
+Everything else in the return path answers questions or drafts a request. Interrupting and
+ending sessions is different in kind: it acts on a running actor. It is scheduled rather than
+left permanently decision-gated, because the capability is genuinely wanted (an agent that
+watches a sibling wedge in a loop, or that finishes the job a worker was spawned for, should
+be able to stop it rather than only report it), but it is scheduled *last*, with the strictest
+machinery in the design around it. Delivered as `ROADMAP.md` Phase 7.6.
+
+**Two capabilities, two tools, separately grantable.** `interrupt(target)` stops the current
+turn and leaves the session alive; `end_session(target)` destroys the actor. Merging them into
+one "stop" verb would make the smaller authority carry the larger one's risk, which is the same
+error §6.7 warns about for interrupt channels.
+
+**An interrupt is a PTY write, and therefore §16's gate applies unchanged.** It goes through
+the fail-closed `safe|blocked|unknown` readiness contract, and `unknown` never authorizes.
+The escape sequence belongs to the adapter, the same place the voice interrupt path already
+resolves it, because a keystroke encoded in the MCP layer is a native detail leaking above
+the adapter boundary (design law 3).
+
+**Ending is graceful-first, and the graceful path does not exist yet.** Today's teardown is a
+hard stop that marks the record `killed`. The typed operation this needs is: interrupt, send
+the harness's own exit sequence, wait bounded for the CLI to tear itself down so the transcript
+flushes and the run closes cleanly, and hard-stop only on timeout. The end reason must
+distinguish `agent_ended` from an operator `killed` and from a CLI `exited`, or the durable
+record loses the one fact a post-mortem needs.
+
+**Self-termination is allowed and is the ordinary case.** A finished worker ending itself is
+the point of the feature. Two constraints make it safe rather than merely convenient: the tool
+returns before teardown begins, and the ended session's transcript, final turn, and history row
+are retained and readable afterwards. An agent may end itself; it may not erase itself. This
+is also the answer to the termination-unawareness failure mode (§2): the human's ability to read
+what happened cannot depend on the agent's judgment about whether it mattered.
+
+**Authority is a per-Project three-position grant, defaulting to drafted.** `off` refuses with a
+typed result; `draft` writes an inert observation-inbox request with full provenance, exactly
+like `requestSpawn`, and a human approval is what acts; `granted` acts directly inside a
+per-origin budget with a full audit trail. This is deliberately the same shape spawn has been
+waiting for, and §16's spawn decision is made here or nowhere: a permanent "drafted forever" for
+one capability and a real grant model for another would be an inconsistency the user would have
+to work around rather than a boundary.
+
+**Bounds are the ones `notify` already proved**, for the same reason they lived in the daemon
+operation there: Project scope, live-agent targets only, per-origin budgets, chain depth and
+cycle detection over the recorded path (A interrupting B while B interrupts A is a loop), and a
+master kill switch. Two targets are never reachable at any grant level: a session outside the
+caller's Project, and the session that owns the running daemon, because job-object inheritance makes
+ending that one take the daemon with it.
+
+**Nothing here is silent.** An agent stopping another agent emits to the event log with the
+caller's session and run as provenance, appears in the fleet audit surface beside agent
+messages, and is a candidate for the §6.7 attention channels. And it never grows an automatic
+remediation: "interrupt and re-run the turn" is resampling, which §16 rules out on evidence.
 
 ---
 
@@ -1039,6 +1108,29 @@ another agent can pick up mid-plan. Section links point to the design detail.
     act and is what spawns). One audit trail with the browser path; sender derived from the
     token. Design: `design/features/agent-messaging.md`. The same-host boundary was
     re-examined and re-affirmed with its limits written down (§7.4).
+- [ ] **2.6 · mux MCP v0.5: situational-awareness reads** (§7.5). Scheduled as `ROADMAP.md`
+  Phase 5.6. Tool-surface work only: every item is a read over a service that already
+  shipped, so it adds no substrate and no authority. Needs step 3.5's run boundary.
+  - [ ] `read_transcript` reads from **either end** with an opaque cursor, so an agent can read
+    the *beginning* of a conversation. The opening request is what identifies a run's work
+    (the finding that killed §6.11), and it is currently unreachable on any session long enough
+    to matter. Paging stays inside one `agent_run_id`; system/meta records are excluded by
+    default with an explicit opt-in; caps and credential redaction are unchanged.
+  - [ ] A caller may read **its own superseded runs**. After a `/clear` the agent retains
+    nothing its predecessor did and the daemon has all of it. Every message names its
+    `agent_run_id`/`agent_run_seq`, and a result from the caller's own earlier run is labelled
+    rather than blended into the present: §7's attribution rule applied where it matters most.
+  - [ ] Run brief on `get_session`: the run's pinned title and opening request, so "what is
+    that session working on" costs one small call instead of a paged transcript read.
+  - [ ] `project_card()` over the shipped step 4 operation, degrading to empty exactly as the
+    internal API does; a bounded ground-truth Git read (branch, status, changed files, diff
+    stat, never patch bodies) so a reviewer conditions on the diff rather than the sibling's
+    story about it (design law 6).
+  - [ ] `message_status(id)` closes the `notify` loop for the sender, and the observation inbox
+    becomes readable, which is the human-to-agent channel with no new trust boundary.
+  - [ ] Decide the cross-Project read question (§18) explicitly. Default stays own-Project;
+    "what else am I working on right now" is inherently cross-Project and needs a named grant
+    if it is ever answered, not a quiet scope widening.
 - [x] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
   Design: `design/features/deterministic-consumers.md`.
   - [x] Annotation anchor + evidence schema: `automation_annotations.agent_run_id` is now
@@ -1116,6 +1208,34 @@ another agent can pick up mid-plan. Section links point to the design detail.
   remains unverified, pull-only, and Project-scoped; it is never bulk-injected, written by
   MCP, or copied into another provider's private store. Every derived record names its
   `agent_run_id`. Delivered as `ROADMAP.md` Phase 7.5.
+  - [ ] Split the shipping order by dependency rather than by tool family: `provenance` and
+    `verifiedStatus` read Tier 0 and the step 3 detectors, both shipped, so they are buildable
+    ahead of the rest; only `priorResolutions` and `deadEnds` genuinely need the step 5 scan
+    timeline. Do not hold the deterministic half behind the semantic half.
+- [ ] **9 · Agent session control** (§7.6, §16). The first agent-reachable actuation, scheduled
+  last and gated hardest. Delivered as `ROADMAP.md` Phase 7.6.
+  - [ ] `interrupt(target)`: stop the current turn, session survives. A PTY write, so it runs
+    behind the fail-closed `safe|blocked|unknown` readiness predicate; `unknown` never
+    authorizes. The escape sequence lives in the adapter, never in the MCP layer.
+  - [ ] `end_session(target)`: destroys the actor, and is allowed against the caller itself.
+    Needs a **graceful-end daemon operation that does not exist yet**: interrupt, harness exit
+    sequence, bounded wait for the CLI's own teardown, hard stop only on timeout. End reasons
+    must distinguish `agent_ended` from operator `killed` and CLI `exited`.
+  - [ ] Self-termination returns before teardown and retains the transcript, final turn, and
+    history row. An agent may end itself; it may not erase itself.
+  - [ ] Per-Project three-position authority grant (`off` / `draft` / `granted`), default
+    `draft`, in the existing per-project opt-in surface. `draft` writes an inert
+    observation-inbox request exactly like `requestSpawn`.
+  - [ ] Resolve agent-held **spawn** authority under the same grant, or leave both drafted.
+    One capability with a real grant model and another drafted forever is an inconsistency,
+    not a boundary (§16).
+  - [ ] Reuse the `notify` bounds wholesale: Project scope, live-agent targets, per-origin
+    budget, chain depth, cycle detection, idempotency, typed refusals, master kill switch.
+    Never reachable at any grant level: a target outside the caller's Project, and the session
+    that owns the running daemon.
+  - [ ] Every interrupt and end is logged with caller provenance, visible in the fleet audit
+    surface, and eligible for the §6.7 attention channels. No automatic remediation is built
+    on top of it (§16: resampling amplifies injected content).
 
 ### UI work (design before it ships — the enablement surface is the big risk)
 
@@ -1460,12 +1580,22 @@ Posture:
   human-directed with a corrected instruction, never an automatic loop.
 - Auto-approval additionally requires an explicit allowlist and belongs with the
   Phase 5 trust-boundary work.
-- **Agent-requested spawn is drafted, never granted.** The return path exposes
-  `mux.requestSpawn` (§7.2), which writes an inert draft into the observation inbox
-  and starts nothing. It is the §13 pattern applied to spawn: the capability an agent
-  gets is "ask the human," not "create an actor." An agent holding real spawn
+- **Agent-requested spawn is drafted, never granted**, until the grant model exists. The
+  return path exposes `mux.requestSpawn` (§7.2), which writes an inert draft into the
+  observation inbox and starts nothing. It is the §13 pattern applied to spawn: the capability
+  an agent gets is "ask the human," not "create an actor." An agent holding real spawn
   authority turns a single prompt injection into unbounded fan-out, which is why this
-  stays gated even though the messaging half (`mux.notify`) ships in Phase 5.
+  stays gated even though the messaging half (`mux.notify`) ships in Phase 5. **Step 9 (§7.6)
+  is where that gate acquires a lever rather than only a lock:** a per-Project three-position
+  authority grant (`off`/`draft`/`granted`), default drafted, budgeted and audited when
+  granted. Spawn is decided under that grant or stays drafted with it.
+- **Agent session control is scheduled, not permanently reserved.** Interrupting a sibling's
+  turn and ending a session (including the caller's own) are real capabilities the product
+  wants, and they land in step 9 behind the same readiness predicate as any other PTY write,
+  the same grant, and the same bounds `notify` proved. Design detail: §7.6. What does not
+  move: an interrupt on `unknown` readiness, a target outside the caller's Project, the
+  daemon-owning session, an end that discards the record of why, and any automatic
+  remediation layered on top.
 - The line that keeps this from re-growing orchestration: observers are advisory and
   stateless; anything that *commands* agents is relay, and relay is reserved. The
   drafting-for-approval channel (§13) is the safe pressure-release: it delivers
@@ -1522,6 +1652,12 @@ Universal hooks abstracts the CLIs' *signals*. The same move applies elsewhere:
 - Whether `mux.notify` targets need a per-Project allowlist UI or whether "any live
   session in the same Project, plus explicit user-added targets" is sufficient
   bounding for Phase 5.
+- Session-control grant defaults (§7.6): whether `granted` is ever a sensible per-Project
+  default for `interrupt` on a session the caller itself spawned, or whether the parent/child
+  relationship deserves its own position between `draft` and `granted`.
+- Whether an agent-ended session should be retained differently from an operator-killed one in
+  the UI. The record must survive either way, but a worker that ended itself on completion is
+  ordinary and a worker another agent ended is worth a human's attention.
 - Enablement-DAG UX: how to present a consumer's substrate dependencies when
   toggling, and how disabling a substrate node communicates to its dependents.
 - Per-project baselines: how much history before an ETA / neglect-time estimate is

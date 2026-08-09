@@ -11,6 +11,7 @@ import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailAr
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { ThemePicker } from './ThemePicker'
 import { applyUiScale, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
+import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
 import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
@@ -56,6 +57,7 @@ type Config = {
   note_command_rail:'auto'|'on'|'off';note_rail_button_size_px:number
   note_indent_guides:boolean
   ui_scale_desktop:UiScale;ui_scale_mobile:UiScale
+  claude_max_columns:ClaudeMaxColumns
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   usage_commands:Record<string,string[]>
@@ -643,6 +645,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
           <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
         <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback.</p>
+          <label>Claude width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
+          <p>Claude Code's renderer can leave stale and duplicated cells when its width changes by a lot, so a Claude pane dragged past this many columns adds margin instead of resizing the terminal again. That is why a wide Claude pane stops growing its text while Codex and shell panes keep filling the space. Raise it for wide diffs and long log lines; choose <strong>No limit</strong> to let Claude fill its pane like every other session, and watch for leftover text on the right after a resize. Phone and other compact panes are never limited - they are narrower than the smallest setting here.</p>
           <label>Global default profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured terminal profiles">

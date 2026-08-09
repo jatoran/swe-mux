@@ -108,15 +108,17 @@ Phase 1  Evidence replay + delivery-readiness contract
                  (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]  [done]
                 -> Phase 5.4  Agent conversation rollover (the run boundary contract)
                   -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
-                    -> Phase 6  Agent Context, portable instructions, and skills
-                       (inspect + manual overwrite first; governed sync = return-path channel 2) [CP §7]
-                      -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
-                        -> Phase 7  Windows maturity, CLI, doctor, and soak
-                          -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
-                            -> Phase 8  Telegram control
-                              -> Phase 9  SSH/native attach
-                                -> Phase 10  WSL bridge + Linux/macOS
-                                  -> Phase 11  Public packaging and release
+                    -> Phase 5.6  mux MCP v0.5: situational-awareness reads  [CP step 2.6]
+                      -> Phase 6  Agent Context, portable instructions, and skills
+                         (inspect + manual overwrite first; governed sync = return-path channel 2) [CP §7]
+                        -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
+                          -> Phase 7  Windows maturity, CLI, doctor, and soak
+                            -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
+                              -> Phase 7.6  mux MCP session control: interrupt + end  [CP step 9]
+                                -> Phase 8  Telegram control
+                                  -> Phase 9  SSH/native attach
+                                    -> Phase 10  WSL bridge + Linux/macOS
+                                      -> Phase 11  Public packaging and release
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -144,10 +146,12 @@ document and are not duplicated here.
 | 1 · Tier 0 + raw store | shipped | write/read hashes are not equality-joinable; §6.1's edge is restated as `target` + time order (CP §9 step 1) |
 | 2 · Helps-today siblings | shipped (Implemented baseline) | observation inbox is where `requestSpawn` drafts land |
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
+| 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, so it does not need Phase 5.5 |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
 | 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency, but **needs Phase 5.4's run boundary** — a timeline that spans a conversation replacement is describing two sessions as one |
 | 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one) |
 | 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate, the Phase 6 Agent Context adapters, the Phase 7 typed daemon operations, and Phase 5.4 run-scoped retrieval |
+| 9 · Agent session control | **Phase 7.6** | the first agent-reachable actuation; needs the Phase 1/5 readiness predicate, a graceful-stop daemon op that does not exist yet (Phase 7), and the Phase 6.5 attention channels so a remote interrupt is never silent |
 | §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
 | §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
 
@@ -712,6 +716,9 @@ tools depend on them.
 Depends on the Phase 3.5 status contract (a session status an agent reads must be the same
 one the UI reads) and on shipped history/transcript search. It does not depend on Phase 4.
 
+Follow-on read tools that were not part of proving the transport are scheduled in **Phase
+5.6**, not here; this phase stays a completion record.
+
 ### Server placement and transport
 
 - [x] Host the MCP endpoint **in the daemon, never in the PTY supervisor** (`POST /mcp`,
@@ -1178,6 +1185,87 @@ two unrelated conversations as one session's history.
 - [ ] No timeline segment, continuity window, novelty comparison, or derived title spans a
   conversation rollover, and the boundary is visible in the timeline UI.
 
+## Phase 5.6 - mux MCP v0.5: situational-awareness reads
+
+Control-plane build-order step 2.6 (`CONTROL_PLANE_ROADMAP.md` §7.5). Phase 4.5 proved the
+transport with four read tools; Phase 7.5 is the semantic memory half and is genuinely late.
+This phase is the gap between them: the questions an agent asks constantly that the daemon
+can already answer from **shipped** machinery, and that today force it to guess, shell out,
+or ask the human. It adds no authority: every item is a read, Project-scoped, through the
+same token, allowlist, redaction, and rate limit Phase 4.5 established.
+
+Depends on Phase 5.4 (a read that crosses a conversation rollover must name the run it came
+from) and on the shipped project card, observation inbox, queue, and Git status services. It
+does **not** depend on Phase 5.5.
+
+### Transcript reads: both ends, and your own past
+
+- [ ] Make `read_transcript` bidirectional and pageable: a `from` selector (`tail` default,
+  `head`) plus an opaque cursor, so a caller can read the **beginning** of a session's
+  conversation, not only its tail. The opening request is what identifies a run's work (the
+  same finding that made the one-shot titler correct and killed the continuous title,
+  CP §6.11), and it is currently unreachable through MCP on any session long enough to
+  matter.
+- [ ] Keep paging inside one `agent_run_id`. A cursor never walks off the end of a run into
+  its predecessor; two conversations are never concatenated into one read (Phase 5.4).
+- [ ] Exclude system/meta records by default, with an explicit opt-in argument for the caller
+  that wants them. Existing byte/message caps and the `looks_like_secret` redaction gate are
+  unchanged and apply to head reads identically.
+- [ ] Let a caller read **its own superseded runs**. After a `/clear` the agent retains
+  nothing its predecessor run did, and the daemon has all of it; this is the cheapest
+  possible self-continuity and it needs no new substrate. Every message is labelled with its
+  `agent_run_id`/`agent_run_seq`, and a result from the caller's own earlier run is marked as
+  such rather than blended into the present: the Phase 7.5 retrieval-precision rule applied
+  one phase early, because this is the exact case it was written for.
+
+### Cheap answers that avoid a transcript read entirely
+
+- [ ] Put the run brief on `get_session`: the run's pinned title and opening request
+  (`builtin.session-titler-initial` already pins one per `agent_run_id`) beside the existing
+  status, `agent_run_id`, and `agent_run_seq`. "What is that session actually working on"
+  should cost one small call, not a paged transcript read.
+- [ ] Add `project_card()` as a caller over the shipped `card_for_project`/`prompt_prefix`
+  operation (CP step 4). It degrades to empty exactly as the internal API does (no card is
+  never a guess), and per-project opt-in already governs whether one exists.
+- [ ] Add a bounded ground-truth Git read (branch, status, changed-file list, diff stat) over
+  the existing Git service, never full patch bodies and never outside the Project's roots.
+  Design law 6: a session reviewing sibling work should condition on the diff, not on the
+  sibling's story about the diff.
+
+### Closing the loops that Phase 5 left open
+
+- [ ] Add `message_status(message_id)` so the sender of an `mux.notify` can see whether it is
+  drafted, armed, delivered, stranded, expired, or refused. Today the write is
+  fire-and-forget from the sender's side, which forces an agent to either assume delivery or
+  re-send; both are worse than a read.
+- [ ] Expose the Project's observation inbox read-only, including the state of the caller's
+  own `request_spawn` drafts. This is the human-to-agent channel with no new trust boundary:
+  notes a human captured while testing are exactly the context the agent lacks.
+- [ ] Decide the cross-Project read question (CP §18) explicitly rather than by default. "What
+  else am I working on right now" is inherently cross-Project; the default stays own-Project
+  only, and any widening is a named grant with its own surface, not a quiet scope change.
+
+### Construction rules (unchanged from Phase 4.5, restated because they are load-bearing)
+
+- [ ] Every tool is a thin caller over the same typed daemon operation the browser uses
+  (CP §7.1). Nothing is implemented inside the MCP layer, so the browser, CLI, and later
+  clients inherit every bound.
+- [ ] Tools are listed even when disabled and answer with a typed refusal, because clients
+  cache `tools/list` at session start and a vanished tool is indistinguishable from a broken
+  server.
+- [ ] Scope misses and true misses stay indistinguishable; empty beats a weak match.
+
+### Phase 5.6 exit criteria
+
+- [ ] An agent can read the first messages of a sibling's conversation and of its own
+  superseded run, and can always tell which run any message came from.
+- [ ] No read tool crosses a Project boundary, and none returns a record the browser's own
+  allowlist would have withheld.
+- [ ] The surface remains read-only: nothing added in this phase can enqueue, deliver, spawn,
+  interrupt, end a session, or write to a PTY. Pinned by the tool-set allowlist test.
+- [ ] Adding these tools costs no new substrate: each one is traceable to a service that
+  shipped in an earlier phase.
+
 ## Phase 6 — Agent Context, portable instructions, and skills
 
 Phase 6 starts with a deliberately small continuity feature: show the user the Project-root
@@ -1475,6 +1563,94 @@ because it inherits the transport, identity, and restart contract already proven
 - [ ] No tool result silently merges two agent runs, and a caller can always tell which run a
   result came from.
 
+## Phase 7.6 - mux MCP session control: interrupt and end
+
+Control-plane build-order step 9 (`CONTROL_PLANE_ROADMAP.md` §7.6, §16). Every MCP tool
+before this phase is a read or a draft. This is the first one that **acts on another running
+agent**, and it is scheduled deliberately rather than left decision-gated forever: an agent
+that can see a sibling wedged in a loop, or that has finished the work a worker was spawned
+for, should be able to stop it instead of only telling a human about it.
+
+Two capabilities, kept as two tools, because they have different blast radii and must be
+grantable separately:
+
+- **`interrupt(target)`**: stop the current turn. The session keeps living, its conversation
+  and PTY survive, and the work it was doing is discarded.
+- **`end_session(target)`**: the session goes away. Allowed against the caller itself.
+
+It sits after Phase 7 because the graceful-stop daemon operation it needs does not exist yet
+(`SessionManager.stop` is a hard kill that marks the record `killed`), after Phase 5's
+readiness contract because an interrupt is a PTY write, and after Phase 6.5 because a
+sibling-initiated interrupt is exactly the kind of event that must never be silent.
+
+### The daemon operations underneath
+
+- [ ] Build a **graceful session end** as a typed daemon operation, used identically by the
+  browser, CLI, and MCP: interrupt the current turn, send the harness's own exit sequence
+  from its adapter, wait bounded for the CLI to tear itself down (transcript flushed, history
+  row closed, run ended cleanly), and fall back to the existing hard stop only on timeout.
+- [ ] Distinguish the end reasons durably: `agent_ended` (a session ended by an agent through
+  this surface, gracefully or by fallback) is not `killed` (operator hard stop) and not
+  `exited` (the CLI ended on its own). A post-mortem must be able to tell which happened.
+- [ ] Own the interrupt sequence in the **adapter**, never in the MCP layer. The escape
+  sequence is per-harness and already resolved for the voice interrupt path; MCP calls the
+  same operation rather than learning any keystroke.
+- [ ] Gate the interrupt on the delivery-readiness predicate with its existing fail-closed
+  contract: `safe` proceeds, `blocked` refuses, `unknown` never authorizes. Interrupting a
+  session that is mid-approval-prompt or in a menu is corruption, not a stop.
+
+### Authority: a per-Project grant, and the same model spawn has been waiting for
+
+- [ ] Add a per-Project **agent authority grant** for these tools with three positions, and
+  make `draft` the default: `off` (typed refusal), `draft` (the call writes an inert
+  observation-inbox request with full provenance, identical in shape to `request_spawn`, and a
+  human approves and the approval is what acts), and `granted` (direct, inside a per-origin
+  budget, fully audited). It lives in the existing enablement/opt-in surface, per Project,
+  never machine-wide.
+- [ ] Resolve agent-held **spawn** authority under this same grant, or not at all. The
+  decision-gated entry exists because spawn converts one prompt injection into unbounded
+  fan-out; the answer is a bounded standing grant with a budget and an audit trail, not a
+  permanently different mechanism for a capability the user wants exposed. If the grant model
+  proves out for interrupt/end, `request_spawn` gains the same `granted` position with its
+  own budget; if it does not, spawn stays drafted and so do these.
+- [ ] Bound the granted path with the machinery `agent_messaging.py` already proves: Project
+  scope, live-agent-only targets, per-origin budget, chain depth and cycle detection over the
+  recorded path (A interrupting B while B interrupts A is a loop), idempotency keys, typed
+  refusals instead of JSON-RPC faults, and a master kill switch.
+
+### What must stay impossible
+
+- [ ] Never reachable: a target outside the caller's Project (indistinguishable from
+  nonexistent, as everywhere else), a shell or non-agent pane, and **the session that owns
+  the running daemon**, because job-object inheritance means ending that session takes the daemon
+  with it, which is a known failure mode and not something an agent may trigger.
+- [ ] Self-termination is permitted and is the ordinary case for a finished worker, but it is
+  the caller's last act and must not destroy the record of why: the tool returns its result
+  before teardown begins, the final turn is flushed and retained, and the ended session stays
+  readable through `list_sessions(include_ended)`, `get_session`, and history. An agent may
+  end itself; it may not erase itself.
+- [ ] Never add automatic remediation on top of this. "Interrupt and re-run the turn" is
+  resampling, which amplifies injected content (CP §16); a rewind stays human-directed with a
+  corrected instruction.
+- [ ] Never let an interrupt or end happen silently. Each one emits to the event log with the
+  calling session and run as provenance, appears in the fleet audit surface beside agent
+  messages, and is a candidate for the Phase 6.5 attention channels. The human learning that
+  one agent stopped another from a status change alone is a defect.
+
+### Phase 7.6 exit criteria
+
+- [ ] A live agent can interrupt and end another agent session in its Project, and its own,
+  through MCP, with the default grant requiring a human approval and the granted position
+  bounded and audited.
+- [ ] An agent-ended session's transcript, final turn, history row, and end reason survive the
+  end and are readable afterwards.
+- [ ] A graceful end is attempted before any hard stop, and the two are distinguishable in the
+  durable record.
+- [ ] An interrupt is refused when readiness is `blocked` or `unknown`, and no interrupt lands
+  in an approval prompt or a menu in the proving corpus.
+- [ ] Disabling the grant leaves every earlier MCP phase working unchanged, and the browser's
+  own stop/interrupt controls are unaffected by any setting here.
+
 ## Phase 8 — Telegram multi-session control
 
 This phase carries forward original Roadmap Phase 9. Telegram consumes typed Phase 5/7
@@ -1650,8 +1826,13 @@ failure behavior:
 - Agent-held spawn authority. Phase 5 ships `mux.requestSpawn` as a **draft producer** only
   (`CONTROL_PLANE_ROADMAP.md` §7.2, §16); letting a tool call actually create a session
   without human approval remains a separate product decision, because it converts one prompt
-  injection into unbounded fan-out.
-- Automatic termination of suspected orphan processes.
+  injection into unbounded fan-out. **This one now has a deciding vehicle rather than an open
+  end:** Phase 7.6 introduces the per-Project three-position authority grant
+  (`off`/`draft`/`granted`) for agent session control, and the spawn decision is made there,
+  under the same budget and audit trail, or not at all.
+- Automatic termination of suspected orphan processes. Agent-initiated termination of a
+  *session* is a different question and is scheduled in Phase 7.6; this entry remains about
+  the daemon acting on processes it merely suspects are orphaned.
 - Definitive identity attribution for shared-account quota usage.
 - Automatic/background bidirectional instruction sync or blind cross-provider skill-directory
   sync. Phase 6's explicit, previewed, one-time root-file overwrite in either direction is the

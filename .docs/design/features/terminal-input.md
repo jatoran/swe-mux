@@ -96,7 +96,12 @@ own fit differs LETTERBOXES: shrink the font, never re-fit, because re-fitting i
 two devices into a resize loop.
 
 **Desktop agent width policy is applied before viewport registration.**
-Claude's host has a centered 120-column maximum, so making its pane wider adds margin instead of repeatedly resizing the PTY through Claude Code's known stale-cell and duplicate-live-region failure.
+Claude's host has a centered column maximum, so making its pane wider adds margin instead of repeatedly resizing the PTY through Claude Code's known stale-cell and duplicate-live-region failure.
+The maximum is the `claude_max_columns` setting (Settings → Terminals), one of a fixed set of steps with `0` meaning no cap at all, defaulting to the 120 columns the app has always used.
+It is configurable because its evidence is a rendering defect in a CLI that ships on its own schedule, so a number measured once is not permanently correct, while a stale one costs the user width with no way to tell a deliberate envelope from a terminal refusing to resize.
+An uncapped Claude pane carries no host style at all, so "the envelope is disabled" and "this build has no envelope" are one code path.
+Compact panes are never capped, on the same grounds as the Codex minimum: every offered step is wider than the device.
+A pane whose width change is clamped by the cap raises a transient notice naming the limit, with a route into the setting, because the clamp is otherwise indistinguishable from a broken resize.
 Codex's own diagnostics recommend at least 80 columns.
 When an ordinary desktop pane would fall below that, mux reduces the xterm font to a floor of 8 px, proposes dimensions again, and sends only the resulting grid; replay therefore starts with the same width xterm is already rendering.
 Compact mobile panes are excluded because preserving readable touch-device type is more important than imposing a desktop minimum.

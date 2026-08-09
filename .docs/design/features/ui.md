@@ -445,7 +445,11 @@ responsive controls.
 - A retained warm pane keeps parsing but not rendering.
   Its renderer is explicitly paused while hidden and resumed on reveal ahead of the reveal's redraw, because xterm's own pause is geometric and never triggers for a measurable `visibility:hidden` box (`terminalRenderPause.ts`, `technical/frontend/workspace-state.md`).
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
-  Claude's terminal body stops at 120 columns and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Terminals; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
+  A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
+  That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.
+  `0` removes the host style entirely rather than relaxing its maximum, so a disabled envelope is the same code path as no envelope.
   The centered grid item retains an explicit `width:100%` before its maximum is applied.
   Centering without that definite width makes CSS Grid intrinsically size the host from xterm's own fitted child, creating a repeated shrink-and-refit loop.
   Codex panes that would fit fewer than 80 columns reduce their font, down to 8 px, and fit again before attach or resize; this preserves Codex's documented 80-column composer floor for ordinary narrow desktop panes.
@@ -902,6 +906,14 @@ responsive controls.
   inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
   rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
   over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- Talk exposes a deliberately smaller rail-derived command set through `railVoice.ts` when a live session is focused.
+  Built-in keys and Paste require explicit `voicePhrases`; non-submitting configured agent skills and slash commands derive aliases from their names.
+  Submitted custom commands require their own explicit voice phrases.
+  Copy is the existing focused-terminal registry command because it is not a rail catalog item.
+  Literal text and prompt macros are excluded, as are destructive and UI-only actions such as clear-input, Attach, keyboard mode, relaunch, and End session.
+  Only items placed on the current device's strip or Commands panel participate, and duplicate placements collapse to one spoken command.
+  The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
+  Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
 - The command-rail editor (`RailEditor.tsx`) shows the two device layouts as columns above a catalog of every command.
   Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
   Each column holds its two surfaces, each surface its rows, each row its draggable chips.

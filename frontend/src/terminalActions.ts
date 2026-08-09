@@ -1,11 +1,18 @@
-export type TerminalInsertRequest = {
+export type TerminalActionRequest = {
   sessionId: string
-  text: string
-  submit: boolean
+  action: string
   requestId: string
+  text?: string
+  submit?: boolean
 }
 
-type TerminalActionResult = { requestId: string; ok: boolean; error?: string }
+export type TerminalInsertRequest = TerminalActionRequest & {
+  action: 'insertText'
+  text: string
+  submit: boolean
+}
+
+export type TerminalActionResult = { requestId: string; ok: boolean; error?: string }
 type TerminalWait = (delayMs: number) => Promise<void>
 
 export const TERMINAL_SUBMIT_SETTLE_MS = 180
@@ -43,6 +50,14 @@ const requestId = (): string => globalThis.crypto?.randomUUID?.() || `${Date.now
  * draft when its target pane is no longer mounted.
  */
 export function insertIntoTerminal(sessionId: string, text: string, submit: boolean): Promise<void> {
+  return requestTerminalAction(sessionId, { action: 'insertText', text, submit })
+}
+
+/** Run an action through the mounted terminal owner and wait for its result. */
+export function requestTerminalAction(
+  sessionId: string,
+  request: { action: string; text?: string; submit?: boolean },
+): Promise<void> {
   const id = requestId()
   return new Promise((resolve, reject) => {
     const finish = (event: Event) => {
@@ -55,14 +70,14 @@ export function insertIntoTerminal(sessionId: string, text: string, submit: bool
     }
     const timer = window.setTimeout(() => {
       window.removeEventListener('mux:terminal-action-result', finish)
-      reject(new Error('The target terminal is not mounted. Draft kept.'))
+      reject(new Error(request.action === 'insertText'
+        ? 'The target terminal is not mounted. Draft kept.'
+        : 'The target terminal is not mounted.'))
     }, 1_500)
     window.addEventListener('mux:terminal-action-result', finish)
-    const detail: TerminalInsertRequest & { action: 'insertText' } = {
+    const detail: TerminalActionRequest = {
       sessionId,
-      action: 'insertText',
-      text,
-      submit,
+      ...request,
       requestId: id,
     }
     window.dispatchEvent(new CustomEvent('mux:terminal-action', { detail }))

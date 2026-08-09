@@ -31,6 +31,33 @@ uv run python tools/perf_snapshot.py --json before.json
 Use `--json` on both sides of a change so a before/after is a diff rather than a memory.
 The rest of this document is what the tool is doing and how to read it.
 
+## Measuring mobile data use
+
+Start a clean daemon-local measurement window, use the mobile client normally, then read the
+result:
+
+```text
+DELETE /api/diagnostics/network
+GET /api/diagnostics/network
+```
+
+The snapshot groups HTTP counts by normalized route and peer, and WebSocket counts by channel
+and peer.
+HTTP response bytes are the encoded body after negotiated compression.
+WebSocket bytes are application text/binary frame payloads before per-message compression.
+Neither figure includes HTTP or WebSocket headers, TLS, Tailscale, TCP/IP, retransmits, or radio
+overhead, so use a browser network export or OS packet capture when the carrier-billed wire total
+is required.
+The DELETE response includes the previous snapshot, writes its aggregate totals to the rotating
+daemon log, and resets only the counters.
+It does not restart the daemon or affect sessions.
+Both diagnostics requests are excluded from the measurement window.
+
+For a useful mobile comparison, measure the same scripted interval with one foreground client,
+then with the browser backgrounded, and compare `http_routes` and `websocket_channels` rather
+than only the aggregate.
+Large one-time static and PTY replay transfers should be separated from steady-state idle use.
+
 ```
 uv run python tools/pty_latency_bench.py --samples 25 --idle-gap 6
 ```

@@ -54,6 +54,12 @@ CUSTOM_THEME_KEYS = {"background", "panel", "line", "foreground", "muted", "acce
 # broken. 1.4 is the ceiling because past it the fixed paddings and grid tracks
 # that deliberately do *not* scale start to crowd.
 UI_SCALES = {0.9, 1.0, 1.1, 1.25, 1.4}
+# Accepted values for `claude_max_columns`, in terminal columns, where 0 means "no
+# cap". Discrete for the same reason the scale steps are: there is no useful
+# difference between a 121- and a 123-column envelope, only a way to land on a value
+# that reads as broken. 320 is the widest step because past it "no cap" is the
+# honest answer rather than a larger number.
+CLAUDE_MAX_COLUMNS = {0, 100, 120, 140, 160, 200, 240, 320}
 # The note editor's own grammars: a normalized chord (`mod+shift+r`) and a
 # command id (`markdown.toggle_task`). The daemon cannot know which commands the
 # vendored editor actually implements, so it checks shape only and the browser
@@ -311,6 +317,15 @@ class Config:
     # config-file edit; neither requires a restart.
     log_level: str = "INFO"
     terminal_renderer: str = "auto"
+    # Desktop width envelope for Claude panes, in columns. Claude Code's live-region
+    # renderer can leave stale and duplicated cells across large column changes, so a
+    # Claude pane dragged wider than this adds margin instead of resizing the PTY
+    # again. 0 removes the cap and lets a Claude pane fill its box like every other
+    # backend. Configurable rather than fixed because the evidence for any particular
+    # number is a defect in a CLI that ships on its own schedule, while the cost of a
+    # stale number lands on someone who cannot tell an envelope from a broken resize.
+    # 120 is what the app has always done: installing this build changes nothing.
+    claude_max_columns: int = 120
     git_poll_seconds: float = 5.0
     process_poll_seconds: float = 5.0
     process_orphan_grace_seconds: float = 15.0
@@ -605,6 +620,14 @@ def _validate(config: Config) -> None:
         errors["default_backend"] = "must be shell or a registered agent"
     if config.terminal_renderer not in {"auto", "dom", "webgl"}:
         errors["terminal_renderer"] = "must be auto, dom, or webgl"
+    # `bool` is an `int` subclass and `True` would otherwise validate as a 1-column cap.
+    if (
+        not isinstance(config.claude_max_columns, int)
+        or isinstance(config.claude_max_columns, bool)
+        or config.claude_max_columns not in CLAUDE_MAX_COLUMNS
+    ):
+        allowed = ", ".join(str(step) for step in sorted(CLAUDE_MAX_COLUMNS))
+        errors["claude_max_columns"] = f"must be one of {allowed} (0 removes the cap)"
     if str(config.log_level).strip().upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
         errors["log_level"] = "must be DEBUG, INFO, WARNING, or ERROR"
     if config.notes_default_open not in {"dock", "popout"}:
