@@ -1008,6 +1008,64 @@ async def test_transcript_close_latch_blocks_hook_reopen_until_new_transcript_tu
     assert session.observation_state["closed_by_transcript"] is False
 
 
+async def test_completed_turn_records_its_duration_on_the_record() -> None:
+    """A ready row reports how long the last turn took, so the turn must be timed.
+
+    The measurement lands on the record rather than only on the event because a
+    browser that connects after the turn ended still has to render the number.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    assert session.record.last_turn_ms is None
+
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(72.0)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.last_turn_ms == 72_000.0
+    assert session.record.state_since == session.clock.wall()
+
+
+async def test_harness_reported_duration_outranks_the_daemon_wall_clock() -> None:
+    """The harness times the turn itself; the daemon also times its own latency."""
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(90.0)
+    await _finish_root_turn(session, events, source="transcript", duration_ms=41_000)
+    assert session.record.last_turn_ms == 41_000.0
+
+
+async def test_implausibly_long_turn_is_discarded_rather_than_reported() -> None:
+    """A missed completion leaves the turn open; closing it hours later is not a turn.
+
+    Keeping the previous measurement is the honest failure: an overnight-idle
+    session must not claim its last turn took nine hours.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(12.0)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.last_turn_ms == 12_000.0
+
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(9 * 60 * 60)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.last_turn_ms == 12_000.0
+
+
 def test_watchdog_recovers_proven_ended_turns_faster_than_pty_backstop() -> None:
     # #4: a tail that proves the turn ended is high-confidence, so recovery no
     # longer waits the full stall window; the ambiguous PTY backstop still does.

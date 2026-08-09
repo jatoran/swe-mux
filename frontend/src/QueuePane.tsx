@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
-import { sessionDotClass } from './sessionStatus'
+import { StateIndicator } from './StateIndicator'
+import { useSessionRowConfig } from './sessionRowPrefs'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
   armQueueMessage, cancelQueueMessage, deleteQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
@@ -139,6 +140,7 @@ export function QueuePane({
   sessionId, sessions, onSelectSession, onOpenAsTab, onOpenFleetQueue, fleetPending = 0,
   openRequestToken,
 }: Props) {
+  const rowConfig = useSessionRowConfig()
   const [view, setView] = useState<QueueTargetView | null>(null)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState('')
@@ -538,7 +540,7 @@ export function QueuePane({
   return (
     <div class="queue-pane">
       <header class="queue-pane-header">
-        <span class={sessionDotClass(session ?? undefined)} />
+        <StateIndicator session={session ?? undefined} shape={rowConfig.dotShape} />
         <strong>{targetable ? targetLabel : 'no agent focused'}</strong>
         {targetable && (
           <span class="queue-pane-status">

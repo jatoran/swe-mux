@@ -5,6 +5,7 @@ import { displayChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
+import { SessionRowSettings } from './SessionRowSettings'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/editor'
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
@@ -928,6 +929,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
           <div class="theme-actions"><button onClick={()=>themeFile.current?.click()}>Import theme</button><button onClick={exportTheme}>Export theme</button></div>
           <p>Settings, menus, controls, and terminal chrome use the same monospace font token.</p>
+          <SessionRowSettings />
           <h3>Side panel tabs</h3>
           <label>Drawer tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <label>Right rail<select value={draft.utility_rail_display} onChange={e=>change('utility_rail_display',e.currentTarget.value as Config['utility_rail_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>

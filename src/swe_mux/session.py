@@ -542,6 +542,10 @@ def apply_state_transition(
             seconds_in_previous = max(0.0, monotonic_now - previous_change_monotonic)
         session.last_state_change_ts = now
         session.last_state_change_monotonic = monotonic_now
+        # The record's mirror of the same instant. Wall-clock rather than
+        # monotonic because it crosses the API boundary to a browser that has no
+        # access to this process's clock origin.
+        record.state_since = now
     # Any accepted transition — including a same-state detail update while tools
     # run — is evidence the session is being observed. Absence of this, not time
     # in state, is what makes a session stuck.
@@ -1540,6 +1544,10 @@ class Session:
         # quiescence watchdog; none are serialized into the frequent record snapshot.
         self.last_state_change_ts = time.time()
         self.last_state_change_monotonic = time.monotonic()
+        # A record adopted from an older daemon carries no `state_since`; seed it
+        # here so an age reads as "since adoption" rather than 1970.
+        if not self.record.state_since:
+            self.record.state_since = self.last_state_change_ts
         self.last_evidence_ts = time.time()
         self.last_hook_ts = 0.0
         # Only hooks whose event *must* have produced transcript records — a prompt
@@ -2972,6 +2980,10 @@ class SessionManager:
         record.parser_schema_version = None
         record.observation_stale_since = None
         record.observation_diagnostic = None
+        # Run-scoped like the annotations: a turn duration measured in a replaced
+        # conversation is not this one's, and keeping it would date the new run's
+        # first idle with the old run's last turn.
+        record.last_turn_ms = None
         # Annotations describe the observation identity being reset here. This is
         # a silent record-level clear for the adoption-repair paths (no Session,
         # no ledger yet); live callers ledger via clear_all_standing_activity

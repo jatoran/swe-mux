@@ -7,10 +7,12 @@ own localStorage (unshareable, invisible to the push sender that runs on the
 server), settings live here keyed by a device *class* — ``desktop`` or
 ``mobile`` — and every device can read and edit either profile.
 
-The ``sounds``, ``commandRail``, ``fileTree`` and ``drawerTabs`` domains are stored
+The ``sounds``, ``commandRail``, ``fileTree``, ``drawerTabs`` and ``sessionRows``
+domains are stored
 opaquely: the browser owns their schema and normalization (custom sound data URLs,
 per-event sound ids, the file-tree's ``{projectId: expandedPaths[]}`` blob, the
-utility drawer's ``{order: tabId[]}``). The ``alerts`` and ``notifications`` domains
+utility drawer's ``{order: tabId[]}``, the sidebar row layout). The ``alerts`` and
+``notifications`` domains
 are interpreted server-side because the Web Push sender must apply the shared
 master, quiet hours, and push-channel policy before any tab is alive to filter it.
 """
@@ -32,6 +34,7 @@ DOMAINS: tuple[str, ...] = (
     "commandRail",
     "fileTree",
     "drawerTabs",
+    "sessionRows",
 )
 NOTIFICATION_EVENTS: tuple[str, ...] = ("complete", "waiting", "attention", "failure", "reset")
 #: Which presence silences a profile's push. See ``default_notifications``.

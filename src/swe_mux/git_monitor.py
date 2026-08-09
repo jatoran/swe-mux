@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import TypeVar
 
 from .background_tasks import background
@@ -12,9 +15,14 @@ from .models import GitState
 from .session import Session, SessionManager
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
+log = logging.getLogger(__name__)
+
 GIT_MONITOR_LOOP = "git-monitor"
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
+#: Repository roots retained in the diffstat memo. One entry per checkout the
+#: fleet has open, so this is bounded by how many worktrees exist, not by time.
+DIFFSTAT_CACHE_LIMIT = 256
 
 T = TypeVar("T")
 
@@ -99,15 +107,113 @@ def _dirty_hash(porcelain: str) -> str | None:
     return hashlib.sha256("\n".join(lines).encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def _worktree_name(root: str, git_dir: str, common_dir: str) -> str | None:
+    """Leaf name of `root` when it is a linked worktree, else None.
+
+    A linked worktree's `--git-dir` lives under the primary checkout's
+    `.git/worktrees/<name>`, so it differs from `--git-common-dir`; the primary
+    checkout reports the same path for both. Comparing the two paths is the only
+    check that stays correct for bare repositories and `.git`-file submodules,
+    where comparing directory *names* does not.
+    """
+    if not git_dir or not common_dir:
+        return None
+    try:
+        if Path(git_dir).resolve() == Path(common_dir).resolve():
+            return None
+    except OSError:
+        return None
+    return Path(root).name or None
+
+
+#: root -> (dirty_hash, added, removed). Keyed by the working-tree fingerprint the
+#: cheap poll already computes, so `git diff --numstat` runs only when the change
+#: set actually moved — not once per session, and not once per five-second poll.
+_diffstat_memo: OrderedDict[str, tuple[str | None, int, int]] = OrderedDict()
+
+
+def reset_diffstat_cache() -> None:
+    """Drop every memoized diffstat. For tests and for daemon restart."""
+    _diffstat_memo.clear()
+
+
+def _memoized_diffstat(root: str, dirty_hash: str | None) -> tuple[int, int] | None:
+    cached = _diffstat_memo.get(root)
+    if cached is None or cached[0] != dirty_hash:
+        return None
+    _diffstat_memo.move_to_end(root)
+    return cached[1], cached[2]
+
+
+def _memoize_diffstat(root: str, dirty_hash: str | None, added: int, removed: int) -> None:
+    _diffstat_memo[root] = (dirty_hash, added, removed)
+    _diffstat_memo.move_to_end(root)
+    while len(_diffstat_memo) > DIFFSTAT_CACHE_LIMIT:
+        _diffstat_memo.popitem(last=False)
+
+
+def parse_numstat(output: str) -> tuple[int, int]:
+    """Sum added/removed lines from `git diff --numstat`.
+
+    Binary files report `-` for both counts and contribute nothing rather than
+    aborting the sum — a repository with one PNG in it still has a line count.
+    """
+    added = removed = 0
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        if parts[0].isdigit():
+            added += int(parts[0])
+        if parts[1].isdigit():
+            removed += int(parts[1])
+    return added, removed
+
+
+async def _read_diffstat(
+    cwd: str, root: str, dirty_hash: str | None, has_head: bool
+) -> tuple[int | None, int | None]:
+    """Lines added/removed vs HEAD, memoized on the working-tree fingerprint.
+
+    A clean tree is answered without touching git at all: no change set means no
+    changed lines, and that is the common case across an idle fleet.
+    """
+    if not has_head:
+        return None, None
+    if dirty_hash is None:
+        _memoize_diffstat(root, None, 0, 0)
+        return 0, 0
+    cached = _memoized_diffstat(root, dirty_hash)
+    if cached is not None:
+        return cached
+    code, output = await _git(cwd, "diff", "--numstat", "HEAD")
+    if code:
+        log.debug(
+            "git diffstat unavailable",
+            extra={"root": root, "code": code, "diagnostic": output[:200]},
+        )
+        return None, None
+    added, removed = parse_numstat(output)
+    _memoize_diffstat(root, dirty_hash, added, removed)
+    return added, removed
+
+
 async def read_git_reading(cwd: str) -> GitReading:
     code, root = await _git(cwd, "rev-parse", "--show-toplevel")
     if code or not root:
         return GitReading(GitState(), GitEvidence())
-    (_, branch), (_, porcelain), (upstream_code, counts), (head_code, head) = await asyncio.gather(
+    (
+        (_, branch),
+        (_, porcelain),
+        (upstream_code, counts),
+        (head_code, head),
+        (dir_code, dirs),
+    ) = await asyncio.gather(
         _git(cwd, "branch", "--show-current"),
         _git(cwd, "status", "--porcelain"),
         _git(cwd, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"),
         _git(cwd, "rev-parse", "HEAD"),
+        _git(cwd, "rev-parse", "--absolute-git-dir", "--git-common-dir"),
     )
     if not branch:
         _, branch = await _git(cwd, "rev-parse", "--short", "HEAD")
@@ -118,9 +224,21 @@ async def read_git_reading(cwd: str) -> GitReading:
             ahead, behind = int(parts[0]), int(parts[1])
     # An unborn branch (no commits yet) reports a non-zero code and no oid.
     commit = head.strip() if not head_code and head.strip() else None
+    dir_lines = dirs.splitlines() if not dir_code else []
+    worktree = _worktree_name(root, *dir_lines[:2]) if len(dir_lines) >= 2 else None
+    dirty_hash = _dirty_hash(porcelain)
+    added, removed = await _read_diffstat(cwd, root, dirty_hash, commit is not None)
     return GitReading(
-        GitState(branch, len(porcelain.splitlines()), ahead, behind),
-        GitEvidence(head=commit, dirty_hash=_dirty_hash(porcelain)),
+        GitState(
+            branch,
+            len(porcelain.splitlines()),
+            ahead,
+            behind,
+            worktree=worktree,
+            added=added,
+            removed=removed,
+        ),
+        GitEvidence(head=commit, dirty_hash=dirty_hash),
     )
 
 
@@ -188,14 +306,7 @@ class GitMonitor:
                         "git_changed",
                         session_id=session.record.id,
                         source="daemon",
-                        git=state.__dict__
-                        if hasattr(state, "__dict__")
-                        else {
-                            "branch": state.branch,
-                            "dirty": state.dirty,
-                            "ahead": state.ahead,
-                            "behind": state.behind,
-                        },
+                        git=asdict(state),
                         # Tier 0 provenance reads these: which commit, which
                         # working-tree change set. The UI ignores them.
                         content_hash=reading.evidence.head,
