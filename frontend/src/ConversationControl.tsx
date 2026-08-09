@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, PersistentVoiceCapture } from './conversation'
+import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, isPlaybackControl, PersistentVoiceCapture } from './conversation'
 import type { CaptureDetector, ParsedMuxVoice } from './conversation'
 import { appendUtterance, clearDraft, editDraft, EMPTY_DRAFT, undoUtterance } from './conversationDraft'
 import type { Draft } from './conversationDraft'
@@ -155,6 +155,7 @@ export function useConversation(
   const respond=(text:string)=>{setDetail(text);recordHistory('mux',text)}
 
   const stop=(record=true)=>{
+    bargeInPlayback()
     if(record&&enabledRef.current)recordHistory('mux','Talk stopped.')
     enabledRef.current=false;enterStandby(false)
     speculationRef.current?.controller.abort();speculationRef.current=null
@@ -439,7 +440,7 @@ export function useConversation(
     finally{clearTimeout(slow)}
     try{
       recordHistory('you',decoded.text)
-      if(marks.playbackAtStart&&decoded.parsed.command!=='mute'){
+      if(marks.playbackAtStart&&!isPlaybackControl(decoded.parsed.command)){
         const spoken=marks.playbackOriginAtStart==='system'
           ?extractWakeIntent(decoded.text,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
           :null

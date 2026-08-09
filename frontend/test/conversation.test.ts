@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { BARGE_IN_CONFIRM_FRAMES, buildVoiceMatcher, nextBargeInFrameCount, parseMuxVoice, playbackSafeProbability } from '../src/conversation.ts'
+import { BARGE_IN_CONFIRM_FRAMES, buildVoiceMatcher, isPlaybackControl, nextBargeInFrameCount, parseMuxVoice, playbackSafeProbability } from '../src/conversation.ts'
 
 assert.deepEqual(parseMuxVoice('Please run the focused tests. Mux send that.'),{
   command:'send',text:'Please run the focused tests.',
@@ -14,6 +14,7 @@ assert.deepEqual(parseMuxVoice('Keep the current implementation. Mucks submit it
 assert.deepEqual(parseMuxVoice('Mux cancel that'),{command:'cancel',text:''})
 assert.deepEqual(parseMuxVoice('Mux undo that'),{command:'undo',text:''})
 assert.deepEqual(parseMuxVoice('Mux stop speaking'),{command:'mute',text:''})
+assert.deepEqual(parseMuxVoice('Mux stop'),{command:'mute',text:''})
 assert.deepEqual(parseMuxVoice('Mux read the reply again'),{command:'read',text:''})
 assert.deepEqual(parseMuxVoice('Mux summary mode'),{command:'summary',text:''})
 assert.deepEqual(parseMuxVoice('Mux use summaries'),{command:'summary',text:''})
@@ -30,6 +31,11 @@ assert.deepEqual(parseMuxVoice('Mux exit voice comms'),{command:'comms_off',text
 assert.deepEqual(parseMuxVoice('Explain what a mux is'),{command:null,text:'Explain what a mux is'})
 assert.deepEqual(parseMuxVoice('Computer send'),{command:null,text:'Computer send'})
 assert.deepEqual(parseMuxVoice('My computer sends notifications'),{command:null,text:'My computer sends notifications'})
+assert.equal(isPlaybackControl('mute'),true)
+assert.equal(isPlaybackControl('stop'),true)
+assert.equal(isPlaybackControl('interrupt'),true)
+assert.equal(isPlaybackControl('send'),false)
+assert.equal(isPlaybackControl(null),false)
 
 // Configurable wake words + phrases: a custom "swe" trigger with variants, and a
 // user-renamed submit phrase. Only configured phrases after a wake word fire.

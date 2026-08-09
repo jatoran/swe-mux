@@ -21,7 +21,7 @@ export const DEFAULT_COMMANDS:VoiceCommandConfig[]=[
   {action:'append',phrases:['append','append it','append that','append message','insert','insert it','insert that']},
   {action:'cancel',phrases:['cancel','cancel that','clear','clear that']},
   {action:'undo',phrases:['undo','undo that','undo last','undo last phrase','delete last','delete last phrase']},
-  {action:'mute',phrases:['mute','stop speaking','stop playback','stop audio']},
+  {action:'mute',phrases:['mute','stop','stop speaking','stop playback','stop audio']},
   {action:'read',phrases:['read','read reply','read the reply','read reply again','read the reply again','read response','speak reply','speak the reply']},
   {action:'summary',phrases:['summary','summary mode','use summaries']},
   {action:'verbatim',phrases:['verbatim','verbatim mode','read verbatim']},
@@ -70,6 +70,11 @@ const defaultMatcher=buildVoiceMatcher(DEFAULT_WAKE_WORDS,DEFAULT_COMMANDS)
 
 export function parseMuxVoice(text:string):ParsedMuxVoice{
   return defaultMatcher.parse(text)
+}
+
+/** Commands that must retain their normal meaning when their speech began over playback. */
+export function isPlaybackControl(command:MuxVoiceCommand|null):boolean{
+  return command==='mute'||command==='stop'||command==='interrupt'
 }
 
 export type ConversationCapability={available:boolean;secureContext:boolean;mediaDevices:boolean;audioContext:boolean;reason:string}

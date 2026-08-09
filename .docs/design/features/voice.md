@@ -88,6 +88,9 @@ affect the PTY, session state, transcripts, history, or projects.
   During playback, three consecutive accepted 32 ms speech frames stop and abandon the current clip, clear the queue, and suppress later clips from the same stream.
   The confirmation frames become the start of the new utterance and playback-contaminated pre-roll is discarded.
   Push-to-talk is already an explicit gesture, so it stops playback immediately without waiting for frame confirmation.
+  Any confirmed speech stops playback before transcription finishes, even when the utterance is not a command.
+  Bare `Mux, stop` maps to the playback-stop action and keeps Talk listening, while the explicit `stop listening` action releases capture.
+  Playback controls retain their normal meaning when the utterance began over audio, so `stop listening` and `interrupt agent` cannot be discarded as playback echo after they already silenced it.
 - **Turning read aloud off is immediate, at all three scopes.** The singleton element is
   shared, so clips are tagged with the session that owns them and each "off" switch stops
   exactly what it turns off: the pane's `tts:` chip going to `off` calls `stopSessionPlayback`
@@ -288,6 +291,7 @@ executed action — so that number is measured rather than estimated.
   `send`, `append`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`, `standby`, `resume`, `comms_on`, `comms_off`, `stop`.
   Defaults ship `mux`/`mucks`/`max` as wake words with phrases matching the historical grammar.
   Schema 20 adds only the three new action definitions to an older saved command list and preserves every existing custom phrase or disabled action.
+  Schema 21 adds bare `stop` only to the untouched stock `mute` phrase list; customized or disabled mute mappings remain unchanged.
 - **Workspace commands use the existing command registry.**
   `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
   When two slot templates match, the one with more fixed words wins, so `new Codex in Project 2 {text}` cannot be swallowed by the selected-Project `new Codex {text}` shorthand.
@@ -308,6 +312,7 @@ executed action — so that number is measured rather than estimated.
   Numbered navigation is always available and never depends on a prior spoken list.
   `Project N` follows rendered visible-sidebar order, including the active Project and Group sort.
   Bare `Session N` follows the selected Project's rendered session order: pane traversal first, then unattached sessions by creation order.
+  `go to next session` and `go to previous session` move through that same selected-Project order from the focused session and stop at the first or last entry without wrapping.
   `Project N Session N` resolves both coordinates against one live index before running the existing session-focus command, so a missing session cannot partially change Projects.
   Pending optimistic session rows have no voice address because their identifiers and placement are not final.
   Result lists speak at most five entries, announce item boundaries and the end of the list, support `next page`, `repeat`, and `more detail`, and retain canonical addresses instead of renumbering filtered results.
@@ -342,8 +347,10 @@ executed action — so that number is measured rather than estimated.
 - Agent Send and Append first call the side-effect-free `voice/prepare-submit` guard, which applies the existing live-Agent, bounded-text, and non-overridable approval/question safety checks.
   After that guard, they route through the mounted `TerminalPane` by a request/acknowledgement event.
   The pane appends with its existing bracketed-paste repair and normal xterm `onData` path, which preserves PTY ownership, replay buffering, broadcast policy, and the same carriage return used by the mobile Send control.
+  Send waits 180 ms after bracketed paste before issuing that carriage return because interactive TUIs such as Codex commit pasted composer text on a later input/render turn.
   Send appends and then submits; Append performs the same insertion without the carriage return.
-  The Talk draft clears only after the target pane acknowledges the operation, and a missing pane leaves the draft intact.
+  The pane acknowledges Send only after the delayed carriage return has been emitted.
+  The Talk draft clears only after that acknowledgement, and a missing or replaced pane leaves the draft intact.
   The older `POST voice/submit` route remains as a bounded compatibility API with idempotency and readiness checks, but the Talk client no longer uses it because a daemon write cannot append to an application composer already holding local text.
   `POST voice/interrupt` writes a lone `\x03` and requires a live Claude/Codex session.
 - **Voice Comms is explicit, session-scoped conversational prompting.**

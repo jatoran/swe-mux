@@ -96,6 +96,32 @@ def test_voice_command_migration_adds_only_new_schema_20_actions(tmp_path: Path)
     assert set(commands) == {"send", "cancel", "append", "comms_on", "comms_off"}
 
 
+def test_voice_command_migration_adds_bare_stop_only_to_stock_mute_phrases(
+    tmp_path: Path,
+) -> None:
+    stock_path = tmp_path / "stock.toml"
+    stock_path.write_text(
+        'schema_version = 20\n'
+        '[[voice_commands]]\naction = "mute"\n'
+        'phrases = ["mute", "stop speaking", "stop playback", "stop audio"]\n',
+        encoding="utf-8",
+    )
+    custom_path = tmp_path / "custom.toml"
+    custom_path.write_text(
+        'schema_version = 20\n'
+        '[[voice_commands]]\naction = "mute"\nphrases = ["silence"]\n',
+        encoding="utf-8",
+    )
+
+    stock = load_config(stock_path)
+    custom = load_config(custom_path)
+
+    assert stock.voice_commands[0]["phrases"] == [
+        "mute", "stop", "stop speaking", "stop playback", "stop audio",
+    ]
+    assert custom.voice_commands[0]["phrases"] == ["silence"]
+
+
 def test_first_run_prefers_powershell_7_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

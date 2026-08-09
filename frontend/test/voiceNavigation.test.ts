@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import type { PaneLayout } from '../src/layout.ts'
 import type { Project, Session } from '../src/types.ts'
 import {
-  buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber,
+  adjacentVoiceSession, buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber,
 } from '../src/voiceNavigation.ts'
 
 const project=(id:string):Project=>({id,name:id,root:`D:/${id}`,position:0} as Project)
@@ -41,5 +41,9 @@ assert.equal(projectAtVoiceNumber(index,1)?.id,'project-b')
 assert.equal(projectAtVoiceNumber(index,3),null)
 assert.equal(sessionAtVoiceNumber(index,'project-b',2)?.id,'pane-second')
 assert.equal(sessionAtVoiceNumber(index,'project-a',2),null)
+assert.equal(adjacentVoiceSession(index,'project-b','pane-first',1)?.id,'pane-second')
+assert.equal(adjacentVoiceSession(index,'project-b','pane-second',-1)?.id,'pane-first')
+assert.equal(adjacentVoiceSession(index,'project-b','old-unpanned',1),null)
+assert.equal(adjacentVoiceSession(index,'project-b','other-project',1),null)
 
 console.log('voice navigation tests passed')

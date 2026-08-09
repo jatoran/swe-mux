@@ -53,3 +53,15 @@ export function sessionAtVoiceNumber(
 ):Session|null{
   return Number.isInteger(number)&&number>0?index.sessionsByProject.get(projectId)?.[number-1]||null:null
 }
+
+/** Resolve a neighboring session from the canonical rendered order without wrapping. */
+export function adjacentVoiceSession(
+  index:VoiceNavigationIndex,
+  projectId:string,
+  sessionId:string,
+  direction:-1|1,
+):Session|null{
+  const ordered=index.sessionsByProject.get(projectId)||[]
+  const current=ordered.findIndex(session=>session.id===sessionId)
+  return current<0?null:ordered[current+direction]||null
+}

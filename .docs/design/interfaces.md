@@ -824,6 +824,8 @@ a restart.
 The Talk client first calls `/voice/prepare-submit` to recheck the live Agent target, bounded text, and non-overridable delivery protections without writing input.
 It then sends Agent drafts through the mounted terminal's ordinary xterm/WebSocket input path, not through `/voice/submit`.
 That is the only path that can append to text already held by the interactive application composer and then use the exact carriage return used by the visible Send control.
+For paste-and-submit, the mounted pane waits 180 ms between bracketed paste and carriage return so Codex and other interactive TUIs can commit the composer text first.
+Its browser acknowledgement is emitted only after that carriage return, and a missing or replaced pane rejects the request so Talk keeps its draft.
 The endpoint remains a compatibility API: it is agent-only, rejects control characters, caps text at 20,000 characters, deduplicates
 bounded recent `utterance_id` values, writes text plus one Enter, and advances the ordinary
 human-input revision.

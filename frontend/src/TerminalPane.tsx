@@ -68,6 +68,7 @@ import {
   type UploadedTerminalAttachment,
 } from './terminalAttachments'
 import { localPreviewUrl } from './previewLinks'
+import { settleTerminalInsertion } from './terminalActions.ts'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, terminalAttachAllowed, watchLiveness, type ConnectionPhase } from './liveness'
 import {
   shouldLoadWebgl,
@@ -2526,12 +2527,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else if (detail.action === 'find') find()
       else if (detail.action === 'toggleKeyboard') toggleKeyboard()
       else if (detail.action === 'insertText' && detail.text) {
-        try {
-          injectText(detail.text, detail.submit)
+        void injectText(detail.text, detail.submit).then(()=>{
           if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:true}}))
-        } catch(cause) {
+        }).catch(cause=>{
           if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:false,error:cause instanceof Error?cause.message:String(cause)}}))
-        }
+        })
       }
       // Rail items rendered outside this pane (the drawer's Commands tab) route
       // here rather than touching xterm: the pane stays the single owner of
@@ -2641,12 +2641,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   // Inject literal text (skills, slash commands, custom macros) then optionally
   // submit with Enter, mirroring the raw onData path used by sendKey.
-  const injectText=(text:string,submit?:boolean)=>{
+  const injectText=async(text:string,submit?:boolean):Promise<void>=>{
     if(!text)return
     const target=termRef.current
-    if(target)pasteIntoTerminal(target,session,text)
-    if(submit)sendKey('\r')
-    else if(!keyboardOffRef.current)focusTerminalInputRef.current()
+    if(!target)throw new Error('The target terminal is not ready. Draft kept.')
+    await settleTerminalInsertion(
+      text,
+      !!submit,
+      value=>pasteIntoTerminal(target,session,value),
+      ()=>{
+        if(termRef.current!==target)throw new Error('The target terminal changed before submit. Draft kept.')
+        sendKey('\r')
+      },
+    )
+    if(!submit&&!keyboardOffRef.current)focusTerminalInputRef.current()
   }
 
   // Tap/click feedback for every rail button (voice chips included). Touch
@@ -2736,7 +2744,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // they cannot go through the synchronous payload path below.
     if(item.type==='prompt')return <button key={key} class={item.className||''} title={item.title||'Insert this prompt template into the composer'} onClick={()=>void runPromptItem(item)}>{item.label}</button>
     const payload=railPayload(item,session.backend as RailBackend)
-    return <button key={key} class={item.className||''} title={item.title||payload} onClick={()=>injectText(payload,item.submit)}>{item.label}</button>
+    return <button key={key} class={item.className||''} title={item.title||payload} onClick={()=>{void injectText(payload,item.submit).catch(cause=>reportError(cause instanceof Error?cause.message:String(cause)))}}>{item.label}</button>
   }
   // Rows are rendered first and *then* filtered on what actually produced a button.
   // Backend filtering alone is not enough: the mutually exclusive built-ins

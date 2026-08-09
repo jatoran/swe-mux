@@ -13,7 +13,7 @@ from typing import Any
 from .harness import HARNESSES, is_agent_harness
 from .keybindings import is_command
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -174,7 +174,7 @@ def default_voice_commands() -> list[dict[str, Any]]:
                 ["undo", "undo that", "undo last", "undo last phrase",
                  "delete last", "delete last phrase"],
             ),
-            ("mute", ["mute", "stop speaking", "stop playback", "stop audio"]),
+            ("mute", ["mute", "stop", "stop speaking", "stop playback", "stop audio"]),
             (
                 "read",
                 ["read", "read reply", "read the reply", "read reply again",
@@ -1119,6 +1119,20 @@ def load_config(path: Path | None = None) -> Config:
             if additions:
                 cfg.voice_commands = [*cfg.voice_commands, *additions]
                 migrated = True
+        if source_schema < 21:
+            # Bare "stop" is the natural interruption while audio is speaking.
+            # Upgrade only the untouched schema-20 mute phrases so a customized or
+            # deliberately disabled action remains exactly as the user configured it.
+            old_mute_phrases = ["mute", "stop speaking", "stop playback", "stop audio"]
+            for voice_command in cfg.voice_commands:
+                if (
+                    isinstance(voice_command, dict)
+                    and voice_command.get("action") == "mute"
+                    and voice_command.get("phrases") == old_mute_phrases
+                ):
+                    voice_command["phrases"] = ["mute", "stop", *old_mute_phrases[1:]]
+                    migrated = True
+                    break
     if not cfg.shell_profiles:
         if "shell_exe" not in raw and shutil.which("pwsh.exe"):
             cfg.shell_exe = "pwsh.exe"

@@ -158,10 +158,10 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   App-owned Talk state renders in the focused pane's floating voice overlay, with a fixed top fallback when no terminal pane is visible.
   It names the target, supports an exact-target pin, keeps the draft across focus changes, and retains a device-local user/Mux history.
   Dynamic navigation, direct spawn, typed fleet/help/reply queries, and guarded approvals resolve through voice aliases on the ordinary command registry.
-  Spoken navigation uses live hierarchical indexes without requiring a prior list: `Project N` follows visible sidebar order, bare `Session N` follows the selected Project's sidebar session order, and `Project N Session N` resolves both coordinates atomically.
+  Spoken navigation uses live hierarchical indexes without requiring a prior list: `Project N` follows visible sidebar order, bare `Session N` follows the selected Project's sidebar session order, `next/previous session` traverses that same Project-scoped order without wrapping, and `Project N Session N` resolves both coordinates atomically.
   Spoken lists retain those canonical addresses, speak five explicitly separated items at a time, and keep five-minute device-local paging context for next/repeat/detail follow-ups.
-  Playback leaves capture open; three consecutive accepted frames stop any playback and continue as ordinary dictation or wake-word command input.
-  Agent Send and Append use the mounted terminal's acknowledged xterm path, so Send appends to an existing composer and uses the same carriage return as the visible mobile control.
+  Playback leaves capture open; three consecutive accepted frames stop any playback before transcription and continue as ordinary dictation or wake-word command input. Bare `Mux, stop` stops playback without releasing Talk.
+  Agent Send and Append use the mounted terminal's acknowledged xterm path, so Send appends to an existing composer, waits 180 ms for bracketed-paste commit, and then uses the same carriage return as the visible mobile control.
   Note, Scratchpad, Markdown, and Queue-composer Send and Append only insert at the caret without staging or delivering a queue item.
   Voice Comms pins one Agent, prepends a short-response protocol once per run, and temporarily enables automatic verbatim playback until restored.
   Capture always decodes through session-free `/api/voice/transcribe`.

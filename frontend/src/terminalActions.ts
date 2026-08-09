@@ -6,6 +6,31 @@ export type TerminalInsertRequest = {
 }
 
 type TerminalActionResult = { requestId: string; ok: boolean; error?: string }
+type TerminalWait = (delayMs: number) => Promise<void>
+
+export const TERMINAL_SUBMIT_SETTLE_MS = 180
+
+const waitForTerminal: TerminalWait = delayMs => new Promise(resolve => window.setTimeout(resolve, delayMs))
+
+/**
+ * Let an interactive TUI commit bracketed paste before sending Enter.
+ *
+ * Codex applies pasted text on its render/input loop. Sending carriage return in
+ * the same browser turn can reach the TUI before that text becomes its composer,
+ * leaving the text visible but unsubmitted. The daemon queue uses this same delay.
+ */
+export async function settleTerminalInsertion(
+  text: string,
+  submit: boolean,
+  append: (value: string) => void,
+  send: () => void,
+  wait: TerminalWait = waitForTerminal,
+): Promise<void> {
+  append(text)
+  if (!submit) return
+  await wait(TERMINAL_SUBMIT_SETTLE_MS)
+  send()
+}
 
 const requestId = (): string => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
 

@@ -109,7 +109,7 @@ import {
   parseVoiceQuery, projectListPage, sessionListPage, spokenSessionStatus, voiceHelpPage,
   voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
 } from './voiceQueries'
-import { buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber } from './voiceNavigation'
+import { adjacentVoiceSession, buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber } from './voiceNavigation'
 import { sessionLaunchVoicePhrases } from './voiceLaunch'
 import {
   clearSpokenListContext, loadSpokenListContext, saveSpokenListContext,
@@ -3058,6 +3058,9 @@ export function App() {
   const voiceNavigationIndex=buildVoiceNavigationIndex(
     displayProjects,sessions,project=>resolveLayout(layoutMap[project.id],project.layout),
   )
+  const relativeVoiceSession=(direction:-1|1):Session|null=>active
+    ?adjacentVoiceSession(voiceNavigationIndex,projectId,active.id,direction)
+    :null
   const voiceSessionAddress=(item:FleetSession)=>voiceNavigationIndex.sessionAddressById.get(item.session.id)||null
   const voiceProjectNumber=(project:{id?:string})=>project.id
     ?voiceNavigationIndex.projectNumberById.get(project.id)||null
@@ -3504,6 +3507,28 @@ export function App() {
       },
     }},
     { id: 'session.open', label: 'Open selected session in focused pane', category: 'session', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void selectSession(commandSession) },
+    { id:'session.nextInProject',label:'Go to next session in current Project',category:'session',available:!!activeProject&&!!active,disabledReason:'Focus a session in a Project first',run:()=>{const target=relativeVoiceSession(1);if(target)void selectSession(target)},voice:{
+      phrases:['go to next session','next session','open next session'],
+      execute:async()=>{
+        const target=relativeVoiceSession(1)
+        if(!target)return{detail:'This is the last session in the current Project.',speech:'This is the last session in the current Project.'}
+        await selectSession(target)
+        const number=voiceNavigationIndex.sessionAddressById.get(target.id)?.sessionNumber
+        const detail=`Opened Session ${number||''}${number?' - ':''}${sessionName(target)}.`
+        return{detail,speech:detail}
+      },
+    }},
+    { id:'session.previousInProject',label:'Go to previous session in current Project',category:'session',available:!!activeProject&&!!active,disabledReason:'Focus a session in a Project first',run:()=>{const target=relativeVoiceSession(-1);if(target)void selectSession(target)},voice:{
+      phrases:['go to previous session','previous session','open previous session','go to prior session'],
+      execute:async()=>{
+        const target=relativeVoiceSession(-1)
+        if(!target)return{detail:'This is the first session in the current Project.',speech:'This is the first session in the current Project.'}
+        await selectSession(target)
+        const number=voiceNavigationIndex.sessionAddressById.get(target.id)?.sessionNumber
+        const detail=`Opened Session ${number||''}${number?' - ':''}${sessionName(target)}.`
+        return{detail,speech:detail}
+      },
+    }},
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
     { id: 'session.regenerateTitle', label: 'Regenerate generated title', category: 'session', available: !!commandSession && isAgent(commandSession) && commandSession.auto_named !== false && !isEndedSession(commandSession), disabledReason: 'Select a live auto-named agent session', run: () => commandSession && void regenerateSessionTitle(commandSession) },
     { id: 'session.clearStandingActivity', label: 'Clear standing activity (subagents / background tasks)', category: 'session', available: !!commandSession && activityBadges(commandSession).length > 0, disabledReason: 'Select a session with a standing-activity badge', run: () => commandSession && void clearStandingActivity(commandSession) },

@@ -1,4 +1,5 @@
 import './terminalKeys.test.ts'
+import './terminalActions.test.ts'
 import './pendingInput.test.ts'
 import './terminalProtocol.test.ts'
 import './terminalHealth.test.ts'
