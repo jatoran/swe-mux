@@ -145,8 +145,10 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
 - **Read aloud (TTS):** `turn_ended` (auto, 1s debounce) or manual → last-turn slice →
   `summary` (OpenRouter cheap model, budgeted under `builtin:voice-summary`) or `verbatim`
   (`speechify`, no LLM) → edge-tts MP3 / Windows SAPI WAV clips in `<data_dir>/voice/` +
-  `voice_clips` SQLite. Browser plays one singleton audio element; autoplay/barge-in are
-  per-device. Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
+  `voice_clips` SQLite.
+  Automatic, manual, and application speech returns a short first clip before tracked background tasks synthesize the remaining sentence-sized clips.
+  Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
+  Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
   **Silero VAD** (`sileroVad.ts`, lazy ~11 MB WASM runtime + ~2.3 MB ONNX model assets; energy detector as fallback) → the
   frame-counted endpoint gate (`speechGate.ts`: 352 ms tail, speculative decode at 160 ms) →
@@ -158,13 +160,15 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   Dynamic navigation, direct spawn, typed fleet/help/reply queries, and guarded approvals resolve through voice aliases on the ordinary command registry.
   Spoken navigation uses live hierarchical indexes without requiring a prior list: `Project N` follows visible sidebar order, bare `Session N` follows the selected Project's sidebar session order, and `Project N Session N` resolves both coordinates atomically.
   Spoken lists retain those canonical addresses, speak five explicitly separated items at a time, and keep five-minute device-local paging context for next/repeat/detail follow-ups.
-  Playback leaves capture open; agent speech permits only exact `mute`, while trusted application speech may be interrupted by the closed read-only lookup/navigation grammar.
-  Agent Send uses idempotent `voice/submit`; note, Scratchpad, Markdown, and Queue-composer Send inserts at the caret without staging or delivering a queue item.
+  Playback leaves capture open; three consecutive accepted frames stop any playback and continue as ordinary dictation or wake-word command input.
+  Agent Send and Append use the mounted terminal's acknowledged xterm path, so Send appends to an existing composer and uses the same carriage return as the visible mobile control.
+  Note, Scratchpad, Markdown, and Queue-composer Send and Append only insert at the caret without staging or delivering a queue item.
+  Voice Comms pins one Agent, prepends a short-response protocol once per run, and temporarily enables automatic verbatim playback until restored.
   Capture always decodes through session-free `/api/voice/transcribe`.
   Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
   `voice_commands` in config, editable in Settings → Voice; `buildVoiceMatcher` compiles them).
-  Fixed action set: `send`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/
-  `help`/`standby`/`resume`/`stop`. `standby` keeps the mic on but ignores everything except a
+  Fixed action set: `send`/`append`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/
+  `help`/`standby`/`resume`/`comms_on`/`comms_off`/`stop`. `standby` keeps the mic on but ignores everything except a
   `resume`/`stop` command; `stop` releases the mic. Hold `Ctrl+Alt+Space` for push-to-talk with
   no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
   breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.

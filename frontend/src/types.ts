@@ -81,6 +81,7 @@ export interface VoiceClip {
   trigger:'auto'|'manual'|'system'; content_mode:'summary'|'verbatim'; engine:string; voice:string
   text:string; format:string; size_bytes:number; duration_hint_s?:number|null
   status:'ready'|'failed'; error?:string|null; model?:string|null; cost_usd?:number|null
+  stream_id?:string; segment_count?:number
 }
 
 export interface VoiceStatus {

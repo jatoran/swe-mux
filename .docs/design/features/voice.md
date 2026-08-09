@@ -29,11 +29,11 @@ affect the PTY, session state, transcripts, history, or projects.
 - `auto` subscribes to `turn_ended`, debounces one second per session (`DEBOUNCE_SECONDS`),
   and extracts the completed `last_turn` transcript slice. `last_reply_text` walks backward
   across turn boundaries so a synthetic provider acknowledgement never becomes the "latest
-  reply". The summary/verbatim text is split at sentence/word boundaries into short ordered
-  clips (`streaming_segments`, ≤420 chars); every clip emits readiness immediately, allowing
-  the browser to start playback before later clips finish encoding. Manual generation remains
-  one clip through `POST /sessions/{id}/voice/generate`. A per-session lock drops overlapping
-  `auto` requests; two engine slots run concurrently (`_engine_semaphore`).
+  reply".
+  Every automatic, manual, and trusted application response uses the same segmented stream.
+  `streaming_segments` makes the first independently playable clip at most 140 characters and later clips at most 420 characters, preferring sentence boundaries and falling back to word boundaries.
+  The first clip is emitted and returned before tracked background work synthesizes the remaining clips, so playback begins while the rest is still encoding.
+  A per-session lock drops overlapping `auto` preparation requests, and two engine slots bound synthesis concurrency (`_engine_semaphore`).
 - Content is `summary` (spoken-word summary via OpenRouter, strict `{speech}` JSON schema,
   three-to-eight plain-English sentences) or `verbatim` (assistant text with markdown, code
   fences, links, and tables reduced to listenable prose by `speechify`, bounded by
@@ -78,8 +78,13 @@ affect the PTY, session state, transcripts, history, or projects.
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
   The silent unlock is transport setup, never public playback state, because capture uses that
   state to decide whether a new utterance could be speaker echo.
-- Auto clips share a stream ID. Barge-in (`bargeInPlayback`) pauses playback, clears its
-  queue, and suppresses later clips from the same reply while leaving manual replay available.
+- Every segmented response shares a stream ID across its clips.
+  A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
+  The response remains a fallback if that event was delayed or lost.
+- Barge-in is a hard stream stop.
+  During playback, three consecutive accepted 32 ms speech frames stop and abandon the current clip, clear the queue, and suppress later clips from the same stream.
+  The confirmation frames become the start of the new utterance and playback-contaminated pre-roll is discarded.
+  Push-to-talk is already an explicit gesture, so it stops playback immediately without waiting for frame confirmation.
 - **Turning read aloud off is immediate, at all three scopes.** The singleton element is
   shared, so clips are tagged with the session that owns them and each "off" switch stops
   exactly what it turns off: the pane's `tts:` chip going to `off` calls `stopSessionPlayback`
@@ -168,12 +173,11 @@ affect the PTY, session state, transcripts, history, or projects.
   noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
   command registry, which fires on press and cannot express a hold; window blur ends it, so a key
   released over another window cannot latch the microphone open.
-- **Playback keeps the microphone open under a constrained duplex policy.**
+- **Playback keeps the microphone open with confirmed-speech barge-in.**
   Silero probability is accepted during playback only when both probability and RMS clear the playback thresholds; the energy fallback retains its raised RMS floor.
-  Capture records whether playback was active and whether the clip was agent or trusted application speech when an utterance began, then disables speculative decoding for that utterance.
-  Agent speech permits only exact `mute`.
-  Trusted application speech permits the closed read-only lookup/navigation grammar after stopping the current clip; dictation, mutation, and approval confirmation remain blocked.
-  A rejected utterance without a wake word names that missing boundary instead of reporting the allowed-command class as if the command itself were unsafe.
+  Capture records the playback origin for diagnostics and waits for three consecutive accepted frames before treating the sound as human speech.
+  Confirmation stops and suppresses the complete stream, trims contaminated pre-roll, and continues through the ordinary dictation and deterministic wake-word rules.
+  Before confirmation, speculative decoding stays disabled and likely echo remains subject to the older origin-specific rejection policy.
 - **The endpoint is acknowledged before any text exists**, by flipping the phase to `heard`.
   Silence after speaking reads as broken; the same silence after an acknowledgement reads as
   thinking.
@@ -278,9 +282,9 @@ executed action — so that number is measured rather than estimated.
   phonetically distinctive, rare in ordinary speech, and not a prefix of a common word.
   Spoken tester trials retained `mux`; `mucks` and `max` remain recognition variants for that same wake word.
 - The **capture-control action set is fixed** (each is wired to code); only its trigger phrases change:
-  `send`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`,
-  `standby`, `resume`, `stop`. Defaults ship `mux`/`mucks`/`max` as wake words with phrases
-  matching the historical grammar.
+  `send`, `append`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`, `standby`, `resume`, `comms_on`, `comms_off`, `stop`.
+  Defaults ship `mux`/`mucks`/`max` as wake words with phrases matching the historical grammar.
+  Schema 20 adds only the three new action definitions to an older saved command list and preserves every existing custom phrase or disabled action.
 - **Workspace commands use the existing command registry.**
   `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
   The registry's low-priority catch-all delegates only to the closed grammar in `voiceQueries.ts`; literal command aliases and literal slot templates always outrank it.
@@ -325,25 +329,26 @@ executed action — so that number is measured rather than estimated.
 - **Capture and target have separate lifetimes.** Talk is one workspace-level browser flag.
   The target follows the focused live Agent, Continuity editor, Scratchpad, Markdown editor, or Queue composer without restarting capture, and the editable draft survives every target change.
   A pin freezes the exact current sink until explicitly released.
-- **A text target is a buffer sink, not an execution path.** Send inserts the trimmed voice draft at that surface's caret and clears the voice draft.
+- **A text target is a buffer sink, not an execution path.** Send and Append both insert the trimmed voice draft at that surface's caret and clear the voice draft.
   In a Queue composer this only fills the composer; staging, arming, and delivery remain separate explicit Queue actions.
   Agent-only commands (`read`, `summary`, `verbatim`, `interrupt`) refuse a text target and keep the draft.
 - All utterances decode through the session-free `POST /api/voice/transcribe` route.
   The target is resolved only when an action needs it, so a focus change during capture cannot send audio to a stale per-session route.
-- `POST voice/submit` is reconnect-safe: an idempotent `utterance_id` (`claim_submission`, a
-  512-entry dedup ring) prevents double-sends, control characters are rejected, and the
-  human-input boundary is advanced (`voice_prompt_submitted`). Single-line text plus one Enter
-  (`{text}\r`) is written atomically. A **multi-line** body takes the queue's delivery bytes
-  instead (`paste_payload` + `SUBMIT_DELAY_SECONDS` + a separate `\r`): recognition never emits
-  a newline, but an edited draft can, and a raw newline submits the prompt early — sending the
-  agent half a message and typing the rest at whatever it shows next. Before claiming the id,
-  the handler rejects the prompt queue's non-overridable readiness reasons, including approval,
-  question, ended-run, and non-agent targets. `POST voice/interrupt`
-  writes a lone `\x03`. Both require a live Claude/Codex session.
-- Playback carries an explicit `agent` or `system` origin into the capture marks.
-  Speech that begins during agent-reply playback may only recognize exact `mute`; every other transcript is discarded as possible echo.
-  Trusted application speech from help, fleet, and navigation lists may be interrupted by the closed read-only lookup/navigation grammar, which first stops playback and then resolves the command.
-  Dictation, mutations, and approval confirmation are always rejected during playback.
+- Agent Send and Append first call the side-effect-free `voice/prepare-submit` guard, which applies the existing live-Agent, bounded-text, and non-overridable approval/question safety checks.
+  After that guard, they route through the mounted `TerminalPane` by a request/acknowledgement event.
+  The pane appends with its existing bracketed-paste repair and normal xterm `onData` path, which preserves PTY ownership, replay buffering, broadcast policy, and the same carriage return used by the mobile Send control.
+  Send appends and then submits; Append performs the same insertion without the carriage return.
+  The Talk draft clears only after the target pane acknowledges the operation, and a missing pane leaves the draft intact.
+  The older `POST voice/submit` route remains as a bounded compatibility API with idempotency and readiness checks, but the Talk client no longer uses it because a daemon write cannot append to an application composer already holding local text.
+  `POST voice/interrupt` writes a lone `\x03` and requires a live Claude/Codex session.
+- **Voice Comms is explicit, session-scoped conversational prompting.**
+  The Talk toggle or `Mux, voice comms on` pins the focused Agent, sets that session to automatic verbatim read-aloud, enables device autoplay, and remembers the prior pin and read-aloud state for restoration.
+  The first appended voice message for each agent run carries the short-response protocol immediately before a `[voice]`-prefixed message; later voice messages in that run carry only the prefix.
+  The protocol requests one or two natural spoken sentences, the answer first, no markdown/list/code/path detail unless requested, and at most one clarification question.
+  `Mux, voice comms off` restores the prior session mode, content mode, device autoplay state, and target pin.
+- Playback carries an explicit `agent` or `system` origin into capture diagnostics.
+  Before barge-in confirmation, the raised RMS and Silero thresholds reject likely speaker echo.
+  Confirmed user speech stops either origin immediately and continues as an ordinary utterance, so it may become dictation or a wake-word command under the normal deterministic safety boundary.
 
 ## Mobile secure context (why HTTPS is required)
 
@@ -386,10 +391,13 @@ into mobile-voice setup instead.
   Capture keeps running while typing; an utterance that lands mid-edit appends at the end with the caret and selection preserved.
   One line grows to five, then scrolls internally.
 - **Voice stays primary.** `Mux, send` and the panel's Send button commit the same draft to the named sink.
+  For an Agent sink they append to the existing composer and submit through the same terminal path as the mobile Send control.
+  `Mux, append` and the panel's Append button append without submitting; text targets always remain append-only.
   `Ctrl`/`Cmd`+`Enter` sends from the textarea; `Escape` releases its keyboard focus.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- The player strip and Talk panel each end with a gear into Settings → Voice.
+- The player strip and Talk panel each expose a `? Commands` action backed by the same fixed help catalog shown in Settings, plus a gear into Settings → Voice.
+  The command catalog is a viewport modal and is not a utility-drawer tab.
   Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
@@ -412,11 +420,12 @@ and never touches the daemon or an LLM.
 - `POST /api/voice/transcribe`: the target-independent decoder used by workspace Conversation capture and the wake-word tester.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
   record one browser-measured sample, start a fresh run.
-- `POST /api/sessions/{sid}/voice/submit` — idempotent voice prompt commit to the PTY.
+- `POST /api/sessions/{sid}/voice/prepare-submit` - side-effect-free safety validation before Talk uses the mounted terminal path.
+- `POST /api/sessions/{sid}/voice/submit` - compatibility-only idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
-- `POST /api/sessions/{sid}/voice/generate` - synthesize one clip of the last reply on demand; optional `{content_mode: summary|verbatim}` is one-shot and does not change the session preference.
-- `POST /api/voice/speak` - synthesize trusted application text without a model call.
+- `POST /api/sessions/{sid}/voice/generate` - start segmented last-reply synthesis; optional `{content_mode: summary|verbatim, stream_id: UUID}` values are one-shot and do not change the session preference.
+- `POST /api/voice/speak` - start segmented trusted application speech without a model call; accepts an optional client stream ID.
 - `GET  /api/sessions/{sid}/last-reply` — normalized assistant text (no terminal OSC 52).
 - `GET  /api/voice/clips`, `GET /api/voice/clips/{id}/audio`, `DELETE /api/voice/clips/{id}`.
 - `POST /api/remote/mobile-voice/enable` — configure/repair the Tailscale Serve HTTPS address.

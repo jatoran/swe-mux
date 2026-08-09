@@ -2517,7 +2517,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   useEffect(() => {
     const onAction = (event: Event) => {
-      const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean}>).detail
+      const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean;requestId?:string}>).detail
       if (detail.sessionId !== session.id) return
       if (detail.action === 'copy') void copy()
       else if (detail.action === 'paste') void paste()
@@ -2525,7 +2525,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
       else if (detail.action === 'find') find()
       else if (detail.action === 'toggleKeyboard') toggleKeyboard()
-      else if (detail.action === 'insertText' && detail.text) { injectText(detail.text, detail.submit) }
+      else if (detail.action === 'insertText' && detail.text) {
+        try {
+          injectText(detail.text, detail.submit)
+          if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:true}}))
+        } catch(cause) {
+          if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:false,error:cause instanceof Error?cause.message:String(cause)}}))
+        }
+      }
       // Rail items rendered outside this pane (the drawer's Commands tab) route
       // here rather than touching xterm: the pane stays the single owner of
       // terminal writes, so broadcast, replay, and read/select mode still apply.

@@ -5,7 +5,7 @@ import type { GateConfig } from './speechGate'
 import { CAPTURE_WORKLET_NAME, captureWorkletUrl } from './voiceCaptureWorklet.ts'
 import type { CaptureMarks } from './voiceLatency'
 
-export type MuxVoiceCommand='send'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'|'standby'|'resume'
+export type MuxVoiceCommand='send'|'append'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'|'standby'|'resume'|'comms_on'|'comms_off'
 export type ParsedMuxVoice={command:MuxVoiceCommand|null;text:string}
 export type VoiceCommandConfig={action:string;phrases:string[]}
 export type VoiceMatcher={parse(text:string):ParsedMuxVoice}
@@ -14,10 +14,11 @@ export type VoiceMatcher={parse(text:string):ParsedMuxVoice}
 // each action are configurable (daemon config, surfaced via /api/voice). Keep in
 // sync with VOICE_COMMAND_ACTIONS / default_voice_commands in config.py — these
 // defaults are only the fallback when the daemon has not supplied a config yet.
-const VOICE_ACTIONS=new Set<MuxVoiceCommand>(['send','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','stop'])
+const VOICE_ACTIONS=new Set<MuxVoiceCommand>(['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','stop','comms_on','comms_off'])
 export const DEFAULT_WAKE_WORDS=['mux','mucks','max']
 export const DEFAULT_COMMANDS:VoiceCommandConfig[]=[
   {action:'send',phrases:['send','send it','send that','send message','submit','submit it','submit that','submit message']},
+  {action:'append',phrases:['append','append it','append that','append message','insert','insert it','insert that']},
   {action:'cancel',phrases:['cancel','cancel that','clear','clear that']},
   {action:'undo',phrases:['undo','undo that','undo last','undo last phrase','delete last','delete last phrase']},
   {action:'mute',phrases:['mute','stop speaking','stop playback','stop audio']},
@@ -28,6 +29,8 @@ export const DEFAULT_COMMANDS:VoiceCommandConfig[]=[
   {action:'help',phrases:['help','list commands','what can i say']},
   {action:'standby',phrases:['sleep','go to sleep','stand by','standby','pause listening']},
   {action:'resume',phrases:['wake','wake up','resume','start listening']},
+  {action:'comms_on',phrases:['voice comms','voice comms on','start voice comms','enter voice comms']},
+  {action:'comms_off',phrases:['voice comms off','stop voice comms','exit voice comms']},
   {action:'stop',phrases:['stop listening','turn off','shut down']},
 ]
 
@@ -102,8 +105,17 @@ export function playbackSafeProbability(probability:number,rms:number,playing:bo
   return probability>=.8&&rms>=.035?probability:0
 }
 
+/** Three accepted 32 ms frames distinguish real barge-in from a speaker transient. */
+export const BARGE_IN_CONFIRM_FRAMES=3
+
+export function nextBargeInFrameCount(current:number,probability:number):number{
+  return probability>0?Math.min(BARGE_IN_CONFIRM_FRAMES,current+1):0
+}
+
 export type CaptureHandlers={
   onSpeechStart():void
+  /** Confirmed user speech over playback. The utterance continues after playback stops. */
+  onBargeIn?():void
   /** The endpoint fired. Raised before any text exists, so the UI can acknowledge instantly. */
   onSpeechEnd():void
   /**
@@ -161,6 +173,8 @@ export class PersistentVoiceCapture{
   private utteranceId=''
   private utterancePlayback=false
   private utterancePlaybackOrigin:'agent'|'system'|null=null
+  private bargeInFrames:Float32Array[]=[]
+  private bargeInConfirmed=false
   private pending:Promise<void>=Promise.resolve()
   private stopped=false
   /** Push-to-talk suspends endpointing entirely; the key release is the endpoint. */
@@ -218,12 +232,19 @@ export class PersistentVoiceCapture{
   beginPushToTalk():void{
     if(!this.context||this.stopped||this.pushToTalk)return
     this.pushToTalk=true
+    const playback=this.handlers.playbackActive()
     if(!this.gate.speaking){
       this.utteranceId=newUtteranceId()
-      this.utterancePlayback=this.handlers.playbackActive()
+      this.utterancePlayback=playback
       this.utterancePlaybackOrigin=this.handlers.playbackOrigin?.()||null
-      this.utterance=this.preRoll.splice(0)
+      this.utterance=this.utterancePlayback?[]:this.preRoll.splice(0)
       this.handlers.onSpeechStart()
+    }
+    if(playback){
+      this.utterance=[]
+      this.utterancePlayback=false
+      this.bargeInConfirmed=true
+      this.handlers.onBargeIn?.()
     }
   }
 
@@ -331,6 +352,19 @@ export class PersistentVoiceCapture{
     // Appended before the events are handled, so an endpoint on this frame reads a
     // complete utterance and a reset afterwards cannot be undone by a late push.
     if(speakingBefore)this.utterance.push(frame)
+    if(this.utterancePlayback&&!this.bargeInConfirmed&&this.gate.speaking){
+      if(probability>0){
+        this.bargeInFrames.push(frame)
+        while(this.bargeInFrames.length>BARGE_IN_CONFIRM_FRAMES)this.bargeInFrames.shift()
+      }else this.bargeInFrames=[]
+      if(this.bargeInFrames.length>=BARGE_IN_CONFIRM_FRAMES){
+        this.bargeInConfirmed=true
+        // Drop playback-contaminated pre-roll while retaining all confirmation frames.
+        this.utterance=[...this.bargeInFrames]
+        this.utterancePlayback=false
+        this.handlers.onBargeIn?.()
+      }
+    }
     for(const event of events){
       if(event.type==='speech-start'){
         this.utteranceId=newUtteranceId()
@@ -338,6 +372,7 @@ export class PersistentVoiceCapture{
         this.utterancePlaybackOrigin=this.handlers.playbackOrigin?.()||null
         // The pre-roll already holds this frame, so it is not appended again.
         this.utterance=this.preRoll.splice(0)
+        if(this.utterancePlayback&&probability>0)this.bargeInFrames=[frame]
         this.handlers.onSpeechStart()
       }else if(event.type==='speculate'){
         this.emit(this.handlers.onSpeculative,this.gate.silenceMs,true)
@@ -382,5 +417,6 @@ export class PersistentVoiceCapture{
     this.gate=new SpeechGate(this.gateConfig)
     this.silero?.reset()
     this.utterance=[];this.utteranceId='';this.utterancePlayback=false;this.utterancePlaybackOrigin=null
+    this.bargeInFrames=[];this.bargeInConfirmed=false
   }
 }

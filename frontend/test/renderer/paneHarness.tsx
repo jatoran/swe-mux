@@ -24,16 +24,16 @@ const status = {
 // Enough of the controller for the panel to render every state it draws; the panel is
 // presentational, so no capture is started here.
 const conversation: Conversation = {
-  target: {kind:'session',id:session.id,label:'Agent · harness',available:()=>true},
-  targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, wake: 'mux',
+  target: {kind:'session',id:session.id,label:'Agent · harness',available:()=>true,agentRunId:()=>null,voiceMode:()=>null,voiceContent:()=>null},
+  targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, comms:false, wake: 'mux',
   detail: 'Listening. Say “mux, send” to submit.', landedAt: 0, latency: null, detector: 'silero',
   history:[
     {id:'1',role:'you',text:'Mux, list active sessions.',at:1},
     {id:'2',role:'mux',text:'2 matching sessions\n\nSession 1 - Alpha\nStatus: working',at:2},
   ],
   draft: 'refactor the scrollback ring so it keeps bracketed paste mode across replay',
-  toggle: () => {}, togglePin: () => {}, stop: () => {}, send: () => {}, undo: () => {}, clear: () => {},
-  clearHistory:()=>{},toggleStandby: () => {}, edit: () => {},
+  toggle: () => {}, togglePin: () => {}, stop: () => {}, send: () => {}, append:()=>{}, undo: () => {}, clear: () => {},
+  clearHistory:()=>{},toggleStandby: () => {},toggleComms:()=>{}, edit: () => {},
 }
 
 // The strip lists clips on mount. The harness has no daemon; VoicePlayer already treats a

@@ -13,7 +13,7 @@ from typing import Any
 from .harness import HARNESSES, is_agent_harness
 from .keybindings import is_command
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -139,6 +139,7 @@ DEFAULT_PROJECT_IGNORE_PATTERNS = [
 # set itself is fixed because each action is wired to code.
 VOICE_COMMAND_ACTIONS = (
     "send",
+    "append",
     "cancel",
     "undo",
     "mute",
@@ -149,6 +150,8 @@ VOICE_COMMAND_ACTIONS = (
     "help",
     "standby",
     "resume",
+    "comms_on",
+    "comms_off",
     "stop",
 )
 DEFAULT_VOICE_WAKE_WORDS = ["mux", "mucks", "max"]
@@ -163,6 +166,8 @@ def default_voice_commands() -> list[dict[str, Any]]:
                 ["send", "send it", "send that", "send message",
                  "submit", "submit it", "submit that", "submit message"],
             ),
+            ("append", ["append", "append it", "append that", "append message",
+                        "insert", "insert it", "insert that"]),
             ("cancel", ["cancel", "cancel that", "clear", "clear that"]),
             (
                 "undo",
@@ -181,6 +186,9 @@ def default_voice_commands() -> list[dict[str, Any]]:
             ("help", ["help", "list commands", "what can i say"]),
             ("standby", ["sleep", "go to sleep", "stand by", "standby", "pause listening"]),
             ("resume", ["wake", "wake up", "resume", "start listening"]),
+            ("comms_on", ["voice comms", "voice comms on", "start voice comms",
+                          "enter voice comms"]),
+            ("comms_off", ["voice comms off", "stop voice comms", "exit voice comms"]),
             ("stop", ["stop listening", "turn off", "shut down"]),
         )
     ]
@@ -1096,6 +1104,21 @@ def load_config(path: Path | None = None) -> Config:
                     gestures[slot] = "notes.open"
                     migrated = True
             cfg.mobile_gestures = gestures
+        if source_schema < 20:
+            # Append and Voice Comms did not exist before schema 20. Add only the
+            # new actions, preserving every phrase and omission the user could have
+            # chosen for the older command set.
+            existing = {
+                item.get("action") for item in cfg.voice_commands if isinstance(item, dict)
+            }
+            additions = [
+                item for item in default_voice_commands()
+                if item["action"] in {"append", "comms_on", "comms_off"}
+                and item["action"] not in existing
+            ]
+            if additions:
+                cfg.voice_commands = [*cfg.voice_commands, *additions]
+                migrated = True
     if not cfg.shell_profiles:
         if "shell_exe" not in raw and shutil.which("pwsh.exe"):
             cfg.shell_exe = "pwsh.exe"

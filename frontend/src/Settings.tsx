@@ -180,9 +180,10 @@ const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordS
 // Canonical order + labels for the configurable conversation commands. The action
 // set is fixed (each is wired to code in ConversationControl); only the wake words
 // and phrases are editable. Mirrors VOICE_COMMAND_ACTIONS in config.py.
-const VOICE_ACTION_ORDER=['send','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','stop'] as const
+const VOICE_ACTION_ORDER=['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','comms_on','comms_off','stop'] as const
 const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   send:{label:'Send / submit',hint:'submit the buffered message'},
+  append:{label:'Append',hint:'append the buffer without submitting'},
   cancel:{label:'Cancel / clear',hint:'clear the whole draft'},
   undo:{label:'Undo',hint:'remove the last transcribed phrase'},
   mute:{label:'Mute',hint:'stop playback, keep listening'},
@@ -193,6 +194,8 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   help:{label:'Help',hint:'list the commands'},
   standby:{label:'Standby',hint:'keep listening but ignore speech until resumed'},
   resume:{label:'Resume',hint:'leave standby and act on speech again'},
+  comms_on:{label:'Voice Comms on',hint:'request short spoken replies from the focused agent'},
+  comms_off:{label:'Voice Comms off',hint:'restore normal replies and prior read-aloud settings'},
   stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
 }
 

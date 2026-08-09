@@ -121,3 +121,18 @@ test('playback explicitly distinguishes trusted application speech from agent te
   assert.equal(voice.getPlayback().origin, 'agent')
   voice.stopAllPlayback()
 })
+
+test('requested segmented speech starts at the first clip and continues in order', async () => {
+  const stream='11111111-1111-4111-8111-111111111111'
+  voice.beginRequestedStream(stream,'system','system')
+  voice.enqueueRequestedStreamClip('segment-1',stream,0,2)
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'segment-1')
+  assert.equal(voice.getPlayback().origin,'system')
+  voice.enqueueRequestedStreamClip('segment-2',stream,1,2)
+  element().finish()
+  await settle()
+  assert.equal(voice.getPlayback().clipId,'segment-2')
+  voice.bargeInPlayback()
+  assert.deepEqual(voice.getPlayback(),{clipId:null,playing:false,position:0,duration:0,origin:null})
+})

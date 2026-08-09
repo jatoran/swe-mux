@@ -1,9 +1,13 @@
 import type { EditorHandle, InsertTarget, TextSurfaceKind } from './insertTarget.ts'
+import type { VoiceContent, VoiceMode } from './types'
 
 export type VoiceSessionCandidate = {
   id: string
   label: string
   available: () => boolean
+  agentRunId: () => string | null
+  voiceMode: () => VoiceMode | null
+  voiceContent: () => VoiceContent | null
 }
 
 export type ConversationTarget =
@@ -12,6 +16,9 @@ export type ConversationTarget =
       id: string
       label: string
       available: () => boolean
+      agentRunId: () => string | null
+      voiceMode: () => VoiceMode | null
+      voiceContent: () => VoiceContent | null
     }
   | {
       kind: 'text'
@@ -48,7 +55,10 @@ export function resolveConversationTarget(
   const session = sessions.find(candidate => candidate.id === sessionId && candidate.available())
     || sessions.find(candidate => candidate.id === fallbackSessionId && candidate.available())
   return session
-    ? { kind: 'session', id: session.id, label: session.label, available: session.available }
+    ? {
+        kind: 'session', id: session.id, label: session.label, available: session.available,
+        agentRunId: session.agentRunId, voiceMode: session.voiceMode, voiceContent: session.voiceContent,
+      }
     : null
 }
 

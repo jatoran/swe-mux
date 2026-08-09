@@ -2,9 +2,11 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import type { Session, VoiceClip, VoiceContent, VoiceStatus } from './types'
 import {
-  autoplayEnabled, getPlayback, pausePlayback, playClip, seekTo,
+  autoplayEnabled, beginRequestedStream, cancelRequestedStream, getPlayback,
+  newVoiceStreamId, pausePlayback, playClip, playRequestedStreamFirst, seekTo,
   setAutoplayEnabled, subscribePlayback, unlockPlayback,
 } from './voice'
+import { VoiceCommandsButton } from './VoiceCommandsButton'
 
 const formatSeconds = (value: number) => {
   const total = Math.max(0, Math.floor(value || 0))
@@ -58,11 +60,14 @@ export function VoicePlayer({ session, status, mode, onSession, onOpenSettings }
   const generate = async () => {
     if (busy) return
     setBusy(true); setError(''); unlockPlayback()
+    const streamId=newVoiceStreamId()
+    beginRequestedStream(streamId,session.id,'agent')
     try {
-      const created = await api<VoiceClip>('POST', `/api/sessions/${session.id}/voice/generate`)
+      const created = await api<VoiceClip>('POST', `/api/sessions/${session.id}/voice/generate`,{stream_id:streamId})
       await load()
-      if (created?.id) { setSelectedId(created.id); void playClip(created.id, session.id).catch(() => {}) }
+      if (created?.id) { setSelectedId(created.id); await playRequestedStreamFirst(created.id,created.stream_id||streamId,session.id,'agent') }
     } catch (cause) {
+      cancelRequestedStream(streamId)
       setError(cause instanceof Error ? cause.message : 'generation failed')
     } finally { setBusy(false) }
   }
@@ -113,6 +118,7 @@ export function VoicePlayer({ session, status, mode, onSession, onOpenSettings }
     {mode === 'auto' && <span class="voice-flag" title="Every completed reply generates audio automatically">auto</span>}
     {clip?.status === 'failed' && <span class="voice-error" title={clip.error || 'generation failed'}>failed</span>}
     {error && <span class="voice-error" title={error}>{error.length > 42 ? `${error.slice(0, 42)}…` : error}</span>}
+    <VoiceCommandsButton compact/>
     {/* Trailing, so the controls the strip exists for keep the leading slots. It is the
         route out of the strip into everything the strip cannot hold: engine, voice, model,
         content default, budget, cache. */}

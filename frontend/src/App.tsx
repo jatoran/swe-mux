@@ -82,7 +82,7 @@ import { VoicePlayer } from './VoicePlayer'
 import { ConversationSurface, ConversationToggle, useConversation } from './ConversationControl'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
-import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
+import { autoplayEnabled, enqueueAutoplay, enqueueRequestedStreamClip, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
 import {
@@ -1421,6 +1421,9 @@ export function App() {
             // speaking after the switch was thrown.
             const autoAllowed = eventSession ? eventSession.voice_mode !== 'off' : true
             if (!isReplay && event.type === 'voice_clip_ready' && event.payload?.trigger === 'auto' && clipId && autoAllowed && autoplayEnabled()) enqueueAutoplay(clipId,String(event.payload?.stream_id||'')||null,event.session_id||null)
+            if(!isReplay&&event.type==='voice_clip_ready'&&event.payload?.trigger!=='auto'&&clipId&&event.payload?.stream_id){
+              enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
+            }
           }
           if (event.type === 'settings_changed') refreshSettings()
           // Another device (or another tab) changed the ring; an open picker refetches.
@@ -1554,12 +1557,19 @@ export function App() {
   },[focusedAgentSession?.id])
   const liveVoiceSessionIds=useRef<Set<string>>(new Set())
   liveVoiceSessionIds.current=new Set(sessions.filter(session=>isAgent(session)&&!session.pending&&!isEndedSession(session)).map(session=>session.id))
+  const liveVoiceSessionRuns=useRef<Map<string,string|null>>(new Map())
+  liveVoiceSessionRuns.current=new Map(sessions.map(session=>[session.id,session.agent_run_id||null]))
+  const liveVoiceSessionSettings=useRef<Map<string,{mode:Session['voice_mode'];content:Session['voice_content']}>>(new Map())
+  liveVoiceSessionSettings.current=new Map(sessions.map(session=>[session.id,{mode:session.voice_mode,content:session.voice_content}]))
   const voiceSessionCandidates=useMemo<VoiceSessionCandidate[]>(()=>sessions
     .filter(session=>session.project_id===projectId&&isAgent(session)&&!session.pending&&!isEndedSession(session))
     .map(session=>({
       id:session.id,
       label:`Agent · ${sessionName(session)}`,
       available:()=>liveVoiceSessionIds.current.has(session.id),
+      agentRunId:()=>liveVoiceSessionRuns.current.get(session.id)||null,
+      voiceMode:()=>liveVoiceSessionSettings.current.get(session.id)?.mode||null,
+      voiceContent:()=>liveVoiceSessionSettings.current.get(session.id)?.content||null,
     })),[sessions,projectId])
   const conversationTarget=useMemo(()=>resolveConversationTarget(
     focusedInsertTarget,

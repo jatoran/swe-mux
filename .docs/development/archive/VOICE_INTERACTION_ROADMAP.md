@@ -64,7 +64,7 @@ Earlier drafts of this work listed them as open.
   (`frontend/src/conversationDraft.ts`) backing per-phrase undo and typed corrections.
 - Both voice surfaces float over the terminal rather than taking pane rows, pinned by
   `frontend/test/renderer/pane-layout.spec.ts`.
-- Phases 1 through 6, the wake-word tester, global targeting, and the constrained full-duplex prototype.
+- Phases 1 through 6, the wake-word tester, global targeting, confirmed-speech barge-in, segmented TTS, and Voice Comms.
   Behaviour lives in `design/features/voice.md`;
   the measurements and the two places the plan changed are recorded under Phase 1.
 
@@ -168,7 +168,7 @@ configuration problem's clothes.
   `voice.toggleTalk` and `voice.toggleTargetPin` are registered commands, so either may also be bound to a key or touch gesture without making a gesture the only entry point.
 - **Text surfaces are the third sink.**
   Continuity note/Scratchpad/Markdown editors and the Queue composer publish stable identities through the shared insert-focus ledger.
-  `Mux, send` inserts at the surface's caret and clears the voice draft.
+  `Mux, send` and `Mux, append` insert at the surface's caret and clear the voice draft without executing the text surface.
   Sending to a Queue composer fills the composer only; it does not stage, arm, or deliver a queue item.
 - **Decode is target-independent.**
   Every utterance uses the session-free `/api/voice/transcribe` route.
@@ -250,7 +250,7 @@ There is no bulk approval command.
 - Answering one requires a two-step confirmation that restates the actual operation.
 - No blanket "approve all", ever.
 
-## Cross-cutting: full-duplex prototype (built 2026-08-09)
+## Cross-cutting: full-duplex and spoken-response follow-up (built 2026-08-09)
 
 Once anything is read back, TTS plays while the mic is open, and a phone speaker with imperfect
 echo cancellation will transcribe the agent's own voice.
@@ -258,11 +258,19 @@ This is the single most likely thing to make hands-free feel broken, and the ans
 whether Phase 5 rundowns are spoken in full or reduced to one line with detail on request.
 Prototype it before building rundown content.
 
-The prototype keeps capture open during playback and applies a playback-specific RMS plus Silero probability gate.
-Playback is explicitly tagged as agent or trusted application speech.
-An utterance that began during agent speech may issue only exact deterministic `mute`; trusted application lists may be interrupted by the closed read-only lookup/navigation grammar, while dictation, mutation, and approval confirmation remain blocked.
-Speculative decode is disabled for those utterances.
-This is intentionally constrained duplex, so fleet status speaks one line by default and requires an explicit detailed-status request for the full rundown.
+Capture stays open during playback and applies a playback-specific RMS plus Silero probability gate.
+Three consecutive accepted 32 ms frames now confirm human barge-in before transcription finishes.
+Confirmation hard-stops the clip and its queued stream, removes playback-contaminated pre-roll, and continues the same speech as ordinary dictation or deterministic wake-word input.
+Push-to-talk stops playback immediately because the held chord is already explicit user intent.
+Fleet status still speaks one line by default and requires an explicit detailed-status request for the full rundown.
+
+Every automatic, manual, and application response now uses the existing segmented clip system.
+The first clip is capped at 140 characters and returned before tracked background tasks synthesize the later 420-character clips.
+This reduces time to first audio without adding a second raw-audio transport.
+
+Voice Comms is explicit and session-scoped.
+Its Talk toggle or voice command pins the Agent, temporarily selects automatic verbatim playback, and prepends the short spoken-response protocol once per agent run before `[voice]` messages.
+Turning it off restores the prior session mode, content mode, device autoplay state, and target pin.
 
 ## Rejected
 

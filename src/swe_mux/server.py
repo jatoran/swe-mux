@@ -739,6 +739,7 @@ def create_app(
             web.get("/api/voice/stt-latency", voice_latency),
             web.post("/api/voice/stt-latency", voice_latency),
             web.delete("/api/voice/stt-latency", voice_latency),
+            web.post("/api/sessions/{sid}/voice/prepare-submit", voice_prepare_submit),
             web.post("/api/sessions/{sid}/voice/submit", voice_submit),
             web.post("/api/sessions/{sid}/voice/approval", voice_approval),
             web.post("/api/sessions/{sid}/voice/interrupt", voice_interrupt),
@@ -6312,23 +6313,19 @@ async def voice_latency(request: web.Request) -> web.Response:
     return json_response(voice.stt_latency_report())
 
 
-async def voice_submit(request: web.Request) -> web.Response:
-    voice: VoiceService = request.app["voice"]
-    session = request.app["sessions"].resolve(request.match_info["sid"])
+def _validate_voice_terminal_text(session: Any, text: str) -> None:
     if not delivers_prompts_through_pty(session.record.backend):
-        return json_response({"error": "conversation mode requires an agent session"}, 409)
+        raise VoiceError("conversation mode requires an agent session")
     if session.record.state in {"exited", "crashed"}:
-        return json_response({"error": "the agent session has ended"}, 409)
-    body = await request.json()
-    text = str(body.get("text") or "").strip()
-    utterance_id = str(body.get("utterance_id") or "").strip()
-    if not utterance_id or len(utterance_id) > 100:
-        raise ValueError("utterance_id is required and must be at most 100 characters")
+        raise VoiceError("the agent session has ended")
     if not text or len(text) > 20_000:
         raise ValueError("voice prompt must contain 1–20000 characters")
     if any(ord(character) < 32 and character not in {"\t", "\n"} for character in text):
         raise ValueError("voice prompt contains terminal control characters")
-    fleet = request.app.get("fleet")
+
+
+def _voice_delivery_protected(app: Any, session: Any) -> list[str]:
+    fleet = app.get("fleet")
     readiness_reasons = set(fleet.readiness.evaluate(session)["reasons"]) if fleet else set()
     if session.record.state in {"exited", "crashed"}:
         readiness_reasons.add("session_ended")
@@ -6337,16 +6334,51 @@ async def voice_submit(request: web.Request) -> web.Response:
             readiness_reasons.add("approval_required")
         elif session.record.awaiting_reason in {"question", "elicitation"}:
             readiness_reasons.add("awaiting_user_input")
-    protected = sorted(readiness_reasons & NON_OVERRIDABLE_REASONS)
+    return sorted(readiness_reasons & NON_OVERRIDABLE_REASONS)
+
+
+def _voice_delivery_protected_response(protected: list[str]) -> web.Response:
+    return json_response(
+        {
+            "error": "voice delivery is protected until the agent prompt is safe",
+            "code": "delivery_protected",
+            "reasons": protected,
+        },
+        409,
+    )
+
+
+async def voice_prepare_submit(request: web.Request) -> web.Response:
+    """Validate a Talk append before the browser uses the mounted terminal path."""
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    text = str((await request.json()).get("text") or "").strip()
+    try:
+        _validate_voice_terminal_text(session, text)
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 409)
+    protected = _voice_delivery_protected(request.app, session)
     if protected:
-        return json_response(
-            {
-                "error": "voice delivery is protected until the agent prompt is safe",
-                "code": "delivery_protected",
-                "reasons": protected,
-            },
-            409,
-        )
+        return _voice_delivery_protected_response(protected)
+    return json_response(
+        {"ok": True, "session_id": session.record.id, "agent_run_id": session.record.agent_run_id}
+    )
+
+
+async def voice_submit(request: web.Request) -> web.Response:
+    voice: VoiceService = request.app["voice"]
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    try:
+        _validate_voice_terminal_text(session, text)
+    except VoiceError as exc:
+        return json_response({"error": str(exc)}, 409)
+    utterance_id = str(body.get("utterance_id") or "").strip()
+    if not utterance_id or len(utterance_id) > 100:
+        raise ValueError("utterance_id is required and must be at most 100 characters")
+    protected = _voice_delivery_protected(request.app, session)
+    if protected:
+        return _voice_delivery_protected_response(protected)
     if not voice.claim_submission(utterance_id):
         return json_response({"ok": True, "duplicate": True})
     if "\n" in text:
@@ -6634,11 +6666,10 @@ async def voice_generate(request: web.Request) -> web.Response:
     if content_mode is not None and content_mode not in {"summary", "verbatim"}:
         raise ValueError("content_mode must be summary or verbatim")
     try:
-        clip = await voice.generate(
-            session.record.id,
-            trigger="manual",
-            content_mode=content_mode,
-        )
+        options: dict[str, Any] = {"trigger": "manual", "content_mode": content_mode}
+        if body.get("stream_id") is not None:
+            options["stream_id"] = body["stream_id"]
+        clip = await voice.generate(session.record.id, **options)
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
     return json_response(clip)
@@ -6646,7 +6677,10 @@ async def voice_generate(request: web.Request) -> web.Response:
 
 async def voice_speak(request: web.Request) -> web.Response:
     try:
-        clip = await request.app["voice"].speak(str((await request.json()).get("text") or ""))
+        body = await request.json()
+        clip = await request.app["voice"].speak(
+            str(body.get("text") or ""), stream_id=body.get("stream_id")
+        )
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
     return json_response(clip)

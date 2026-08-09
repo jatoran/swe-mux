@@ -79,6 +79,23 @@ def test_conversation_stt_defaults_and_untouched_sapi_pair_migrate_to_whisper(
     assert custom.stt_whisper_model == "small.en"
 
 
+def test_voice_command_migration_adds_only_new_schema_20_actions(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        'schema_version = 19\n'
+        '[[voice_commands]]\naction = "send"\nphrases = ["ship this"]\n'
+        '[[voice_commands]]\naction = "cancel"\nphrases = []\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+    commands = {item["action"]: item["phrases"] for item in config.voice_commands}
+
+    assert commands["send"] == ["ship this"]
+    assert commands["cancel"] == []
+    assert set(commands) == {"send", "cancel", "append", "comms_on", "comms_off"}
+
+
 def test_first_run_prefers_powershell_7_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

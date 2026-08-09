@@ -28,6 +28,7 @@ let unlocked = false
 let unlocking = false
 let queue: QueueItem[] = []
 const suppressedStreams = new Set<string>()
+const requestedStreams = new Map<string,{sessionId:string|null;origin:PlaybackOrigin}>()
 let state: PlaybackState = { clipId: null, playing: false, position: 0, duration: 0, origin: null }
 const listeners = new Set<() => void>()
 
@@ -88,6 +89,42 @@ export async function playClip(clipId: string, sessionId: string | null = null, 
   await playClipAudio(clipId, origin)
 }
 
+export function newVoiceStreamId():string{
+  if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID()
+  const hex=()=>Math.floor(Math.random()*0x10000).toString(16).padStart(4,'0')
+  return `${hex()}${hex()}-${hex()}-4${hex().slice(1)}-${(8+Math.floor(Math.random()*4)).toString(16)}${hex().slice(1)}-${hex()}${hex()}${hex()}`
+}
+
+/** Claim a user-requested stream before its first server event can arrive. */
+export function beginRequestedStream(streamId:string,sessionId:string|null,origin:PlaybackOrigin):void{
+  suppressCurrentStream()
+  queue=[]
+  haltCurrentClip()
+  requestedStreams.set(streamId,{sessionId,origin})
+}
+
+export function cancelRequestedStream(streamId:string):void{
+  requestedStreams.delete(streamId)
+  suppressedStreams.add(streamId)
+}
+
+/** Accept live segment events only for a stream explicitly requested by this tab. */
+export function enqueueRequestedStreamClip(clipId:string,streamId:string,index:number,count:number):void{
+  const request=requestedStreams.get(streamId)
+  if(!request||suppressedStreams.has(streamId))return
+  const item:QueueItem={clipId,streamId,sessionId:request.sessionId,origin:request.origin}
+  if(state.playing&&currentClipId!==clipId)queue.push(item)
+  else if(currentClipId!==clipId)void playQueuedClip(item).catch(()=>{})
+  if(index>=count-1)requestedStreams.delete(streamId)
+}
+
+/** Response fallback for a lost/delayed event. Dedupe against current and queued clips. */
+export async function playRequestedStreamFirst(clipId:string,streamId:string,sessionId:string|null,origin:PlaybackOrigin):Promise<void>{
+  if(currentClipId===clipId||queue.some(item=>item.clipId===clipId))return
+  requestedStreams.set(streamId,{sessionId,origin})
+  await playQueuedClip({clipId,streamId,sessionId,origin})
+}
+
 async function playQueuedClip(item:QueueItem):Promise<void>{
   if(item.streamId&&suppressedStreams.has(item.streamId))return
   currentStreamId=item.streamId
@@ -144,14 +181,14 @@ export function enqueueAutoplay(clipId: string, streamId: string | null = null, 
 function suppressCurrentStream():void{
   if(!currentStreamId)return
   suppressedStreams.add(currentStreamId)
+  requestedStreams.delete(currentStreamId)
   if(suppressedStreams.size>64)suppressedStreams.delete(suppressedStreams.values().next().value as string)
 }
 
 export function bargeInPlayback():void{
   suppressCurrentStream()
   queue=[]
-  audioElement?.pause()
-  setState({playing:false})
+  haltCurrentClip()
 }
 
 // Hard stop: unlike pausePlayback (which keeps the clip loaded so the play button
@@ -184,5 +221,6 @@ export function stopSessionPlayback(sessionId: string): void {
 export function stopAllPlayback(): void {
   suppressCurrentStream()
   queue = []
+  requestedStreams.clear()
   haltCurrentClip()
 }

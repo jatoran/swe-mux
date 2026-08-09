@@ -15,6 +15,9 @@ const sessions: VoiceSessionCandidate[] = ['agent-a', 'agent-b'].map(id => ({
   id,
   label: `Agent · ${id}`,
   available: () => live.has(id),
+  agentRunId: () => `${id}-run`,
+  voiceMode: () => null,
+  voiceContent: () => null,
 }))
 
 test('conversation target follows terminal focus and falls back to the focused agent', () => {

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { buildVoiceMatcher, parseMuxVoice, playbackSafeProbability } from '../src/conversation.ts'
+import { BARGE_IN_CONFIRM_FRAMES, buildVoiceMatcher, nextBargeInFrameCount, parseMuxVoice, playbackSafeProbability } from '../src/conversation.ts'
 
 assert.deepEqual(parseMuxVoice('Please run the focused tests. Mux send that.'),{
   command:'send',text:'Please run the focused tests.',
 })
 assert.deepEqual(parseMuxVoice('Mux, send'),{command:'send',text:''})
+assert.deepEqual(parseMuxVoice('Keep this in the composer. Mux append'),{command:'append',text:'Keep this in the composer.'})
 assert.deepEqual(parseMuxVoice('Okay mux submit message'),{command:'send',text:''})
 assert.deepEqual(parseMuxVoice('Hey mux, cancel that'),{command:'cancel',text:''})
 assert.deepEqual(parseMuxVoice('Keep the current implementation. Mucks submit it'),{
@@ -24,6 +25,8 @@ assert.deepEqual(parseMuxVoice('Actually stop this run. Mux interrupt the agent'
 })
 assert.deepEqual(parseMuxVoice('Mux go to sleep'),{command:'standby',text:''})
 assert.deepEqual(parseMuxVoice('Mux resume'),{command:'resume',text:''})
+assert.deepEqual(parseMuxVoice('Mux voice comms on'),{command:'comms_on',text:''})
+assert.deepEqual(parseMuxVoice('Mux exit voice comms'),{command:'comms_off',text:''})
 assert.deepEqual(parseMuxVoice('Explain what a mux is'),{command:null,text:'Explain what a mux is'})
 assert.deepEqual(parseMuxVoice('Computer send'),{command:null,text:'Computer send'})
 assert.deepEqual(parseMuxVoice('My computer sends notifications'),{command:null,text:'My computer sends notifications'})
@@ -45,5 +48,11 @@ assert.equal(playbackSafeProbability(.95,.02,true),0)
 assert.equal(playbackSafeProbability(.7,.08,true),0)
 assert.equal(playbackSafeProbability(.95,.08,true),.95)
 assert.equal(playbackSafeProbability(.4,.01,false),.4)
+let bargeFrames=0
+bargeFrames=nextBargeInFrameCount(bargeFrames,.9)
+bargeFrames=nextBargeInFrameCount(bargeFrames,.9)
+assert.equal(bargeFrames,BARGE_IN_CONFIRM_FRAMES-1)
+assert.equal(nextBargeInFrameCount(bargeFrames,.9),BARGE_IN_CONFIRM_FRAMES)
+assert.equal(nextBargeInFrameCount(bargeFrames,0),0)
 
 console.log('conversation tests passed')

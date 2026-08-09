@@ -17,7 +17,13 @@ from swe_mux.config import load_config, update_config
 from swe_mux.event_bus import EventBus
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.openrouter import OpenRouterResult
-from swe_mux.server import session_last_reply, voice_approval, voice_generate, voice_submit
+from swe_mux.server import (
+    session_last_reply,
+    voice_approval,
+    voice_generate,
+    voice_prepare_submit,
+    voice_submit,
+)
 from swe_mux.voice import (
     VOICE_RULE_ID,
     VoiceError,
@@ -232,6 +238,7 @@ def test_streaming_segments_preserve_text_and_bound_chunks() -> None:
     chunks = streaming_segments(text, max_chars=120)
     assert len(chunks) > 2
     assert all(0 < len(chunk) <= 120 for chunk in chunks)
+    assert len(chunks[0]) <= 120
     assert " ".join(chunks) == " ".join(text.split())
 
 
@@ -424,6 +431,16 @@ async def test_voice_generate_route_forwards_validated_one_shot_mode() -> None:
         {"session_id": "s1", "trigger": "manual", "content_mode": "verbatim"}
     ]
 
+    request.json = lambda: asyncio.sleep(
+        0,
+        result={
+            "content_mode": "summary",
+            "stream_id": "11111111-1111-4111-8111-111111111111",
+        },
+    )
+    await voice_generate(cast(Any, request))
+    assert calls[-1]["stream_id"] == "11111111-1111-4111-8111-111111111111"
+
 
 def test_effective_mode_inherits_global_default_until_marked(tmp_path: Path) -> None:
     service, _events, _emitted, record = make_service(tmp_path, default_mode="auto")
@@ -475,7 +492,11 @@ async def test_auto_generation_emits_short_audio_segments_in_order(tmp_path: Pat
     patch_slice(service, REPLY_MESSAGES)
     spoken = patch_engine(service)
     try:
-        await service.generate("s1", trigger="auto")
+        first = await service.generate("s1", trigger="auto")
+        assert first["segment_count"] >= 2
+        assert len(first["text"]) <= 140
+        assert len(spoken) == 1
+        await asyncio.gather(*tuple(service._segment_tasks))
         ready = [event for event in emitted if event.type == "voice_clip_ready"]
         assert len(ready) == len(spoken) >= 2
         assert [event.payload["segment_index"] for event in ready] == list(range(len(ready)))
@@ -815,6 +836,44 @@ async def test_voice_submit_refuses_a_protected_approval_prompt(tmp_path: Path) 
         assert response.status == 409
         assert payload["code"] == "delivery_protected"
         assert payload["reasons"] == ["approval_required"]
+        assert writes == []
+    finally:
+        service.store.close()
+
+
+async def test_voice_prepare_submit_guards_without_writing(tmp_path: Path) -> None:
+    service, events, _emitted, record = make_service(tmp_path)
+    writes: list[str] = []
+    session = SimpleNamespace(
+        record=record,
+        pty=SimpleNamespace(write=writes.append),
+    )
+
+    class Request:
+        match_info = {"sid": "s1"}
+        app = {
+            "voice": service,
+            "sessions": SimpleNamespace(resolve=lambda _sid: session),
+            "events": events,
+        }
+
+        async def json(self) -> dict[str, object]:
+            return {"text": "append this", "submit": True}
+
+    try:
+        ready = await voice_prepare_submit(cast(Any, Request()))
+        assert json.loads(ready.text) == {
+            "ok": True,
+            "session_id": "s1",
+            "agent_run_id": "run-1",
+        }
+        assert writes == []
+
+        record.state = "awaiting"
+        record.awaiting_reason = "approval"
+        protected = await voice_prepare_submit(cast(Any, Request()))
+        assert protected.status == 409
+        assert json.loads(protected.text)["reasons"] == ["approval_required"]
         assert writes == []
     finally:
         service.store.close()

@@ -414,16 +414,9 @@ def estimate_duration_seconds(text: str, rate: str) -> float:
     return round(words / max(per_second, 0.5), 1)
 
 
-def streaming_segments(text: str, max_chars: int = 420) -> list[str]:
-    """Split speakable text into short independently playable clips.
-
-    Auto read-aloud emits each clip as soon as its synthesis finishes. Sentence
-    boundaries keep the audio natural; long sentences fall back to word chunks.
-    """
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    if not cleaned:
-        return []
-    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+def _bounded_speech_chunks(text: str, max_chars: int) -> list[str]:
+    """Split normalized speech at sentence boundaries, then at words."""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
     chunks: list[str] = []
     current = ""
     for sentence in sentences:
@@ -449,6 +442,25 @@ def streaming_segments(text: str, max_chars: int = 420) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
+
+
+def streaming_segments(
+    text: str, max_chars: int = 420, first_max_chars: int = 140
+) -> list[str]:
+    """Split speakable text into short independently playable clips.
+
+    Auto read-aloud emits each clip as soon as its synthesis finishes. Sentence
+    boundaries keep the audio natural; long sentences fall back to word chunks.
+    """
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if not cleaned:
+        return []
+    first_chunks = _bounded_speech_chunks(cleaned, max(40, min(max_chars, first_max_chars)))
+    if not first_chunks:
+        return []
+    first = first_chunks[0]
+    remainder = cleaned[len(first):].strip()
+    return [first, *_bounded_speech_chunks(remainder, max(80, max_chars))]
 
 
 class VoiceStore:
@@ -642,6 +654,7 @@ class VoiceService:
         self._task: asyncio.Task[None] | None = None
         self._queue: asyncio.Queue[Any] | None = None
         self._debounce: dict[str, asyncio.Task[None]] = {}
+        self._segment_tasks: set[asyncio.Task[None]] = set()
         self._locks: dict[str, asyncio.Lock] = {}
         self._engine_semaphore = asyncio.Semaphore(2)
         self._sapi_script_path: Path | None = None
@@ -750,6 +763,10 @@ class VoiceService:
             task.cancel()
         pending = list(self._debounce.values())
         self._debounce.clear()
+        for task in self._segment_tasks:
+            task.cancel()
+        pending.extend(self._segment_tasks)
+        self._segment_tasks.clear()
         if self._queue:
             self.events.unsubscribe(self._queue)
             self._queue = None
@@ -809,6 +826,7 @@ class VoiceService:
         *,
         trigger: str,
         content_mode: str | None = None,
+        stream_id: str | None = None,
     ) -> dict[str, Any]:
         session = self.sessions.sessions.get(session_id)
         if not session:
@@ -822,7 +840,7 @@ class VoiceService:
         if lock.locked() and trigger == "auto":
             return {}  # a clip for this session is already being generated
         async with lock:
-            stream_id = str(uuid.uuid4())
+            stream_id = self._stream_id(stream_id)
             if content_mode is not None and content_mode not in {"summary", "verbatim"}:
                 raise VoiceError("content mode must be summary or verbatim")
             selected_content = content_mode or self.effective_content(record)
@@ -854,74 +872,33 @@ class VoiceService:
                     error=message,
                 )
                 raise VoiceError(message) from exc
-            segments = streaming_segments(spoken) if trigger == "auto" else [spoken]
+            segments = streaming_segments(spoken)
             if not segments:
                 raise VoiceError("nothing speakable remained after preprocessing")
-            first: dict[str, Any] | None = None
-            for index, segment in enumerate(segments):
-                segment_row = row if index == 0 else self._new_clip_row(
-                    session_id, trigger, record.agent_run_id, selected_content
-                )
-                if index > 0:
-                    # Summary accounting belongs to the first clip only; repeating it on
-                    # every audio segment would inflate clip-level diagnostics.
-                    segment_row["model"] = row["model"]
-                try:
-                    await self._synthesize_clip(segment_row, segment)
-                except (VoiceError, TimeoutError, OSError) as exc:
-                    message = str(exc)[:500] or exc.__class__.__name__
-                    segment_row["error"] = message
-                    self.diagnostic = message
-                    log.warning(
-                        "voice reply synthesis failed session=%s run=%s "
-                        "trigger=%s content=%s segment=%d error=%s",
-                        session_id,
-                        record.agent_run_id,
-                        trigger,
-                        selected_content,
-                        index,
-                        message,
-                    )
-                    await self.store.add_clip(segment_row)
-                    await self.events.emit(
-                        "voice_clip_failed",
-                        session_id=session_id,
-                        source="daemon",
-                        clip_id=segment_row["id"],
-                        trigger=trigger,
-                        stream_id=stream_id,
-                        segment_index=index,
-                        segment_count=len(segments),
-                        error=message,
-                    )
-                    raise VoiceError(message) from exc
-                await self.store.add_clip(segment_row)
-                await self.events.emit(
-                    "voice_clip_ready",
-                    session_id=session_id,
-                    source="daemon",
-                    clip_id=segment_row["id"],
-                    agent_run_id=record.agent_run_id,
-                    trigger=trigger,
-                    stream_id=stream_id,
-                    segment_index=index,
-                    segment_count=len(segments),
-                )
-                if first is None:
-                    first = clip_snapshot(segment_row)
-            await self._prune()
-            log.info(
-                "voice reply generated session=%s run=%s clip=%s trigger=%s content=%s segments=%d",
-                session_id,
-                record.agent_run_id,
-                first["id"] if first else "",
-                trigger,
-                selected_content,
-                len(segments),
+            await self._synthesize_stream_segment(
+                row, segments[0], session_id=session_id, agent_run_id=record.agent_run_id,
+                trigger=trigger, stream_id=stream_id, index=0, count=len(segments),
             )
-            return first or {}
+            first = clip_snapshot(row)
+            first["stream_id"] = stream_id
+            first["segment_count"] = len(segments)
+            if len(segments) > 1:
+                self._start_segment_tail(
+                    session_id=session_id, agent_run_id=record.agent_run_id,
+                    trigger=trigger, content_mode=selected_content, model=row["model"],
+                    stream_id=stream_id, segments=segments[1:], total=len(segments),
+                )
+            else:
+                await self._prune()
+            log.info(
+                "voice reply first segment ready session=%s run=%s clip=%s "
+                "trigger=%s content=%s segments=%d",
+                session_id, record.agent_run_id, first["id"], trigger,
+                selected_content, len(segments),
+            )
+            return first
 
-    async def speak(self, text: str) -> dict[str, Any]:
+    async def speak(self, text: str, *, stream_id: str | None = None) -> dict[str, Any]:
         """Synthesize trusted application text without involving a language model."""
         if not self.config.tts_enabled:
             raise VoiceError("read aloud is off")
@@ -930,19 +907,135 @@ class VoiceService:
             raise VoiceError("system speech must contain 1-2000 characters")
         if any(ord(character) < 32 for character in spoken):
             raise VoiceError("system speech contains control characters")
+        stream_id = self._stream_id(stream_id)
+        segments = streaming_segments(spoken)
         row = self._new_clip_row("system", "system", None, "verbatim")
+        await self._synthesize_stream_segment(
+            row, segments[0], session_id="system", agent_run_id=None, trigger="system",
+            stream_id=stream_id, index=0, count=len(segments),
+        )
+        first = clip_snapshot(row)
+        first["stream_id"] = stream_id
+        first["segment_count"] = len(segments)
+        if len(segments) > 1:
+            self._start_segment_tail(
+                session_id="system", agent_run_id=None, trigger="system",
+                content_mode="verbatim", model=None, stream_id=stream_id,
+                segments=segments[1:], total=len(segments),
+            )
+        else:
+            await self._prune()
+        log.info(
+            "voice system first segment ready clip=%s characters=%d segments=%d",
+            row["id"], len(spoken), len(segments),
+        )
+        return first
+
+    @staticmethod
+    def _stream_id(requested: str | None) -> str:
+        if requested is None:
+            return str(uuid.uuid4())
+        try:
+            parsed = uuid.UUID(requested)
+        except (ValueError, AttributeError) as exc:
+            raise VoiceError("stream_id must be a UUID") from exc
+        return str(parsed)
+
+    async def _synthesize_stream_segment(
+        self,
+        row: dict[str, Any],
+        spoken: str,
+        *,
+        session_id: str,
+        agent_run_id: str | None,
+        trigger: str,
+        stream_id: str,
+        index: int,
+        count: int,
+    ) -> None:
         try:
             await self._synthesize_clip(row, spoken)
         except (VoiceError, TimeoutError, OSError) as exc:
             message = str(exc)[:500] or exc.__class__.__name__
             row["error"] = message
+            self.diagnostic = message
             await self.store.add_clip(row)
-            log.warning("voice system speech failed clip=%s error=%s", row["id"], message)
+            await self.events.emit(
+                "voice_clip_failed", session_id=session_id, source="daemon",
+                clip_id=row["id"], trigger=trigger, stream_id=stream_id,
+                segment_index=index, segment_count=count, error=message,
+            )
+            log.warning(
+                "voice stream synthesis failed session=%s run=%s trigger=%s "
+                "segment=%d/%d error=%s",
+                session_id, agent_run_id, trigger, index + 1, count, message,
+            )
             raise VoiceError(message) from exc
         await self.store.add_clip(row)
+        await self.events.emit(
+            "voice_clip_ready", session_id=session_id, source="daemon",
+            clip_id=row["id"], agent_run_id=agent_run_id, trigger=trigger,
+            stream_id=stream_id, segment_index=index, segment_count=count,
+        )
+
+    def _start_segment_tail(
+        self,
+        *,
+        session_id: str,
+        agent_run_id: str | None,
+        trigger: str,
+        content_mode: str,
+        model: str | None,
+        stream_id: str,
+        segments: list[str],
+        total: int,
+    ) -> None:
+        task = asyncio.create_task(
+            self._generate_segment_tail(
+                session_id=session_id, agent_run_id=agent_run_id, trigger=trigger,
+                content_mode=content_mode, model=model, stream_id=stream_id,
+                segments=segments, total=total,
+            ),
+            name=f"voice-segments-{stream_id}",
+        )
+        self._segment_tasks.add(task)
+        task.add_done_callback(self._segment_tail_done)
+
+    def _segment_tail_done(self, task: asyncio.Task[None]) -> None:
+        self._segment_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            log.error("voice segment task failed task=%s", task.get_name(), exc_info=error)
+
+    async def _generate_segment_tail(
+        self,
+        *,
+        session_id: str,
+        agent_run_id: str | None,
+        trigger: str,
+        content_mode: str,
+        model: str | None,
+        stream_id: str,
+        segments: list[str],
+        total: int,
+    ) -> None:
+        for offset, segment in enumerate(segments, start=1):
+            row = self._new_clip_row(session_id, trigger, agent_run_id, content_mode)
+            row["model"] = model
+            try:
+                await self._synthesize_stream_segment(
+                    row, segment, session_id=session_id, agent_run_id=agent_run_id,
+                    trigger=trigger, stream_id=stream_id, index=offset, count=total,
+                )
+            except VoiceError:
+                return
         await self._prune()
-        log.info("voice system speech generated clip=%s characters=%d", row["id"], len(spoken))
-        return clip_snapshot(row)
+        log.info(
+            "voice stream complete session=%s run=%s trigger=%s stream=%s segments=%d",
+            session_id, agent_run_id, trigger, stream_id, total,
+        )
 
     def _new_clip_row(
         self, session_id: str, trigger: str, agent_run_id: str | None, content_mode: str

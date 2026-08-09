@@ -1833,6 +1833,16 @@ body {
 /* faster-whisper returns whole utterances, never partial words, so there is no text to
    stream in. The flash is the arrival signal — honest about being discrete. */
 .dictation-panel.landed .dictation-draft{border-color:var(--green,#8bd450)}
+.voice-command-dialog-backdrop{position:fixed;inset:0;z-index:220;display:grid;place-items:center;padding:16px;background:#0009;pointer-events:auto}
+.voice-command-dialog{width:min(760px,calc(100vw - 24px));max-height:min(82dvh,720px);display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px 0 #000a;color:var(--text);font:11px/1.45 'JetBrains Mono';overflow:hidden}
+.voice-command-dialog>header{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-bottom:1px solid var(--line)}
+.voice-command-dialog>header button{width:28px;height:28px;border:0;border-radius:4px;background:transparent;color:var(--muted);font:18px/1 sans-serif;cursor:pointer}
+.voice-command-dialog>header button:hover{background:var(--panel2);color:var(--text)}
+.voice-command-dialog-groups{overflow:auto;padding:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.voice-command-dialog-groups section{min-width:0}
+.voice-command-dialog-groups h3{margin:0 0 6px;color:var(--green,#8bd450);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.voice-command-dialog-groups section>div{display:grid;gap:3px}
+.voice-command-dialog-groups code{display:block;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:normal}
 @media(max-width:760px){
   .mobile-toolbar>.conversation-talk-toggle{min-width:52px;height:calc(36px*var(--ui-scale));padding:0 6px;font-size:9px}
   .conversation-layer{left:0;right:0;top:calc(46px*var(--ui-scale));width:auto;padding:0 max(5px,env(safe-area-inset-right)) 0 max(5px,env(safe-area-inset-left))}

@@ -8,7 +8,10 @@ import { enableMobileVoice, mobileVoiceDestination } from './mobileVoice'
 import { buildLatencySample, formatLatency } from './voiceLatency'
 import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
-import { bargeInPlayback, getPlayback, playClip, unlockPlayback } from './voice'
+import {
+  autoplayEnabled, bargeInPlayback, beginRequestedStream, cancelRequestedStream, getPlayback,
+  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, unlockPlayback,
+} from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
 import type { ConversationTarget } from './conversationTarget'
@@ -20,6 +23,9 @@ import {
   saveVoiceConversationHistory, saveVoiceConversationHistoryOpen,
 } from './voiceConversationHistory'
 import type { VoiceConversationEntry, VoiceConversationRole } from './voiceConversationHistory'
+import { insertIntoTerminal } from './terminalActions'
+import { voiceCommsMessage } from './voiceComms'
+import { VoiceCommandsButton } from './VoiceCommandsButton'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -47,6 +53,7 @@ export type Conversation={
   /** True only while capture is live; a failed start keeps the panel up to report why. */
   active:boolean
   standby:boolean
+  comms:boolean
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
   landedAt:number
@@ -63,10 +70,12 @@ export type Conversation={
   togglePin:()=>void
   stop:()=>void
   send:()=>void
+  append:()=>void
   undo:()=>void
   clear:()=>void
   clearHistory:()=>void
   toggleStandby:()=>void
+  toggleComms:()=>void
   edit:(text:string)=>void
 }
 
@@ -93,6 +102,7 @@ export function useConversation(
   const [draft,setDraftState]=useState<Draft>(EMPTY_DRAFT)
   const [active,setActive]=useState(false)
   const [standby,setStandby]=useState(false)
+  const [commsTargetId,setCommsTargetId]=useState<string|null>(null)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
   const [history,setHistory]=useState<VoiceConversationEntry[]>(()=>loadVoiceConversationHistory())
@@ -101,6 +111,7 @@ export function useConversation(
   // failed and this is as good as it gets".
   const [detector,setDetector]=useState<CaptureDetector|null>(null)
   const [pinnedTarget,setPinnedTarget]=useState<ConversationTarget|null>(null)
+  const pinnedTargetRef=useRef<ConversationTarget|null>(null);pinnedTargetRef.current=pinnedTarget
   const target=effectiveConversationTarget(followingTarget,pinnedTarget)
   const targetAvailable=conversationTargetAvailable(target)
   const latencyRef=useRef<LatencySample|null>(null)
@@ -111,6 +122,11 @@ export function useConversation(
   const standbyRef=useRef(false)
   const draftRef=useRef<Draft>(EMPTY_DRAFT)
   const queueRef=useRef<Promise<void>>(Promise.resolve())
+  const commsTargetRef=useRef<string|null>(null);commsTargetRef.current=commsTargetId
+  const commsProtocolRuns=useRef<Set<string>>(new Set())
+  const commsPrevious=useRef<Map<string,{voice_mode:Session['voice_mode'];voice_content:Session['voice_content']}>>(new Map())
+  const commsPreviousAutoplay=useRef<boolean|null>(null)
+  const commsPreviousPin=useRef<ConversationTarget|null>(null)
   // The speculative decode in flight, so speech resuming can abort it rather than
   // leave the daemon decoding audio whose result is already void.
   const speculationRef=useRef<{utteranceId:string;controller:AbortController}|null>(null)
@@ -197,34 +213,83 @@ export function useConversation(
     }
   },[])
 
-  const submit=async(text:string)=>{
+  const commitToTarget=async(text:string,submit:boolean)=>{
     const body=text.trim()
-    if(!body){setPhase('listening');respond(`Nothing buffered yet. Keep talking, then say “${wakeRef.current}, send”.`);return}
+    if(!body){setPhase('listening');respond(`Nothing buffered yet. Keep talking, then say “${wakeRef.current}, ${submit?'send':'append'}”.`);return}
     const target=targetRef.current
     if(!target||!conversationTargetAvailable(target)){
-      setPhase('listening');respond('Draft kept. Focus an agent, note, Scratchpad, or Queue composer before sending.');return
+      setPhase('listening');respond('Draft kept. Focus an agent, note, Scratchpad, or Queue composer first.');return
     }
-    setPhase('sending');setDetail('Submitting voice message…')
+    setPhase('sending');setDetail(submit?'Submitting voice message…':'Appending voice message…')
     if(target.kind==='text'){
       target.editor.insertText(body)
-      setDraft(clearDraft());setPhase('listening');respond(`Inserted into ${target.label}. Still listening.`)
+      setDraft(clearDraft());setPhase('listening');respond(`Appended to ${target.label}. Still listening.`)
       return
     }
-    const utteranceId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`
-    await api('POST',`/api/sessions/${target.id}/voice/submit`,{utterance_id:utteranceId,text:body})
-    reportPromptSubmitted(target.id)
-    setDraft(clearDraft());setPhase('listening');respond('Sent. Still listening for your next message.')
+    const runKey=`${target.id}:${target.agentRunId()||'current'}`
+    const comms=commsTargetRef.current===target.id
+    const includeProtocol=comms&&!commsProtocolRuns.current.has(runKey)
+    const terminalText=comms?voiceCommsMessage(body,includeProtocol):body
+    await api('POST',`/api/sessions/${target.id}/voice/prepare-submit`,{text:terminalText})
+    await insertIntoTerminal(target.id,terminalText,submit)
+    if(includeProtocol)commsProtocolRuns.current.add(runKey)
+    if(submit)reportPromptSubmitted(target.id)
+    setDraft(clearDraft());setPhase('listening')
+    respond(submit?'Sent through the agent composer. Still listening for your next message.':'Appended to the agent composer without sending. Still listening.')
   }
+  const submit=(text:string)=>commitToTarget(text,true)
+  const append=(text:string)=>commitToTarget(text,false)
   const reportFailure=(cause:unknown)=>{setPhase('error');respond(cause instanceof Error?cause.message:String(cause))}
   const sessionTarget=():Extract<ConversationTarget,{kind:'session'}>|null=>{
     const target=targetRef.current
     return target?.kind==='session'&&conversationTargetAvailable(target)?target:null
   }
 
+  const toggleComms=async(force?:boolean)=>{
+    const activeId=commsTargetRef.current
+    const enable=force??!activeId
+    if(enable&&activeId){setPhase('listening');respond('Voice comms is already on.');return}
+    if(!enable){
+      if(!activeId){setPhase('listening');respond('Voice comms is already off.');return}
+      const previous=commsPrevious.current.get(activeId)
+      commsTargetRef.current=null;setCommsTargetId(null)
+      let restoreFailure:unknown=null
+      if(previous){
+        try{
+          const updated=await api<Session>('PATCH',`/api/sessions/${activeId}`,previous)
+          onSessionRef.current(updated)
+          commsPrevious.current.delete(activeId)
+        }catch(cause){restoreFailure=cause}
+      }
+      if(commsPreviousAutoplay.current!==null)setAutoplayEnabled(commsPreviousAutoplay.current)
+      commsPreviousAutoplay.current=null
+      setPinnedTarget(commsPreviousPin.current);commsPreviousPin.current=null
+      if(restoreFailure){reportFailure(restoreFailure);return}
+      setPhase('listening');respond('Voice comms off. Normal agent replies restored.');return
+    }
+    const target=sessionTarget()
+    if(!target){setPhase('listening');respond('Voice comms needs a focused agent session.');return}
+    if(!statusRef.current?.enabled){setPhase('listening');respond('Voice comms needs Read aloud enabled in Settings, Voice.');return}
+    commsPrevious.current.set(target.id,{voice_mode:target.voiceMode(),voice_content:target.voiceContent()})
+    try{
+      const updated=await api<Session>('PATCH',`/api/sessions/${target.id}`,{voice_mode:'auto',voice_content:'verbatim'})
+      onSessionRef.current(updated)
+    }catch(cause){reportFailure(cause);return}
+    commsPreviousAutoplay.current=autoplayEnabled()
+    setAutoplayEnabled(true)
+    commsPreviousPin.current=pinnedTargetRef.current
+    commsTargetRef.current=target.id;setCommsTargetId(target.id);setPinnedTarget(target)
+    setPhase('listening');respond(`Voice comms on for ${target.label}. Replies will be short and read aloud.`)
+  }
+
   const speakSystem=async(text:string)=>{
     if(!statusRef.current?.enabled)throw new Error('Read aloud is off. Enable it in Settings, Voice.')
-    const clip=await api<VoiceClip>('POST','/api/voice/speak',{text})
-    unlockPlayback();await playClip(clip.id,'system','system')
+    const streamId=newVoiceStreamId()
+    unlockPlayback();beginRequestedStream(streamId,'system','system')
+    try{
+      const clip=await api<VoiceClip>('POST','/api/voice/speak',{text,stream_id:streamId})
+      await playRequestedStreamFirst(clip.id,clip.stream_id||streamId,'system','system')
+    }catch(cause){cancelRequestedStream(streamId);throw cause}
   }
 
   const runRegistryIntent=async(spoken:string)=>{
@@ -281,6 +346,10 @@ export function useConversation(
       try{await submit(pending.text)}catch(cause){reportFailure(cause)}
       return
     }
+    if(parsed.command==='append'){
+      try{await append(pending.text)}catch(cause){reportFailure(cause)}
+      return
+    }
     if(parsed.command==='mute'){
       bargeInPlayback();setPhase('listening');respond('Playback stopped. Still listening.');return
     }
@@ -290,10 +359,12 @@ export function useConversation(
       if(!session){setPhase('listening');respond('Read reply needs an agent target. Draft kept.');return}
       if(!statusRef.current?.enabled){setPhase('listening');respond('Read aloud is off. Enable it in Settings, Voice. Still listening.');return}
       setPhase('sending');setDetail('Preparing the latest reply…')
+      const streamId=newVoiceStreamId()
       try{
-        const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`)
-        unlockPlayback();await playClip(clip.id,session.id);setPhase('listening');respond('Reply read. Still listening.')
-      }catch(cause){reportFailure(cause)}
+        unlockPlayback();beginRequestedStream(streamId,session.id,'agent')
+        const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`,{stream_id:streamId})
+        await playRequestedStreamFirst(clip.id,clip.stream_id||streamId,session.id,'agent');setPhase('listening');respond('Reply playback started. Still listening.')
+      }catch(cause){cancelRequestedStream(streamId);reportFailure(cause)}
       return
     }
     if(parsed.command==='summary'||parsed.command==='verbatim'){
@@ -309,6 +380,10 @@ export function useConversation(
     if(parsed.command==='help'){
       try{if(await runRegistryIntent('list voice commands'))return}catch(cause){reportFailure(cause);return}
       setPhase('listening');respond(`${wakeWord} commands: send, cancel, undo, mute, read reply, summary, verbatim, interrupt, standby, resume, and stop.`);return
+    }
+    if(parsed.command==='comms_on'||parsed.command==='comms_off'){
+      await toggleComms(parsed.command==='comms_on')
+      return
     }
     if(parsed.command==='interrupt'){
       const session=sessionTarget()
@@ -453,6 +528,7 @@ export function useConversation(
       playbackActive:()=>getPlayback().playing,
       playbackOrigin:()=>getPlayback().origin,
       onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
+      onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail('Playback stopped. Listening…')}},
       // Fired at the endpoint, before any text exists. It is the whole point of the
       // phase: the answer has to arrive when the user stops talking, not when the
       // decode does, or the pause reads as a failure.
@@ -499,7 +575,7 @@ export function useConversation(
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,wake,landedAt,latency,detector,history,
+    detail,draft:draft.text,active,standby,comms:!!commsTargetId,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()
@@ -507,6 +583,7 @@ export function useConversation(
     togglePin:()=>setPinnedTarget(current=>toggleConversationTargetPin(current,targetRef.current)),
     stop,
     send:()=>{void (async()=>{try{await submit(draftRef.current.text)}catch(cause){reportFailure(cause)}})()},
+    append:()=>{void (async()=>{try{await append(draftRef.current.text)}catch(cause){reportFailure(cause)}})()},
     undo:()=>{
       const next=undoUtterance(draftRef.current);setDraft(next)
       setDetail(next.text?'Removed the last phrase.':'Removed the last phrase. Draft is empty.')
@@ -519,6 +596,7 @@ export function useConversation(
       if(enabledRef.current)setPhase(next?'standby':'listening')
       setDetail(next?`Standby. Still listening; say “${wakeRef.current}, resume” to continue.`:'Resumed. Listening for your message.')
     },
+    toggleComms:()=>{void toggleComms()},
     edit:text=>{setDraft(editDraft(text))},
   }
 }
@@ -637,10 +715,13 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
       {conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">
         <button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>
+        <button title="Append the draft to the target without submitting" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={()=>conversation.append()}>append</button>
         <button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>
         <button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>
         <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
+        <button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>
         <button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop</button>
+        <VoiceCommandsButton/>
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
     </header>

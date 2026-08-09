@@ -783,13 +783,14 @@ It does not change tailnet policy or make swe-mux public.
 
 ```text
 GET    /voice
-POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim}
+POST   /sessions/{id}/voice/generate    {content_mode?: summary|verbatim, stream_id?: UUID}
 POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
 POST   /voice/transcribe                 same body and headers, no session
+POST   /sessions/{id}/voice/prepare-submit  {text}
 POST   /sessions/{id}/voice/submit       {utterance_id, text}
 POST   /sessions/{id}/voice/approval     {action: prepare|confirm|cancel, confirmation_id?}
 POST   /sessions/{id}/voice/interrupt
-POST   /voice/speak                      {text}
+POST   /voice/speak                      {text, stream_id?: UUID}
 GET    /voice/stt-latency
 POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
@@ -820,7 +821,10 @@ believed. `GET` returns per-stage p50/p95/max plus a separate command-only total
 a fresh measurement run, and every sample is also written to `daemon.log`, which is what survives
 a restart.
 
-Submit is agent-only, rejects control characters, caps text at 20,000 characters, deduplicates
+The Talk client first calls `/voice/prepare-submit` to recheck the live Agent target, bounded text, and non-overridable delivery protections without writing input.
+It then sends Agent drafts through the mounted terminal's ordinary xterm/WebSocket input path, not through `/voice/submit`.
+That is the only path that can append to text already held by the interactive application composer and then use the exact carriage return used by the visible Send control.
+The endpoint remains a compatibility API: it is agent-only, rejects control characters, caps text at 20,000 characters, deduplicates
 bounded recent `utterance_id` values, writes text plus one Enter, and advances the ordinary
 human-input revision.
 It refuses the prompt queue's non-overridable readiness reasons before claiming an utterance id.
@@ -833,12 +837,14 @@ It returns a one-use 20-second confirmation id plus the bounded operation text a
 There is no bulk form.
 
 `/voice/speak` validates and synthesizes bounded application-authored text through the configured TTS engine without transcript reading, summarization, or a model call.
+The optional client-generated stream ID lets the requesting tab claim live segment events before the first synthesis finishes.
 
 `/sessions/{id}/voice/generate` reads the latest assistant reply using the session/global effective content mode unless `content_mode` is supplied.
 The request override is validated, applies to one clip only, and never mutates the session's persistent read-aloud preference.
+The optional stream ID has the same claim-before-request role as `/voice/speak`.
 
-Automatic completed-reply synthesis emits ordered `voice_clip_ready` events sharing
-`stream_id`, `segment_index`, and `segment_count`; each ready segment is independently playable.
+Automatic, manual, and application-text synthesis returns the first short clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
+Each ready segment is independently playable, and later segments continue in tracked background tasks after the HTTP response.
 Summary/verbatim selection remains the existing session/global contract.
 
 ## Delivery diagnostics

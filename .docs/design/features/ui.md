@@ -803,6 +803,8 @@ responsive controls.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
   Active Talk renders in the focused terminal pane's `.voice-overlay`, immediately after the read-aloud strip, while its capture, draft, target, and history remain app-owned (`features/voice.md`).
   The Talk history header is its disclosure control, and its expanded or collapsed state persists device-locally across focus-driven view remounts.
+  The player strip and Talk actions both open the shared voice-command catalog as a root viewport modal, so pane overflow cannot clip it and terminal geometry does not change.
+  Voice Comms remains a Talk-panel toggle and spoken command, not a utility-drawer tab.
   A fixed top `.conversation-layer` is only the fallback when no visible terminal can host the view.
   Any new pane-local overlay belongs on the pane anchor, and any view placed there must remain out of flow.
   Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
