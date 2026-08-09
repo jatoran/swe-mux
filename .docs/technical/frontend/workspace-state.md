@@ -51,6 +51,11 @@ Mobile derives one depth-first tab rail and one selected body from the desktop t
 Responsive transitions never flatten or persist replacement geometry.
 The drawer tab strips and desktop right rail have separate icon/title config fields; only `utility_rail_display` feeds `--utility-rail-width`, so changing drawer tabs never reflows the workspace grid.
 
+The desktop right rail renders only while the drawer is closed, and the docked drawer takes the same last grid column when open.
+`--utility-rail-width` is reserved in both states: closed it sizes the rail, open it is added to `--drawer-width` to size the drawer's column.
+The workspace's remaining width is therefore identical whether the rail or the drawer holds that column, so `drawerMaximumWidth` keeps reserving the launcher width and the outer resizer keeps reading and writing the stored drawer width unchanged.
+Both `.utility-drawer.docked` and `.drawer-resizer` address that column with negative grid lines, which silently retarget if the open template's column count changes.
+
 `OverflowRail` wraps workspace and utility tablists without taking over their ARIA roles or drag targets.
 It owns endpoint detection, non-layout-consuming fade chevrons, wheel translation, boundary-aware paging, and selected or focused tab reveal.
 Selection changes and pane-focus changes are separate reveal triggers because moving focus to an already-active pane tab does not change the selected child ID.

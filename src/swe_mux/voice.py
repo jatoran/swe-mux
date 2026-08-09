@@ -715,6 +715,40 @@ class VoiceService:
         )
         return sample
 
+    def record_barge_in_diagnostic(self, raw: Any) -> dict[str, Any]:
+        """Validate and durably log one browser-side playback speech probe."""
+        if not isinstance(raw, dict):
+            raise VoiceError("barge-in diagnostic must be an object")
+        outcome = str(raw.get("outcome") or "")
+        detector = str(raw.get("detector") or "")
+        origin_value = raw.get("origin")
+        origin = None if origin_value is None else str(origin_value)
+        if outcome not in {"confirmed", "rejected"}:
+            raise VoiceError("barge-in outcome must be confirmed or rejected")
+        if detector not in {"silero", "energy"}:
+            raise VoiceError("barge-in detector must be silero or energy")
+        if origin not in {None, "agent", "system"}:
+            raise VoiceError("barge-in origin must be agent, system, or null")
+
+        def bounded(value: Any) -> float:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return 0.0
+            if not math.isfinite(number):
+                return 0.0
+            return round(max(0.0, min(number, 1.0)), 4)
+
+        sample: dict[str, Any] = {
+            "outcome": outcome,
+            "detector": detector,
+            "origin": origin,
+            "peak_probability": bounded(raw.get("peakProbability")),
+            "peak_rms": bounded(raw.get("peakRms")),
+        }
+        log.info("voice barge-in %s", json.dumps(sample, sort_keys=True))
+        return sample
+
     def stt_latency_report(self) -> dict[str, Any]:
         return latency_report(list(self._stt_latency))
 

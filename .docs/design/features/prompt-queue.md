@@ -32,7 +32,8 @@ separately opt-in.
   session and its run id both survived, so a message written for one conversation delivered
   into the wiped one.
 - **Explicit states.** `draft | armed | blocked | delivering | sent | failed | cancelled |
-  stranded`. Transitions are transactional (conditional UPDATEs on one store worker) and
+  stranded | deleted`. `deleted` is an internal, content-free tombstone excluded from every
+  queue, fleet, summary, and export view. Transitions are transactional (conditional UPDATEs on one store worker) and
   idempotent. `blocked` records the last refused delivery's reasons; an edit or re-arm
   clears them. `delivering` is transient but persisted so a daemon death mid-send is
   distinguishable: startup reconcile flips it to `failed` ("verify the terminal") because
@@ -40,7 +41,12 @@ separately opt-in.
   lost delivery. Cancel records `cancel_kind: cancelled | skipped`.
 - **Strict head-of-line.** Any later item may be armed in advance, but only the earliest
   pending (draft/armed/blocked/delivering) item can deliver; everything behind it waits
-  until the head is sent, cancelled, or explicitly skipped.
+  until the head is sent, cancelled, explicitly skipped, or deleted.
+- **Delete is distinct from cancel/skip.** `DELETE /api/queue/messages/{id}` accepts every
+  state except `delivering`, erases the body and action payloads, hides the item immediately,
+  and releases head-of-line order. A `delivering` item returns `409 delivery_in_progress`
+  because its PTY write may already be underway. The content-free tombstone retains sender
+  correlation until normal retention so an agent or automation retry cannot resurrect the item.
 - **The body shown is the body delivered.** No hidden rendered variant exists. Edits
   increment `revision`; `send-next` validates the exact revision the user last saw and
   refuses (`revision_conflict`) otherwise. Sent/delivering items are immutable.
@@ -71,7 +77,8 @@ separately opt-in.
   retries and daemon restarts.
 - **Audit without duplication.** `queue_deliveries` records each attempt's revision,
   target identity, readiness state + reasons, confirmation flag, outcome, byte count, and
-  error. Prompt text lives only in `queue_messages`; `queue_updated` / `queue_delivery`
+  error. Prompt text lives only in visible `queue_messages`; delete blanks it while retaining
+  content-free correlation and delivery-audit linkage. `queue_updated` / `queue_delivery`
   events carry ids and counts only.
 - **Provenance-rich sender model.** `sender_kind` (`user | remote_user | agent | rule |
   queue_draft`), `sender_id`/`sender_label`, `origin_session_id`, `correlation_id` (unique
@@ -87,8 +94,8 @@ separately opt-in.
   missing, ended, or running a different bound run). Stranded items offer copy, explicit
   retarget (to a live agent session, as a draft at the new queue's tail, with the previous
   binding recorded in `retargeted_from`), or cancel.
-- **Retention and export.** Terminal-state items (sent/failed/cancelled/stranded) and
-  their audit rows age out on `prompt_queue_retention_days` (default 90); pending items
+- **Retention and export.** Terminal-state items (sent/failed/cancelled/stranded), deleted
+  tombstones, and their audit rows age out on `prompt_queue_retention_days` (default 90); pending items
   never do. `GET /api/queue/export` snapshots one queue; credential-shaped bodies
   (`looks_like_secret`) are redacted unless the user opts out.
 
@@ -107,11 +114,13 @@ separately opt-in.
   It is reached from the app menu, `queue.fleet`, the Project menu, and the Queue tab's `fleet` control, which carries the fleet-wide pending count.
   It reports install-wide auto-delivery state and owns none of it.
 - **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.** Rows carry only `Send now` (head) and the arm toggle
-  inline; edit, move, cancel/skip, the schedule presets and copy live behind a per-row `⋯`
+  inline; edit, move, cancel/skip, delete, the schedule presets and copy live behind a per-row `⋯`
   that opens a tray under the row rather than a floating menu. Terminal-state items
   (sent/failed/cancelled) collapse behind a `N delivered or closed` disclosure instead of
   rendering crossed out in place. The auto-delivery controls collapse to a one-line
   `auto: …` status with a disclosure. `Ctrl+Enter` in the composer stages armed.
+  Delete uses an inline second-click confirmation and is also available in the fleet queue;
+  it is hidden while the item is `delivering`.
 - **The `queue:<session_id>` pane leaf survives as an explicit pop-out** (the `↗` in the
   panel header) for wide review or two queues side by side, and is what a persisted layout
   holding one resolves to. It renders the same component with its target pinned instead of

@@ -10,7 +10,7 @@ import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import {
   autoplayEnabled, bargeInPlayback, beginRequestedStream, cancelRequestedStream, getPlayback,
-  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, unlockPlayback,
+  newVoiceStreamId, playRequestedStreamFirst, setAutoplayEnabled, setPlaybackDucked, unlockPlayback,
 } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
@@ -528,6 +528,8 @@ export function useConversation(
     const capture=new PersistentVoiceCapture({
       playbackActive:()=>getPlayback().playing,
       playbackOrigin:()=>getPlayback().origin,
+      onPlaybackProbe:active=>setPlaybackDucked(active),
+      onPlaybackProbeResult:result=>{void api('POST','/api/voice/barge-in-diagnostic',result,{timeoutMs:4000}).catch(()=>{})},
       onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}setPhase('hearing');setDetail(getPlayback().playing?'Listening through playback…':'Listening…')},
       onBargeIn:()=>{bargeInPlayback();if(enabledRef.current&&!standbyRef.current){setPhase('hearing');setDetail('Playback stopped. Listening…')}},
       // Fired at the endpoint, before any text exists. It is the whole point of the

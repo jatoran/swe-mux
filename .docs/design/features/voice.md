@@ -88,8 +88,11 @@ affect the PTY, session state, transcripts, history, or projects.
   A browser claims manual and application streams before making the request, so the first live readiness event can start playback without waiting for the HTTP response.
   The response remains a fallback if that event was delayed or lost.
 - Barge-in is a hard stream stop.
-  During playback, three consecutive accepted 32 ms speech frames stop and abandon the current clip, clear the queue, and suppress later clips from the same stream.
-  The confirmation frames become the start of the new utterance and playback-contaminated pre-roll is discarded.
+  The first credible speech frame sidechain-mutes the singleton audio element instead of requiring the user's voice to overpower the phone speaker.
+  Capture ignores three 32 ms frames while speaker echo drains, then requires three consecutive speech frames against the quiet microphone.
+  Confirmation stops and abandons the current clip, clears the queue, and suppresses later clips from the same stream.
+  The clean confirmation frames become the start of the new utterance and playback-contaminated pre-roll is discarded.
+  If speech disappears when playback is muted, the sound was echo and playback is restored.
   Push-to-talk is already an explicit gesture, so it stops playback immediately without waiting for frame confirmation.
   Any confirmed speech stops playback before transcription finishes, even when the utterance is not a command.
   Bare `Mux, stop` maps to the playback-stop action and keeps Talk listening, while the explicit `stop listening` action releases capture.
@@ -161,9 +164,9 @@ affect the PTY, session state, transcripts, history, or projects.
   after **352 ms** of trailing silence, entering speech at probability 0.5 and leaving at 0.35 so
   a marginal frame cannot flap the counter. The energy detector keeps its **900 ms** tail: that
   tail exists *because* RMS-over-noise-floor false-triggers on breath and room noise, so a
-  shorter one would cut words in half. Its threshold is unchanged
-  (`max(0.012, noiseFloor*3.2, playbackActive ? 0.035 : 0)`) — the raised floor during playback
-  keeps the agent's own TTS from self-triggering.
+  shorter one would cut words in half.
+  Its ordinary threshold remains `max(0.012, noiseFloor*3.2)`.
+  The fallback updates its noise floor only while playback is absent, because learning speaker output as room noise can raise the threshold beyond a real voice.
 - **Speculative decode.** After 160 ms of silence, Silero capture sends what it has so far to the
   routing decoder while still listening. If speech resumes, the gate voids the speculation and
   the in-flight request is aborted. The trigger is well under the endpoint on purpose: a decode
@@ -183,10 +186,12 @@ affect the PTY, session state, transcripts, history, or projects.
   command registry, which fires on press and cannot express a hold; window blur ends it, so a key
   released over another window cannot latch the microphone open.
 - **Playback keeps the microphone open with confirmed-speech barge-in.**
-  Silero probability is accepted during playback only when both probability and RMS clear the playback thresholds; the energy fallback retains its raised RMS floor.
-  Capture records the playback origin for diagnostics and waits for three consecutive accepted frames before treating the sound as human speech.
+  A possible voice clears the normal 0.5 Silero threshold and a low RMS floor, then immediately ducks app audio.
+  Capture records the playback origin for diagnostics, waits three frames for echo to drain, and requires three consecutive accepted frames on the quiet microphone before treating the sound as human speech.
   Confirmation stops and suppresses the complete stream, trims contaminated pre-roll, and continues through the ordinary dictation and deterministic wake-word rules.
-  Before confirmation, speculative decoding stays disabled and likely echo remains subject to the older origin-specific rejection policy.
+  Rejected echo restores playback without producing an utterance.
+  Completed probes post bounded confirmed/rejected diagnostics to the daemon log, including detector, playback origin, peak probability, and peak RMS.
+  Before confirmation, speculative decoding stays disabled.
 - **The endpoint is acknowledged before any text exists**, by flipping the phase to `heard`.
   Silence after speaking reads as broken; the same silence after an acknowledgement reads as
   thinking.
@@ -364,7 +369,7 @@ executed action — so that number is measured rather than estimated.
   A normal one-to-two-sentence Comms reply stays in one audio clip; only replies beyond the ordinary 420-character clip bound enter the segmented continuation path.
   `Mux, voice comms off` restores the prior session mode, content mode, device autoplay state, and target pin.
 - Playback carries an explicit `agent` or `system` origin into capture diagnostics.
-  Before barge-in confirmation, the raised RMS and Silero thresholds reject likely speaker echo.
+  A sidechain probe distinguishes likely speaker echo from speech after ducking the speaker, rather than demanding that speech beat a fixed playback RMS threshold.
   Confirmed user speech stops either origin immediately and continues as an ordinary utterance, so it may become dictation or a wake-word command under the normal deterministic safety boundary.
 
 ## Mobile secure context (why HTTPS is required)
@@ -440,6 +445,7 @@ and never touches the daemon or an LLM.
 - `POST /api/voice/transcribe`: the target-independent decoder used by workspace Conversation capture and the wake-word tester.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
   record one browser-measured sample, start a fresh run.
+- `POST /api/voice/barge-in-diagnostic` - bounded confirmed/rejected playback probe diagnostics written to `daemon.log`.
 - `POST /api/sessions/{sid}/voice/prepare-submit` - side-effect-free safety validation before Talk uses the mounted terminal path.
 - `POST /api/sessions/{sid}/voice/submit` - compatibility-only idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/approval` - prepare, confirm, or cancel one guarded approval.

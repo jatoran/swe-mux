@@ -1207,15 +1207,22 @@ body {
 /* Desktop app identity occupies only the cell above the sidebar. Each pane owns the
    adjacent tab strip at the top of its own stack, including both branches of a split. */
 .workspace{--workspace-separator:color-mix(in srgb,var(--text) 14%,var(--line));grid-template-columns:var(--sidebar-width,254px) 4px minmax(0,1fr) var(--utility-rail-width,40px);grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}
-/* The docked utility drawer adds its own resizer + column ahead of the icon
-   rail. Negative column lines keep the rail last whatever the sidebar does. */
-.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(150px,1fr) 4px var(--drawer-width,380px) var(--utility-rail-width,40px)}
+/* Opening the drawer *replaces* the icon rail rather than sitting beside it, so the last
+   column swaps from the rail to the drawer and the drawer takes the rail's width with it.
+   That keeps the main workspace exactly as wide as it was before this rule existed — the
+   geometry budget is unchanged, only its owner is — so opening the drawer sends no larger
+   reflow to the PTYs than it always did. `--drawer-width` therefore stays the *stored*
+   width, which is what the resizer reads and writes and what `drawerMaximumWidth` clamps
+   after reserving the same launcher width. Negative column lines keep the last column last
+   whatever the sidebar does; both rules below count columns from the right, so they move
+   with this template. */
+.workspace.drawer-open{grid-template-columns:var(--sidebar-width,254px) 4px minmax(150px,1fr) 4px calc(var(--drawer-width,380px) + var(--utility-rail-width,40px))}
 .app-topbar{position:relative;z-index:48;grid-column:1;grid-row:1;min-width:0;display:flex;align-items:stretch;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel);box-shadow:0 1px #000}
 .app-identity{min-width:0;flex:1 1 0;display:flex;align-items:center;gap:5px;padding:0 7px 0 5px;white-space:nowrap}.app-identity .desktop-project-name{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-weight:600}.app-identity button{width:25px;height:calc(25px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.app-identity button:hover{background:var(--panel2);color:var(--accent)}.app-identity .sidebar-collapse{flex:none}.app-identity .daemon-ok{flex:none;width:20px;height:calc(25px*var(--ui-scale));margin:0;justify-content:center}.app-identity .daemon-ok i{width:6px;height:8px}
 .pane-stack{position:relative;grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr)}.pane-stack:after{content:"";position:absolute;z-index:25;inset:0;border:1px solid color-mix(in srgb,var(--text) 11%,transparent);pointer-events:none}.pane-stack>.stack-tabs-rail{display:block}.pane-stack>.stack-tabs-rail>.stack-tabs button{height:calc(33px*var(--ui-scale))}.pane-stack.focused-pane:after{border-color:color-mix(in srgb,var(--text) 34%,transparent);box-shadow:inset 0 2px color-mix(in srgb,var(--text) 42%,transparent)}
 
 /* Desktop sidebar sizing is device-local UI state. */
-.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--workspace-separator);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) var(--utility-rail-width,40px)}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(150px,1fr) 4px var(--drawer-width,380px) var(--utility-rail-width,40px)}
+.sidebar{grid-column:1;grid-row:2;min-width:0;overflow:hidden}.sidebar-resizer{grid-column:2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--workspace-separator);touch-action:none}.sidebar-resizer:after{content:"";position:absolute;inset:0 -3px}.sidebar-resizer:hover,.sidebar-resizing .sidebar-resizer{background:var(--accent)}.main-stage{grid-column:3;grid-row:1/3}.workspace.sidebar-collapsed{grid-template-columns:40px 0 minmax(0,1fr) var(--utility-rail-width,40px)}.workspace.sidebar-collapsed.drawer-open{grid-template-columns:40px 0 minmax(150px,1fr) 4px calc(var(--drawer-width,380px) + var(--utility-rail-width,40px))}
 /* The rail shares the collapsed sidebar's cell; the sidebar itself is only
    visibility-hidden, so it still reserves the column but paints nothing. */
 .sidebar-rail{grid-column:1;grid-row:2;display:flex;flex-direction:column;align-items:center;gap:4px;min-height:0;padding:6px 0;border-right:1px solid var(--line);background:var(--panel);overflow:hidden}
@@ -2126,13 +2133,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 }
 @media(prefers-reduced-motion:reduce){.clipboard-panel{animation:none}}
 /* Utility drawer host: one component, two renderings.
-   Desktop docks it as a workspace grid column (the pane tree shrinks instead of
-   being covered, which matters in a tiling workspace) beside an always-visible
-   icon rail; mobile takes the same element out of flow as an overlay with a scrim,
-   mirroring the navigation sidebar it is mutually exclusive with. */
+   Desktop docks it as the workspace grid's last column (the pane tree shrinks instead of
+   being covered, which matters in a tiling workspace), taking over the column the icon
+   rail holds while it is closed; mobile takes the same element out of flow as an overlay
+   with a scrim, mirroring the navigation sidebar it is mutually exclusive with. */
 .utility-drawer{--utility-surface:color-mix(in srgb,var(--panel) 94%,var(--text));min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--utility-surface);font:10px 'Cascadia Mono',Consolas,monospace}
-.utility-drawer.docked{grid-column:-3/-2;grid-row:1/3;border-left:0;box-shadow:-8px 0 18px color-mix(in srgb,#000 34%,transparent),inset 1px 0 color-mix(in srgb,var(--text) 18%,transparent)}
-.drawer-resizer{grid-column:-4/-3;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--workspace-separator,var(--line));touch-action:none}
+.utility-drawer.docked{grid-column:-2/-1;grid-row:1/3;border-left:0;box-shadow:-8px 0 18px color-mix(in srgb,#000 34%,transparent),inset 1px 0 color-mix(in srgb,var(--text) 18%,transparent)}
+.drawer-resizer{grid-column:-3/-2;grid-row:1/3;position:relative;z-index:8;cursor:col-resize;background:var(--workspace-separator,var(--line));touch-action:none}
 .drawer-resizer:after{content:"";position:absolute;inset:0 -3px}
 .drawer-resizer:hover,.drawer-resizer:focus-visible,.sidebar-resizing .drawer-resizer{background:var(--accent);outline:0}
 .utility-drawer.overlay{position:fixed;z-index:60;top:0;right:0;bottom:0;width:90vw;border-left:1px solid var(--line);box-shadow:-9px 0 22px #000a;animation:utility-drawer-in .14s ease-out}
@@ -2140,7 +2147,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .utility-drawer-scrim{position:fixed;z-index:59;inset:0;border:0;background:#020403aa}
 /* This menu is rendered at the app root, outside the overlay that opened it. */
 .drawer-display-menu{z-index:70}
-/* Always-visible desktop strip: the reason these surfaces stop being buried. */
+/* What the collapsed desktop drawer looks like, and the reason these surfaces stop being
+   buried. It holds the workspace's last column only while the drawer is closed; the docked
+   drawer claims the same column line when open, and the two are never rendered together. */
 .utility-rail{grid-column:-2/-1;grid-row:1/3;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border-left:1px solid var(--workspace-separator,var(--line));background:color-mix(in srgb,var(--panel) 88%,var(--bg))}
 .utility-rail button{position:relative;width:28px;height:calc(30px*var(--ui-scale));flex:none;display:grid;place-items:center;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:12px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 .utility-rail.title-mode{align-items:stretch;padding-inline:6px}
@@ -2149,7 +2158,6 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Icons are sized here, not in `em`: this surface runs a 9-12px font. */
 .utility-rail button svg{width:16px;height:16px;display:block}
 .utility-rail button:hover,.utility-rail button:focus-visible{border-color:var(--accent);color:var(--text)}
-.utility-rail button.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));color:var(--text);box-shadow:inset -2px 0 var(--accent)}
 .drawer-badge{position:absolute;top:-4px;right:-4px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:7px;background:var(--amber);color:#12140c;font:600 8px 'Cascadia Mono',Consolas,monospace;font-style:normal}
 .drawer-tabs-rail{--overflow-rail-bg:var(--panel2);--overflow-rail-accent:var(--accent);flex:none}
 .drawer-tabs{width:100%;flex:1 1 auto;min-width:0;display:flex;flex-wrap:nowrap;align-items:stretch;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch}
@@ -2199,6 +2207,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-pane-heading{position:relative;z-index:6;flex:none;min-height:27px;display:flex;align-items:center;gap:6px;padding:3px 7px;border-bottom:1px solid var(--line);background:var(--panel)}
 .drawer-pane-heading .drawer-panel-title{position:static;flex:0 1 auto;width:auto;max-width:55%;cursor:help}
 .drawer-scope-context{min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:7px}
+/* One per drawer, on the pane holding its top-right corner, because the drawer collapses as
+   a whole. It replaces the launcher rail's toggle, which is not on screen while the drawer is
+   open. Sized for touch on the mobile overlay, where it is the only close control besides the
+   scrim; `flex:none` so a long scope string never squeezes it out of the row. */
+.drawer-collapse{flex:none;width:19px;height:19px;display:grid;place-items:center;padding:0;border:1px solid transparent;background:transparent;color:var(--muted);font:13px 'Cascadia Mono',Consolas,monospace;line-height:1;cursor:pointer}
+.drawer-collapse:hover,.drawer-collapse:focus-visible{border-color:var(--accent);color:var(--text);outline:0}
+@media(max-width:760px){.drawer-collapse{width:34px;height:34px;border-color:var(--line);background:var(--panel2);font-size:15px}}
 .drawer-pane-heading+.drawer-status,.drawer-pane-heading+.clipboard-disabled{padding-left:9px}
 .drawer-pane[data-pointer-drop-indicator]:after{content:"";position:absolute;z-index:30;pointer-events:none;border:2px solid var(--green);background:color-mix(in srgb,var(--green) 14%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--green) 13%,transparent)}
 .drawer-pane[data-pointer-drop-indicator="join"]:after{inset:34px 0 0}
@@ -2606,6 +2621,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-item-actions button,.queue-item-actions select{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
 .queue-item-actions .queue-send{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent)}
 .queue-item-actions .queue-send-confirm{border-color:color-mix(in srgb,var(--red) 55%,var(--line));color:var(--red)}
+.queue-item-actions .danger{border-color:color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red)}
+.queue-item-actions .danger.confirming{background:color-mix(in srgb,var(--red) 14%,var(--panel2));border-color:var(--red)}
 /* The overflow toggle sits hard right so the two acts that matter (send, arm) stay left-
    aligned across every row, and its tray opens under the row rather than floating. */
 .queue-item-actions .queue-item-menu{margin-left:auto;min-width:28px;color:var(--muted)}

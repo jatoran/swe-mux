@@ -348,6 +348,7 @@ POST   /queue/messages                              {target_session_id, body, ar
                                                      constraints?, correlation_id?}
 PATCH  /queue/messages/{message_id}                 {body, revision} | {armed} | {after} |
                                                      {retarget_session_id} | {constraints}
+DELETE /queue/messages/{message_id}                 erase and hide; 409 while delivering
 POST   /queue/messages/{message_id}/cancel          {kind: cancelled|skipped|revoked}
 GET    /queue/messages/{message_id}/deliveries      audit rows (no prompt text)
 POST   /queue/send-next                             {message_id, revision, idempotency_key?, confirm?}
@@ -799,6 +800,7 @@ POST   /voice/speak                      {text, stream_id?: UUID}
 GET    /voice/stt-latency
 POST   /voice/stt-latency                one browser-measured stage sample
 DELETE /voice/stt-latency
+POST   /voice/barge-in-diagnostic        bounded confirmed/rejected playback probe
 GET    /voice/clips[?session=&run=&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
@@ -825,6 +827,10 @@ trusted, because a diagnostic that can be poisoned into showing impossible stage
 believed. `GET` returns per-stage p50/p95/max plus a separate command-only total, `DELETE` starts
 a fresh measurement run, and every sample is also written to `daemon.log`, which is what survives
 a restart.
+
+`/voice/barge-in-diagnostic` records the result of the browser's playback sidechain probe.
+It accepts a confirmed/rejected outcome, Silero/energy detector, optional agent/system origin, peak probability, and peak RMS.
+The daemon validates and clamps the browser-supplied values before writing the record to `daemon.log`.
 
 The Talk client first calls `/voice/prepare-submit` to recheck the live Agent target, bounded text, and non-overridable delivery protections without writing input.
 It then sends Agent drafts through the mounted terminal's ordinary xterm/WebSocket input path, not through `/voice/submit`.
