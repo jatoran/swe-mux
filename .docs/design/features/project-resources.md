@@ -29,6 +29,8 @@ The file tree and notes collection are utility-drawer tabs.
 - Stored `project.note` and `session.note` bindings and gestures migrate to `notes.open`.
 - The Notes drawer lists explicit notes even when empty, supports Project/all-Projects scope, searches title/Project/excerpt, and provides create, rename, delete, open-in-drawer, and open-in-pane actions.
 - A note editor header keeps the note title, owning Project, and current save state on one row, separated by centered dots.
+- A focused note, Scratchpad, or editable Markdown file publishes a named Conversation text sink.
+  Voice Send inserts the editable draft through Continuity's public caret-aware `insertText` operation, so ordinary note autosave and file-draft rules remain the only write path.
 - A note already open in a pane is activated where it is.
 - Opening a note never creates or rearranges a split.
 - Moving a note is an explicit tab move or pane-edge split action.

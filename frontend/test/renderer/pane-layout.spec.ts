@@ -2,8 +2,8 @@ import { expect, test } from 'playwright/test'
 
 /**
  * The pane geometry contract (`design/features/ui.md`): a terminal pane is two rows —
- * header and surface — and the voice surfaces float over the terminal rather than taking
- * a row from it. The pane's remaining height *is* the PTY's row count, so any layout
+ * header and surface - and pane voice playback floats over the terminal while dictation
+ * lives at app level. The pane's remaining height *is* the PTY's row count, so any layout
  * change that moves or resizes `.terminal-surface` resizes a live agent's terminal and
  * makes its TUI reflow; the damage outlives the overlay because the reflowed scrollback
  * does not come back when it closes.
@@ -24,7 +24,7 @@ const bounds = () => {
   return {
     pane: box('.terminal-pane')!, bar: box('.pane-bar')!, surface: box('.terminal-surface')!,
     host: box('.terminal-host')!, overlay: box('.voice-overlay'), strip: box('.voice-strip'),
-    panel: box('.dictation-panel'),
+    panel: box('.dictation-panel'), layer: box('.conversation-layer'),
   }
 }
 
@@ -50,30 +50,42 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
     expect(on.surface.y).toBe(on.bar.y + on.bar.height)
     expect(on.surface.height).toBe(on.pane.height - on.bar.height)
 
-    // And the overlay is where it claims to be: inside the pane, over the top of the
-    // terminal, strip above panel, never eating the terminal it is supposed to float on.
+    // The playback overlay stays in its pane while the dictation card is app-level.
     expect(on.overlay!.x).toBeGreaterThanOrEqual(on.pane.x)
     expect(on.overlay!.x + on.overlay!.width).toBeLessThanOrEqual(on.pane.x + on.pane.width)
     expect(on.overlay!.y).toBeGreaterThanOrEqual(on.surface.y)
     expect(on.overlay!.y).toBeLessThan(on.surface.y + 40)
-    expect(on.panel!.y).toBeGreaterThanOrEqual(on.strip!.y + on.strip!.height)
     expect(on.overlay!.height).toBeLessThan(on.surface.height * 0.6)
+    expect(on.panel!.x).toBeGreaterThanOrEqual(on.layer!.x)
+    expect(on.panel!.x + on.panel!.width).toBeLessThanOrEqual(on.layer!.x + on.layer!.width)
+    expect(on.panel!.y).toBeGreaterThanOrEqual(on.layer!.y)
+    expect(on.panel!.y + on.panel!.height).toBeLessThanOrEqual(on.layer!.y + on.layer!.height)
+    if (viewport.mobile) {
+      expect(on.panel!.x).toBeLessThanOrEqual(5)
+      expect(on.panel!.width).toBeGreaterThanOrEqual(viewport.width - 10)
+      expect(on.panel!.y + on.panel!.height).toBeGreaterThanOrEqual(viewport.height - 6)
+    } else {
+      expect(on.panel!.x + on.panel!.width).toBeGreaterThanOrEqual(viewport.width - 13)
+      expect(on.panel!.y + on.panel!.height).toBeGreaterThanOrEqual(viewport.height - 13)
+    }
   })
 }
 
-test('the floating stack is click-through between its cards', async ({ page }) => {
+test('the global dictation layer stays below modal overlays', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 })
   await page.goto('/pane-harness.html?overlay=1&mobile=0')
   await expect(page.locator('.dictation-panel')).toBeVisible()
-  // The gap between the two cards still belongs to the terminal, or the overlay would
-  // silently steal a band of clicks across the full width of the pane.
-  const hits = await page.evaluate(() => {
-    const strip = document.querySelector('.voice-strip')!.getBoundingClientRect()
-    const panel = document.querySelector('.dictation-panel')!.getBoundingClientRect()
-    const gap = document.elementFromPoint(strip.x + strip.width / 2, (strip.bottom + panel.top) / 2)
-    const card = document.elementFromPoint(strip.x + strip.width / 2, strip.y + strip.height / 2)
-    return { gapInTerminal: !!gap?.closest('.terminal-surface'), cardTakesPointer: !!card?.closest('.voice-strip') }
+  const bands = await page.evaluate(() => {
+    const layer = document.querySelector<HTMLElement>('.conversation-layer')!
+    const modal = document.createElement('div')
+    modal.className = 'palette-layer'
+    document.body.append(modal)
+    const result = {
+      conversation: Number(getComputedStyle(layer).zIndex),
+      modal: Number(getComputedStyle(modal).zIndex),
+    }
+    modal.remove()
+    return result
   })
-  expect(hits.gapInTerminal).toBe(true)
-  expect(hits.cardTakesPointer).toBe(true)
+  expect(bands.conversation).toBeLessThan(bands.modal)
 })

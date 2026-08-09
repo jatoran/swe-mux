@@ -10,6 +10,7 @@ import type {
 import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
+import type { TextSurfaceIdentity } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { hasSelection, selectionText } from './noteSelection'
 import {
@@ -80,6 +81,8 @@ type Props = {
   railActions?: readonly RailAction[]
   /** Mirror of the live element so the pane header can read the engine's selection. */
   elementRef?: { current: ContinuityEditorElement | null }
+  /** App-level identity used by dictation and other focus-following input surfaces. */
+  textSurface?: TextSurfaceIdentity
 }
 
 /**
@@ -202,6 +205,7 @@ export function ContinuityMarkdownEditor({
   scrollKey,
   railActions,
   hostRef,
+  textSurface,
   onCommit,
 }: {
   initialText: string
@@ -215,6 +219,7 @@ export function ContinuityMarkdownEditor({
    *  from outside the editor (a header button takes DOM focus; the selection is engine state,
    *  so it survives that). Cleared on detach with the internal ref. */
   hostRef?: { current: ContinuityEditorElement | null }
+  textSurface?: TextSurfaceIdentity
   onCommit: (text: string) => void
 }) {
   ensureNoteRailArrangement()
@@ -224,6 +229,8 @@ export function ContinuityMarkdownEditor({
   hostRefTarget.current = hostRef
   const scrollKeyRef = useRef(scrollKey)
   scrollKeyRef.current = scrollKey
+  const textSurfaceRef = useRef(textSurface)
+  textSurfaceRef.current = textSurface
   const settings = useNoteEditorSettings()
   const resolvedRailActions = useMemo<readonly RailAction[]>(
     () => [...NOTE_CLIPBOARD_RAIL_ACTIONS, ...(railActions || [])],
@@ -247,8 +254,12 @@ export function ContinuityMarkdownEditor({
     if (hostRefTarget.current) hostRefTarget.current.current = element
     // Focus inside the editor makes it the target for inserted text (clipboard
     // history, terminal selections) even after an overlay takes DOM focus.
-    if (element) element.addEventListener('focusin', () => noteEditorFocus(element))
+    if (element) element.addEventListener('focusin', () => noteEditorFocus(element, textSurfaceRef.current))
   }, [])
+  useEffect(() => {
+    const element = elementRef.current
+    if (element?.matches(':focus-within')) noteEditorFocus(element, textSurface)
+  }, [textSurface?.id, textSurface?.kind, textSurface?.label])
   return (
     <ContinuityEditor
       ref={attachRef}
@@ -331,6 +342,7 @@ export function ProjectNoteEditor({
   label = 'Note',
   railActions,
   elementRef,
+  textSurface,
 }: Props) {
   const key = noteQueueKey(projectId, resourceId)
   return (
@@ -340,6 +352,7 @@ export function ProjectNoteEditor({
       scrollKey={key}
       railActions={railActions}
       hostRef={elementRef}
+      textSurface={textSurface}
       onCommit={text => noteSaveQueue.submit(key, text)}
     />
   )

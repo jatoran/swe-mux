@@ -139,6 +139,10 @@ KEYBINDING_COMMANDS = (
     ("drawer.moveDown", "Side panel: move focused tab down", "view"),
     ("clipboard.open", "Side panel: always clipboard history (rail Clip button)", "clipboard"),
     ("clipboard.clear", "Clear unpinned clipboard history", "clipboard"),
+    # Conversation capture is workspace-level. These commands make the visible mic
+    # and target-pin controls optional gesture/keybinding destinations too.
+    ("voice.toggleTalk", "Toggle hands-free conversation", "voice"),
+    ("voice.toggleTargetPin", "Toggle voice dictation target pin", "voice"),
     *tuple(
         (f"project.activate({index})", f"Switch to project {index}", "project")
         for index in range(1, 10)

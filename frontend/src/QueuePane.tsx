@@ -12,6 +12,8 @@ import {
 import type { Session } from './types'
 import { deliversHarnessPrompts } from './harnessRegistry'
 import { reportPromptSubmitted } from './projectRecency'
+import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
+import type { EditorHandle } from './insertTarget'
 
 // The prompt queue's session-scoped surface, in two renderings.
 //
@@ -150,8 +152,42 @@ export function QueuePane({
   const [showDone, setShowDone] = useState(false)
   const alive = useRef(true)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  const composerSessionRef = useRef(sessionId)
+  composerSessionRef.current = sessionId
 
   const session = sessions.find(item => item.id === sessionId) || null
+  const composerTargetLabel = session ? agentTargetName(session) : sessionId || 'No session'
+  const composerHandle = useMemo<EditorHandle>(() => {
+    const targetSessionId = sessionId
+    return {
+      get isConnected() { return composerSessionRef.current === targetSessionId && (composerRef.current?.isConnected ?? false) },
+      insertText: text => {
+        if (composerSessionRef.current !== targetSessionId) return
+        const field = composerRef.current
+        const start = field?.selectionStart ?? 0
+        const end = field?.selectionEnd ?? start
+        setComposer(current => {
+          const safeStart = Math.min(start, current.length)
+          const safeEnd = Math.min(Math.max(end, safeStart), current.length)
+          const next = `${current.slice(0, safeStart)}${text}${current.slice(safeEnd)}`
+          requestAnimationFrame(() => {
+            const caret = safeStart + text.length
+            composerRef.current?.setSelectionRange(caret, caret)
+          })
+          return next
+        })
+      },
+    }
+  }, [sessionId])
+  const composerSurface = {
+    id: `queue:${sessionId}`,
+    kind: 'queue' as const,
+    label: `Queue · ${composerTargetLabel}`,
+  }
+  useEffect(() => () => forgetEditorFocus(composerHandle), [composerHandle])
+  useEffect(() => {
+    if (document.activeElement === composerRef.current) noteEditorFocus(composerHandle, composerSurface)
+  }, [sessionId, composerTargetLabel])
   // An id with no session record is an ended target the daemon still holds a queue for
   // (the pop-out tab outliving its session); only a *live non-agent* is refused here.
   const targetable = !!sessionId && (isAgentSession(session) || !session)
@@ -619,6 +655,7 @@ export function QueuePane({
             placeholder="Stage a message for this agent…"
             title="Ctrl+Enter stages it armed"
             disabled={busyId === 'composer'}
+            onFocus={() => noteEditorFocus(composerHandle, composerSurface)}
             onInput={event => setComposer(event.currentTarget.value)}
             onKeyDown={event => {
               if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return

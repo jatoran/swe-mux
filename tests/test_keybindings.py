@@ -78,6 +78,8 @@ def test_keybinding_editor_metadata_exposes_commands_and_reserved_lists() -> Non
     assert "pane.stackNew" in commands
     assert "drawer.moveLeft" in commands
     assert "drawer.queue" in commands
+    assert "voice.toggleTalk" in commands
+    assert "voice.toggleTargetPin" in commands
     assert "project.activate(9)" in commands
     assert "ctrl+w" in policy["browser_reserved"]
     assert policy["desktop_only"] == ["ctrl+shift+tab", "ctrl+tab"]

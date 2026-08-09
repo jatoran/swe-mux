@@ -1,5 +1,5 @@
 import { render } from 'preact'
-import { DictationPanel, type Conversation } from '../../src/ConversationControl'
+import { ConversationSurface, type Conversation } from '../../src/ConversationControl'
 import { VoicePlayer } from '../../src/VoicePlayer'
 import type { Session, VoiceStatus } from '../../src/types'
 import '../../src/style.css'
@@ -24,10 +24,11 @@ const status = {
 // Enough of the controller for the panel to render every state it draws; the panel is
 // presentational, so no capture is started here.
 const conversation: Conversation = {
-  sessionId: session.id, phase: 'listening', active: true, standby: false, wake: 'mux',
-  detail: 'Listening. Say “mux, send” to submit.', landedAt: 0,
+  target: {kind:'session',id:session.id,label:'Agent · harness',available:()=>true},
+  targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, wake: 'mux',
+  detail: 'Listening. Say “mux, send” to submit.', landedAt: 0, latency: null, detector: 'silero',
   draft: 'refactor the scrollback ring so it keeps bracketed paste mode across replay',
-  toggle: () => {}, stop: () => {}, send: () => {}, undo: () => {}, clear: () => {},
+  toggle: () => {}, togglePin: () => {}, stop: () => {}, send: () => {}, undo: () => {}, clear: () => {},
   toggleStandby: () => {}, edit: () => {},
 }
 
@@ -40,13 +41,11 @@ const pane = <section class="terminal-pane focused">
     <div><span class="pane-state running">running</span></div>
     <div class="pane-voice">
       <button class="voice-chip auto">tts:auto</button>
-      <button class="conversation-chip listening">talk:on</button>
     </div>
     <div class="pane-tools"><button>⋯</button></div>
   </div>
   {overlay && <div class="voice-overlay-anchor"><div class="voice-overlay">
     <VoicePlayer session={session} status={status} mode="auto" onSession={() => {}} onOpenSettings={() => {}} />
-    <DictationPanel conversation={conversation} onOpenSettings={() => {}} />
   </div></div>}
   <div class="terminal-surface">
     <div class="terminal-host" />
@@ -59,8 +58,10 @@ root.setAttribute('style', 'width:100%;height:100dvh;display:grid;grid-template-
 document.body.setAttribute('style', 'margin:0')
 document.documentElement.style.setProperty('--ui-scale', '1')
 render(
-  mobile
+  <>{mobile
     ? <div class="mobile-unified-active">{pane}</div>
-    : <div class="pane-grid count-1">{pane}</div>,
+    : <div class="pane-grid count-1">{pane}</div>}
+    {overlay&&<ConversationSurface conversation={conversation} configured onOpenSettings={() => {}}/>}
+  </>,
   root,
 )

@@ -58,6 +58,8 @@ PaneLeaf = terminal | note | preview | history | queue
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
+- The app-level Conversation surface is not a `PaneLeaf`, does not participate in layout persistence or focus traversal, and cannot add tracks or resize a terminal.
+  Pane-local read-aloud playback remains a zero-height overlay over its owning terminal surface.
 - Desktop pane boundaries use four-pixel neutral gutters and a quiet one-pixel pane frame.
   The focused pane strengthens that neutral frame and adds a short top inset rather than introducing another semantic colour.
   Mobile suppresses the frame because its projection renders only one pane at a time.

@@ -2,14 +2,11 @@
 
 ## What it is
 
-Optional per-session reply synthesis (TTS, "read aloud") plus a browser-captured,
-daemon-transcribed Conversation mode (STT, "hands-free"), isolated from terminal, history,
-Project, and transcript correctness. Two independent halves share one `VoiceService`,
-one `voice_clips` store, and one browser playback element:
+Optional per-session reply synthesis (TTS, "read aloud") plus a workspace-level, browser-captured Conversation mode (STT, "hands-free"), isolated from history, Project, and transcript correctness.
+Two independent halves share one `VoiceService`, one `voice_clips` store, and one browser playback element:
 
 - **Read aloud (TTS):** agent replies → spoken audio clips the browser plays.
-- **Conversation (STT):** microphone speech → transcribed text → the agent's PTY, driven by
-  spoken `Mux` wake-word commands.
+- **Conversation (STT):** microphone speech → buffered draft → the named Agent or text-surface sink, driven by spoken `Mux` wake-word commands.
 
 ## Contract
 
@@ -275,11 +272,18 @@ executed action — so that number is measured rather than estimated.
   `send`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`,
   `standby`, `resume`, `stop`. Defaults ship `mux`/`mucks`/`max` as wake words with phrases
   matching the historical grammar.
-- **Three run states.** Active (default) buffers speech and runs every command. `standby`
-  keeps the mic and transcription running but **discards every utterance except a `resume` (or
-  `stop`) command** — so it stays listening yet does nothing until woken. `stop` fully tears
-  capture down and releases the mic (only a Talk-button gesture can re-open it, since browsers
-  forbid silent re-acquire). The draft buffer survives standby.
+- **Three run states.** Active (default) buffers speech and runs every command.
+  `standby` keeps the mic and transcription running but **discards every utterance except a `resume` (or `stop`) command**, so it stays listening yet does nothing until woken.
+  `stop` fully tears capture down and releases the mic; only an explicit mic-control or bound-command gesture can re-open it because browsers forbid silent reacquisition.
+  The draft buffer survives standby.
+- **Capture and target have separate lifetimes.** Talk is one workspace-level browser flag.
+  The target follows the focused live Agent, Continuity editor, Scratchpad, Markdown editor, or Queue composer without restarting capture, and the editable draft survives every target change.
+  A pin freezes the exact current sink until explicitly released.
+- **A text target is a buffer sink, not an execution path.** Send inserts the trimmed voice draft at that surface's caret and clears the voice draft.
+  In a Queue composer this only fills the composer; staging, arming, and delivery remain separate explicit Queue actions.
+  Agent-only commands (`read`, `summary`, `verbatim`, `interrupt`) refuse a text target and keep the draft.
+- All utterances decode through the session-free `POST /api/voice/transcribe` route.
+  The target is resolved only when an action needs it, so a focus change during capture cannot send audio to a stale per-session route.
 - `POST voice/submit` is reconnect-safe: an idempotent `utterance_id` (`claim_submission`, a
   512-entry dedup ring) prevents double-sends, control characters are rejected, and the
   human-input boundary is advanced (`voice_prompt_submitted`). Single-line text plus one Enter
@@ -313,47 +317,26 @@ into mobile-voice setup instead.
 
 ## Browser surface
 
-- Every voice affordance lives at the **top** of an agent pane. The pane header carries a
-  `.pane-voice` group — the `tts:` chip (off / tap / auto) and the `talk:` Conversation toggle
-  — between the cwd and the note/proc/⋯ tools. The session context menu and command palette
-  expose the same playback operations; Settings → Voice owns engines, voice, language/model,
-  content, budget, and cache config.
-- The chips are in the header and not the bottom command rail because that rail is a
-  horizontal scroller the user pages through to reach terminal keys: voice chips both occupied
-  its most valuable leading slots and scrolled out of reach. The header group is itself a
-  scroller, which is what keeps a long chip set from pushing the pane tools out of a bar that
-  must never wrap — see `ui.md`.
-- **Both working surfaces float; neither takes a row.** The player strip (play/pause, seek,
-  clip navigation, on-demand generate, verbatim/summary, device autoplay) and the dictation
-  panel hang from one zero-height `.voice-overlay-anchor` sharing the terminal surface's
-  track, stacked strip-over-panel and inset from the pane's top edge. **The pane's remaining
-  height is the PTY's row count**: an in-flow strip meant every read-aloud or Talk toggle
-  resized the terminal under a live agent and made its TUI reflow and repaint, which is the
-  one cost a transient UI affordance must not impose. The container is click-through, so the
-  gap between the two cards still belongs to the terminal.
-- **The dictation draft is a surface, not a chip.** It carries the phase, the status line, the
-  actions (send / undo / clear / standby / stop / Settings), and the draft itself. The draft
-  lived in the header until it was clear that a chip scroller can only ever show a truncated
-  tail of a spoken sentence; the header keeps the `talk:` switch and its state colour and
-  nothing else. Three properties are load-bearing:
-  - **Always editable, no edit mode.** The draft is a live `<textarea>` — click or tap it and
-    type. Capture keeps running while typing; an utterance that lands mid-edit appends at the
-    end with the caret and selection preserved. Without this a single misrecognized word meant
-    re-dictating the whole prompt, since `cancel`/`undo` are the only spoken corrections.
-  - **Grows with the draft, bounded.** One line to five, then internal scroll. This is only
-    affordable because the panel floats; the same behaviour in flow would have resized the
-    PTY on every phrase.
-  - **Voice stays primary.** `Mux, send` and the panel's Send button are the same submission,
-    and nothing in the panel needs to be touched for hands-free use. `Ctrl`/`Cmd`+`Enter` sends
-    from the textarea; `Escape` returns the keyboard to the terminal.
+- **Read aloud remains session-scoped.** Each Agent pane header carries only its `tts:` chip (off / tap / auto).
+  The player strip (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay) floats from the pane's zero-height `.voice-overlay-anchor`.
+  It never changes terminal geometry.
+- **Conversation is app-level.** The inactive form is a visible mic control.
+  While Talk is on, `.conversation-layer` is a corner card on desktop and a bottom sheet on mobile with z-index 24.
+  Workspace panes use lower z-index values, while palette and modal layers use higher values.
+  The surface stays mounted across Project, pane, and target changes.
+- **The panel names its sink.** The `to:` row carries the Agent or text-surface label, its pin control, and an unavailable state.
+  Send is disabled when the named target disappeared.
+  Unpin resumes focus-following without changing the draft.
+- **The dictation draft is always editable.** The live `<textarea>` has no edit mode.
+  Capture keeps running while typing; an utterance that lands mid-edit appends at the end with the caret and selection preserved.
+  One line grows to five, then scrolls internally.
+- **Voice stays primary.** `Mux, send` and the panel's Send button commit the same draft to the named sink.
+  `Ctrl`/`Cmd`+`Enter` sends from the textarea; `Escape` releases its keyboard focus.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- Each floating surface ends with a **gear** into Settings → Voice, on every device. It
-  replaced the header's touch-only `audio…` chip: with a route on both surfaces, a third one
-  in the header was duplication. The header does **not** repeat `speak`, summary/verbatim, or
-  autoplay either — those render only where the strip renders. `tts:setup` and `talk:setup`
-  replace their chips when the global feature is disabled, so an unavailable feature stays
-  discoverable.
+- The player strip and global dictation card each end with a gear into Settings → Voice.
+  Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
+- `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
 
 ## Session sounds (unrelated audio path)
@@ -370,7 +353,7 @@ and never touches the daemon or an LLM.
 - `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`; audio is never
   written to disk. Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and
   `X-Mux-Utterance-Id` headers.
-- `POST /api/voice/transcribe` — the same decoder without a session, for the wake-word tester.
+- `POST /api/voice/transcribe`: the target-independent decoder used by workspace Conversation capture and the wake-word tester.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
   record one browser-measured sample, start a fresh run.
 - `POST /api/sessions/{sid}/voice/submit` — idempotent voice prompt commit to the PTY.
@@ -397,9 +380,8 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx` — `useConversation` (the app-root capture controller,
-  the command loop, speculative decoding, and push-to-talk), `ConversationChip` (header switch),
-  `DictationPanel` (draft surface).
+- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, and push-to-talk), `ConversationSurface` (global mic/card), and `DictationPanel` (draft surface).
+- `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.
 - `frontend/src/audioFrames.ts` — streaming resampler and 512-sample framing.

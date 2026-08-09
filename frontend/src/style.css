@@ -1709,8 +1709,7 @@ body {
   .project-workspace,.terminal-workspace{width:100%;height:100%;flex:1 1 100%}
 }
 
-/* Read aloud (TTS) + dictation. The strip renders inside .terminal-surface, above the
-   clipboard rail, so the pane keeps its plain pane-bar + surface two-row grid. */
+/* Read aloud (TTS) stays pane-local. Dictation is a fixed app-level layer. */
 .pending-terminal-pane{grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr)}.pending-terminal-body{min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted);background:radial-gradient(circle at center,color-mix(in srgb,var(--green) 7%,transparent),transparent 42%)}.pending-terminal-body strong{color:var(--text);font-size:12px;font-weight:500}.pending-terminal-body small{font-size:9px}.pending-terminal-spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--green);animation:pending-terminal-spin .75s linear infinite}.pending-terminal-row{cursor:wait}.pending-terminal-tab{cursor:wait;opacity:.82}@keyframes pending-terminal-spin{to{transform:rotate(360deg)}}
 /* The playback strip is the expanded half of the header's voice group: it draws as its own
    row immediately under the pane bar (hence border-bottom, not border-top) and only exists
@@ -1740,15 +1739,14 @@ body {
    touch-only `audio…` chip, so it renders on every device. */
 .voice-strip .voice-settings-open,.dictation-actions .dictation-settings{flex:none;font-size:12px;line-height:1}
 
-/* Both voice surfaces — the read-aloud player strip and the dictation draft — FLOAT over
-   the top of the terminal rather than taking rows from it. The terminal host is the pane's
-   1fr track, so an in-flow strip resizes the PTY every time read aloud or Talk is toggled,
-   and the agent's TUI reflows and repaints around a transient UI affordance.
-   The anchor is what makes that free. It is a real grid/flex item sharing the surface's
+/* The read-aloud player strip floats over the top of its terminal rather than taking a row.
+   The terminal host is the pane's 1fr track, so an in-flow strip would resize the PTY and
+   make the agent's TUI reflow around a transient affordance. The anchor makes that free.
+   It is a real grid/flex item sharing the surface's
    track, but zero-height, so neither layout gives it any space and the stack hangs from it
    with `position:absolute`. One rule covers the desktop grid and the mobile flex column,
-   and its stacking context is what lifts the stack over the terminal. Because nothing
-   resizes any more, the draft is free to grow with its content (`.dictation-draft`).
+   and its stacking context is what lifts the stack over the terminal. Dictation is app-level
+   and does not use this anchor.
    z-index 11 is deliberate: over the terminal host, under the find bar (12), the scroll
    buttons (14), and the file-drop overlay (18), each of which must stay reachable.
    The stack itself is click-through so the gap between two floating cards still belongs to
@@ -1757,6 +1755,13 @@ body {
 .voice-overlay{position:absolute;top:6px;left:6px;right:6px;display:flex;flex-direction:column;gap:5px;pointer-events:none}
 .voice-overlay>*{pointer-events:auto}
 .voice-overlay>.voice-strip{border:1px solid var(--line);box-shadow:4px 5px 0 #0008}
+.conversation-layer{position:fixed;right:12px;bottom:12px;z-index:24;width:min(620px,calc(100vw - 24px));pointer-events:none}
+.conversation-layer>*{pointer-events:auto}
+.conversation-layer.off{width:auto}
+.conversation-mic-control{min-width:44px;height:calc(38px*var(--ui-scale));display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--green,#8bd450);border-radius:20px;padding:0 13px;background:var(--panel);color:var(--green,#8bd450);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';cursor:pointer}
+.conversation-mic-control:hover{background:var(--panel2);color:var(--text)}
+.conversation-mic-control.setup{border-color:var(--line);color:var(--muted)}
+.conversation-mic-control svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .dictation-panel{display:grid;gap:3px;padding:4px 8px 5px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted)}
 .dictation-panel>header{display:flex;align-items:center;gap:7px;min-width:0}
 .dictation-phase{flex:none}
@@ -1780,6 +1785,13 @@ body {
 .dictation-actions .dictation-send{color:var(--green,#8bd450)}
 .dictation-actions .dictation-stop{color:var(--error,#f07178)}
 .dictation-actions button.active{color:var(--amber)}
+.dictation-target{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;padding:1px 0;color:var(--muted)}
+.dictation-target strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:500}
+.dictation-target.unavailable strong{color:var(--amber)}
+.dictation-target button{height:calc(19px*var(--ui-scale));border:0;border-radius:4px;padding:0 6px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.dictation-target button:hover:not(:disabled){background:var(--panel2);color:var(--text)}
+.dictation-target button.active{color:var(--amber)}
+.dictation-target button:disabled{opacity:.35;cursor:default}
 /* Always editable, never a mode: this textarea *is* the draft, so there is no read-only
    state and no edit button to find. Click it and type.
    It grows with the draft between one line and the cap, then scrolls. Growing is only
@@ -1792,6 +1804,12 @@ body {
 /* faster-whisper returns whole utterances, never partial words, so there is no text to
    stream in. The flash is the arrival signal — honest about being discrete. */
 .dictation-panel.landed .dictation-draft{border-color:var(--green,#8bd450)}
+@media(max-width:760px){
+  .conversation-layer{left:0;right:0;bottom:0;width:auto;padding:0 max(5px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(5px,env(safe-area-inset-left))}
+  .conversation-layer.off{left:auto;right:max(8px,env(safe-area-inset-right));width:auto;padding:0 0 max(8px,env(safe-area-inset-bottom))}
+  .conversation-mic-control{min-width:48px;height:calc(48px*var(--ui-scale));border-radius:24px;font-size:10px}
+  .dictation-target button{min-width:44px;height:calc(30px*var(--ui-scale));font-size:10px}
+}
 
 /* The header is both the section label and the section's drag handle, so the whole
    row takes the grab cursor while its buttons keep the pointer. Sort sits directly
@@ -1980,14 +1998,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    border and the colour are set and whichever the host applies wins. */
 .pane-voice .voice-chip.auto{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
 .pane-voice .voice-chip.on_demand{color:var(--text)}
-.pane-voice .conversation-chip.listening{color:var(--green,#8bd450)}
-.pane-voice .conversation-chip.hearing{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
-.pane-voice .conversation-chip.starting,.pane-voice .conversation-chip.warming,.pane-voice .conversation-chip.transcribing,.pane-voice .conversation-chip.heard,.pane-voice .conversation-chip.sending{color:var(--blue,#7aa2f7)}
-.pane-voice .conversation-chip.error{color:var(--error,#f07178)}
-/* The live transcript used to be a capped, ellipsized span in this group. It could not
-   work: the bar must never wrap, so the one variable-width member had to be clipped, and
-   a spoken sentence is always longer than the cap. The draft moved to `.dictation-panel`,
-   a full-width row of its own; the chip here is state only. */
+/* Read aloud remains session-scoped in the pane header. Conversation capture moved to
+   `.conversation-layer`, where target changes cannot resize or unmount a terminal. */
 .pane-voice .voice-mic.recording{color:var(--error,#f07178);animation:voice-rec-pulse 1.2s ease-in-out infinite}
 @keyframes voice-rec-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media(pointer:coarse){.pane-voice .voice-mic{display:none}}

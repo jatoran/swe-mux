@@ -16,6 +16,7 @@
 | utility drawer width | `mux.drawer.width.v1` | device-local, global across Projects |
 | utility drawer pane selections, focused tab, desktop expansion | `mux.drawer.projects.v2` keyed by Project | device-local |
 | mobile utility drawer visibility | `mobileDrawerOpen` in App | browser session |
+| talk capture, draft, focus-following target, exact-sink pin | `useConversation` in App plus `conversationTarget.ts` | browser session |
 | drawer-tab and desktop-right-rail icon/title modes | `drawer_tab_display` and `utility_rail_display` config fields | live presentation settings, independent |
 | pointer drag target/ghost | refs and direct DOM attributes | one gesture |
 | note/file draft | resource component/save queue | resource-local |
@@ -57,6 +58,8 @@ The underlying tablist remains the native horizontal touch and trackpad scroller
 
 Notes is the only inactive drawer body kept mounted.
 Its singleton host is derived from the unique Notes tab's owner stack, remains hidden while another tab is selected there, and preserves cursor, undo, save-queue ownership, and editor insert targeting.
+Focused Continuity editors publish their named resource identity through `insertTarget.ts`; Queue publishes its composer the same way, while terminals publish only live agent sessions.
+The app-level Conversation controller follows the latest published target unless its exact sink is pinned, and a detached pinned sink becomes unavailable instead of being silently retargeted.
 The per-Project selected note survives drawer close in `mux.drawer.note.v1`.
 Editor ownership is derived from that selection plus drawer visibility, so closing the drawer restores any matching workspace editor without erasing the Notes sub-tab.
 

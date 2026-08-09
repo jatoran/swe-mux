@@ -14,9 +14,18 @@ export type EditorHandle = {
   isConnected?: boolean
 }
 
+export type TextSurfaceKind = 'note' | 'scratchpad' | 'file' | 'queue'
+
+/** Stable identity shown by global input surfaces such as voice dictation. */
+export type TextSurfaceIdentity = {
+  id: string
+  kind: TextSurfaceKind
+  label: string
+}
+
 export type InsertTarget =
   | { kind: 'terminal'; sessionId: string; at: number }
-  | { kind: 'editor'; editor: EditorHandle; at: number }
+  | { kind: 'editor'; editor: EditorHandle; surface?: TextSurfaceIdentity; at: number }
 
 export type InsertDecision =
   | { kind: 'terminal'; sessionId: string }
@@ -29,6 +38,22 @@ export type InsertDecision =
 export type InsertOptions = { terminalsOnly?: boolean }
 
 let current: InsertTarget | null = null
+const listeners = new Set<(target: InsertTarget | null) => void>()
+
+function publish(next: InsertTarget | null): void {
+  let same = current === next
+  if (current?.kind === 'terminal' && next?.kind === 'terminal') {
+    same = current.sessionId === next.sessionId
+  } else if (current?.kind === 'editor' && next?.kind === 'editor') {
+    same = current.editor === next.editor
+      && current.surface?.id === next.surface?.id
+      && current.surface?.kind === next.surface?.kind
+      && current.surface?.label === next.surface?.label
+  }
+  current = next
+  if (same) return
+  for (const listener of listeners) listener(current)
+}
 
 /**
  * Resolve where text should go.
@@ -52,20 +77,30 @@ export function chooseInsertTarget(
 
 export function noteTerminalFocus(sessionId: string, at: number = Date.now()): void {
   if (!sessionId) return
-  current = { kind: 'terminal', sessionId, at }
+  publish({ kind: 'terminal', sessionId, at })
 }
 
-export function noteEditorFocus(editor: EditorHandle, at: number = Date.now()): void {
-  current = { kind: 'editor', editor, at }
+export function noteEditorFocus(
+  editor: EditorHandle,
+  surface?: TextSurfaceIdentity,
+  at: number = Date.now(),
+): void {
+  publish({ kind: 'editor', editor, surface, at })
 }
 
 /** Forget an editor as it unmounts, so a stale handle cannot win the routing. */
 export function forgetEditorFocus(editor: EditorHandle): void {
-  if (current?.kind === 'editor' && current.editor === editor) current = null
+  if (current?.kind === 'editor' && current.editor === editor) publish(null)
 }
 
 export function currentInsertTarget(): InsertTarget | null {
   return current
+}
+
+/** React hosts subscribe once so a focus change can retarget an app-level surface. */
+export function subscribeInsertTarget(listener: (target: InsertTarget | null) => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
 }
 
 /**

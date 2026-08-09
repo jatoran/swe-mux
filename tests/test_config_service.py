@@ -504,6 +504,12 @@ def test_mobile_gestures_default_and_are_hot_reloadable_and_validated(tmp_path: 
     assert restart == set()
     assert config.mobile_gestures == {"swipe_left": "palette.open", "two_finger_tap": ""}
 
+    hot, _ = update_config(
+        config, {"mobile_gestures": {"two_finger_tap": "voice.toggleTalk"}}
+    )
+    assert hot == {"mobile_gestures"}
+    assert config.mobile_gestures == {"two_finger_tap": "voice.toggleTalk"}
+
     with pytest.raises(ValueError, match="unknown command for gestures"):
         update_config(config, {"mobile_gestures": {"swipe_left": "does.not.exist"}})
     with pytest.raises(ValueError, match="unknown gesture slots"):

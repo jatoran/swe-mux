@@ -99,6 +99,8 @@ separately opt-in.
   The pane header's `queue[:N]` chip focuses its named session before opening Queue, while `queue.open` and the rail open the focused session's queue.
   Queue has no application-wide or Project-wide mode.
   It live-updates from `mux:queue-changed`, re-dispatched from `queue_updated` and `queue_delivery` events.
+- **The focused Queue composer is a named Conversation text sink.**
+  Voice Send fills the composer at its caret but never stages, arms, delivers, or presses Enter; those remain explicit Queue acts.
 - **The fleet queue is a modal overlay** (`FleetQueue`) over the same message store, not a second drawer tab.
   It partitions rows by explicit authorship (`agents + automation | human | all authors`, opening on non-human) and filters server-side by Project or target session.
   It is a modal because it has no send button: the Queue tab is docked so the target terminal stays visible while the operator decides to interrupt, and a view that decides nothing needs no terminal beside it.

@@ -64,7 +64,7 @@ Earlier drafts of this work listed them as open.
   (`frontend/src/conversationDraft.ts`) backing per-phrase undo and typed corrections.
 - Both voice surfaces float over the terminal rather than taking pane rows, pinned by
   `frontend/test/renderer/pane-layout.spec.ts`.
-- Phase 1 (all ten items) and the Phase 2 tester. Behaviour lives in `design/features/voice.md`;
+- Phase 1 (all ten items), the Phase 2 tester, and Phase 3 global targeting. Behaviour lives in `design/features/voice.md`;
   the measurements and the two places the plan changed are recorded under Phase 1.
 
 ## Phase 1 — STT latency (built 2026-08-08)
@@ -147,23 +147,33 @@ configuration problem's clothes.
   inside "sweet" as a hit would report the trigger surviving in the situation that proves it did
   not.
 
-## Phase 3 — Global talk surface and targeting
+## Phase 3 - Global talk surface and targeting (built 2026-08-09)
 
-- **Target follows the focused session** rather than pinning at start
-  (`useConversation` currently binds its target in `start`).
-- **The panel names its target**, and the draft survives a target change.
-- **A target pin** ("stay on this one") for reading one pane while dictating to another, which is
-  the common case on a desktop with splits.
-- **Talk on/off persists as a workspace-level flag**, not a property of whichever pane owned it.
-- **Lift the dictation panel to an app-level floating layer**: bottom sheet on mobile, corner card
-  on desktop, above panes and below modals in the overlay z-band.
-- **Retire the per-session `talk:` chip**, keep `tts:`, and add a mic control plus an optional
-  gesture. A gesture cannot be the only trigger: it is discoverable once and invisible after.
-- **Add the third sink**: text surfaces (note editor, scratchpad, queue composer).
-  Naming it now is what keeps note dictation from being a retrofit.
+- **Capture is workspace-level.**
+  `useConversation` no longer owns a session or restarts the microphone when focus moves.
+  Talk remains browser-volatile because a browser cannot silently reacquire the microphone after reload, but it survives every Project, pane, and target change within the workspace lifetime.
+- **Target follows focus and is named.**
+  The panel shows the current Agent, note, Scratchpad, Markdown file, or Queue composer.
+  A target change never clears or submits the draft.
+- **Pin freezes the exact sink.**
+  Unpin returns to focus-following mode.
+  If a pinned editor unmounts or a following Queue panel retargets in place, the old handle becomes unavailable and Send is disabled rather than inserting into a different surface under the old name.
+- **The dictation surface is app-level.**
+  It is a desktop corner card and mobile bottom sheet at z-index 24; panes use lower values and modal surfaces use higher values.
+  The inactive form is a visible mic control.
+- **Per-session Talk controls are gone.**
+  `tts:` remains in each Agent pane because playback mode is still per-session.
+  `voice.toggleTalk` and `voice.toggleTargetPin` are registered commands, so either may also be bound to a key or touch gesture without making a gesture the only entry point.
+- **Text surfaces are the third sink.**
+  Continuity note/Scratchpad/Markdown editors and the Queue composer publish stable identities through the shared insert-focus ledger.
+  `Mux, send` inserts at the surface's caret and clears the voice draft.
+  Sending to a Queue composer fills the composer only; it does not stage, arm, or deliver a queue item.
+- **Decode is target-independent.**
+  Every utterance uses the session-free `/api/voice/transcribe` route.
+  Only the explicit Send action resolves the current sink, while Agent-only commands such as read reply and interrupt refuse a text target and keep the draft.
 
-The routing model is four sinks, not one: a session's PTY, a text surface, the app, and fleet
-status. Target-follows-focus is the default binding for the first, not the architecture.
+The routing model is four sinks, not one: a session's PTY, a text surface, the app, and fleet status.
+Target-follows-focus is the default binding for the first two, not the architecture.
 
 ## Phase 4 — Command and navigation layer
 

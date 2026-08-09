@@ -1278,7 +1278,16 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
     {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>
       :isDelimitedFile&&readableFile&&fileViewMode==='preview'?<DelimitedTextViewer text={text} delimiter={presentation.delimiter}/>
-      :editable?(autosaved?<ProjectNoteEditor key={`${resourceScope}:${resource.kind}:${resource.id}:${loadGeneration}`} projectId={resourceScope} resourceId={`${resource.kind}:${resource.id}`} initialText={text} label={isNote?noteTitle:resource.id} railActions={railActions} elementRef={editorElement}/>:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/>)
+      :editable?(autosaved?<ProjectNoteEditor
+        key={`${resourceScope}:${resource.kind}:${resource.id}:${loadGeneration}`}
+        projectId={resourceScope}
+        resourceId={`${resource.kind}:${resource.id}`}
+        initialText={text}
+        label={isNote?noteTitle:resource.id}
+        railActions={railActions}
+        elementRef={editorElement}
+        textSurface={{id:resourceKey,kind:isGlobalNote?'scratchpad':isNote?'note':'file',label:isGlobalNote?'Scratchpad':isNote?`${noteTitle} · ${project.name}`:`${resource.id} · ${project.name}`}}
+      />:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/> )
       :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>
       :<div class="resource-unavailable">{status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>
         :unavailableMessage

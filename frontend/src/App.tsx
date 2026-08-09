@@ -73,12 +73,15 @@ import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
 } from './clipboardHistory'
 import { InteractionHud, showInteractionHud } from './InteractionHud'
-import { insertIntoFocusedSurface } from './insertTarget'
+import { currentInsertTarget, insertIntoFocusedSurface, noteTerminalFocus, subscribeInsertTarget } from './insertTarget'
+import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
 import { VoicePlayer } from './VoicePlayer'
-import { ConversationChip, DictationPanel, useConversation } from './ConversationControl'
+import { ConversationSurface, useConversation } from './ConversationControl'
+import { resolveConversationTarget } from './conversationTarget'
+import type { VoiceSessionCandidate } from './conversationTarget'
 import { autoplayEnabled, enqueueAutoplay, playClip, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
 import { handleSessionSound, type NormalizedMuxEvent } from './sessionSounds'
 import { mergeSessionSnapshot, reconcileSessionSnapshots } from './sessionSnapshots'
@@ -286,6 +289,8 @@ export function App() {
   const [projectId, setProjectId] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
   const [focusedViewId,setFocusedViewId]=useState<string|null>(null)
+  const [focusedInsertTarget,setFocusedInsertTarget]=useState<InsertTarget|null>(()=>currentInsertTarget())
+  useEffect(()=>subscribeInsertTarget(setFocusedInsertTarget),[])
   // A view we have asked to focus that this project's layout does not hold yet. Set by
   // `requestFocusView` and consumed by the reconciliation effect; see
   // `reconcileFocusView` for why the intent has to outlive the refresh.
@@ -1530,6 +1535,30 @@ export function App() {
   const activeStack=focusedTabId?stackForView(activeLayout,focusedTabId):null
   const unpanned = sessions.filter(session => session.project_id === projectId && !['exited', 'crashed'].includes(session.state) && !paneIds.includes(session.id))
   const focusedOutsideLayout=!!active&&!['exited','crashed'].includes(active.state)&&active.project_id===projectId&&!paneIds.includes(active.id)
+  const focusedAgentSession=focusedViewId
+    ?sessions.find(session=>session.id===focusedViewId&&session.project_id===projectId&&isAgent(session)&&!session.pending&&!isEndedSession(session))||null
+    :active&&active.project_id===projectId&&isAgent(active)&&!active.pending&&!isEndedSession(active)?active:null
+  useEffect(()=>{
+    if(focusedAgentSession)noteTerminalFocus(focusedAgentSession.id)
+  },[focusedAgentSession?.id])
+  const liveVoiceSessionIds=useRef<Set<string>>(new Set())
+  liveVoiceSessionIds.current=new Set(sessions.filter(session=>isAgent(session)&&!session.pending&&!isEndedSession(session)).map(session=>session.id))
+  const voiceSessionCandidates=useMemo<VoiceSessionCandidate[]>(()=>sessions
+    .filter(session=>session.project_id===projectId&&isAgent(session)&&!session.pending&&!isEndedSession(session))
+    .map(session=>({
+      id:session.id,
+      label:`Agent · ${sessionName(session)}`,
+      available:()=>liveVoiceSessionIds.current.has(session.id),
+    })),[sessions,projectId])
+  const conversationTarget=useMemo(()=>resolveConversationTarget(
+    focusedInsertTarget,
+    voiceSessionCandidates,
+    focusedAgentSession?.id||null,
+  ),[focusedInsertTarget,voiceSessionCandidates,focusedAgentSession?.id])
+  const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? mergeSessionSnapshot(item,next) : item))
+  // Capture is a workspace flag. Focus only changes this commit target; it never
+  // restarts the microphone or clears the draft, and pinning freezes the target.
+  const conversation = useConversation(voiceStatus, updateSession, conversationTarget)
 
   // Sessions on screen right now (visible pane of the displayed project) count as
   // "read": their sidebar rows stay muted even while their agent keeps working.
@@ -3078,6 +3107,8 @@ export function App() {
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
     { id: 'session.pinAttention', label: active?.pinned_attention ? 'Unpin focused session attention' : 'Pin focused session attention', category: 'session', available: !!active && isAgent(active), disabledReason: 'Attention pinning requires a focused agent', run: () => active && void api<Session>('PATCH', `/api/sessions/${active.id}`, { pin: !active.pinned_attention }).then(updateSession) },
+    { id: 'voice.toggleTalk', label: conversation.active||conversation.phase!=='off'?'Stop hands-free conversation':'Start hands-free conversation', category: 'voice', available: !!voiceStatus?.stt_enabled, disabledReason: 'Enable microphone conversation in Settings first', run: () => conversation.toggle() },
+    { id: 'voice.toggleTargetPin', label: conversation.pinned?'Voice dictation: follow workspace focus':'Voice dictation: pin current target', category: 'voice', available: !!conversation.target, disabledReason: 'Focus an agent or text surface first', run: () => conversation.togglePin() },
     { id: 'voice.cycleMode', label: `Read aloud: cycle focused session mode${active && isAgent(active) ? ` (now ${voiceModeLabel(effectiveVoiceMode(active))})` : ''}`, category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) cycleVoiceMode(active); setContextMenu(null) } },
     { id: 'voice.speak', label: 'Read aloud: speak focused session’s last reply', category: 'voice', available: !!active && isAgent(active) && !!voiceStatus?.enabled, disabledReason: 'Read aloud requires a focused agent and TTS enabled in Settings', run: () => { if (active) void speakLastReply(active); setContextMenu(null) } },
     { id: 'voice.autoplayDevice', label: `Read aloud: turn device autoplay ${autoplayEnabled() ? 'off' : 'on'}`, category: 'voice', available: !!voiceStatus?.enabled, disabledReason: 'Enable read aloud in Settings first', run: () => { setAutoplayEnabled(!autoplayEnabled()); setContextMenu(null) } },
@@ -3316,10 +3347,6 @@ export function App() {
     }
   }, [mobileWorkspace, mobileGestures, swipeAwayClose])
 
-  const updateSession = (next: Session) => setSessions(items => items.map(item => item.id === next.id ? mergeSessionSnapshot(item,next) : item))
-  // One controller for the whole browser: the microphone is a device singleton, so
-  // the pane chips and the dictation panel are views onto this, not instances of it.
-  const conversation = useConversation(voiceStatus, updateSession)
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
     const current=clientStartupTimingValues.current[sessionId]||{}
     if(current[milestone]!==undefined)return
@@ -3591,10 +3618,10 @@ export function App() {
     const agentVoice=agentSession
     const voiceMode=voiceStatus?.enabled&&agentVoice?effectiveVoiceMode(session):'off'
     const voiceAvailable=!!voiceStatus?.enabled&&agentVoice
-    const conversationAvailable=!!voiceStatus?.stt_enabled&&agentVoice
     const voiceStripVisible=voiceAvailable&&voiceMode!=='off'
-    // Read-aloud and conversation controls live in the pane header beside note/proc, and the
-    // playback strip (seek, clip nav, generate) expands as a row directly beneath it. They
+    // Read-aloud stays session-scoped in the pane header. The workspace microphone and
+    // dictation draft are rendered once at App level, so changing panes only retargets them.
+    // The playback strip (seek, clip nav, generate) floats directly beneath the header. It
     // used to lead the bottom command rail, but that rail is a horizontal scroller the user
     // pages through to reach terminal keys, so the voice chips were both in the way there and
     // easy to lose off-screen. Grouped in the header they have a fixed home; the group is its
@@ -3602,8 +3629,6 @@ export function App() {
     const paneVoice=agentVoice&&voiceStatus?<>
       {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
       {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
-      {conversationAvailable&&<ConversationChip session={session} conversation={conversation}/>}
-      {!conversationAvailable&&<button class="conversation-chip mobile-voice-action" aria-label="Set up hands-free conversation" title="Microphone conversation is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>talk:setup</button>}
       {/* speak / verbatim-summary / autoplay were repeated here for touch while the playback
           strip was buried at the bottom of the pane; the strip owns them now. The `audio…`
           settings chip went the same way once both floating surfaces grew their own gear —
@@ -3611,18 +3636,10 @@ export function App() {
     </>:null
     const openVoiceSettings=()=>openSettings('Voice')
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
-    // The dictation draft is its own surface under the player strip, not a chip in the
-    // header: it is prose of unbounded length, and `.pane-voice` is a fixed-chip scroller
-    // in a bar that must never wrap, so a readout there could only ever be an ellipsis.
-    // Only the pane that owns the microphone renders it — capture is a device singleton.
-    const dictationNode=conversation.sessionId===session.id
-      ?<DictationPanel conversation={conversation} onOpenSettings={openVoiceSettings}/>
-      :null
-    // Both voice surfaces hang off one zero-height anchor so they float over the terminal
-    // instead of taking rows from it: an in-flow strip resizes the PTY every time read aloud
-    // or Talk is toggled, and the agent's TUI reflows around it (see `voice.md`).
-    const voiceOverlayNode=voiceStripNode||dictationNode
-      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{dictationNode}</div></div>
+    // The read-aloud strip hangs off a zero-height pane anchor. Dictation no longer
+    // participates in pane layout at all.
+    const voiceOverlayNode=voiceStripNode
+      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}</div></div>
       :null
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
@@ -3879,6 +3896,7 @@ export function App() {
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
+    {voiceStatus&&<ConversationSurface conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>}
 
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}

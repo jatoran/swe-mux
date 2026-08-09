@@ -789,20 +789,16 @@ responsive controls.
   that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
   opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
   operation with nothing open (`features/auto-delivery.md`).
-- The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**. It is a grid
-  with `grid-auto-flow:column`, which is what enforces that: without it, an item beyond the
-  declared column count auto-places into a *second row*, and the voice group is a
-  variable-length chip set, so the tools would silently drop under the status line. Overflow is
-  absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade, never by growing
-  the bar. Phones drop the cwd column and cap the status width so the group keeps room.
-- **A pane is two rows — header and terminal surface — and nothing a feature toggles may add
-  a third.** The pane's remaining height is the PTY's row count, so an in-flow strip that
-  appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and
-  repaint. The read-aloud player strip and the dictation draft therefore *float*: both hang
-  from one zero-height `.voice-overlay-anchor` that shares the surface's track, so they cost
-  no rows in the desktop grid or the mobile flex column, and toggling either changes nothing
-  about terminal geometry (`features/voice.md`). Anything else that wants to appear over a
-  terminal on a toggle belongs on the same anchor.
+- The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**.
+  It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
+  The pane-local voice group contains read-aloud only; workspace talk is in the app-level Conversation layer.
+  Overflow is absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade and never grows the bar.
+  Phones drop the cwd column and cap the status width so the group keeps room.
+- **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
+  The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
+  The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
+  Workspace dictation renders outside the pane tree in the fixed `.conversation-layer`, so changing targets or showing its draft cannot change any terminal's geometry (`features/voice.md`).
+  Any new pane-local overlay belongs on the pane anchor; any workspace-global control belongs outside the pane tree.
   Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
   pane declares no columns, so a second item with an auto column is auto-placed into an
   implicit column 2 and the pane splits in half. This contract is enforced by
@@ -817,6 +813,8 @@ responsive controls.
   these has to stay reachable while the others are up. Overlay containers are click-through
   (`pointer-events:none`) with their cards opting back in, so the space between floating
   cards still belongs to the terminal.
+- The app-level Conversation layer uses z-index 24; workspace chrome uses lower values, while command-palette and modal layers use higher values.
+  Its compact mic control expands into the named-target draft surface, follows focus unless pinned, and becomes a mobile bottom sheet without entering pane or drawer layout.
 - Prose of unbounded length belongs on a floating surface of this kind, never in the header
   chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
   placed there can only ever show a truncated tail.

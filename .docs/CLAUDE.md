@@ -152,10 +152,10 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   frame-counted endpoint gate (`speechGate.ts`: 352 ms tail, speculative decode at 160 ms) →
   `voice/transcribe` → faster-whisper, **two decode profiles** (`command` = `small.en` greedy,
   `dictation` = `turbo` with beam 5 above 3 s), decoded from memory with no disk write →
-  wake-word + command-phrase **suffix**, which a speculative transcript can use to short-circuit
-  the remaining tail → idempotent `voice/submit` writes `{text}\r` to the
-  PTY (a multi-line edited draft goes as bracketed paste + a separate Enter instead). The draft
-  is an utterance log shown in the pane's `.dictation-panel` row, editable in place.
+  wake-word + command-phrase **suffix**, which a speculative transcript can use to short-circuit the remaining tail → one workspace-level draft targeting the focused Agent or text surface.
+  The app-level `.conversation-layer` names that target, supports an exact-target pin, and keeps the draft across focus changes.
+  Agent Send uses idempotent `voice/submit`; note, Scratchpad, Markdown, and Queue-composer Send inserts at the caret without staging or delivering a queue item.
+  Capture always decodes through session-free `/api/voice/transcribe`.
   Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
   `voice_commands` in config, editable in Settings → Voice; `buildVoiceMatcher` compiles them).
   Fixed action set: `send`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/

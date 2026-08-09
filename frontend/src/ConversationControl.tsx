@@ -10,6 +10,8 @@ import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import { bargeInPlayback, getPlayback, playClip, unlockPlayback } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
+import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
+import type { ConversationTarget } from './conversationTarget'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -27,8 +29,10 @@ type Phase='off'|'starting'|'warming'|'listening'|'hearing'|'heard'|'transcribin
 const primaryWake=(words?:string[])=>(words&&words.find(word=>word.trim())||DEFAULT_WAKE_WORDS[0])
 
 export type Conversation={
-  /** The session that owns the microphone, or null when nothing is dictating. */
-  sessionId:string|null
+  /** Current commit destination. Capture stays live when this changes. */
+  target:ConversationTarget|null
+  targetAvailable:boolean
+  pinned:boolean
   phase:Phase
   detail:string
   draft:string
@@ -45,7 +49,8 @@ export type Conversation={
    * Null while it is still loading — reported as the `warming` phase.
    */
   detector:CaptureDetector|null
-  toggle:(session:Session)=>void
+  toggle:()=>void
+  togglePin:()=>void
   stop:()=>void
   send:()=>void
   undo:()=>void
@@ -57,19 +62,20 @@ export type Conversation={
 /**
  * Hands-free capture, held once for the whole browser.
  *
- * Exactly one pane can own the microphone (`PersistentVoiceCapture` is a device
- * singleton), so this lives at the app root rather than once per pane: the chip in
- * each pane header and the dictation panel under the owning pane are two views of
- * the same controller. Keeping it here is also what removed the pane-to-pane
- * "conversation claim" event — there is only one instance left to claim from.
+ * `PersistentVoiceCapture` is a device singleton, so capture belongs to the workspace,
+ * not to a pane. Focus supplies a replaceable commit target; pinning freezes that target
+ * while the microphone and draft continue independently.
  */
-export function useConversation(status:VoiceStatus|null,onSession:(session:Session)=>void):Conversation{
+export function useConversation(
+  status:VoiceStatus|null,
+  onSession:(session:Session)=>void,
+  followingTarget:ConversationTarget|null,
+):Conversation{
   const wake=primaryWake(status?.wake_words)
   const matcher=useMemo(
     ()=>buildVoiceMatcher(status?.wake_words?.length?status.wake_words:DEFAULT_WAKE_WORDS,status?.commands?.length?status.commands:DEFAULT_COMMANDS),
     [status?.wake_words,status?.commands],
   )
-  const [sessionId,setSessionId]=useState<string|null>(null)
   const [phase,setPhase]=useState<Phase>('off')
   const [detail,setDetail]=useState('')
   const [draft,setDraftState]=useState<Draft>(EMPTY_DRAFT)
@@ -81,9 +87,13 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   // having settled on the energy fallback: one is "not yet", the other is "Silero
   // failed and this is as good as it gets".
   const [detector,setDetector]=useState<CaptureDetector|null>(null)
+  const [pinnedTarget,setPinnedTarget]=useState<ConversationTarget|null>(null)
+  const target=effectiveConversationTarget(followingTarget,pinnedTarget)
+  const targetAvailable=conversationTargetAvailable(target)
   const latencyRef=useRef<LatencySample|null>(null)
-  const sessionRef=useRef<Session|null>(null)
+  const targetRef=useRef<ConversationTarget|null>(target);targetRef.current=target
   const captureRef=useRef<PersistentVoiceCapture|null>(null)
+  const startingRef=useRef<PersistentVoiceCapture|null>(null)
   const enabledRef=useRef(false)
   const standbyRef=useRef(false)
   const draftRef=useRef<Draft>(EMPTY_DRAFT)
@@ -110,9 +120,10 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
 
   const stop=()=>{
     enabledRef.current=false;enterStandby(false)
+    speculationRef.current?.controller.abort();speculationRef.current=null
+    startingRef.current?.stop();startingRef.current=null
     captureRef.current?.stop();captureRef.current=null
-    sessionRef.current=null
-    setActive(false);setSessionId(null);setPhase('off');setDetail('');setDetector(null)
+    setActive(false);setPhase('off');setDetail('');setDetector(null)
   }
   const stopRef=useRef(stop);stopRef.current=stop
   // Capture is a device resource: a reload or a route away from the workspace must
@@ -166,17 +177,28 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   },[])
 
   const submit=async(text:string)=>{
-    const session=sessionRef.current
-    if(!session)return
     const body=text.trim()
     if(!body){setPhase('listening');setDetail(`Nothing buffered yet. Keep talking, then say “${wakeRef.current}, send”.`);return}
+    const target=targetRef.current
+    if(!target||!conversationTargetAvailable(target)){
+      setPhase('listening');setDetail('Draft kept. Focus an agent, note, Scratchpad, or Queue composer before sending.');return
+    }
     setPhase('sending');setDetail('Submitting voice message…')
+    if(target.kind==='text'){
+      target.editor.insertText(body)
+      setDraft(clearDraft());setPhase('listening');setDetail(`Inserted into ${target.label}. Still listening.`)
+      return
+    }
     const utteranceId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`
-    await api('POST',`/api/sessions/${session.id}/voice/submit`,{utterance_id:utteranceId,text:body})
-    reportPromptSubmitted(session.id)
+    await api('POST',`/api/sessions/${target.id}/voice/submit`,{utterance_id:utteranceId,text:body})
+    reportPromptSubmitted(target.id)
     setDraft(clearDraft());setPhase('listening');setDetail('Sent. Still listening for your next message.')
   }
   const reportFailure=(cause:unknown)=>{setPhase('error');setDetail(cause instanceof Error?cause.message:String(cause))}
+  const sessionTarget=():Extract<ConversationTarget,{kind:'session'}>|null=>{
+    const target=targetRef.current
+    return target?.kind==='session'&&conversationTargetAvailable(target)?target:null
+  }
 
   const handleTranscript=async(parsed:ParsedMuxVoice)=>{
     if(!enabledRef.current)return
@@ -211,8 +233,8 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
       bargeInPlayback();setPhase('listening');setDetail('Playback stopped. Still listening.');return
     }
     if(parsed.command==='read'){
-      const session=sessionRef.current
-      if(!session)return
+      const session=sessionTarget()
+      if(!session){setPhase('listening');setDetail('Read reply needs an agent target. Draft kept.');return}
       if(!statusRef.current?.enabled){setPhase('listening');setDetail('Read aloud is off — enable it in Settings → Voice. Still listening.');return}
       setPhase('sending');setDetail('Preparing the latest reply…')
       try{
@@ -222,8 +244,8 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
       return
     }
     if(parsed.command==='summary'||parsed.command==='verbatim'){
-      const session=sessionRef.current
-      if(!session)return
+      const session=sessionTarget()
+      if(!session){setPhase('listening');setDetail('Reply mode needs an agent target. Draft kept.');return}
       const mode=parsed.command
       try{
         const updated=await api<Session>('PATCH',`/api/sessions/${session.id}`,{voice_content:mode})
@@ -235,8 +257,8 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
       setPhase('listening');setDetail(`${wakeWord} commands: send, cancel, undo, mute, read reply, summary, verbatim, interrupt, standby/resume, stop.`);return
     }
     if(parsed.command==='interrupt'){
-      const session=sessionRef.current
-      if(!session)return
+      const session=sessionTarget()
+      if(!session){setPhase('listening');setDetail('Interrupt needs an agent target. Draft kept.');return}
       bargeInPlayback();setPhase('listening');setDetail('Playback stopped; interrupt sent to the agent.')
       try{await api('POST',`/api/sessions/${session.id}/voice/interrupt`)}catch(cause){reportFailure(cause)}
       return
@@ -257,10 +279,8 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
 
   type Decoded={parsed:ParsedMuxVoice;postAt:number;responseAt:number;server:ServerTimings}
   const decode=async(audio:Blob,marks:CaptureMarks,profile:'command'|'dictation',signal?:AbortSignal):Promise<Decoded>=>{
-    const session=sessionRef.current
-    if(!session)throw new Error('no session owns the microphone')
     const postAt=performance.now()
-    const response=await fetch(`/api/sessions/${encodeURIComponent(session.id)}/voice/transcribe`,{
+    const response=await fetch('/api/voice/transcribe',{
       method:'POST',
       // The profile picks the daemon's decoder: a routing pass wants the fast small
       // English model and its own slot, so a speculative decode cannot delay the
@@ -276,7 +296,7 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   }
 
   const transcribe=async(audio:Blob,marks:CaptureMarks)=>{
-    if(!enabledRef.current||!sessionRef.current)return
+    if(!enabledRef.current)return
     if(!standbyRef.current){setPhase('transcribing');setDetail('Transcribing locally on muxd…')}
     // Whisper models are cached for the life of the *daemon*, not the tab, so the
     // first utterance after a restart or a redeploy waits seconds on a model load.
@@ -331,15 +351,12 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
     }
   }
 
-  // Talk mode is mic → transcribe → PTY. It does not require read aloud and never
+  // Talk mode is mic → transcribe → named target. It does not require read aloud and never
   // changes it: the tts chip, the device autoplay toggle, and this button are three
   // independent switches. Only the read/summary/verbatim voice commands need TTS,
   // and each reports that itself.
-  const start=async(session:Session)=>{
-    if(enabledRef.current)stop()
-    // Claimed before the capability checks so a refusal has somewhere to be read:
-    // the panel is the only surface that shows `detail` in full.
-    sessionRef.current=session;setSessionId(session.id)
+  const start=async()=>{
+    if(enabledRef.current||startingRef.current)stop()
     const capability=conversationCapability()
     if(!capability.secureContext){
       setPhase('starting');setDetail('Creating a private HTTPS address for mobile voice…')
@@ -385,32 +402,34 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
       },
       onError:message=>{if(enabledRef.current){setPhase('error');setDetail(message)}},
     })
+    startingRef.current=capture
     try{
       await capture.start()
-      // A second pane's chip clicked during the permission prompt already owns the
-      // controller. Adopting this capture now would send its utterances to the pane
-      // the user just left, so the losing start releases the microphone instead.
-      if(sessionRef.current!==session){capture.stop();return}
+      // A second toggle during the permission prompt already stopped or replaced this
+      // attempt. The losing capture must release the device instead of reviving Talk.
+      if(startingRef.current!==capture){capture.stop();return}
+      startingRef.current=null
       captureRef.current=capture;enabledRef.current=true;enterStandby(false);setActive(true)
       // Always warming here: `start` fires the detector load without awaiting it, and
       // nothing between that and this line yields, so `onDetector` cannot have run
       // yet. The displayed phase derives `warming` from `detector` being null, so
       // readiness has one source of truth rather than a phase and a flag to disagree.
       setPhase('listening');setDetail(WARMING_DETAIL)
-    }catch(cause){capture.stop();if(sessionRef.current!==session)return;enabledRef.current=false;setActive(false);reportFailure(cause)}
+    }catch(cause){capture.stop();if(startingRef.current!==capture)return;startingRef.current=null;enabledRef.current=false;setActive(false);reportFailure(cause)}
   }
 
   return {
-    sessionId,
+    target,targetAvailable,pinned:!!pinnedTarget,
     // Derived rather than stored: readiness has one source of truth (`detector`), and
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
     detail,draft:draft.text,active,standby,wake,landedAt,latency,detector,
-    toggle:session=>{
-      if(sessionRef.current?.id===session.id&&(enabledRef.current||phase==='error')){stop();return}
-      void start(session)
+    toggle:()=>{
+      if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
+      void start()
     },
+    togglePin:()=>setPinnedTarget(current=>toggleConversationTargetPin(current,targetRef.current)),
     stop,
     send:()=>{void (async()=>{try{await submit(draftRef.current.text)}catch(cause){reportFailure(cause)}})()},
     undo:()=>{
@@ -428,41 +447,36 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   }
 }
 
-/**
- * The pane header's Talk switch. It carries the state at a glance and nothing else —
- * the live transcript used to sit beside it and could not fit, because `.pane-voice`
- * is a fixed-chip scroller in a bar that must never wrap (see `ui.md`). The draft
- * text belongs to the dictation panel one row below.
- */
-export function ConversationChip({session,conversation}:{session:Session;conversation:Conversation}){
-  const owned=conversation.sessionId===session.id
-  const phase=owned?conversation.phase:'off'
-  const listening=owned&&conversation.active
-  const label=phase==='error'?'talk:error'
-    :!listening?'talk:off'
-    :phase==='warming'?'talk:warming'
-    :phase==='standby'?'talk:standby'
-    :phase==='hearing'?'talk:hearing'
-    :phase==='heard'?'talk:heard'
-    :phase==='transcribing'?'talk:typing'
-    :'talk:on'
-  const detail=owned&&conversation.detail?conversation.detail:`Say “${conversation.wake}, send” when your message is ready.`
-  return <button
-    class={`conversation-chip ${phase}`}
-    aria-pressed={listening}
-    aria-label={`Hands-free conversation for ${session.name}: ${phase}`}
-    title={`${listening?'Stop':'Start'} hands-free conversation · ${detail}`}
-    onClick={()=>conversation.toggle(session)}
-  >{label}</button>
+function MicIcon(){
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
+}
+
+/** One workspace-level control: a corner mic while off, the global draft card while on. */
+export function ConversationSurface({
+  conversation,
+  configured,
+  onOpenSettings,
+}:{
+  conversation:Conversation
+  configured:boolean
+  onOpenSettings:()=>void
+}){
+  if(conversation.phase==='off')return <div class="conversation-layer off">
+    <button
+      class={`conversation-mic-control${configured?'':' setup'}`}
+      aria-label={configured?'Start hands-free conversation':'Set up hands-free conversation'}
+      title={configured
+        ? `Start hands-free conversation${conversation.target?` · target: ${conversation.target.label}`:' · focus an agent or text surface to choose a target'}`
+        : 'Microphone conversation is disabled · open Voice settings'}
+      onClick={configured?()=>conversation.toggle():onOpenSettings}
+    ><MicIcon/><span>{configured?'Talk':'Set up voice'}</span></button>
+  </div>
+  return <div class="conversation-layer active"><DictationPanel conversation={conversation} onOpenSettings={onOpenSettings}/></div>
 }
 
 /**
- * The dictation draft, as its own pane row under the read-aloud strip.
- *
- * Fixed height on purpose: the terminal host is the pane's `1fr` row, so a panel
- * that grew with the draft would resize the PTY on every phrase and reflow the
- * agent's TUI. It costs the terminal the same rows for the whole time Talk is on,
- * one resize each way, exactly like the read-aloud strip above it.
+ * The app-level dictation draft. It is outside every pane, so focus and target changes
+ * cannot unmount it or resize a PTY.
  */
 export function DictationPanel({conversation,onOpenSettings}:{conversation:Conversation;onOpenSettings:()=>void}){
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
@@ -517,7 +531,7 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
       <span class="dictation-detail" role="status" aria-live="polite">{conversation.detail}</span>
       {conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">
-        <button class="dictation-send" title="Send the draft to the agent (Ctrl+Enter)" disabled={!conversation.draft.trim()} onClick={send}>send</button>
+        <button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>
         <button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>
         <button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>
         <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
@@ -525,6 +539,17 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
     </header>
+    <div class={`dictation-target${conversation.targetAvailable?'':' unavailable'}`}>
+      <span>to:</span>
+      <strong title={conversation.target?.label||'No target'}>{conversation.target?.label||'No target focused'}</strong>
+      <button
+        class={conversation.pinned?'active':''}
+        aria-pressed={conversation.pinned}
+        disabled={!conversation.target}
+        title={conversation.pinned?'Follow workspace focus again':'Stay on this target while focus moves'}
+        onClick={()=>conversation.togglePin()}
+      >{conversation.pinned?'unpin':'pin'}</button>
+    </div>
     <textarea
       ref={draftRef}
       class="dictation-draft"
