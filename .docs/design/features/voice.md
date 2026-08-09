@@ -76,6 +76,8 @@ affect the PTY, session state, transcripts, history, or projects.
   singleton audio element is reused so mobile browsers allow programmatic playback after any
   voice-UI gesture (`unlockPlayback` plays a silent WAV inside the gesture), and a
   localStorage device-autoplay toggle decides whether `auto` clips play on that client.
+  The silent unlock is transport setup, never public playback state, because capture uses that
+  state to decide whether a new utterance could be speaker echo.
 - Auto clips share a stream ID. Barge-in (`bargeInPlayback`) pauses playback, clears its
   queue, and suppresses later clips from the same reply while leaving manual replay available.
 - **Turning read aloud off is immediate, at all three scopes.** The singleton element is

@@ -21,6 +21,11 @@ let currentClipId: string | null = null
 let currentStreamId: string | null = null
 let currentSessionId: string | null = null
 let unlocked = false
+// The silent gesture-time play only grants future playback permission. It is not
+// audible playback and must never make capture classify the user's next words as
+// speaker echo. Some mobile Chromium builds do not emit `ended` for a zero-frame
+// WAV, so this cannot depend on that event to clear the public playback state.
+let unlocking = false
 let queue: QueueItem[] = []
 const suppressedStreams = new Set<string>()
 let state: PlaybackState = { clipId: null, playing: false, position: 0, duration: 0, origin: null }
@@ -37,11 +42,12 @@ function ensureAudio(): HTMLAudioElement {
   if (audioElement) return audioElement
   const audio = new Audio()
   audio.preload = 'auto'
-  audio.addEventListener('timeupdate', () => setState({ position: audio.currentTime, duration: Number.isFinite(audio.duration) ? audio.duration : state.duration }))
-  audio.addEventListener('durationchange', () => { if (Number.isFinite(audio.duration)) setState({ duration: audio.duration }) })
-  audio.addEventListener('play', () => setState({ playing: true }))
-  audio.addEventListener('pause', () => setState({ playing: false }))
+  audio.addEventListener('timeupdate', () => { if (!unlocking) setState({ position: audio.currentTime, duration: Number.isFinite(audio.duration) ? audio.duration : state.duration }) })
+  audio.addEventListener('durationchange', () => { if (!unlocking && Number.isFinite(audio.duration)) setState({ duration: audio.duration }) })
+  audio.addEventListener('play', () => { if (!unlocking) setState({ playing: true }) })
+  audio.addEventListener('pause', () => { if (!unlocking) setState({ playing: false }) })
   audio.addEventListener('ended', () => {
+    if (unlocking) { unlocking = false; return }
     setState({ playing: false })
     const next = queue.shift()
     if (next) void playQueuedClip(next).catch(() => { /* autoplay chain stops on error */ })
@@ -62,9 +68,18 @@ export function subscribePlayback(listener: () => void): () => void {
 export function unlockPlayback(): void {
   if (unlocked) return
   const audio = ensureAudio()
+  unlocking = true
   unlocked = true
   audio.src = SILENT_WAV
-  void audio.play().catch(() => { unlocked = false })
+  void audio.play().then(() => {
+    if (!unlocking) return
+    audio.pause()
+    unlocking = false
+  }).catch(() => {
+    if (!unlocking) return
+    unlocking = false
+    unlocked = false
+  })
 }
 
 export async function playClip(clipId: string, sessionId: string | null = null, origin: PlaybackOrigin = 'agent'): Promise<void> {
@@ -82,6 +97,9 @@ async function playQueuedClip(item:QueueItem):Promise<void>{
 
 async function playClipAudio(clipId:string,origin:PlaybackOrigin):Promise<void>{
   const audio = ensureAudio()
+  // A real clip supersedes any still-pending silent unlock. Its media events are
+  // public playback state even if the unlock promise settles afterwards.
+  unlocking = false
   if (currentClipId === clipId && audio.src && !audio.ended) {
     if (audio.paused) await audio.play()
     return

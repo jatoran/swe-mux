@@ -39,6 +39,14 @@ const voice = await import('../src/voice.ts')
 const element = () => FakeAudio.instances[0]
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
+test('gesture unlock never presents its silent media as active playback', async () => {
+  voice.unlockPlayback()
+  assert.equal(voice.getPlayback().playing, false, 'capture must not classify speech during unlock as playback echo')
+  await settle()
+  assert.equal(element().paused, true)
+  assert.deepEqual(voice.getPlayback(), { clipId: null, playing: false, position: 0, duration: 0, origin: null })
+})
+
 test('turning read aloud off for a session cuts that session mid-clip', async () => {
   await voice.playClip('clip-a', 'session-a')
   assert.equal(voice.getPlayback().clipId, 'clip-a')
