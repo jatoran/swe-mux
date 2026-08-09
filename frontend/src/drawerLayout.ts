@@ -194,6 +194,21 @@ export function drawerStackForTab(layout: DrawerLayout, tab: DrawerTabId): Drawe
   return drawerStacks(layout).find(stack => stack.tabs.includes(tab)) ?? null
 }
 
+/**
+ * The stack occupying the drawer's top-right corner.
+ *
+ * The drawer collapses as a whole, so its collapse control belongs to the drawer rather
+ * than to any one pane — but the drawer has no chrome of its own to hang it on, only pane
+ * headings. This picks the single heading that sits where a close control is expected.
+ * `horizontal` splits lay their branches out as a row (`second` is the right one) and
+ * `vertical` splits as a column (`first` is the top one), matching `.drawer-split` in the
+ * stylesheet; keep the two in step if that flex direction ever changes.
+ */
+export function drawerCollapseHostStack(node: DrawerNode): DrawerStack {
+  if (node.type === 'stack') return node
+  return drawerCollapseHostStack(node.direction === 'horizontal' ? node.second : node.first)
+}
+
 export function mapDrawerNode(node: DrawerNode, transform: (node: DrawerNode) => DrawerNode): DrawerNode {
   const mapped = node.type === 'split'
     ? { ...node, first: mapDrawerNode(node.first, transform), second: mapDrawerNode(node.second, transform) }

@@ -6,6 +6,7 @@ import {
   activateDrawerTab,
   adjacentDrawerStack,
   defaultDrawerLayout,
+  drawerCollapseHostStack,
   drawerStackForTab,
   drawerStacks,
   drawerTabs,
@@ -60,6 +61,26 @@ test('layout parse and serialization repair malformed singleton state', () => {
   assert.deepEqual(parseDrawerLayout(serializeDrawerLayout(layout)), layout)
   assertSingletons(parseDrawerLayout('{bad'))
   assertSingletons(normalizeDrawerLayout({ nope: true }))
+})
+
+test('the collapse host is the stack in the drawer top-right corner', () => {
+  const stack = (id: string, tabs: DrawerTabId[]): DrawerNode => ({ type: 'stack', id, tabs })
+  const split = (id: string, direction: 'horizontal' | 'vertical', first: DrawerNode, second: DrawerNode): DrawerNode =>
+    ({ type: 'split', id, direction, ratio: 0.5, first, second })
+
+  // Stack ids are generated, so the default layout has to be captured once to compare.
+  const single = defaultDrawerLayout()
+  assert.equal(drawerCollapseHostStack(single.root).id, drawerStacks(single)[0].id)
+  // Horizontal splits lay out as a row, so the right branch wins; vertical ones as a
+  // column, so the top branch does. Nested, the two rules compose to one corner.
+  assert.equal(drawerCollapseHostStack(split('s', 'horizontal', stack('left', ['files']), stack('right', ['notes']))).id, 'right')
+  assert.equal(drawerCollapseHostStack(split('s', 'vertical', stack('top', ['files']), stack('bottom', ['notes']))).id, 'top')
+  assert.equal(drawerCollapseHostStack(split(
+    's',
+    'horizontal',
+    stack('left', ['files']),
+    split('inner', 'vertical', stack('corner', ['notes']), stack('under', ['git'])),
+  )).id, 'corner')
 })
 
 test('missing shipped tabs join their canonical predecessor without moving existing tabs', () => {
