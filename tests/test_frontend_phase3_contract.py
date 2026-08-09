@@ -276,7 +276,7 @@ def test_groups_sort_from_the_projects_header_and_collapse_from_their_header() -
     )
     # A folded Group reports live count *and* the strongest agent state, or an
     # approval waiting inside it would be invisible.
-    assert "projectSetRailStatus(sessions,peerIds,seenActivity)" in app
+    assert "projectSetRailStatus(sessions,peerIds,ackedTurns)" in app
     assert ".bucket-collapsed-badge.activity-attention" in css
     assert ".sidebar-project-bucket>header .bucket-chevron" in css
     # Sections deliberately carry no date modes: nothing dates a Group.

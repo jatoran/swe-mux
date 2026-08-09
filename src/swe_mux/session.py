@@ -478,6 +478,73 @@ def _record_transition_refusal(
     )
 
 
+# --- turn completions: the counter the sidebar's unread tier reads -----------
+#
+# "Has this agent finished saying something since I last looked?" is a question
+# none of the status axes answer on their own, and it must not be answered from
+# PTY traffic: a resize repaint, an idle spinner, and a finished turn are the
+# same bytes. It is answered here, from the transition contract, because only
+# the daemon sees every transition - and the acknowledgement is held on the
+# record for the same reason a per-browser mark could not work: it has to follow
+# the user between devices and survive a reload.
+
+
+def is_turn_completion(previous: SessionState | None, state: SessionState) -> bool:
+    """True when a transition means the agent just stopped holding the floor.
+
+    An approval counts from any state but itself - it is the loudest thing a
+    session can want, and one raised from `idle` still needs the user. Otherwise
+    only `working -> idle` qualifies. `starting -> idle` is the CLI finishing its
+    boot rather than the agent finishing a turn, and counting it would make every
+    freshly spawned session unread before it had said anything; `awaiting -> idle`
+    is the human answering the prompt, which is their own action, not news.
+    """
+    if state == "awaiting":
+        return previous != "awaiting"
+    return state == "idle" and previous == "working"
+
+
+def note_turn_completion(
+    session: Any, *, source: str, evidence: str | None, now: float
+) -> int | None:
+    """Advance the turn counter, returning the turn that just completed.
+
+    Deliberately does not append a ledger entry of its own: the transition that
+    completed the turn is already being ledgered, and carrying `turn_seq` on
+    that entry says the same thing without doubling the durable timeline's write
+    rate. `/api/sessions/{sid}/state-log` can still answer "why did this row
+    light up?" - the answer is the entry whose `turn_seq` matches.
+    """
+    record = getattr(session, "record", None)
+    if record is None or not hasattr(record, "turn_seq"):
+        return None
+    record.turn_seq = int(getattr(record, "turn_seq", 0) or 0) + 1
+    record.last_turn_end_ts = now
+    record.last_turn_evidence = f"{source}:{evidence}" if evidence else source
+    return int(record.turn_seq)
+
+
+def acknowledge_turns(
+    record: Any, turn_seq: int | None = None, *, now: float | None = None
+) -> bool:
+    """Mark this session read up to `turn_seq` (its current counter when None).
+
+    Clamped to the counter the daemon has actually reached, so a stale or
+    hand-written client cannot acknowledge a turn that has not happened yet and
+    silently swallow the next real one. Monotone: a second device that is behind
+    cannot un-read what the first already cleared, which is what makes two
+    browsers and a phone converge instead of fighting. Returns True when the
+    mark actually moved.
+    """
+    current = int(getattr(record, "turn_seq", 0) or 0)
+    target = current if turn_seq is None else min(int(turn_seq), current)
+    if target <= int(getattr(record, "read_turn_seq", 0) or 0):
+        return False
+    record.read_turn_seq = target
+    record.read_at = time.time() if now is None else now
+    return True
+
+
 def apply_state_transition(
     session: Any,
     state: SessionState,
@@ -535,6 +602,16 @@ def apply_state_transition(
     if not changed:
         return False
     proof = transition_proof(source, inferred)
+    # Counted here, inside the one funnel every source arbitrates through, so a
+    # turn cannot be counted twice when the hook and the transcript both report
+    # it: whichever lands first is the transition, and the second is the no-op
+    # `changed` check that returned above. A refused transition never reaches
+    # this line, so a late hook against a dead session announces nothing.
+    completed_turn = (
+        note_turn_completion(session, source=source, evidence=evidence, now=now)
+        if is_turn_completion(previous, state)
+        else None
+    )
     seconds_in_previous: float | None = None
     if previous != state:
         previous_change_monotonic = getattr(session, "last_state_change_monotonic", None)
@@ -575,6 +652,10 @@ def apply_state_transition(
             round(seconds_in_previous, 3) if seconds_in_previous is not None else None
         ),
     }
+    # Present only on the transitions that completed a turn, so the timeline can
+    # be filtered to them without carrying a null on every other row.
+    if completed_turn is not None:
+        entry["turn_seq"] = completed_turn
     ledger = getattr(session, "state_transitions", None)
     if ledger is not None:
         ledger.append(entry)

@@ -12,9 +12,13 @@ Three axes stay separate and are never collapsed:
 
 - **SessionState** (+ `awaiting_reason`) — what the agent is doing, rendered per session.
 - **`delivery_state`** — whether typed delivery would be safe (`delivery-readiness.md`).
-- **Attention** — unread/pinned UX state (`sessionAttention.ts`), client-side only.
-  It reads SessionState but never feeds it: a row is only unread once its agent has settled
-  (`idle` or `awaiting`), so unread means "finished, and unseen" rather than "producing output".
+- **Attention** - unread/pinned UX state (`turn_seq` / `read_turn_seq` on the record,
+  rendered by `sessionAttention.ts`).
+  It reads the transition contract but never feeds it: turn completions are counted *from*
+  transitions, and a row is only unread once its agent has settled (`idle` or `awaiting`), so
+  unread means "finished, and unseen" rather than "producing output".
+  The counter and its acknowledgement are server-side because a per-browser mark could
+  neither survive a reload nor follow the user to a second device.
 
 ## The detection ladder
 
@@ -466,6 +470,38 @@ wall timing, and seconds spent in the previous state. No transition can occur wi
 ledger entry; `promote`/`demote`/nested-agent detection/`_mark_ended` all route through it.
 Inferred transitions are recovery events — counted, bounded, and never the primary path
 for a healthy session.
+
+### Turn completions (the attention counter)
+
+The same funnel counts turns, because it is the only place that sees every transition after
+arbitration. `is_turn_completion` decides, and `note_turn_completion` advances
+`record.turn_seq`, stamps `last_turn_end_ts` / `last_turn_evidence`, and ledgers a
+`turn_completed` entry so "why did this row light up?" is answerable from
+`/api/sessions/{sid}/state-log` after the fact.
+
+A turn completes when the agent stops holding the floor:
+
+| Transition | Counts | Why |
+| --- | --- | --- |
+| `working -> idle` | yes | The agent finished speaking. |
+| any state but `awaiting` -> `awaiting` | yes | An approval is the loudest thing a session can want, including one raised from `idle`. |
+| `starting -> idle` | no | The CLI finished booting. Counting it made every freshly spawned session unread before it had said anything. |
+| `awaiting -> idle` | no | The human answered the prompt. Their own action is not news for them. |
+| `awaiting -> awaiting` | no | A detail change on the same approval is the same approval. |
+| anything -> `exited` / `crashed` | no | An ended session carries its own muted styling. |
+
+Counting inside the funnel is what makes the count exact rather than approximate: a refused
+transition (the terminal latch, or a source that lost arbitration) is not a turn, and a
+duplicate report of one turn - the hook and the transcript landing milliseconds apart - is a
+no-op transition and so counts once.
+
+`turn_seq` is deliberately not derived from `last_activity_ts`, which moves on every PTY byte
+including the full-screen repaint a resize provokes. `design/features/ui.md` covers what the
+sidebar does with the counter and why the old signal failed; `read_turn_seq` on the same record
+is the user-level acknowledgement, written through `POST /sessions/{id}/read`
+(`design/interfaces.md`). Both round-trip through `SessionRecord.snapshot()`, so a
+session-preserving daemon restart keeps them, and a snapshot written by a daemon that predates
+them adopts as caught up rather than as a wall of false unread.
 
 ## Reading the PTY screen
 

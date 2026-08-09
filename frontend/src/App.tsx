@@ -147,7 +147,8 @@ import {
   toggleBucketCollapsed,
 } from './projectSort'
 import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail } from './projectRecency'
-import { reconcileSeen, isUnread, projectRailStatus, projectSetRailStatus, type ProjectRailActivity, type SeenMap } from './sessionAttention'
+import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
+import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { activityBadges, sessionDotClass, sessionStatus } from './sessionStatus'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
@@ -162,6 +163,11 @@ import {
 const FLEET_SAFETY_REFRESH_MS=60_000
 const KEYBINDING_SAFETY_REFRESH_MS=60_000
 const PROCESS_SUMMARY_REFRESH_MS=10_000
+// How long an agent's finished turn must sit on screen, with a human at the
+// window, before the row counts as read. Long enough that flicking through
+// panes does not silently clear a fleet; short enough that reading a reply and
+// moving on does.
+const READ_ACK_DWELL_MS=1_200
 
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
@@ -394,8 +400,9 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextState>(null)
   const [projectMenu, setProjectMenu] = useState<ProjectContext>(null)
   const [sidebarMenu,setSidebarMenu]=useState<SidebarContext>(null)
-  // Per-agent read/unread marks for sidebar rows; see sessionAttention.ts.
-  const [seenActivity,setSeenActivity]=useState<SeenMap>({})
+  // Acknowledgements in flight for sidebar rows. The durable mark lives on the
+  // session record; this is only the optimistic overlay. See sessionAttention.ts.
+  const [ackedTurns,setAckedTurns]=useState<AckMap>({})
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
@@ -1795,17 +1802,41 @@ export function App() {
   // restarts the microphone or clears the draft, and pinning freezes the target.
   const conversation = useConversation(voiceStatus, updateSession, conversationTarget, handleVoiceIntent)
 
-  // Sessions on screen right now (visible pane of the displayed project) count as
-  // "read": their sidebar rows stay muted even while their agent keeps working.
+  // Sessions on screen right now (visible pane of the displayed project). Being
+  // on screen is half of what marks a row read; a human at the window is the
+  // other half (humanPresence.ts).
   const visibleSessionIds=visibleTerminalIds(activeLayout)
   const conversationPaneCandidate=focusedViewId||activeId
   const conversationPaneId=conversation.phase!=='off'&&conversationPaneCandidate&&visibleSessionIds.includes(conversationPaneCandidate)
     ?conversationPaneCandidate
     :null
   const visibleSessionKey=visibleSessionIds.join('\n')
+  const [humanPresent,setHumanPresent]=useState(isHumanPresent)
+  useEffect(()=>watchHumanPresence(setHumanPresent),[])
+  // Drop overlay entries the daemon has confirmed, so the map stays the size of
+  // what is genuinely in flight rather than growing for the life of the tab.
+  useEffect(()=>{setAckedTurns(prev=>pruneAcks(prev,sessions))},[sessions])
+  // Acknowledge the completed turns of every on-screen agent after a dwell. The
+  // dependency is the pending turns themselves, not the session list: a busy
+  // fleet re-renders constantly, and keying the timer on that would restart it
+  // forever and never acknowledge anything. `turn_seq` only moves when an agent
+  // settles, so this key is stable for exactly as long as the dwell needs.
+  const pending=humanPresent?pendingAcks(sessions,visibleSessionIds,ackedTurns):[]
+  const pendingKey=pending.map(([id,seq])=>`${id}:${seq}`).join('\n')
   useEffect(()=>{
-    setSeenActivity(prev=>reconcileSeen(prev,sessions,visibleSessionIds))
-  },[sessions,visibleSessionKey])
+    if(!pendingKey)return
+    const timer=window.setTimeout(()=>{
+      for(const [id,seq] of pending){
+        // Optimistic first: the row must clear now, not a round-trip later. A
+        // failed POST is left alone rather than rolled back - the next snapshot
+        // carries the daemon's own answer, and re-lighting a row the user just
+        // looked at is worse than acknowledging it slightly early.
+        setAckedTurns(current=>current[id]>=seq?current:{...current,[id]:seq})
+        void api('POST',`/api/sessions/${id}/read`,{turn_seq:seq}).catch(()=>{})
+      }
+    },READ_ACK_DWELL_MS)
+    return()=>window.clearTimeout(timer)
+  },[pendingKey])
 
   // Terminals stay mounted for a few switches after you leave them, so coming back
   // costs no replay (`warmPanes.ts`). Recency is recorded from the layout rather than
@@ -4461,7 +4492,7 @@ export function App() {
     const agent=isAgent(session)
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
-      :isUnread(session,seenActivity)?'unread':'read'
+      :isUnread(session,ackedTurns)?'unread':'read'
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});if(!mobileWorkspace)beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session)}
       <span class="session-copy"><strong>{isAgent(session) && <span class={`agent-prefix ${session.backend}`} title={harnessDisplayName(session.backend)}>{providerGlyph(session.backend)}</span>}{sessionName(session)}{session.broadcast&&<span class="broadcast-flag" title="In the broadcast set — keystrokes mirror here while broadcast input is on">⇶</span>}{activityGlyphs(session)}</strong><small class={isObservedHarness(session.backend) ? `agent-status ${session.state}` : 'agent-unobserved'}>{sessionStatus(session)}</small></span>
@@ -4647,7 +4678,7 @@ export function App() {
             // the header has to answer for all of them: a count for how much is live,
             // and the strongest state as a dot, because a bare count cannot say that
             // something in here is waiting on you.
-            const bucketStatus=bucketCollapsed?projectSetRailStatus(sessions,peerIds,seenActivity):null
+            const bucketStatus=bucketCollapsed?projectSetRailStatus(sessions,peerIds,ackedTurns):null
             return <section class={`sidebar-project-list sidebar-project-bucket ${bucketCollapsed?'collapsed':''}`} key={bucket.id} data-reorder-id={bucket.id}>
             {/* Desktop uses the header as both drag handle and collapse toggle. Mobile
                 keeps only the tap-to-fold half because Project rows are its sole sidebar
@@ -4674,7 +4705,7 @@ export function App() {
           than forcing an expand round-trip for menu, projects, or status. */}
       {sidebarCollapsed&&<nav class="sidebar-rail" aria-label="Sidebar shortcuts">
         <div class="rail-projects" aria-label="Projects">
-          {displayProjects.map(project=>{const status=projectRailStatus(sessions,project.id,seenActivity);const selected=project.id===projectId;const readLabel=status.agentCount?(status.unread?' · unread output':' · read'):'';const countLabel=status.liveCount?` · ${status.liveCount} live session${status.liveCount===1?'':'s'}`:'';return <button
+          {displayProjects.map(project=>{const status=projectRailStatus(sessions,project.id,ackedTurns);const selected=project.id===projectId;const readLabel=status.agentCount?(status.unread?' · unread output':' · read'):'';const countLabel=status.liveCount?` · ${status.liveCount} live session${status.liveCount===1?'':'s'}`:'';return <button
             key={project.id}
             data-sidebar-project-id={project.id}
             class={`rail-project activity-${status.activity} ${status.unread?'unread':'read'} ${selected?'active':''}`}

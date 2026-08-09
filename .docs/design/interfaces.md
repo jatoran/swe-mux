@@ -427,6 +427,7 @@ GET    /sessions[?project=&state=&backend=]
 POST   /sessions
 GET    /sessions/{id}
 PATCH  /sessions/{id}
+POST   /sessions/{id}/read
 POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
 DELETE /sessions/{id}
@@ -445,6 +446,18 @@ GET    /sessions/{id}/agent-environment[?refresh=1]
 an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex
 runs; ended, shell, and manually named sessions are rejected. Provider and budget failures remain
 visible through automation diagnostics and never block the agent lifecycle.
+
+`POST /sessions/{id}/read` takes an optional `{turn_seq?: number}` (the session's current
+`turn_seq` when omitted) and returns `{id, turn_seq, read_turn_seq, read_at}`.
+It acknowledges completed turns for the **user**, not for one browser: the mark lives on the
+session record, so it follows every device and survives a reload.
+The write is monotone and clamped to the counter the daemon has actually reached - a device that
+is behind cannot un-read what another cleared, and no client can acknowledge a turn that has not
+happened and silently swallow the next real one.
+A no-op acknowledgement emits nothing; a real one publishes a session update and a `session_read`
+event so other devices converge.
+Separate from `PATCH /sessions/{id}` because it is written on a dwell timer whenever a human is
+looking at a pane and must not carry that route's history metadata write.
 
 `POST /sessions/{id}/standing-activity/clear` takes an optional
 `{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the

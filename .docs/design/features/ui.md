@@ -85,13 +85,36 @@ responsive controls.
   A vertical rule on the left reads as structure rather than state: consecutive marked rows
   merge into one long spine, and the left of the row is where the tab thread runs.
   Per-row state stays on the side nothing structural uses.
-- `unread` requires a **settled** agent — `idle` or `awaiting` — not merely unseen output.
+- `unread` requires a **settled** agent - `idle` or `awaiting` - not merely unseen output.
   A working agent is mid-turn: its output is still growing and there is nothing to catch up on,
   so counting it as unread brightened every off-screen agent for the entire length of its run,
   which is precisely the window in which the row means "nothing for you here".
-  Because the read mark only advances while a session is visible, an agent that works off screen
-  compares against its pre-run mark and turns unread the moment it stops.
-  The brightest tier therefore means "finished, and waiting on you".
+  An agent that works off screen therefore turns unread the moment it stops, and the brightest
+  tier means "finished, and waiting on you".
+- **Unread is counted in turns, never in output.** The row compares two integers the daemon
+  serves on the session record: `turn_seq`, which advances only where the status contract
+  settles a working session or raises an approval, and `read_turn_seq`, the acknowledgement.
+  Deriving it from `last_activity_ts` instead - the timestamp of the last PTY byte - was wrong
+  in both directions at once, and neither failure was visible as a bug in the sidebar:
+  - Every SIGWINCH makes an agent TUI repaint its whole screen, so resizing the window,
+    collapsing the sidebar, changing UI scale, or attaching a phone stamped fresh activity on
+    every attached session within milliseconds of each other and lit up a whole Project.
+    Idle spinners and status footers did the same, slowly.
+  - The read mark lived in one tab's memory, so a reload, a UI reload, or a phone evicting the
+    page marked the entire fleet caught up, and a second device never saw the first device's
+    marks at all.
+  A server-held counter cannot be moved by a repaint, survives a reload, and gives every device
+  the same number to compare against.
+  `design/features/status-detection.md` owns which transitions count as a turn.
+- **Being on screen is half of what marks a row read; a human at the window is the other half.**
+  A pane can be mounted and visible in a window that is minimized, behind another app, or on a
+  phone whose screen is off, and marking those read is how a night of finished turns used to
+  vanish before anyone looked at them.
+  The acknowledgement therefore requires `visibilityState === 'visible'` **and** window focus
+  (`humanPresence.ts`), plus a short dwell, and is written through `POST /sessions/{id}/read`.
+  The strictness is deliberate: a window parked visible on a second monitor with nobody at the
+  desk is exactly the case that has to keep its marks, and erring this way only leaves a row lit
+  slightly longer than needed.
 - The row's kill control appears on hover, and on keyboard focus via `:focus-visible`; selecting
   a row does not reveal it.
   `:focus-within` did reveal it, because clicking a row leaves DOM focus on it, so every selected

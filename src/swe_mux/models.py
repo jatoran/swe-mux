@@ -174,6 +174,27 @@ class SessionRecord:
     observation_stale_since: float | None = None
     observation_diagnostic: str | None = None
     last_activity_ts: float = field(default_factory=time.time)
+    # --- attention: turn completions, and the read mark against them ----------
+    #
+    # `last_activity_ts` above is a liveness signal: it moves on every byte the
+    # PTY emits, which includes the full-screen repaint every SIGWINCH provokes
+    # (see `Session.apply_geometry`) and the idle repaint traffic of a spinner or
+    # a status footer. Deriving "the agent said something you have not read" from
+    # it made resizing a window, collapsing the sidebar, or attaching a phone
+    # indistinguishable from the agent speaking, and lit up whole projects at
+    # once. `turn_seq` counts *semantic* turn completions instead - it advances
+    # only where the status contract settles a working session or raises an
+    # approval - so no amount of repainting can move it. It is compared as a
+    # monotone integer rather than a timestamp, which also makes the read mark
+    # immune to clock skew between the daemon and any client.
+    turn_seq: int = 0
+    last_turn_end_ts: float = 0.0
+    last_turn_evidence: str | None = None
+    # Highest `turn_seq` a human has acknowledged, held on the session rather
+    # than in a browser so the mark follows the user across devices and survives
+    # a reload - the discipline attention records already use for `read_at`.
+    read_turn_seq: int = 0
+    read_at: float | None = None
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False
     broadcast: bool = False

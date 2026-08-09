@@ -185,6 +185,7 @@ from .session import (
     STATE_WATCHDOG_LOOP,
     Session,
     SessionManager,
+    acknowledge_turns,
     clear_all_standing_activity,
     clear_standing_activity,
     pty_tail_explain,
@@ -703,6 +704,7 @@ def create_app(
             web.get("/api/sessions/{sid}/skills", session_skills),
             web.get("/api/sessions/{sid}/agent-environment", session_agent_environment),
             web.patch("/api/sessions/{sid}", patch_session),
+            web.post("/api/sessions/{sid}/read", mark_session_read),
             web.post("/api/sessions/{sid}/title/regenerate", regenerate_session_title),
             web.post(
                 "/api/sessions/{sid}/standing-activity/clear", clear_session_standing_activity
@@ -4282,6 +4284,40 @@ async def patch_session(request: web.Request) -> web.Response:
     session.publish_update()
     await request.app["events"].emit("session_updated", session_id=session.record.id)
     return json_response(session.record.snapshot())
+
+
+async def mark_session_read(request: web.Request) -> web.Response:
+    """Acknowledge this session's completed turns up to `turn_seq`.
+
+    Separate from PATCH because it is written on a dwell timer whenever a human
+    is actually looking at a pane, and must not carry PATCH's history metadata
+    write. The acknowledgement is clamped and monotone in `acknowledge_turns`, so
+    a replayed or out-of-order call is a no-op rather than a lost notification.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    body = await request.json() if request.body_exists else {}
+    if not isinstance(body, dict):
+        raise ValueError("body must be an object")
+    raw = body.get("turn_seq")
+    if raw is not None and (not isinstance(raw, int) or isinstance(raw, bool) or raw < 0):
+        raise ValueError("turn_seq must be a non-negative integer")
+    if acknowledge_turns(session.record, raw):
+        session.publish_update()
+        # Other devices hold their own copy of the mark; this is what converges
+        # them. A client that acknowledged it itself already shows the result.
+        await request.app["events"].emit(
+            "session_read",
+            session_id=session.record.id,
+            turn_seq=session.record.read_turn_seq,
+        )
+    return json_response(
+        {
+            "id": session.record.id,
+            "turn_seq": session.record.turn_seq,
+            "read_turn_seq": session.record.read_turn_seq,
+            "read_at": session.record.read_at,
+        }
+    )
 
 
 async def regenerate_session_title(request: web.Request) -> web.Response:

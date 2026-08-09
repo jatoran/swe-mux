@@ -37,6 +37,14 @@ export interface Session {
   tokens_out: number; tokens_cache_read:number; tokens_cache_write:number; cost_usd:number
   provider?:string|null; provider_account_hashes?:Record<string,string>
   context_window: number; context_pct: number; last_activity_ts: number
+  /**
+   * Semantic turn completions, and the highest one a human has acknowledged.
+   * These, never `last_activity_ts`, drive the sidebar's unread tier: activity
+   * moves on any PTY byte, including the repaint a resize provokes. Optional
+   * because a daemon predating them serves neither, in which case every row
+   * reads as caught up rather than as a wall of false unread.
+   */
+  turn_seq?: number; read_turn_seq?: number; last_turn_end_ts?: number
   git: { branch?: string; dirty: number; ahead: number; behind: number }
   pinned_attention: boolean; broadcast: boolean
   startup_timing_ms?: Record<string, number>
