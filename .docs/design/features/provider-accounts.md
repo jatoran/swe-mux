@@ -153,10 +153,10 @@
   error. Review is server-persisted, removes the row from active notifications, retains it in
   the evidence log, and rejects manual-usage classification for Claude rows.
 - `POST .../select` takes no body; there is no force flag and no confirmation step.
-- Desktop and mobile status use one two-row metric grid per provider.
+- The expanded sidebar's status block uses one two-row metric grid per provider.
   The first row shows the provider icon, 5-hour reset countdown, weekly reset countdown, and optional Fable heading.
   The second row shows the selected account label's first four characters followed by the corresponding usage percentages.
-  The collapsed desktop rail remains icon plus weekly percentage because its fixed 28 px width cannot contain the grid.
+  Both condensed surfaces — the collapsed desktop rail and the mobile toolbar — instead draw one 28 px square per provider, icon above weekly percentage: the rail's width cannot contain the grid, and the phone's toolbar cannot spare the row (see `ui.md` § quota indicators). Either square opens the same popover, which is where the window-by-window reading lives for a device with no hover.
   The full switcher is a viewport-level overlay anchored to the status block, so sidebar width and overflow never clip it.
 - Removing the selected saved account removes mux ownership metadata and its private
   snapshot; live system auth remains untouched and becomes external.

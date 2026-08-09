@@ -58,6 +58,26 @@ PaneLeaf = terminal | note | preview | history | queue
   rearranges the pane tree except an explicit split, drag, or move.
 - Every pane has its own tab strip and active tab. There is no global tab strip, dock/pop-out
   mode, detached layout, or separate resource workspace.
+- **The sidebar's session list under a Project is that Project's pane tree read depth-first**, so
+  a position in the list is a position in the tree, and dragging a session there is a layout
+  edit like any other. Dropping between two rows moves the leaf to exactly that slot
+  (`moveTerminalBeside`): inside one pane a tab reorder, across panes a change of pane membership
+  landing at the index the preview drew, with the moved tab coming to the front of the pane that
+  receives it. Dropping *on* a row instead merges the two into one tabbed pane, unless they
+  already share a pane — a row that cannot be grouped with is an insertion target over its whole
+  height rather than a middle band that quietly does something else.
+  Every drop used to be that merge, and the merge appends, so a row aimed at the top of the list
+  arrived at the bottom of a pane and the sidebar looked like it had ignored the gesture.
+- A session can never be dragged into another Project. The gesture consults only the source
+  Project's own session list, so no pointer position over another Project resolves to a target,
+  and a release outside that list commits nothing. Moving a running PTY's owner is not a decision
+  a short gesture over a tree makes; the drag used to answer with a red "invalid" outline and an
+  error on drop, which is a worse way to say the same thing than having no target there.
+- A live session the Project layout has no leaf for is listed after the tree in creation order.
+  It holds no position, so nothing can be dropped beside it — but it can itself be dragged, and
+  dropping it into the list opens it at that slot, which is the only reading a position has for a
+  session that has none. A pending terminal is likewise not a target: its leaf is client-only and
+  about to be replaced.
 - The app-level Conversation surface is not a `PaneLeaf`, does not participate in layout persistence or focus traversal, and cannot add tracks or resize a terminal.
   Pane-local read-aloud playback remains a zero-height overlay over its owning terminal surface.
 - Desktop pane boundaries use four-pixel neutral gutters and a quiet one-pixel pane frame.
@@ -130,9 +150,27 @@ PaneLeaf = terminal | note | preview | history | queue
 - Tab-strip gaps and source positions resolve to the nearest insertion slot. A line previews
   before/after insertion, a tab bar highlight previews joining a pane, and edge overlays preview
   a new split. Sidebar insertion and grouping targets use equivalent explicit indicators.
+- **The sidebar's lists preview the landing position, not the pointer position.** A Project or
+  session in the air draws a dashed, labelled outline of itself over the gap it would drop into
+  (`.mux-drop-slot`), sized to the row and indented to match the row it lands beside.
+  The cursor ghost says what is moving; the slot says where it stops, and between them a drop is
+  predictable before release rather than after it.
+  Tab strips keep the line instead: tabs are as wide as their labels, so an outline the size of
+  the dragged tab would misdescribe a gap of a different width.
+  Like every other preview it is a body-level element positioned over the list, never a
+  placeholder spliced into it — the sidebar re-renders on every fleet event, and a foreign node
+  inside a Preact-managed parent does not survive that diff.
 - Pointer capture makes pointer-up deterministic. Escape, pointer cancel, lost capture, and
-  window blur cancel, clear the indicator/ghost, restore embedded-preview pointer behavior, and
-  persist nothing.
+  window blur cancel, clear the indicator/ghost/slot, restore embedded-preview pointer behavior,
+  and persist nothing.
+- **A touch drag cancels `touchmove` itself for as long as it is active.** `preventDefault` on a
+  pointer move does not stop a touch from scrolling, so without it the sidebar scrolled under the
+  finger and that scroll cancelled the pointer — a hold-drag that picked a row up and then did
+  nothing. The listener is registered at pointer-down (which precedes `touchstart`, so the
+  sequence stays main-thread and its moves stay cancelable) and only cancels once the drag is
+  real, leaving an ordinary scroll that merely began on a row untouched. `touch-action:none` on
+  the rows is not the alternative: rows are most of what there is to put a finger on, so it would
+  cost the sidebar its scrolling everywhere to serve a gesture that happens rarely.
 - A running drag **owns the pointer**, and says so rather than leaving it to be inferred. It
   claims ownership when it crosses the 5 px threshold and releases when it unwinds
   (`pointerDragClaim.ts`); the mobile touch-gesture recognizer refuses to classify any touch

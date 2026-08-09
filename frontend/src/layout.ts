@@ -300,10 +300,50 @@ export function groupTerminalsInStack(layout:PaneLayout,targetId:string,nextId:s
   return openTab(removeLeaf(layout,'terminal',nextId),targetId,terminalLeaf(nextId))
 }
 
-export function addToStack(layout:PaneLayout,stackId:string,sessionId:string):PaneLayout{return addLeafToStack(layout,stackId,terminalLeaf(sessionId))}
+// `addToStack(layout, stackId, sessionId)` was the terminal-flavoured wrapper here. Its only
+// caller was the sidebar drop that joined a whole pane, which now lands on a row and reorders,
+// so it went rather than waiting to be rediscovered as the way to add a tab.
 export function addLeafToStack(layout:PaneLayout,stackId:string,next:PaneLeaf):PaneLayout{
+  return insertLeafInStack(layout,stackId,next,Number.MAX_SAFE_INTEGER)
+}
+/** Place a leaf at an exact position among a pane's tabs. `index` is clamped, so the end of the
+ *  list is reachable without the caller counting children. */
+export function insertLeafInStack(layout:PaneLayout,stackId:string,next:PaneLeaf,index:number):PaneLayout{
   if(leaves(layout).some(leaf=>leaf.id===next.id)||!layout.root)return layout
-  return {...layout,root:mapPanes(layout.root,pane=>pane.id===stackId?{...pane,children:[...pane.children,next],active_child_id:next.id}:pane)}
+  return {...layout,root:mapPanes(layout.root,pane=>{
+    if(pane.id!==stackId)return pane
+    const at=Math.max(0,Math.min(pane.children.length,index))
+    return {...pane,children:[...pane.children.slice(0,at),next,...pane.children.slice(at)],active_child_id:next.id}
+  })}
+}
+
+/** Move a terminal so it lands immediately before or after another terminal.
+ *
+ *  The sidebar's session list *is* the pane tree read depth-first, so an insertion preview drawn
+ *  between two rows can only be honoured by moving the leaf to that slot: inside one pane that
+ *  is a tab reorder, and across panes it is a change of pane membership landing at the exact
+ *  index the preview promised. Dropping a session that is not in the tree at all (a live session
+ *  whose leaf this Project's layout has yet to catch up with) opens it there, which is the only
+ *  reading a position in the list has for a session that has none. */
+export function moveTerminalBeside(layout:PaneLayout,movedId:string,targetId:string,side:'before'|'after'):PaneLayout{
+  if(movedId===targetId)return layout
+  const target=stackForView(layout,targetId)
+  if(!target||!target.children.some(child=>child.kind==='terminal'&&child.id===targetId))return layout
+  const source=stackForView(layout,movedId)
+  if(source&&source.id===target.id){
+    const ordered=source.children.map(child=>child.id).filter(id=>id!==movedId)
+    const index=ordered.indexOf(targetId)
+    if(index<0)return layout
+    ordered.splice(index+(side==='after'?1:0),0,movedId)
+    return reorderStack(layout,source.id,ordered)
+  }
+  const leaf=leaves(layout).find(item=>item.kind==='terminal'&&item.id===movedId)||terminalLeaf(movedId)
+  // Removing the leaf can collapse its pane and the split above it, but never renumbers the
+  // target pane, so the destination index is resolved after the removal rather than before.
+  const without=source?removeLeaf(layout,'terminal',movedId):layout
+  const resolved=stackForView(without,targetId)
+  if(!resolved)return layout
+  return insertLeafInStack(without,resolved.id,leaf,resolved.children.findIndex(child=>child.id===targetId)+(side==='after'?1:0))
 }
 
 // Session notes used to open through a `placeCompanionLeaf` helper that split a pane off so

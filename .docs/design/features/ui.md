@@ -128,17 +128,25 @@ responsive controls.
   identifying the row, so it keeps full contrast while the numbers carry the shared
   ok/warn/critical banding. Providers render in the same order as everywhere else.
   Provider marks use inline vector geometry with `currentColor`, so platform emoji substitution cannot replace their configured identity colours.
-- The **collapsed desktop rail** has room for one number, and that number is weekly: the 5-hour
-  session window churns constantly, and `fable` is a sub-window of one provider's plan rather
-  than a measure comparable across providers, so weekly is the one worth a permanent glance.
-- The **mobile toolbar** and expanded sidebar show every window the provider reports, so Claude
+- The **collapsed desktop rail and the mobile toolbar** draw the same square: one per provider,
+  the provider's mark above one number, and that number is weekly. The 5-hour session window
+  churns constantly, and `fable` is a sub-window of one provider's plan rather than a measure
+  comparable across providers, so weekly is the one worth a permanent glance.
+  The phone carries the square rather than the sidebar's breakdown for the same reason the rail
+  does, only more so: the breakdown is three columns of numbers competing with the Project name
+  and two run controls inside one 44 px row, and the question a phone is glanced at for is how
+  much of the week is gone. The full reading is one tap away, in the popover the square opens,
+  which is also where a device that cannot hover reaches what the tooltip says.
+  A single square is banded by the number it prints, never by a hotter window it hides — a border
+  contradicting the digits beside it is the same defect as banding an unrounded value.
+- The **expanded sidebar** shows every window the provider reports, so Claude
   can show `5h/weekly[/fable]` while Codex shows only `weekly` when no 5-hour window is reported.
   Missing windows do not render placeholder dashes.
   The provider identity column has a fixed width so its mark stays left-aligned across rows with different window counts.
   Visible percentage signs distinguish usage readings from reset countdowns, while the tooltip names each reported window.
-  Each window is banded on its own, so the chip says *which* one is hot; the chip's border takes the worst of them.
-  The weekly reset countdown stays on a second line beneath: "22% used" answers a different question from "and it clears in 4d12h", and a phone has no hover tooltip to reach the second one.
-  The chip's tooltip, and therefore its accessible name, names every window and says the countdown is the weekly one.
+  Each window is banded on its own, so the breakdown says *which* one is hot.
+  The weekly reset countdown stays on a second line beneath: "22% used" answers a different question from "and it clears in 4d12h".
+  Every chip's tooltip, and therefore its accessible name, names every window the provider reports and says the countdown is the weekly one — including the mobile square, which draws only one of them.
 - A band always describes the digits actually printed, not the value behind them: a rounded `90`
   colours as 90 even when the true reading is 89.6, or the colour would contradict the number
   beside it at exactly the threshold people watch for.
@@ -198,8 +206,12 @@ responsive controls.
 - Mobile Project long-press is not a context-menu gesture.
   A 325 ms hold with no movement beyond 8 px picks up the Project; earlier vertical movement remains native sidebar scrolling and shows no reorder feedback.
   Pickup closes open menus, claims the pointer, gives short haptic feedback, lifts the row, and enables insertion preview plus edge auto-scroll inside its current section.
+  Once picked up it also **cancels `touchmove` for the rest of the drag**, without which the sidebar scrolled under the finger and the scroll cancelled the pointer — the row lifted and then nothing happened, which is what "mobile reordering does not work" looked like (`workspace-layout.md` § pointer drag contract).
   `⋮` opens the Project context menu on tap, while desktop right-click retains the same menu.
   Mobile sessions and every other sidebar row never start a sidebar drag; session long-press remains context-menu-only.
+- Both sidebar lists preview a drop as the **landing slot** — a dashed outline of the dragged row, labelled with its name, over the gap it would fall into — rather than as a line at the pointer.
+  What a drag is asking is "which two rows does this end up between", and an outline the shape of the row answers it where a line marks only where the finger is.
+  Sessions add a second, deliberately different preview for the other thing a drop can mean: landing on a row rather than between two merges the pair into one tabbed pane, and shows a blue row highlight instead of the green slot, because the two targets sit a few pixels apart and must not read as one.
 - **No context menu reorders or reshapes anything, on any platform.** Open-in-split,
   new-terminal-in-split, new-custom-terminal-in-split, stack-with-focused, dissolve-stack, and
   move-tab are absent from the session menu on every source (sidebar row, tab, pane bar / `⋯`),
@@ -534,14 +546,18 @@ responsive controls.
   along — which hid *which* provider was burning and gave no sense of how long until it
   cleared, and a phone has no hover tooltip to recover either. Providers render in the same
   order as every other surface.
-- Nav is a glyph rather than the `:nav` label. No word survives at this width, and pinning a
+- Nav is a mark rather than the `:nav` label. No word survives at this width, and pinning a
   font size to force one would ignore the user's UI-scale setting, which this button is subject
   to through an `!important` rule. It and the side-panel toggle are one mirrored box (36 × 44
   px): whatever is true of the tap target for one drawer is true of the other. 24 px was too
   narrow to hit reliably — the 44 px height alone does not rescue a target that thin, because a
-  thumb's contact patch is wider than it is tall — and the glyph scales with the box, or a
-  wider button only frames a 9 px `≡` in dead space. Both drawers also open by swipe, so
+  thumb's contact patch is wider than it is tall — and the mark scales with the box, or a
+  wider button only frames a 9 px glyph in dead space. Both drawers also open by swipe, so
   neither toggle is its panel's only entry point.
+  The mark itself is the mirror too: `NavPanelIcon` is `SidePanelIcon` reflected, a frame with
+  its *left* column partitioned off. The pair only reads as a pair if their marks are one mark
+  reflected, and the `≡` it replaced named no panel at all — it was a menu glyph on a button that
+  opens a drawer.
 - Every Run trigger that targets the active Project — mobile toolbar, desktop header, collapsed
   rail — toggles: a second click collapses the menu. Sidebar project rows keep the plain open, so
   clicking another Project's `▶` while a menu is up switches to it rather than only closing.

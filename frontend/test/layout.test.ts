@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  activateContainingStack, emptyLayout, groupTerminalsInStack, leaves, moveLeafToSplit,
-  moveLeafToStack, noteResourceId, openTab, paneNeighborIds, paneStacks, parseLayout, parseNoteResourceId,
+  activateContainingStack, emptyLayout, groupTerminalsInStack, insertLeafInStack, leaves, moveLeafToSplit,
+  moveLeafToStack, moveTerminalBeside, noteResourceId, openTab, paneNeighborIds, paneStacks, parseLayout, parseNoteResourceId,
   reconcilePreviews, removeLeaf, reorderStack, resourceLeaf, setSplitRatio,
   openAnchorId,
   spawnAnchorId, splitTerminal, splitView, swapPanes, swapTerminals, terminalIds, terminalLeaf, visibleTerminalIds,
@@ -228,4 +228,54 @@ test('splitView moves an existing view instead of duplicating it',()=>{
   layout=splitView(layout,'a',terminalLeaf('b'),'horizontal')
   assert.deepEqual(terminalIds(layout),['a','b'])
   assert.equal(paneStacks(layout).length,2)
+})
+
+test('a leaf inserts at an exact tab position, with the ends reachable by a clamped index',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('a'))
+  layout=openTab(layout,'a',terminalLeaf('c'))
+  const middle=insertLeafInStack(layout,paneStacks(layout)[0].id,terminalLeaf('b'),1)
+  assert.deepEqual(terminalIds(middle),['a','b','c'])
+  assert.deepEqual(terminalIds(insertLeafInStack(layout,paneStacks(layout)[0].id,terminalLeaf('b'),99)),['a','c','b'])
+  assert.deepEqual(terminalIds(insertLeafInStack(layout,paneStacks(layout)[0].id,terminalLeaf('b'),-4)),['b','a','c'])
+  // A leaf already in the tree is not duplicated by inserting it again.
+  assert.equal(insertLeafInStack(layout,paneStacks(layout)[0].id,terminalLeaf('a'),0),layout)
+})
+
+test('a session moves to the exact slot it was dropped in, not to the end of the pane',()=>{
+  // The sidebar list is the pane tree read depth-first, so an insertion preview drawn between
+  // two rows has to land there. Appending was the whole complaint: every drop, wherever it was
+  // aimed, arrived at the bottom.
+  let layout=openTab(emptyLayout(),null,terminalLeaf('a'))
+  layout=openTab(layout,'a',terminalLeaf('b'))
+  layout=openTab(layout,'a',terminalLeaf('c'))
+  assert.deepEqual(terminalIds(moveTerminalBeside(layout,'c','a','before')),['c','a','b'])
+  assert.deepEqual(terminalIds(moveTerminalBeside(layout,'c','a','after')),['a','c','b'])
+  assert.deepEqual(terminalIds(moveTerminalBeside(layout,'a','c','after')),['b','c','a'])
+  // Reordering inside one pane does not change which of its tabs is showing.
+  assert.equal(paneStacks(moveTerminalBeside(layout,'c','a','before'))[0].active_child_id,'c')
+})
+
+test('a session dropped beside a tab in another pane joins that pane at that index',()=>{
+  let layout=splitTerminal(openTab(emptyLayout(),null,terminalLeaf('left')),'left','right','horizontal')
+  layout=openTab(layout,'right',terminalLeaf('second'))
+  const moved=moveTerminalBeside(layout,'left','second','before')
+  assert.equal(paneStacks(moved).length,1,'emptying a pane collapses the split above it')
+  assert.deepEqual(paneStacks(moved)[0].children.map(child=>child.id),['right','left','second'])
+  assert.equal(paneStacks(moved)[0].active_child_id,'left','a tab that changes pane comes to the front of it')
+})
+
+test('a session with no leaf yet opens at the position it was dropped in',()=>{
+  // A live session the Project layout has no leaf for is listed after the tree. Placing it in
+  // the list is the only thing a position can mean for it, so the drop opens it there.
+  let layout=openTab(emptyLayout(),null,terminalLeaf('a'))
+  layout=openTab(layout,'a',terminalLeaf('b'))
+  assert.deepEqual(terminalIds(moveTerminalBeside(layout,'unpaned','b','before')),['a','unpaned','b'])
+})
+
+test('a move with nothing to move to leaves the layout identical',()=>{
+  let layout=openTab(emptyLayout(),null,terminalLeaf('a'))
+  layout=openTab(layout,'a',terminalLeaf('b'))
+  assert.equal(moveTerminalBeside(layout,'a','a','before'),layout)
+  assert.equal(moveTerminalBeside(layout,'a','gone','before'),layout)
+  assert.equal(moveTerminalBeside(emptyLayout(),'a','b','after').root,null)
 })

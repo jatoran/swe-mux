@@ -161,12 +161,33 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert "moveLeafToSplit" in app
     assert "targetStackId" in app
     assert "class={`project-group" in app
-    assert "dragSessionTargetRef.current={stackId,projectId:targetProjectId}" in app
     assert ".project-group.project-drop-target" in css
     assert ".drop-before:after" in css
     assert ".drop-after:after" in css
     assert ".drop-zone-left" in css
     assert ".drop-zone-tabs" in css
+
+    # Both sidebar lists preview the landing position as a labelled outline of the dragged
+    # row over the gap it would take, not as a line at the pointer.
+    assert "dropSlotForRow(targetSection,target.side,rowHeight,project.name)" in app
+    assert "dropSlotForRow(element,target.side,rowHeight,label)" in app
+    assert ".mux-drop-slot{" in css
+
+    # A session drop resolves to a slot between rows or to grouping with one, and lands
+    # exactly there rather than being appended to the target's pane.
+    assert "listDropTargetForPoint(" in app
+    assert "moveTerminalBeside(current,session.id,target.id,target.side)" in app
+    assert "groupTerminalsInStack(current,target.id,session.id)" in app
+
+    # The gesture never leaves the Project it started in: only that Project's own session
+    # list is consulted, and a release outside it commits nothing.
+    assert "querySelector<HTMLElement>(':scope > .session-list')" in app
+    assert "DROP_LIST_MARGIN" in app
+    assert 'data-pointer-drop-indicator="invalid"' not in css
+
+    # Touch drags cancel touchmove themselves; without it a scrolling sidebar cancels the
+    # pointer and a picked-up row goes nowhere.
+    assert "window.addEventListener('touchmove',blockTouchScroll,{passive:false})" in app
 
 
 def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
@@ -340,16 +361,18 @@ def test_collapsed_sidebar_rail_keeps_sidebar_controls_reachable() -> None:
     # Popover direction is independent of the condensed trigger so the rail, which
     # sits at the bottom of the window, still opens upward.
     assert "const opensDown=placement?placement==='down':compact" in accounts
-    # One chip per provider, each identified by its own mark. Both surfaces read the same
-    # windows map; the rail narrows it to weekly because it has room for one number, while
-    # the mobile toolbar shows every window the provider reports.
+    # One chip per provider, each identified by its own mark, narrowed to the weekly window
+    # because a square has room for one number. The expanded sidebar keeps the full grid.
     assert "providerQuotaWindows" in accounts
-    assert "const weekly=windows?.weekly||null" in accounts
+    assert "const weekly=quotas[provider]?.weekly||null" in accounts
     assert "quotaGridSegments(quotas[provider])" in accounts
     # One chip builder shared by the collapsed rail and the mobile toolbar, so the
-    # two surfaces cannot drift apart.
-    assert "const quotaChip=(provider:ProviderName,form:'rail'|'toolbar')=>" in accounts
-    assert "quotaChip(provider,'rail')" in accounts
+    # two surfaces cannot drift apart. Only the tooltip differs: the toolbar names every
+    # window there, since a phone has no hover and draws only one of them.
+    assert "const quotaChip=(provider:ProviderName,title:string)=>" in accounts
+    assert "quotaChip(provider,weeklyTitle(provider))" in accounts
+    assert "quotaChip(provider,toolbarTitle(provider))" in accounts
+    assert "toolbar-quota" not in accounts and "toolbar-quota" not in css
     assert "providerGlyph(provider)" in accounts
     assert ".rail-quota .provider-glyph" in css
     # RAM, not CPU: a fluctuating percentage is not worth a permanent glance.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accountAbbreviation, accountPopoverStyle, chipUsageBand, formatResetRemaining, providerQuotaWindows, quotaGridSegments, quotaSummary, shownUsageBand, usageBand } from '../src/providerAccountDisplay.ts'
+import { accountAbbreviation, accountPopoverStyle, formatResetRemaining, providerQuotaWindows, quotaGridSegments, quotaSummary, shownUsageBand, usageBand } from '../src/providerAccountDisplay.ts'
 
 test('quota windows come from the selected account of each provider, never another slot',()=>{
   const accounts=[
@@ -47,11 +47,11 @@ test('the quota grid reads reset/percentage columns and omits windows the provid
   assert.deepEqual(quotaGridSegments(quotas.claude,now).map(segment=>segment.band),['critical','warn','ok'])
 })
 
-test('the toolbar chip omits every window when the account poll errored',()=>{
+test('the expanded chip omits every window when the account poll errored',()=>{
   const accounts=[{provider:'claude',id:'a',quota:{status:'error',session:{used_percent:12},weekly:{used_percent:99}}}]
   const quotas=providerQuotaWindows(accounts,{claude:'a'})
   assert.deepEqual(quotaGridSegments(quotas.claude),[])
-  assert.equal(chipUsageBand(quotas.claude),'unknown')
+  assert.equal(shownUsageBand(quotas.claude?.weekly?.used_percent),'unknown')
   // An unselected or missing provider has no entry, and the chip degrades to the same reading.
   assert.deepEqual(quotaGridSegments(quotas.codex),[])
 })
@@ -62,12 +62,12 @@ test('account abbreviations are trimmed, capped at four characters, and visible 
   assert.equal(accountAbbreviation(''),'—')
 })
 
-test('a chip bands on its hottest window, not on weekly alone',()=>{
+test('a condensed square bands on the weekly window it prints, not on a hotter one it hides',()=>{
   const accounts=[{provider:'claude',id:'a',quota:{status:'ready',session:{used_percent:93},weekly:{used_percent:20}}}]
   const quotas=providerQuotaWindows(accounts,{claude:'a'})
-  assert.equal(chipUsageBand(quotas.claude),'critical')
-  // Fable counts too: it is the window a Claude plan runs out of first.
-  assert.equal(chipUsageBand({session:{used_percent:1},weekly:{used_percent:2},fable:{used_percent:80}}),'warn')
+  assert.equal(shownUsageBand(quotas.claude?.weekly?.used_percent),'ok')
+  // Every window still bands individually where all of them are drawn.
+  assert.deepEqual(quotaGridSegments(quotas.claude).map(segment=>segment.band),['critical','ok'])
 })
 
 test('a band follows the digits the chip prints, not the value behind them',()=>{
