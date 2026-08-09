@@ -705,13 +705,13 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
     <header>
       <span
         class={`dictation-phase ${conversation.phase}`}
-        title={conversation.detector===null
+        title={`${conversation.detail}${conversation.detail?' · ':''}${conversation.detector===null
           ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
           : conversation.detector==='silero'
             ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
-            : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}
+            : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}`}
       >talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>
-      <span class="dictation-detail" role="status" aria-live="polite">{conversation.detail}</span>
+      <span class="sr-only" role="status" aria-live="polite">{conversation.detail}</span>
       {conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">
         <button class="dictation-send" title="Commit the draft to the named target (Ctrl+Enter)" disabled={!conversation.draft.trim()||!conversation.targetAvailable} onClick={send}>send</button>

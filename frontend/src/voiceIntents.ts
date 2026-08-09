@@ -5,6 +5,8 @@ export type VoiceIntentCandidate = {
   phrase: string
   text: string
   confidence: number
+  /** Fixed words around a slot. More specific templates beat shorter prefixes. */
+  specificity: number
 }
 
 export type VoiceIntentResolution = {
@@ -36,11 +38,11 @@ export function extractWakeIntent(value: string, wakeWords: string[]): string | 
   return null
 }
 
-function phraseMatch(spoken: string, phrase: string): { text: string; confidence: number } | null {
+function phraseMatch(spoken: string, phrase: string): { text: string; confidence: number; specificity: number } | null {
   const marker = '{text}'
   const normalized = normalizeSpokenText(phrase)
   const markerAt = normalized.indexOf(marker)
-  if (markerAt < 0) return spoken === normalized ? { text: '', confidence: 1 } : null
+  if (markerAt < 0) return spoken === normalized ? { text: '', confidence: 1, specificity: normalized.split(/\s+/).length } : null
   const before = normalized.slice(0, markerAt).trim()
   const after = normalized.slice(markerAt + marker.length).trim()
   if (before && spoken !== before && !spoken.startsWith(`${before} `)) return null
@@ -50,7 +52,8 @@ function phraseMatch(spoken: string, phrase: string): { text: string; confidence
   if (!text) return null
   // A catch-all `{text}` query is the final deterministic grammar fallback.
   // Literal slot templates such as `new Claude in Alpha {text}` must outrank it.
-  return { text, confidence: before || after ? .98 : .9 }
+  const specificity = `${before} ${after}`.trim().split(/\s+/).filter(Boolean).length
+  return { text, confidence: before || after ? .98 : .9, specificity }
 }
 
 /** Resolve only aliases declared by the command registry. No action exists here. */
@@ -67,12 +70,16 @@ export function resolveVoiceIntent(commands: Command[], spoken: string): VoiceIn
   const bestByCommand = new Map<string, VoiceIntentCandidate>()
   for (const candidate of candidates) {
     const current = bestByCommand.get(candidate.command.id)
-    if (!current || candidate.confidence > current.confidence) bestByCommand.set(candidate.command.id, candidate)
+    if (!current || candidate.confidence > current.confidence
+      || (candidate.confidence === current.confidence && candidate.specificity > current.specificity)) {
+      bestByCommand.set(candidate.command.id, candidate)
+    }
   }
   const ranked = [...bestByCommand.values()].sort((left, right) =>
-    right.confidence - left.confidence || left.command.label.localeCompare(right.command.label))
+    right.confidence - left.confidence || right.specificity - left.specificity || left.command.label.localeCompare(right.command.label))
   const confidence = ranked[0]?.confidence || 0
-  const tied = ranked.filter(candidate => candidate.confidence >= confidence - .01)
+  const specificity = ranked[0]?.specificity || 0
+  const tied = ranked.filter(candidate => candidate.confidence >= confidence - .01 && candidate.specificity === specificity)
   return { match: tied.length === 1 ? tied[0] : null, candidates: tied, confidence }
 }
 

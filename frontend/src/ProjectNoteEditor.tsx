@@ -9,7 +9,7 @@ import type {
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
-import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
+import { claimEditorInsertTarget, forgetEditorFocus, noteEditorFocus } from './insertTarget'
 import type { TextSurfaceIdentity } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { hasSelection, selectionText } from './noteSelection'
@@ -83,6 +83,9 @@ type Props = {
   elementRef?: { current: ContinuityEditorElement | null }
   /** App-level identity used by dictation and other focus-following input surfaces. */
   textSurface?: TextSurfaceIdentity
+  /** Claim routing without raising the mobile keyboard. Consumed once by the caller. */
+  claimInsertTargetToken?: number
+  onInsertTargetClaimed?: (token: number) => void
 }
 
 /**
@@ -206,6 +209,8 @@ export function ContinuityMarkdownEditor({
   railActions,
   hostRef,
   textSurface,
+  claimInsertTargetToken,
+  onInsertTargetClaimed,
   onCommit,
 }: {
   initialText: string
@@ -220,6 +225,8 @@ export function ContinuityMarkdownEditor({
    *  so it survives that). Cleared on detach with the internal ref. */
   hostRef?: { current: ContinuityEditorElement | null }
   textSurface?: TextSurfaceIdentity
+  claimInsertTargetToken?: number
+  onInsertTargetClaimed?: (token: number) => void
   onCommit: (text: string) => void
 }) {
   ensureNoteRailArrangement()
@@ -260,6 +267,10 @@ export function ContinuityMarkdownEditor({
     const element = elementRef.current
     if (element?.matches(':focus-within')) noteEditorFocus(element, textSurface)
   }, [textSurface?.id, textSurface?.kind, textSurface?.label])
+  useEffect(() => {
+    const element = elementRef.current
+    claimEditorInsertTarget(element,textSurface,claimInsertTargetToken,onInsertTargetClaimed)
+  },[claimInsertTargetToken,textSurface?.id,textSurface?.kind,textSurface?.label,onInsertTargetClaimed])
   return (
     <ContinuityEditor
       ref={attachRef}
@@ -343,6 +354,8 @@ export function ProjectNoteEditor({
   railActions,
   elementRef,
   textSurface,
+  claimInsertTargetToken,
+  onInsertTargetClaimed,
 }: Props) {
   const key = noteQueueKey(projectId, resourceId)
   return (
@@ -353,6 +366,8 @@ export function ProjectNoteEditor({
       railActions={railActions}
       hostRef={elementRef}
       textSurface={textSurface}
+      claimInsertTargetToken={claimInsertTargetToken}
+      onInsertTargetClaimed={onInsertTargetClaimed}
       onCommit={text => noteSaveQueue.submit(key, text)}
     />
   )

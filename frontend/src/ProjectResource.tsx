@@ -63,6 +63,9 @@ type Props={
   /** Opens the send-to-agent dialog. Only the Continuity-backed views (notes and markdown
    *  files) offer it: they are the surfaces that own a real selection. */
   onSendToAgent?:(request:SendToAgentRequest)=>void
+  /** One-shot request from spoken Notes navigation to claim this editor for insertion. */
+  claimInsertTargetToken?:number
+  onInsertTargetClaimed?:(token:number)=>void
 }
 
 const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf('/')):''
@@ -83,7 +86,7 @@ function scheduleTreeSave(projectId:string,paths:string[]){
   },400))
 }
 
-export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent}:Props){
+export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onSendToAgent,claimInsertTargetToken,onInsertTargetClaimed}:Props){
   const isGlobalNote=resource.kind==='global-note'
   const isNote=resource.kind==='note'||isGlobalNote
   const isFile=resource.kind==='file'||resource.kind==='worktree-file'
@@ -1287,6 +1290,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
         railActions={railActions}
         elementRef={editorElement}
         textSurface={{id:resourceKey,kind:isGlobalNote?'scratchpad':isNote?'note':'file',label:isGlobalNote?'Scratchpad':isNote?`${noteTitle} · ${project.name}`:`${resource.id} · ${project.name}`}}
+        claimInsertTargetToken={claimInsertTargetToken}
+        onInsertTargetClaimed={onInsertTargetClaimed}
       />:<textarea value={text} onInput={event=>setText(event.currentTarget.value)} onKeyDown={handleEditorKey} spellcheck={false}/> )
       :isDelimitedFile&&readableFile&&fileViewMode==='raw'?<textarea readOnly value={text} spellcheck={false}/>
       :<div class="resource-unavailable">{status==='error'?<><span>{isNote?'This note could not be loaded.':'This file could not be loaded.'}</span> <button class="resource-retry" onClick={()=>retryNowRef.current()}>Retry now</button></>

@@ -31,6 +31,8 @@ The file tree and notes collection are utility-drawer tabs.
 - A note editor header keeps the note title, owning Project, and current save state on one row, separated by centered dots.
 - A focused note, Scratchpad, or editable Markdown file publishes a named Conversation text sink.
   Voice Send inserts the editable draft through Continuity's public caret-aware `insertText` operation, so ordinary note autosave and file-draft rules remain the only write path.
+  Spoken `open Notes` republishes the selected drawer note as that sink without DOM focus, so the next Voice Send or Append lands there without opening the mobile keyboard.
+  Any later manual surface focus overrides the spoken navigation claim.
 - A note already open in a pane is activated where it is.
 - Opening a note never creates or rearranges a split.
 - Moving a note is an explicit tab move or pane-edge split action.

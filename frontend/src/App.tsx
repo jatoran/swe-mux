@@ -110,6 +110,7 @@ import {
   voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
 } from './voiceQueries'
 import { buildVoiceNavigationIndex, projectAtVoiceNumber, sessionAtVoiceNumber } from './voiceNavigation'
+import { sessionLaunchVoicePhrases } from './voiceLaunch'
 import {
   clearSpokenListContext, loadSpokenListContext, saveSpokenListContext,
   SPOKEN_LIST_TTL_MS, type SpokenListContext,
@@ -417,6 +418,14 @@ export function App() {
   // The shared layout is never mutated merely by selecting a drawer tab. See `drawerNotes.ts`
   // for why one editor per note per browser is a correctness rule and not a preference.
   const [drawerNotes,setDrawerNotes]=useState<DrawerNoteMap>(()=>parseDrawerNotes(localStorage.getItem(DRAWER_NOTE_KEY)))
+  const [drawerNoteClaimRequest,setDrawerNoteClaimRequest]=useState<{token:number;projectId:string;resourceId:string}|null>(null)
+  const drawerNoteClaimSequence=useRef(0)
+  useEffect(()=>{
+    if(!drawerNoteClaimRequest)return
+    const token=drawerNoteClaimRequest.token
+    const timeout=window.setTimeout(()=>setDrawerNoteClaimRequest(current=>current?.token===token?null:current),5000)
+    return()=>window.clearTimeout(timeout)
+  },[drawerNoteClaimRequest?.token])
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -3401,7 +3410,20 @@ export function App() {
     })),
     ...DRAWER_TABS.map((tab): Command => ({
       id:`drawer.show:${tab.id}`,label:`Open ${tab.label}`,category:'view',available:true,
-      run:()=>showDrawerTab(tab.id),voice:{phrases:[`open ${tab.label}`,`show ${tab.label}`,`go to ${tab.label}`]},
+      run:()=>openDrawerTab(tab.id),voice:{
+        phrases:[`open ${tab.label}`,`show ${tab.label}`,`go to ${tab.label}`],
+        execute:()=>{
+          openDrawerTab(tab.id)
+          if(tab.id!=='notes')return{detail:`Opened ${tab.label}. Still listening.`}
+          if(!drawerNoteId){
+            setDrawerNoteClaimRequest(null)
+            return{detail:'Opened Notes. Select a note before using Send or Append.'}
+          }
+          const token=++drawerNoteClaimSequence.current
+          setDrawerNoteClaimRequest({token,projectId,resourceId:drawerNoteId})
+          return{detail:'Opened Notes and targeted the current note. Still listening.'}
+        },
+      },
     })),
     // Tab order is persistent state a drag can scramble, so it needs a way back that is not
     // "drag five tabs into place from memory".
@@ -3551,8 +3573,19 @@ export function App() {
       id:`session.spawn:${project.id}:${backend}`,label:`New ${harnessDisplayName(backend)} in ${project.name}`,category:'session',available:true,
       run:()=>void spawnTerminal(project.id,false,undefined,undefined,'after',backend),
       voice:{
-        phrases:[`new ${harnessDisplayName(backend)} in ${project.name}`,`new ${harnessDisplayName(backend)} in ${project.name} {text}`,`new ${backend} in ${project.name}`,`new ${backend} in ${project.name} {text}`,...(backend==='shell'?[`new terminal in ${project.name}`,`new terminal in ${project.name} {text}`]:[])],
-        execute:async text=>{await spawnTerminal(project.id,false,undefined,undefined,'after',backend,{seedText:text||undefined});return{detail:`Started ${harnessDisplayName(backend)} in ${project.name}${text?' with the spoken seed':''}. Still listening.`}},
+        phrases:sessionLaunchVoicePhrases({
+          backend,
+          displayName:harnessDisplayName(backend),
+          projectName:project.name,
+          projectNumber:voiceProjectNumber(project),
+          currentProject:project.id===projectId,
+        }),
+        execute:async text=>{
+          const started=await spawnTerminal(project.id,false,undefined,undefined,'after',backend,{seedText:text||undefined})
+          return{detail:started
+            ?`Started ${harnessDisplayName(backend)} in ${project.name}${text?' with the spoken seed':''}. Still listening.`
+            :'The session could not be started. Still listening.'}
+        },
       },
     }))),
   ]
@@ -4430,6 +4463,8 @@ export function App() {
         }}
         onOpenScratchpad={openScratchpad}
         drawerNoteId={drawerNoteId}
+        noteTargetClaimToken={drawerNoteClaimRequest?.projectId===projectId&&drawerNoteClaimRequest.resourceId===drawerNoteId?drawerNoteClaimRequest.token:undefined}
+        onNoteTargetClaimed={token=>setDrawerNoteClaimRequest(current=>current?.token===token?null:current)}
         onPopDrawerNoteToTab={resourceId=>popDrawerNoteToTab(resourceId,projectId)}
         tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}

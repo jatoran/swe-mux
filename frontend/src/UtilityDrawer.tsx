@@ -98,6 +98,9 @@ type Props = {
    *  one live editor per browser (see `drawerNotes.ts`), so this is also what tells the
    *  matching pane leaf to stand down. */
   drawerNoteId: string | null
+  /** One-shot voice-navigation request to make the selected note the insertion target. */
+  noteTargetClaimToken?: number
+  onNoteTargetClaimed: (token: number) => void
   /** Give it back and put it in a pane, focused. */
   onPopDrawerNoteToTab: (resourceId: string) => void
   onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
@@ -246,6 +249,8 @@ export function UtilityDrawer(props: Props) {
             resource={drawerNote.identity}
             onOpenFile={path => { props.onOpenFile(path); onDone() }}
             onSendToAgent={props.onSendToAgent}
+            claimInsertTargetToken={props.noteTargetClaimToken}
+            onInsertTargetClaimed={props.onNoteTargetClaimed}
           />
           : null}
       />

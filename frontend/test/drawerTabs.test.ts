@@ -78,6 +78,8 @@ test('App restores desktop state per Project without persisting mobile visibilit
   assert.ok(app.includes("openDrawerTab('files',project.id)"), 'cross-Project Files actions must name their target')
   assert.ok(app.includes("openDrawerTab('notes',targetProject)"), 'cross-Project Notes actions must name their target')
   assert.ok(app.includes("openDrawerTab('queue',session?.project_id||projectId)"), 'cross-Project Queue actions must name their target')
+  assert.ok(app.includes('setDrawerNoteClaimRequest({token,projectId,resourceId:drawerNoteId})'), 'spoken Notes navigation must claim the selected note')
+  assert.ok(app.includes('noteTargetClaimToken={drawerNoteClaimRequest?.projectId===projectId'), 'the claim must be scoped to the current Project and selected note')
 })
 
 test('each drawer body shows a compact heading with the rail tooltip description', () => {

@@ -238,8 +238,20 @@ def test_streaming_segments_preserve_text_and_bound_chunks() -> None:
     chunks = streaming_segments(text, max_chars=120)
     assert len(chunks) > 2
     assert all(0 < len(chunk) <= 120 for chunk in chunks)
-    assert len(chunks[0]) <= 120
+    assert chunks[0] == "First result is ready."
     assert " ".join(chunks) == " ".join(text.split())
+
+
+def test_streaming_segments_keep_a_comms_sized_reply_coherent() -> None:
+    text = (
+        "It's an evidence-based hypertrophy training system: a researched exercise "
+        "database plus physiological models for fatigue and volume, feeding an optimizer "
+        "that searches over a whole seven-day cycle of three full-body sessions rather "
+        "than picking exercises one at a time. It outputs a web viewer and reports, and "
+        "it also has a training logger you can run locally."
+    )
+    assert len(text) <= 420
+    assert streaming_segments(text) == [text]
 
 
 def test_last_reply_text_collects_only_assistant_text() -> None:
@@ -494,7 +506,8 @@ async def test_auto_generation_emits_short_audio_segments_in_order(tmp_path: Pat
     try:
         first = await service.generate("s1", trigger="auto")
         assert first["segment_count"] >= 2
-        assert len(first["text"]) <= 140
+        assert len(first["text"]) <= 420
+        assert first["text"].endswith(".")
         assert len(spoken) == 1
         await asyncio.gather(*tuple(service._segment_tasks))
         ready = [event for event in emitted if event.type == "voice_clip_ready"]

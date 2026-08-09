@@ -59,6 +59,7 @@ The underlying tablist remains the native horizontal touch and trackpad scroller
 Notes is the only inactive drawer body kept mounted.
 Its singleton host is derived from the unique Notes tab's owner stack, remains hidden while another tab is selected there, and preserves cursor, undo, save-queue ownership, and editor insert targeting.
 Focused Continuity editors publish their named resource identity through `insertTarget.ts`; Queue publishes its composer the same way, while terminals publish only live agent sessions.
+Spoken Notes navigation issues a bounded one-shot claim for the selected note without DOM focus; consuming it clears the request, and later ordinary focus publication remains authoritative.
 The app-level Conversation controller follows the latest published target unless its exact sink is pinned, and a detached pinned sink becomes unavailable instead of being silently retargeted.
 The per-Project selected note survives drawer close in `mux.drawer.note.v1`.
 Editor ownership is derived from that selection plus drawer visibility, so closing the drawer restores any matching workspace editor without erasing the Notes sub-tab.

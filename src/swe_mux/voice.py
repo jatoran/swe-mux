@@ -444,23 +444,26 @@ def _bounded_speech_chunks(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def streaming_segments(
-    text: str, max_chars: int = 420, first_max_chars: int = 140
-) -> list[str]:
+def streaming_segments(text: str, max_chars: int = 420) -> list[str]:
     """Split speakable text into short independently playable clips.
 
-    Auto read-aloud emits each clip as soon as its synthesis finishes. Sentence
-    boundaries keep the audio natural; long sentences fall back to word chunks.
+    Auto read-aloud emits each clip as soon as its synthesis finishes. A reply
+    that already fits in one ordinary clip stays whole. Longer replies lead with
+    one complete sentence whenever possible, because a low-latency cut in the
+    middle of a thought sounds like a second, unrelated response when playback
+    advances to the continuation. Only sentences longer than the clip bound fall
+    back to word chunks.
     """
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
         return []
-    first_chunks = _bounded_speech_chunks(cleaned, max(40, min(max_chars, first_max_chars)))
-    if not first_chunks:
-        return []
-    first = first_chunks[0]
+    bound = max(80, max_chars)
+    if len(cleaned) <= bound:
+        return [cleaned]
+    first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0]
+    first = _bounded_speech_chunks(first_sentence, bound)[0]
     remainder = cleaned[len(first):].strip()
-    return [first, *_bounded_speech_chunks(remainder, max(80, max_chars))]
+    return [first, *_bounded_speech_chunks(remainder, bound)]
 
 
 class VoiceStore:

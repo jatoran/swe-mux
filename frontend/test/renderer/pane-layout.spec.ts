@@ -96,6 +96,14 @@ test('Talk history collapses from its own header without moving the terminal', a
   expect(after.host).toEqual(before.host)
 })
 
+test('the Talk header keeps transient detail accessible without repeating history text', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await page.goto('/pane-harness.html?overlay=1&mobile=1')
+  await expect(page.locator('.dictation-detail')).toHaveCount(0)
+  await expect(page.locator('.dictation-panel>header .sr-only')).toHaveText('Listening. Say “mux, send” to submit.')
+  await expect(page.locator('.dictation-phase')).toHaveAttribute('title',/Listening\. Say/)
+})
+
 test('the Talk commands button opens the shared catalog above the pane', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 })
   await page.goto('/pane-harness.html?overlay=1&mobile=1')

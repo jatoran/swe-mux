@@ -146,7 +146,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `summary` (OpenRouter cheap model, budgeted under `builtin:voice-summary`) or `verbatim`
   (`speechify`, no LLM) → edge-tts MP3 / Windows SAPI WAV clips in `<data_dir>/voice/` +
   `voice_clips` SQLite.
-  Automatic, manual, and application speech returns a short first clip before tracked background tasks synthesize the remaining sentence-sized clips.
+  Automatic, manual, and application speech keeps ordinary replies in one coherent clip and returns a complete opening sentence for longer streams before tracked background tasks synthesize the remaining sentence-sized clips.
   Browser playback uses one singleton audio element; confirmed speech hard-stops and suppresses the whole current stream.
   Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →

@@ -8,7 +8,7 @@ import {
   type VoiceSessionCandidate,
 } from '../src/conversationTarget.ts'
 import type { EditorHandle } from '../src/insertTarget.ts'
-import { forgetEditorFocus, noteEditorFocus, subscribeInsertTarget } from '../src/insertTarget.ts'
+import { claimEditorInsertTarget, forgetEditorFocus, noteEditorFocus, noteTerminalFocus, subscribeInsertTarget } from '../src/insertTarget.ts'
 
 const live = new Set(['agent-a', 'agent-b'])
 const sessions: VoiceSessionCandidate[] = ['agent-a', 'agent-b'].map(id => ({
@@ -86,4 +86,18 @@ test('a focused text surface republishes a resolved label change', () => {
   forgetEditorFocus(editor)
   unsubscribe()
   assert.deepEqual(labels, ['Note · loading', 'Decision log · Project'])
+})
+
+test('spoken Notes navigation claims insertion without DOM focus and later focus overrides it', () => {
+  const editor: EditorHandle = { insertText: () => {}, isConnected: true }
+  const consumed:number[]=[]
+  let currentTarget: Parameters<typeof resolveConversationTarget>[0] = null
+  const unsubscribe=subscribeInsertTarget(target=>{currentTarget=target})
+  assert.equal(claimEditorInsertTarget(editor,{id:'note:one',kind:'note',label:'Decision log'},7,token=>consumed.push(token)),true)
+  assert.deepEqual(consumed,[7])
+  assert.equal(resolveConversationTarget(currentTarget,sessions,'agent-a')?.id,'note:one')
+  noteTerminalFocus('agent-b')
+  assert.equal(resolveConversationTarget(currentTarget,sessions,'agent-a')?.id,'agent-b')
+  forgetEditorFocus(editor)
+  unsubscribe()
 })

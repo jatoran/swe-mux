@@ -31,7 +31,10 @@ affect the PTY, session state, transcripts, history, or projects.
   across turn boundaries so a synthetic provider acknowledgement never becomes the "latest
   reply".
   Every automatic, manual, and trusted application response uses the same segmented stream.
-  `streaming_segments` makes the first independently playable clip at most 140 characters and later clips at most 420 characters, preferring sentence boundaries and falling back to word boundaries.
+  `streaming_segments` keeps any ordinary reply of at most 420 characters in one coherent clip.
+  Longer replies emit one complete opening sentence first whenever it fits the 420-character clip bound, then continue in clips of at most 420 characters.
+  Only a single sentence longer than that bound falls back to a word boundary.
+  This keeps streaming from cutting a normal Voice Comms answer in the middle of a thought, which otherwise makes the continuation sound like a second generated answer.
   The first clip is emitted and returned before tracked background work synthesizes the remaining clips, so playback begins while the rest is still encoding.
   A per-session lock drops overlapping `auto` preparation requests, and two engine slots bound synthesis concurrency (`_engine_semaphore`).
 - Content is `summary` (spoken-word summary via OpenRouter, strict `{speech}` JSON schema,
@@ -287,8 +290,10 @@ executed action — so that number is measured rather than estimated.
   Schema 20 adds only the three new action definitions to an older saved command list and preserves every existing custom phrase or disabled action.
 - **Workspace commands use the existing command registry.**
   `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
+  When two slot templates match, the one with more fixed words wins, so `new Codex in Project 2 {text}` cannot be swallowed by the selected-Project `new Codex {text}` shorthand.
   The registry's low-priority catch-all delegates only to the closed grammar in `voiceQueries.ts`; literal command aliases and literal slot templates always outrank it.
   `App.tsx` generates focus commands for every live session and Project, drawer commands from `DRAWER_TABS`, and direct spawn commands for each Project/backend pair.
+  Session launch accepts the Project name, the stable visible `Project N` address, or no Project qualifier for the selected Project, and the ordinary spawn path focuses the optimistic new tab immediately.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
 - **Settings exposes the complete current command surface.**
@@ -345,6 +350,8 @@ executed action — so that number is measured rather than estimated.
   The Talk toggle or `Mux, voice comms on` pins the focused Agent, sets that session to automatic verbatim read-aloud, enables device autoplay, and remembers the prior pin and read-aloud state for restoration.
   The first appended voice message for each agent run carries the short-response protocol immediately before a `[voice]`-prefixed message; later voice messages in that run carry only the prefix.
   The protocol requests one or two natural spoken sentences, the answer first, no markdown/list/code/path detail unless requested, and at most one clarification question.
+  Comms playback remains verbatim and never invokes the summary model.
+  A normal one-to-two-sentence Comms reply stays in one audio clip; only replies beyond the ordinary 420-character clip bound enter the segmented continuation path.
   `Mux, voice comms off` restores the prior session mode, content mode, device autoplay state, and target pin.
 - Playback carries an explicit `agent` or `system` origin into capture diagnostics.
   Before barge-in confirmation, the raised RMS and Silero thresholds reject likely speaker echo.
@@ -384,6 +391,7 @@ into mobile-voice setup instead.
   Lists and help retain their line-broken display text while TTS receives the separately paced speech form.
   Last-reply requests retain the generated reply text, not only a playback status message.
   The panel opens with history visible, follows the newest entry, and provides an explicit clear action.
+  The header shows only the `talk:<phase>` badge and last latency; transient detail remains available to assistive technology and in the phase tooltip instead of repeating history text.
 - **The panel names its sink.** The `to:` row carries the Agent or text-surface label, its pin control, and an unavailable state.
   Send is disabled when the named target disappeared.
   Unpin resumes focus-following without changing the draft.
@@ -398,6 +406,8 @@ into mobile-voice setup instead.
   arrival with a brief border flash instead of animating a stream it does not receive.
 - The player strip and Talk panel each expose a `? Commands` action backed by the same fixed help catalog shown in Settings, plus a gear into Settings → Voice.
   The command catalog is a viewport modal and is not a utility-drawer tab.
+  Spoken drawer aliases always open the named tab rather than toggling it closed.
+  Spoken `open Notes` also claims the selected drawer note as the current text sink without raising the mobile keyboard; a later pointer or keyboard focus change overrides that claim normally.
   Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.

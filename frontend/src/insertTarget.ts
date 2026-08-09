@@ -88,6 +88,23 @@ export function noteEditorFocus(
   publish({ kind: 'editor', editor, surface, at })
 }
 
+/**
+ * Claim an already-open editor for a one-shot navigation request without DOM
+ * focus. Voice navigation must retarget Send/Append without opening the mobile
+ * keyboard; a later pointer or keyboard focus event can override it normally.
+ */
+export function claimEditorInsertTarget(
+  editor: EditorHandle | null,
+  surface: TextSurfaceIdentity | undefined,
+  token: number | undefined,
+  consumed?: (token: number) => void,
+): boolean {
+  if(token===undefined||!editor||editor.isConnected===false||!surface)return false
+  noteEditorFocus(editor,surface)
+  consumed?.(token)
+  return true
+}
+
 /** Forget an editor as it unmounts, so a stale handle cannot win the routing. */
 export function forgetEditorFocus(editor: EditorHandle): void {
   if (current?.kind === 'editor' && current.editor === editor) publish(null)

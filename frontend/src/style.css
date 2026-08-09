@@ -1776,14 +1776,10 @@ body {
 .dictation-phase.starting,.dictation-phase.warming,.dictation-phase.transcribing,.dictation-phase.heard,.dictation-phase.sending{color:var(--blue,#7aa2f7)}
 .dictation-phase.standby{color:var(--amber)}
 .dictation-phase.error{color:var(--error,#f07178)}
-/* The status line is the elastic member and the actions are fixed, so a long diagnostic
-   ellipsizes instead of pushing send/stop off the row. Its full text is the panel itself. */
-.dictation-detail{min-width:0;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;line-height:1.35}
-.dictation-panel.error .dictation-detail{color:var(--error,#f07178)}
 /* End of speech to action for the last utterance. Present because Phase 1 of the
    voice roadmap is judged on this number, and a breakdown nobody can see while
    speaking is a breakdown nobody tunes against. */
-.dictation-latency{flex:0 0 auto;color:var(--muted);opacity:.7;font-variant-numeric:tabular-nums;cursor:help}
+.dictation-latency{grid-column:3;flex:0 0 auto;color:var(--muted);opacity:.7;font-variant-numeric:tabular-nums;cursor:help}
 .dictation-actions{grid-column:1/-1;min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:3px;overflow-x:auto;scrollbar-width:none}
 .dictation-actions::-webkit-scrollbar{display:none}
 .dictation-actions button{height:calc(20px*var(--ui-scale));min-width:22px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}

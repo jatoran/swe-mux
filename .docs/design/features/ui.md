@@ -803,6 +803,7 @@ responsive controls.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
   Active Talk renders in the focused terminal pane's `.voice-overlay`, immediately after the read-aloud strip, while its capture, draft, target, and history remain app-owned (`features/voice.md`).
   The Talk history header is its disclosure control, and its expanded or collapsed state persists device-locally across focus-driven view remounts.
+  The compact panel header contains phase and last latency only; response and transcript prose belongs in Talk history, while transient phase detail remains screen-reader text and a badge tooltip.
   The player strip and Talk actions both open the shared voice-command catalog as a root viewport modal, so pane overflow cannot clip it and terminal geometry does not change.
   Voice Comms remains a Talk-panel toggle and spoken command, not a utility-drawer tab.
   A fixed top `.conversation-layer` is only the fallback when no visible terminal can host the view.
@@ -1150,6 +1151,8 @@ responsive controls.
   It survives drawer close, utility-tab and session changes, Project switches, and reloads.
   Closing the drawer ends editor ownership but does not erase the selection, so a placeholder never points at a hidden panel and reopening resumes the same tab.
   Moving the selected note to a pane also closes the drawer and retains the selection.
+  Spoken `open Notes` opens rather than toggles the drawer and makes this selected note the insertion target without moving DOM focus or raising a soft keyboard.
+  A later terminal, note, file, Scratchpad, or Queue-composer focus report replaces that one-shot routing claim normally.
 - **The Notes body is the one drawer body kept mounted across tab switches**, hidden rather than
   unmounted. Both reasons are load-bearing: an editor unmounted on every switch loses cursor and
   undo history, and `insertTarget` refuses a detached editor handle, so switching to Clipboard to

@@ -843,7 +843,8 @@ The optional client-generated stream ID lets the requesting tab claim live segme
 The request override is validated, applies to one clip only, and never mutates the session's persistent read-aloud preference.
 The optional stream ID has the same claim-before-request role as `/voice/speak`.
 
-Automatic, manual, and application-text synthesis returns the first short clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
+Automatic, manual, and application-text synthesis returns the first coherent clip with `stream_id` and `segment_count`, then emits ordered `voice_clip_ready` events sharing `stream_id`, `segment_index`, and `segment_count`.
+Replies of at most 420 characters stay in that one clip; longer replies prefer a complete opening sentence before continuing.
 Each ready segment is independently playable, and later segments continue in tracked background tasks after the HTTP response.
 Summary/verbatim selection remains the existing session/global contract.
 

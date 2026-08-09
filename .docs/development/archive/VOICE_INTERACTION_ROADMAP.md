@@ -265,7 +265,9 @@ Push-to-talk stops playback immediately because the held chord is already explic
 Fleet status still speaks one line by default and requires an explicit detailed-status request for the full rundown.
 
 Every automatic, manual, and application response now uses the existing segmented clip system.
-The first clip is capped at 140 characters and returned before tracked background tasks synthesize the later 420-character clips.
+The initial implementation capped the first clip at 140 characters and returned it before tracked background tasks synthesized the later 420-character clips.
+Real Voice Comms use showed that this could split an otherwise short reply in the middle of a sentence and make its continuation sound like a second model-generated answer.
+The corrected policy keeps replies up to 420 characters whole and starts longer replies with a complete sentence whenever possible before background synthesis continues.
 This reduces time to first audio without adding a second raw-audio transport.
 
 Voice Comms is explicit and session-scoped.
