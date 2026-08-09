@@ -13,6 +13,9 @@ import { ThemePicker } from './ThemePicker'
 import { applyUiScale, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
+import { VoiceLatencyReport } from './VoiceLatencyReport'
+import { WakeWordTester } from './WakeWordTester'
+import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { RailEditor } from './RailEditor'
 import { allBackendNames, harnessDisplayName, harnesses } from './harnessRegistry'
@@ -75,7 +78,7 @@ type Config = {
   tts_soften_stops:boolean;tts_sapi_voice:string;tts_sapi_rate:number
   tts_summary_model:string;tts_summary_max_tokens:number;tts_verbatim_max_chars:number
   tts_daily_budget_usd:number;tts_cache_mb:number;stt_enabled:boolean
-  stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string
+  stt_engine:'sapi'|'whisper';stt_language:string;stt_whisper_model:string;stt_routing_model:string
   voice_wake_words:string[];voice_commands:{action:string;phrases:string[]}[]
 }
 type VoiceStatusInfo = {
@@ -83,7 +86,8 @@ type VoiceStatusInfo = {
   summary_model:string;spend_today:{tokens:number;cost_usd:number};daily_budget_usd:number
   cache_bytes:number;cache_limit_bytes:number;clip_count:number;stt_enabled:boolean
   stt_engine:'sapi'|'whisper';stt_available:boolean;stt_diagnostic?:string|null
-  stt_language:string;stt_whisper_model:string
+  stt_language:string;stt_whisper_model:string;stt_routing_model?:string
+  wake_words?:string[];commands?:{action:string;phrases:string[]}[]
 }
 const EDGE_VOICE_SUGGESTIONS = [
   'en-AU-NatashaNeural','en-AU-WilliamNeural','en-US-AndrewNeural','en-US-AriaNeural',
@@ -208,6 +212,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [detectedProfiles, setDetectedProfiles] = useState<ShellProfile[]>([])
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
+  const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
@@ -235,6 +240,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   useEffect(() => {
     api<RemoteStatus>('GET','/api/remote/status').then(setRemote).catch(()=>setRemote(null))
     api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
+    api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
     // One bundled request instead of nine — on a high-RTT client (phone over
     // Tailscale) per-request connection setup dominated the panel's open delay.
     api<SettingsBundle>('GET','/api/settings/bundle').then(bundle => {
@@ -287,6 +293,9 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   },[dirty,leaveSettings])
   const onOpenUsage=useCallback(()=>requestClose('usage'),[requestClose])
   const onOpenAutomation=useCallback(()=>requestClose('automation'),[requestClose])
+
+  const loadLatency=()=>{void api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
+  const resetLatency=()=>{void api<LatencyReportPayload>('DELETE','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
 
   const setupMobileVoice=async()=>{
     if(mobileVoiceBusy)return
@@ -819,9 +828,13 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label class="check"><span>Enable microphone input and hands-free Conversation mode</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
           <label>Daemon transcription engine<select value={draft.stt_engine} onChange={e=>change('stt_engine',e.currentTarget.value as Config['stt_engine'])}><option value="whisper">Whisper Turbo (local, recommended)</option><option value="sapi">Windows Speech Recognition (legacy)</option></select></label>
           <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /></label>
-          {draft.stt_engine==='whisper'&&<label>Whisper model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
+          {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
+          {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
           <p>Conversation mode captures microphone audio in swe-mux, sends bounded speech-only WAV utterances to muxd, and keeps listening across pauses. It acts only when an utterance ends with a wake word followed by a command phrase; everything before that is buffered as your message. Raw audio is deleted after transcription.</p>
+          <h3>Spoken command latency</h3>
+          <p>End of speech to executed action, broken into the four stages it passes through. Samples are recorded by the browser after each utterance and also written to <code>daemon.log</code>. The target is under 500 ms for a short command.</p>
+          <VoiceLatencyReport report={latencyReport} onRefresh={loadLatency} onReset={resetLatency} />
           <h3>Wake words and commands</h3>
           <p>Add every spelling your recognizer actually produces (comma separated) — the matcher does not invent variants. <code>Standby</code> keeps the mic on but ignores speech until you say a <code>resume</code> command; <code>stop</code> turns Conversation mode off and releases the mic. Leave a command blank to disable its voice trigger.</p>
           <label>Wake words<input value={(draft.voice_wake_words||[]).join(', ')} placeholder="mux, mucks, max" onInput={e=>change('voice_wake_words',e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean))} /></label>
@@ -837,6 +850,14 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
               }} /></label>
             })}
           </div>
+          <h4>Test what the recognizer actually hears</h4>
+          <p>Speak the wake word and a command a few times. Each utterance goes through the same transcription and the same matcher the command path uses, so this reports what would really have happened. Choose a trigger word from this, not from how it looks: a good one is two or three syllables, distinctive, rare in ordinary speech, and not the start of a common word. Save any pending changes above first — the test scores against the saved configuration.</p>
+          <WakeWordTester
+            wakeWords={voiceInfo?.wake_words||draft.voice_wake_words||[]}
+            commands={voiceInfo?.commands||draft.voice_commands||[]}
+            available={!!voiceInfo?.stt_available}
+            diagnostic={voiceInfo?.stt_diagnostic||''}
+          />
           <h3>Mobile voice</h3>
           <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS. swe-mux configures a private Tailscale Serve address (<code>https://&lt;device&gt;.ts.net/</code>) automatically at startup; use the button below if it needs a one-time Tailscale approval or repair.</p>
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>

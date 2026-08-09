@@ -46,6 +46,10 @@ and reattachable browser viewports.
   columns and rows. The daemon resizes ConPTY before sending replay bytes; older clients may use
   their first `resize` frame or the bounded compatibility timeout. Messages received while
   readiness is pending are processed only after the replay boundary.
+- A flow-control-capable browser acknowledges terminal bytes only after xterm parses them.
+  The daemon limits unparsed output per connection to 128 KiB, preventing old repaint traffic from placing typed echo seconds behind the parser queue.
+  Attach and resync replay are included, while older browser bundles remain compatible because the capability is negotiated in `attach_ready`.
+  Hidden warm panes withhold credit after one bounded window and release it when revealed, so retained busy agents stop consuming the UI thread without disconnecting.
 - A session attached from several devices shares one keyboard and one size, and the daemon
   arbitrates both rather than letting the last client to speak decide. Attach, detach and
   reconnect never change process state, and neither does losing an ownership race: refused

@@ -212,7 +212,14 @@ from .transcript_view import (
     parse_transcript_with_watermark,
 )
 from .usage import UsageManager
-from .voice import VoiceError, VoiceService, VoiceStore, clip_snapshot, last_reply_text
+from .voice import (
+    DICTATION_PROFILE,
+    VoiceError,
+    VoiceService,
+    VoiceStore,
+    clip_snapshot,
+    last_reply_text,
+)
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -725,6 +732,10 @@ def create_app(
             web.get("/api/notifications", list_notifications),
             web.get("/api/voice", voice_status),
             web.post("/api/sessions/{sid}/voice/transcribe", voice_transcribe),
+            web.post("/api/voice/transcribe", voice_transcribe),
+            web.get("/api/voice/stt-latency", voice_latency),
+            web.post("/api/voice/stt-latency", voice_latency),
+            web.delete("/api/voice/stt-latency", voice_latency),
             web.post("/api/sessions/{sid}/voice/submit", voice_submit),
             web.post("/api/sessions/{sid}/voice/interrupt", voice_interrupt),
             web.post("/api/sessions/{sid}/voice/generate", voice_generate),
@@ -3694,7 +3705,14 @@ async def list_sessions(request: web.Request) -> web.Response:
         item["_snapshot_generation"] = request.app["daemon_generation"]
         item["_snapshot_revision"] = session.revision
         item["_snapshot_enriched"] = True
-        delivery = readiness.evaluate(session, record_metrics=False)
+        # This readiness is display-only and never authorizes a PTY write. Reuse a
+        # bounded classifier verdict so simultaneous browser refreshes cannot make
+        # GET /api/sessions repeatedly scan every live terminal on the event loop.
+        delivery = readiness.evaluate(
+            session,
+            record_metrics=False,
+            snapshot_pty_cache_seconds=1.0,
+        )
         item["delivery_readiness"] = {
             "state": delivery["delivery_state"],
             "reason": delivery["reason"],
@@ -6234,20 +6252,59 @@ async def voice_status(request: web.Request) -> web.Response:
 
 
 async def voice_transcribe(request: web.Request) -> web.Response:
+    # Taken before anything else so the reported queue cost covers the body read
+    # and the STT lock wait, not just the part of the path VoiceService can see.
+    received_at = time.perf_counter()
     voice: VoiceService = request.app["voice"]
-    session = request.app["sessions"].resolve(request.match_info["sid"])
-    if not is_agent_harness(session.record.backend):
-        return json_response({"error": "conversation mode requires an agent session"}, 409)
+    # The session is what dictation is *for*, not what transcription needs. The
+    # session-free form exists so the wake-word tester measures the real decoder and
+    # the real grammar rather than a parallel implementation of both.
+    sid = request.match_info.get("sid")
+    if sid:
+        session = request.app["sessions"].resolve(sid)
+        if not is_agent_harness(session.record.backend):
+            return json_response({"error": "conversation mode requires an agent session"}, 409)
     if request.content_type not in {"audio/wav", "audio/x-wav", "application/octet-stream"}:
         return json_response({"error": "voice transcription requires WAV audio"}, 415)
     if request.content_length is not None and request.content_length > 2 * 1024 * 1024:
         return json_response({"error": "voice utterance must not exceed 2 MiB"}, 413)
+    correlation_id = re.sub(
+        r"[^A-Za-z0-9_.:-]", "", str(request.headers.get("X-Mux-Utterance-Id", ""))[:100]
+    )
+    profile = str(request.headers.get("X-Mux-Decode-Profile", "")).strip().lower()
     try:
         audio = await request.read()
-        text = await voice.transcribe_wav(audio)
+        result = await voice.transcribe_wav(
+            audio,
+            received_at=received_at,
+            correlation_id=correlation_id,
+            profile=profile or DICTATION_PROFILE,
+        )
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
-    return json_response({"text": text})
+    # `server_ms` lets the client subtract the daemon's own time from the round
+    # trip and be left with transport, which it cannot measure any other way.
+    timings = result.timings()
+    timings["server_ms"] = round((time.perf_counter() - received_at) * 1000, 1)
+    return json_response({"text": result.text, "timings": timings})
+
+
+async def voice_latency(request: web.Request) -> web.Response:
+    """The end-of-speech-to-action stage breakdown.
+
+    GET reports it, POST records one browser-measured sample, DELETE starts a fresh
+    measurement run. Samples are also written to `daemon.log`, which is what makes a
+    latency complaint answerable after a restart has emptied the ring.
+    """
+    voice: VoiceService = request.app["voice"]
+    if request.method == "DELETE":
+        voice.clear_stt_latency()
+    elif request.method == "POST":
+        try:
+            voice.record_stt_latency(await request.json())
+        except VoiceError as exc:
+            return json_response({"error": str(exc)}, 400)
+    return json_response(voice.stt_latency_report())
 
 
 async def voice_submit(request: web.Request) -> web.Response:
@@ -7808,6 +7865,47 @@ async def reveal_path(request: web.Request) -> web.Response:
     return json_response({"ok": True})
 
 
+PTY_OUTPUT_HIGH_WATER_BYTES = 128 * 1024
+
+
+class PtyOutputFlow:
+    """Per-browser credit based on bytes xterm has actually parsed.
+
+    TCP/WebSocket backpressure ends when Chromium accepts a frame, not when xterm
+    has parsed and painted it. Without this second boundary, a repaint-heavy TUI
+    can queue megabytes in xterm and put typed echo behind seconds of old output.
+    """
+
+    def __init__(self, high_water_bytes: int = PTY_OUTPUT_HIGH_WATER_BYTES) -> None:
+        self.high_water_bytes = max(1, high_water_bytes)
+        self.enabled = False
+        self.unacknowledged_bytes = 0
+        self._credit_available = asyncio.Event()
+        self._credit_available.set()
+
+    def enable(self) -> None:
+        self.enabled = True
+
+    async def wait_for_credit(self) -> None:
+        while self.enabled and self.unacknowledged_bytes >= self.high_water_bytes:
+            self._credit_available.clear()
+            await self._credit_available.wait()
+
+    def sent(self, byte_count: int) -> None:
+        if not self.enabled or byte_count <= 0:
+            return
+        self.unacknowledged_bytes += byte_count
+        if self.unacknowledged_bytes >= self.high_water_bytes:
+            self._credit_available.clear()
+
+    def acknowledge(self, byte_count: int) -> None:
+        if not self.enabled or byte_count <= 0:
+            return
+        self.unacknowledged_bytes = max(0, self.unacknowledged_bytes - byte_count)
+        if self.unacknowledged_bytes < self.high_water_bytes:
+            self._credit_available.set()
+
+
 async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     snapshot_generation = str(request.app.get("daemon_generation") or "legacy")
@@ -7821,6 +7919,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     )
     session.attachments_seen += 1
     snapshot, revision, replay, subscriber = session.replay_and_subscribe()
+    output_flow = PtyOutputFlow()
     # Everything after the subscribe runs inside the try, so no path can exit
     # without unsubscribing. A mid-replay disconnect (a slow mobile link is the
     # realistic case) used to orphan the subscriber, permanently marking the
@@ -7856,6 +7955,8 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             if initial_message.type == WSMsgType.TEXT:
                 initial_frame = json.loads(initial_message.data)
                 if initial_frame.get("type") in {"attach_ready", "resize"}:
+                    if initial_frame.get("output_flow_control") is True:
+                        output_flow.enable()
                     geometry_queued = _apply_client_viewport(session, connection_id, initial_frame)
                     # A repaint-heavy TUI can wrap the retained ring until this
                     # attach's replay holds no transcript at all. The recovery is
@@ -7885,6 +7986,10 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             }
         )
         if replay:
+            # Count attach replay too. Its parse acknowledgement may arrive after
+            # live sending starts; leaving it uncounted would let that acknowledgement
+            # erase credit belonging to newer live output.
+            output_flow.sent(len(replay))
             await ws.send_bytes(replay)
         await ws.send_json({"type": "replay_end", "reason": "attach"})
         # The arbitrated size can differ from this client's own fit (another device owns
@@ -7907,12 +8012,16 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             )
             return ws
         sender_task = asyncio.create_task(
-            _pty_sender(ws, session, subscriber, snapshot_generation)
+            _pty_sender(ws, session, subscriber, snapshot_generation, output_flow)
         )
         for pending_message in pending_messages:
-            await _handle_pty_client_message(request, ws, session, connection_id, pending_message)
+            await _handle_pty_client_message(
+                request, ws, session, connection_id, pending_message, output_flow
+            )
         async for message in ws:
-            await _handle_pty_client_message(request, ws, session, connection_id, message)
+            await _handle_pty_client_message(
+                request, ws, session, connection_id, message, output_flow
+            )
     finally:
         # Every synchronous cleanup runs before the sender task is awaited. A handler
         # cancelled on peer disconnect re-raises at the first await inside its own
@@ -7966,12 +8075,21 @@ def _versioned_pty_frame(frame: dict[str, Any], generation: str) -> dict[str, An
 
 
 async def _pty_sender(
-    ws: web.WebSocketResponse, session: Session, subscriber: Any, generation: str
+    ws: web.WebSocketResponse,
+    session: Session,
+    subscriber: Any,
+    generation: str,
+    output_flow: PtyOutputFlow,
 ) -> None:
     # unsupervised-loop-ok: lives for one PTY websocket, not the daemon.
     while True:
         message = await subscriber.queue.get()
         if isinstance(message, bytes):
+            await output_flow.wait_for_credit()
+            # Reserve before the await. The receiver task can process a fast browser's
+            # acknowledgement while send_bytes is yielding; counting afterward would
+            # turn that valid ACK into phantom unacknowledged credit.
+            output_flow.sent(len(message))
             await ws.send_bytes(message)
         elif message.get("type") == "resync":
             (
@@ -7991,6 +8109,8 @@ async def _pty_sender(
             )
             await ws.send_json({"type": "replay_start", "reason": "resync"})
             if replay_bytes:
+                await output_flow.wait_for_credit()
+                output_flow.sent(len(replay_bytes))
                 await ws.send_bytes(replay_bytes)
             await ws.send_json({"type": "replay_end", "reason": "resync"})
             await ws.send_json(
@@ -8236,6 +8356,7 @@ CLIENT_REPAINT_MIN_INTERVAL_SECONDS = 2.0
 CLIENT_REPAIR_PHASES = frozenset(
     {
         "write_pipeline_dead",
+        "write_pipeline_backlog",
         "surface_drift_repair",
         "viewport_fit_drift_repair",
         "viewport_fit_resumed",
@@ -8313,6 +8434,7 @@ async def _handle_pty_client_message(
     session: Session,
     connection_id: str,
     message: Any,
+    output_flow: PtyOutputFlow,
 ) -> None:
     if message.type == WSMsgType.BINARY:
         # No current client sends binary input; a non-owner's bytes are counted and
@@ -8360,6 +8482,10 @@ async def _handle_pty_client_message(
             await _handle_client_repaint(request, session)
         elif frame.get("type") == "client_diagnostic":
             _handle_client_diagnostic(request, session, frame)
+        elif frame.get("type") == "output_ack":
+            byte_count = frame.get("bytes")
+            if isinstance(byte_count, int) and not isinstance(byte_count, bool):
+                output_flow.acknowledge(byte_count)
 
 
 async def events_ws(request: web.Request) -> web.WebSocketResponse:

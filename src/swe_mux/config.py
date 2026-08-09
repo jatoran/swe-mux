@@ -490,6 +490,10 @@ class Config:
     stt_engine: str = "whisper"
     stt_language: str = "en-US"
     stt_whisper_model: str = "turbo"
+    # The routing decoder, used for the speculative pass that only has to recognize a
+    # wake word and a command phrase. Small and English-only because that pass is a
+    # reflex path; blank falls back to the dictation model.
+    stt_routing_model: str = "small.en"
     voice_wake_words: list[str] = field(
         default_factory=lambda: list(DEFAULT_VOICE_WAKE_WORDS)
     )
@@ -817,6 +821,10 @@ def _validate(config: Config) -> None:
         errors["stt_language"] = "must be a language tag such as en-US"
     if not config.stt_whisper_model.strip() or len(config.stt_whisper_model) > 120:
         errors["stt_whisper_model"] = "must name a Whisper model in 120 characters or fewer"
+    if len(config.stt_routing_model) > 120:
+        errors["stt_routing_model"] = (
+            "must name a Whisper model in 120 characters or fewer, or be blank"
+        )
     if (
         not isinstance(config.voice_wake_words, list)
         or not 1 <= len(config.voice_wake_words) <= 64

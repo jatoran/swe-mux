@@ -5,9 +5,18 @@ import {
   remountDecision,
   surfaceDrifted,
   terminalFitDrifted,
+  WRITE_PIPELINE_BACKLOG_BYTES,
+  WRITE_PIPELINE_BACKLOG_MS,
   WRITE_PIPELINE_STALL_MS,
+  writePipelineBacklogged,
   writePipelineStalled,
 } from '../src/terminalHealth.ts'
+
+test('a progressing but deep write queue is reported before it looks dead', () => {
+  assert.equal(writePipelineBacklogged(WRITE_PIPELINE_BACKLOG_BYTES, 1_000, 1_000 + WRITE_PIPELINE_BACKLOG_MS), true)
+  assert.equal(writePipelineBacklogged(WRITE_PIPELINE_BACKLOG_BYTES - 1, 1_000, 10_000), false)
+  assert.equal(writePipelineBacklogged(WRITE_PIPELINE_BACKLOG_BYTES, null, 10_000), false)
+})
 
 test('a live write pipeline keeps byte arrival and parse progress together', () => {
   // Parsed milliseconds after arrival, checked seconds later: healthy.

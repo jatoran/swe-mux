@@ -1028,16 +1028,24 @@ def pty_tail_explain(
 ) -> dict[str, Any]:
     """Return the classifier outcome and bounded evidence for every rule."""
     normalized = _normalize_tail_text(tail)
+    # Most rules share one of only a few regions. Computing the region per rule
+    # repeatedly rescanned the whole 32 KiB tail, including every prompt-frame
+    # regular expression, for each readiness evaluation. Fleet snapshots evaluate
+    # every session, so that redundant scan became a daemon event-loop hot path.
+    regions: dict[ScreenRegion, str] = {}
     evaluations: list[dict[str, Any]] = []
     outcome: PtyTailState = "unknown"
     for rule in PTY_RULES:
         applicable = rule.backends is None or backend is None or backend in rule.backends
-        text = screen_region_text(
-            rule.region,
-            normalized,
-            osc_title=osc_title,
-            osc_progress=osc_progress,
-        )
+        text = regions.get(rule.region)
+        if text is None:
+            text = screen_region_text(
+                rule.region,
+                normalized,
+                osc_title=osc_title,
+                osc_progress=osc_progress,
+            )
+            regions[rule.region] = text
         matched = applicable and rule.predicate.search(text) is not None
         evaluations.append(
             {

@@ -1150,6 +1150,24 @@ body {
 .project-default{padding:8px 0;border:0;border-top:1px solid var(--line);background:transparent}.project-default>strong{display:block;margin-bottom:4px;color:var(--accent)}
 .settings-advanced{margin-top:12px;border-top:1px solid var(--line);padding-top:9px}.settings-advanced summary{cursor:pointer;color:var(--accent)}.settings-advanced[open] summary{margin-bottom:8px}
 .voice-commands{display:flex;flex-direction:column;gap:6px;margin:6px 0}.voice-commands label{display:flex;flex-direction:column;gap:2px}.voice-commands label>span{font-size:11px;color:var(--text)}.voice-commands label>span em{color:var(--muted);font-style:normal}
+/* Spoken-command latency readout (Settings → Voice). Tabular numerals so the four
+   stage rows stay column-aligned while samples arrive and the digits change width. */
+.voice-latency{margin:6px 0}.voice-latency-actions{display:flex;align-items:center;gap:8px;margin-bottom:6px;color:var(--muted)}
+.voice-latency-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.voice-latency-table th,.voice-latency-table td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--line)}
+.voice-latency-table th:first-child,.voice-latency-table td:first-child{text-align:left;color:var(--muted)}
+.voice-latency-table th{color:var(--accent);text-transform:uppercase;font-weight:normal}
+.voice-latency-total td{color:var(--text);border-bottom:0}.voice-latency-total td:first-child{color:var(--text)}
+/* Wake-word tester. The "heard" column is the point of the surface, so it takes the
+   width and wraps; everything else stays narrow and right-aligned beside it. */
+.wake-test{margin:6px 0}.wake-test-actions{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
+.wake-test-actions label{flex:0 0 auto}.wake-test-actions input{width:calc(70px*var(--ui-scale))}
+.wake-test-table{width:100%;border-collapse:collapse;margin-top:6px}
+.wake-test-table th,.wake-test-table td{padding:3px 6px;text-align:right;border-bottom:1px solid var(--line);vertical-align:top}
+.wake-test-table th:nth-child(2),.wake-test-table td:nth-child(2){width:100%;text-align:left;word-break:break-word}
+.wake-test-table th{color:var(--accent);text-transform:uppercase;font-weight:normal}
+.wake-test-table td:first-child{color:var(--muted)}
+.wake-test-miss td{color:var(--muted)}.wake-test-miss td:nth-child(2){color:var(--error,#f07178)}
 .theme-actions{flex-wrap:wrap}.settings-panel>footer{overflow-x:auto}.settings-panel>footer button{white-space:nowrap}
 .keybinding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 0;border-top:1px solid var(--line)}.keybinding-heading strong{color:var(--accent)}.keybinding-heading p{margin:3px 0 0}.keybinding-heading button{flex:none}
 .keybinding-capture{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:9px;min-height:42px;margin-bottom:7px;padding:6px 8px;border:1px solid var(--accent);background:var(--bg)}.keybinding-capture>span{color:var(--accent)}.keybinding-capture>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.keybinding-error{max-width:none!important;margin:0 0 7px!important;padding:7px 8px;border:1px solid var(--red);color:var(--red)!important;background:color-mix(in srgb,var(--red) 8%,var(--panel))}
@@ -1744,13 +1762,17 @@ body {
 .dictation-phase{flex:none}
 .dictation-phase.listening{color:var(--green,#8bd450)}
 .dictation-phase.hearing{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
-.dictation-phase.starting,.dictation-phase.transcribing,.dictation-phase.sending{color:var(--blue,#7aa2f7)}
+.dictation-phase.starting,.dictation-phase.warming,.dictation-phase.transcribing,.dictation-phase.heard,.dictation-phase.sending{color:var(--blue,#7aa2f7)}
 .dictation-phase.standby{color:var(--amber)}
 .dictation-phase.error{color:var(--error,#f07178)}
 /* The status line is the elastic member and the actions are fixed, so a long diagnostic
    ellipsizes instead of pushing send/stop off the row. Its full text is the panel itself. */
 .dictation-detail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dictation-panel.error .dictation-detail{color:var(--error,#f07178)}
+/* End of speech to action for the last utterance. Present because Phase 1 of the
+   voice roadmap is judged on this number, and a breakdown nobody can see while
+   speaking is a breakdown nobody tunes against. */
+.dictation-latency{flex:0 0 auto;color:var(--muted);opacity:.7;font-variant-numeric:tabular-nums;cursor:help}
 .dictation-actions{flex:0 0 auto;display:flex;align-items:center;gap:3px}
 .dictation-actions button{height:calc(20px*var(--ui-scale));min-width:22px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .dictation-actions button:hover:not(:disabled){background:#252b32;color:var(--text)}
@@ -1960,7 +1982,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .pane-voice .voice-chip.on_demand{color:var(--text)}
 .pane-voice .conversation-chip.listening{color:var(--green,#8bd450)}
 .pane-voice .conversation-chip.hearing{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
-.pane-voice .conversation-chip.starting,.pane-voice .conversation-chip.transcribing,.pane-voice .conversation-chip.sending{color:var(--blue,#7aa2f7)}
+.pane-voice .conversation-chip.starting,.pane-voice .conversation-chip.warming,.pane-voice .conversation-chip.transcribing,.pane-voice .conversation-chip.heard,.pane-voice .conversation-chip.sending{color:var(--blue,#7aa2f7)}
 .pane-voice .conversation-chip.error{color:var(--error,#f07178)}
 /* The live transcript used to be a capped, ellipsized span in this group. It could not
    work: the bar must never wrap, so the one variable-width member had to be clipped, and

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -23,9 +25,10 @@ import time
 import uuid
 import wave
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -58,6 +61,52 @@ ENGINE_TIMEOUT_SECONDS = 45.0
 STT_TIMEOUT_SECONDS = 60.0
 STT_MAX_BYTES = 2 * 1024 * 1024
 STT_MAX_SECONDS = 35.0
+STT_LATENCY_SAMPLES = 200
+# Capture always resamples to this rate, and decoding runs from the raw PCM rather
+# than a file, so the utterance is never resampled twice and never touches the disk.
+STT_SAMPLE_RATE = 16_000
+# Two decoders, because the two jobs have opposite priorities: a spoken command is a
+# reflex that feels broken past half a second, and dictated prose is read afterwards.
+# They hold separate locks so a speculative routing decode cannot queue the real
+# utterance behind it.
+COMMAND_PROFILE = "command"
+DICTATION_PROFILE = "dictation"
+DECODE_PROFILES = (COMMAND_PROFILE, DICTATION_PROFILE)
+# Beam search buys accuracy that only shows in longer text, and costs about 10% on a
+# one-second utterance against 30% on a twelve-second one. Short audio goes greedy.
+STT_GREEDY_MAX_MS = 3_000.0
+# How many configured wake words may bias the routing decoder. See `_hotwords`: a
+# long list of short, similar tokens makes the small model loop instead of decoding.
+STT_ROUTING_HOTWORD_LIMIT = 8
+STT_HOTWORDS = (
+    "swe-mux, Mux, Muxie, Claude, Codex, Git, GitHub, Python, "
+    "TypeScript, terminal, API, send, submit, cancel, undo, mute, "
+    "read reply, summary, verbatim, interrupt, stop listening"
+)
+# Every stage a spoken command passes through, end of speech to executed action.
+# The daemon owns `queue_ms` and `decode_ms` and hands them back on the transcribe
+# response; the browser owns the rest and posts the merged sample once the action
+# has run, because only it knows when speech actually stopped.
+LATENCY_FIELDS = (
+    "audio_ms",  # captured speech, for reading decode cost against utterance length
+    "endpoint_ms",  # last speech frame -> the VAD declared the utterance over
+    "encode_ms",  # endpoint -> downsampled and WAV encoded
+    "wait_ms",  # encoded -> POST issued, i.e. queued behind an earlier utterance
+    "upload_ms",  # POST issued -> daemon entered its handler (round trip minus server)
+    "queue_ms",  # daemon handler entry -> decode start
+    "decode_ms",  # decode start -> recognized text
+    "action_ms",  # text -> the command ran or the draft updated
+    "total_ms",  # end of speech -> action, the number the exit criterion is about
+)
+# The four stages the roadmap's exit criterion is stated in, derived from the
+# fields so a change in where a cost lands cannot silently rename a stage.
+LATENCY_STAGES: dict[str, tuple[str, ...]] = {
+    "to_post_ms": ("endpoint_ms", "encode_ms", "wait_ms"),
+    "to_decode_ms": ("upload_ms", "queue_ms"),
+    "decode_ms": ("decode_ms",),
+    "action_ms": ("action_ms",),
+}
+LATENCY_MAX_MS = 600_000.0
 SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {"speech": {"type": "string"}},
@@ -126,6 +175,123 @@ $recognizer.Dispose()
 
 class VoiceError(RuntimeError):
     """Typed, user-visible read-aloud failure. Never affects the PTY lifecycle."""
+
+
+@dataclass(frozen=True)
+class Transcription:
+    """One recognized utterance plus the daemon-side stage timings behind it.
+
+    Transcription returns timings rather than a bare string because the browser is
+    the only party that can measure the whole path (it alone knows when speech
+    stopped) and the daemon is the only party that can separate queueing from
+    decoding. The client merges the two halves into one latency sample.
+    """
+
+    text: str
+    audio_ms: float
+    queue_ms: float
+    decode_ms: float
+    engine: str
+    model: str
+    beam_size: int
+
+    def timings(self) -> dict[str, Any]:
+        return {
+            "audio_ms": round(self.audio_ms, 1),
+            "queue_ms": round(self.queue_ms, 1),
+            "decode_ms": round(self.decode_ms, 1),
+            "engine": self.engine,
+            "model": self.model,
+            "beam_size": self.beam_size,
+        }
+
+
+def _finite(value: Any, *, limit: float = LATENCY_MAX_MS) -> float:
+    """Clamp one browser-supplied duration into a plottable millisecond range."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(number):
+        return 0.0
+    return round(max(0.0, min(number, limit)), 1)
+
+
+def normalize_latency_sample(raw: Any) -> dict[str, Any]:
+    """Coerce a posted latency sample into the stored shape.
+
+    The numbers arrive from the browser, so every field is clamped rather than
+    trusted: a diagnostic that can be poisoned into showing impossible stages is
+    worse than no diagnostic, because it is still believed.
+    """
+    if not isinstance(raw, dict):
+        raise VoiceError("latency sample must be an object")
+    sample: dict[str, Any] = {field: _finite(raw.get(field)) for field in LATENCY_FIELDS}
+    utterance_id = str(raw.get("utterance_id") or "")[:100]
+    sample["utterance_id"] = re.sub(r"[^A-Za-z0-9_.:-]", "", utterance_id)
+    sample["at"] = time.time()
+    sample["speculative"] = bool(raw.get("speculative"))
+    sample["command"] = str(raw.get("command") or "")[:40]
+    sample["model"] = str(raw.get("model") or "")[:120]
+    sample["engine"] = str(raw.get("engine") or "")[:40]
+    return sample
+
+
+def latency_stages(sample: dict[str, Any]) -> dict[str, float]:
+    """The four reported stages, summed from the recorded fields."""
+    return {
+        stage: round(sum(float(sample.get(field) or 0.0) for field in fields), 1)
+        for stage, fields in LATENCY_STAGES.items()
+    }
+
+
+def percentile(values: Sequence[float], fraction: float) -> float:
+    """Nearest-rank percentile. Exact on the tiny sample counts voice produces."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(fraction * len(ordered)) - 1))
+    return round(ordered[index], 1)
+
+
+def latency_report(samples: Sequence[dict[str, Any]], *, recent: int = 20) -> dict[str, Any]:
+    """Per-stage p50/p95/max plus the newest raw samples.
+
+    Percentiles rather than a mean: one cold model load is a 7-second outlier that
+    would drag a mean far away from anything the user ever experiences.
+    """
+    stages = [latency_stages(sample) for sample in samples]
+    summary = {
+        stage: {
+            "p50": percentile([item[stage] for item in stages], 0.5),
+            "p95": percentile([item[stage] for item in stages], 0.95),
+            "max": round(max((item[stage] for item in stages), default=0.0), 1),
+        }
+        for stage in LATENCY_STAGES
+    }
+    totals = [float(sample.get("total_ms") or 0.0) for sample in samples]
+    commands = [
+        float(sample.get("total_ms") or 0.0) for sample in samples if sample.get("command")
+    ]
+    return {
+        "count": len(samples),
+        "stages": summary,
+        "total_ms": {
+            "p50": percentile(totals, 0.5),
+            "p95": percentile(totals, 0.95),
+            "max": round(max(totals, default=0.0), 1),
+        },
+        # The exit criterion is stated for a short command, not for dictation, so
+        # the command-only total is the number to read it against.
+        "command_total_ms": {
+            "count": len(commands),
+            "p50": percentile(commands, 0.5),
+            "p95": percentile(commands, 0.95),
+        },
+        "recent": [
+            {**sample, "stages": latency_stages(sample)} for sample in list(samples)[-recent:]
+        ],
+    }
 
 
 def soften_stops(text: str) -> str:
@@ -435,12 +601,15 @@ class VoiceService:
         self._engine_semaphore = asyncio.Semaphore(2)
         self._sapi_script_path: Path | None = None
         self._sapi_stt_script_path: Path | None = None
-        self._stt_lock = asyncio.Lock()
-        self._whisper_model: Any = None
-        self._whisper_model_name: str | None = None
-        self._whisper_device: str | None = None
+        # One lock per decode profile, not one for transcription: a speculative
+        # routing pass overlaps the real utterance by design, and a shared lock would
+        # turn that overlap into exactly the delay speculation exists to remove.
+        self._stt_locks = {profile: asyncio.Lock() for profile in DECODE_PROFILES}
+        self._whisper_models: dict[str, Any] = {}
+        self._whisper_devices: dict[str, str] = {}
         self._submitted_ids: deque[str] = deque(maxlen=512)
         self._submitted_id_set: set[str] = set()
+        self._stt_latency: deque[dict[str, Any]] = deque(maxlen=STT_LATENCY_SAMPLES)
 
     @property
     def clip_directory(self) -> Path:
@@ -468,6 +637,27 @@ class VoiceService:
         self._submitted_ids.append(utterance_id)
         self._submitted_id_set.add(utterance_id)
         return True
+
+    def record_stt_latency(self, raw: Any) -> dict[str, Any]:
+        """Store one end-to-end latency sample and log it durably.
+
+        The ring is for the Settings readout; `daemon.log` is the record that
+        outlives a daemon restart, which is what makes a "voice felt slow an hour
+        ago" report answerable at all.
+        """
+        sample = normalize_latency_sample(raw)
+        self._stt_latency.append(sample)
+        log.info(
+            "voice stt latency %s",
+            json.dumps({**sample, "stages": latency_stages(sample)}, sort_keys=True),
+        )
+        return sample
+
+    def stt_latency_report(self) -> dict[str, Any]:
+        return latency_report(list(self._stt_latency))
+
+    def clear_stt_latency(self) -> None:
+        self._stt_latency.clear()
 
     def start(self) -> None:
         if self._task:
@@ -851,51 +1041,112 @@ class VoiceService:
             except OSError:
                 continue
 
-    async def transcribe_wav(self, audio: bytes) -> str:
-        """Transcribe one bounded speech utterance without retaining its audio."""
+    async def transcribe_wav(
+        self,
+        audio: bytes,
+        *,
+        received_at: float | None = None,
+        correlation_id: str = "",
+        profile: str = DICTATION_PROFILE,
+    ) -> Transcription:
+        """Transcribe one bounded speech utterance without retaining its audio.
+
+        `received_at` is the caller's `time.perf_counter()` at request entry, so the
+        reported queue cost covers the body read and the lock wait rather than only
+        the part of the path this method can see.
+
+        `profile` selects which decoder answers. The two exist because the latency a
+        spoken command can tolerate and the accuracy dictated prose needs are
+        different problems: a routing pass wants the small English model and greedy
+        search, while dictation wants the larger model. They hold separate locks, so
+        a speculative routing decode can never queue the real utterance behind it.
+        """
+        entry = time.perf_counter() if received_at is None else received_at
         if not self.config.stt_enabled:
             raise VoiceError("microphone transcription is disabled in Settings")
-        self._validate_wav(audio)
-        async with self._stt_lock:
-            utterance_id = str(uuid.uuid4())
-            directory = self.clip_directory / "stt"
-            directory.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(self._sweep_stale_utterances, directory)
-            audio_path = directory / f"{utterance_id}.wav"
-            text_path = directory / f"{utterance_id}.txt"
-            await asyncio.to_thread(audio_path.write_bytes, audio)
-            try:
-                if self.config.stt_engine == "whisper":
+        audio_ms, frames = self._validate_wav(audio)
+        profile = profile if profile in DECODE_PROFILES else DICTATION_PROFILE
+        utterance_id = correlation_id or str(uuid.uuid4())
+        marks: dict[str, Any] = {}
+        async with self._stt_locks[profile]:
+            if self.config.stt_engine == "whisper":
+                try:
                     text = await asyncio.wait_for(
-                        asyncio.to_thread(self._transcribe_whisper, audio_path),
+                        asyncio.to_thread(
+                            self._transcribe_whisper, frames, audio_ms, profile, marks
+                        ),
                         timeout=STT_TIMEOUT_SECONDS,
                     )
-                else:
-                    text = await self._transcribe_sapi(audio_path, text_path)
-            except TimeoutError as exc:
-                # `asyncio.to_thread` cannot be cancelled, so the worker keeps
-                # transcribing with the WAV open: on Windows the unlink below then
-                # raises WinError 32 and *masks* the timeout with a PermissionError
-                # that voice_transcribe (VoiceError-only) turns into a 500.
-                raise VoiceError(
-                    "transcription timed out; try a shorter utterance"
-                ) from exc
-            finally:
-                # Best effort: a file the abandoned worker still holds is swept by
-                # `_sweep_stale_utterances`, so "audio is always deleted" holds
-                # even when the unlink here cannot win.
-                for temporary in (audio_path, text_path):
-                    try:
-                        temporary.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                except TimeoutError as exc:
+                    # `asyncio.to_thread` cannot be cancelled, so the abandoned worker
+                    # keeps decoding; nothing here waits on it, and because the audio
+                    # never left memory there is no file for it to hold open either.
+                    raise VoiceError("transcription timed out; try a shorter utterance") from exc
+            else:
+                text = await self._transcribe_sapi(audio, marks)
             normalized = re.sub(r"\s+", " ", text).strip()
             if not normalized:
                 raise VoiceError("no speech was recognized")
-            return normalized[:20_000]
+            now = time.perf_counter()
+            decode_start = marks.get("decode_start", now)
+            decode_end = marks.get("decode_end", now)
+            result = Transcription(
+                text=normalized[:20_000],
+                audio_ms=audio_ms,
+                queue_ms=max(0.0, (decode_start - entry) * 1000),
+                decode_ms=max(0.0, (decode_end - decode_start) * 1000),
+                engine=self.config.stt_engine,
+                # Both read back from the decoder rather than recomputed here, so the
+                # reported model and beam can never drift from the ones used.
+                model=str(marks.get("model", "system")),
+                beam_size=int(marks.get("beam_size", 0)),
+            )
+            log.info(
+                "voice stt decode id=%s profile=%s audio=%.0fms queue=%.0fms decode=%.0fms "
+                "engine=%s model=%s beam=%d chars=%d",
+                utterance_id,
+                profile,
+                result.audio_ms,
+                result.queue_ms,
+                result.decode_ms,
+                result.engine,
+                result.model,
+                result.beam_size,
+                len(result.text),
+            )
+            return result
+
+    def decode_model(self, profile: str) -> str:
+        """Which Whisper model a profile decodes with.
+
+        The routing model is optional: an empty setting, or one that fails to load,
+        means commands decode on the dictation model. That is slower but correct,
+        which is the right way for an optimisation to fail.
+        """
+        if profile == COMMAND_PROFILE and self.config.stt_routing_model.strip():
+            return self.config.stt_routing_model.strip()
+        return self.config.stt_whisper_model
+
+    def beam_size(self, profile: str, audio_ms: float) -> int:
+        """Greedy for short audio, beam search only where it can pay for itself.
+
+        Beam search costs roughly 10% on a one-second command and 30% on a long
+        dictation, and buys accuracy that only shows up in the longer text. Routing
+        never uses it: the grammar it feeds is a closed set of short phrases.
+        """
+        if profile == COMMAND_PROFILE:
+            return 1
+        return 1 if audio_ms <= STT_GREEDY_MAX_MS else 5
 
     @staticmethod
-    def _validate_wav(audio: bytes) -> None:
+    def _validate_wav(audio: bytes) -> tuple[float, bytes]:
+        """Reject anything outside the capture contract.
+
+        Returns the audio length and its raw PCM frames. Decoding here is what lets
+        transcription run from memory: the utterance never reaches the disk, so "no
+        audio is retained" holds by construction rather than by a cleanup sweep that
+        could lose a race.
+        """
         if not audio or len(audio) > STT_MAX_BYTES:
             raise VoiceError("voice utterance must be between 1 byte and 2 MiB")
         try:
@@ -903,18 +1154,33 @@ class VoiceService:
                 channels = source.getnchannels()
                 width = source.getsampwidth()
                 rate = source.getframerate()
-                frames = source.getnframes()
+                count = source.getnframes()
+                frames = source.readframes(count)
         except (EOFError, wave.Error) as exc:
             raise VoiceError("voice utterance must be a valid WAV file") from exc
-        if channels != 1 or width != 2 or not 8_000 <= rate <= 48_000:
-            raise VoiceError("voice WAV must be mono 16-bit PCM at 8–48 kHz")
-        if frames <= 0 or frames / rate > STT_MAX_SECONDS:
+        if channels != 1 or width != 2 or rate != STT_SAMPLE_RATE:
+            raise VoiceError(f"voice WAV must be mono 16-bit PCM at {STT_SAMPLE_RATE} Hz")
+        if count <= 0 or count / rate > STT_MAX_SECONDS:
             raise VoiceError("voice utterance must be no longer than 35 seconds")
+        return count / rate * 1000, frames
 
-    async def _transcribe_sapi(self, audio_path: Path, text_path: Path) -> str:
+    async def _transcribe_sapi(self, audio: bytes, marks: dict[str, Any]) -> str:
+        """Windows `System.Speech`, the legacy engine.
+
+        The only path that still writes the utterance to disk, because the recognizer
+        takes a file and nothing else. It is also the only reason the stale-utterance
+        sweep survives: the Whisper path decodes from memory and leaves nothing behind.
+        """
         if os.name != "nt" or not shutil.which("powershell.exe"):
             raise VoiceError("Windows Speech Recognition is available only on Windows")
         script = self._ensure_sapi_stt_script()
+        directory = self.clip_directory / "stt"
+        directory.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(self._sweep_stale_utterances, directory)
+        utterance_id = str(uuid.uuid4())
+        audio_path = directory / f"{utterance_id}.wav"
+        text_path = directory / f"{utterance_id}.txt"
+        await asyncio.to_thread(audio_path.write_bytes, audio)
         command = [
             "powershell.exe",
             "-NoProfile",
@@ -930,61 +1196,116 @@ class VoiceService:
             "-Culture",
             self.config.stt_language,
         ]
+        marks["decode_start"] = time.perf_counter()
+        marks["model"] = "system"
+        marks["beam_size"] = 0
         try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                command,
-                capture_output=True,
-                text=True,
-                timeout=STT_TIMEOUT_SECONDS,
-                creationflags=background_creation_flags(),
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            raise VoiceError(f"Windows speech recognition failed: {exc}") from exc
-        if result.returncode != 0 or not text_path.exists():
-            detail = (result.stderr or result.stdout or "recognizer unavailable").strip()
-            raise VoiceError(f"Windows speech recognition failed: {detail[:300]}")
-        return text_path.read_text(encoding="utf-8")
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=STT_TIMEOUT_SECONDS,
+                    creationflags=background_creation_flags(),
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                raise VoiceError(f"Windows speech recognition failed: {exc}") from exc
+            if result.returncode != 0 or not text_path.exists():
+                detail = (result.stderr or result.stdout or "recognizer unavailable").strip()
+                raise VoiceError(f"Windows speech recognition failed: {detail[:300]}")
+            return text_path.read_text(encoding="utf-8")
+        finally:
+            marks["decode_end"] = time.perf_counter()
+            for temporary in (audio_path, text_path):
+                with suppress(OSError):
+                    temporary.unlink(missing_ok=True)
 
-    def _transcribe_whisper(self, audio_path: Path) -> str:
+    def _hotwords(self, profile: str) -> str:
+        """Recognition bias.
+
+        The routing pass adds the configured **wake words** and nothing else. A
+        made-up trigger word has no business appearing in a general model's training
+        data, so biasing toward it is worth real accuracy; the command phrases are
+        ordinary English the model already knows.
+
+        Adding those phrases too was measured and reverted. Feeding the default set
+        of 57 short, near-identical phrases ("send it", "send that", "send message")
+        drove `small.en` into a repetition loop — 1530 ms on a 1.6 s utterance and
+        3035 ms on a long one, against 94 ms with the wake words alone, and the text
+        came back as "mux, send, send message, send message, send message". Hence
+        the cap as well: `voice_wake_words` allows 64 entries, and 64 short tokens
+        is exactly that failure shape.
+        """
+        if profile != COMMAND_PROFILE:
+            return STT_HOTWORDS
+        spoken = (str(item).strip() for item in self.config.voice_wake_words)
+        bounded = [*dict.fromkeys(word for word in spoken if word)][:STT_ROUTING_HOTWORD_LIMIT]
+        return ", ".join([*bounded, STT_HOTWORDS])
+
+    def _transcribe_whisper(
+        self, frames: bytes, audio_ms: float, profile: str, marks: dict[str, Any]
+    ) -> str:
         try:
+            import numpy
             from faster_whisper import WhisperModel
         except ImportError as exc:
             raise VoiceError(
                 "faster-whisper is not installed; reinstall/sync swe-mux dependencies "
                 "or select Windows Speech Recognition in Settings"
             ) from exc
-        if (
-            self._whisper_model is None
-            or self._whisper_model_name != self.config.stt_whisper_model
-        ):
-            try:
-                self._load_whisper_model(WhisperModel)
-            except Exception as exc:
-                raise VoiceError(
-                    f"local Whisper model could not load: {str(exc)[:300]}"
-                ) from exc
+        name = self._ensure_whisper_model(WhisperModel, profile)
+        # int16 PCM straight from the validated WAV header. `astype` copies, so the
+        # read-only buffer view never reaches the decoder.
+        samples = numpy.frombuffer(frames, dtype=numpy.int16).astype(numpy.float32) / 32768.0
         try:
-            return self._run_whisper_transcription(audio_path)
+            return self._run_whisper_transcription(name, samples, audio_ms, profile, marks)
         except Exception as first_error:
-            if self._whisper_device == "cuda":
-                # CTranslate2 can see a GPU even when a required CUDA/cuDNN runtime
-                # DLL is absent. Conversation mode should remain useful in that case.
-                self._whisper_model = WhisperModel(
-                    self.config.stt_whisper_model, device="cpu", compute_type="int8"
-                )
-                self._whisper_device = "cpu"
-                try:
-                    return self._run_whisper_transcription(audio_path)
-                except Exception as fallback_error:
-                    raise VoiceError(
-                        f"local Whisper transcription failed: {str(fallback_error)[:300]}"
-                    ) from fallback_error
-            raise VoiceError(
-                f"local Whisper transcription failed: {str(first_error)[:300]}"
-            ) from first_error
+            if self._whisper_devices.get(name) != "cuda":
+                raise VoiceError(
+                    f"local Whisper transcription failed: {str(first_error)[:300]}"
+                ) from first_error
+            # CTranslate2 can see a GPU even when a required CUDA/cuDNN runtime DLL is
+            # absent. Conversation mode should remain useful in that case.
+            self._whisper_models[name] = WhisperModel(name, device="cpu", compute_type="int8")
+            self._whisper_devices[name] = "cpu"
+            try:
+                return self._run_whisper_transcription(name, samples, audio_ms, profile, marks)
+            except Exception as fallback_error:
+                raise VoiceError(
+                    f"local Whisper transcription failed: {str(fallback_error)[:300]}"
+                ) from fallback_error
 
-    def _load_whisper_model(self, model_class: Any) -> None:
+    def _ensure_whisper_model(self, model_class: Any, profile: str) -> str:
+        """Load the model this profile wants, falling back to the dictation model.
+
+        A missing or unloadable routing model must not take the command path down
+        with it: it is a latency optimisation, and the dictation model answers the
+        same question correctly, only slower.
+        """
+        name = self.decode_model(profile)
+        if name in self._whisper_models:
+            return name
+        try:
+            self._load_whisper_model(model_class, name)
+            return name
+        except Exception as exc:
+            fallback = self.config.stt_whisper_model
+            if name == fallback:
+                raise VoiceError(f"local Whisper model could not load: {str(exc)[:300]}") from exc
+            log.warning("voice stt routing model %s could not load; using %s", name, fallback)
+            if fallback in self._whisper_models:
+                return fallback
+            try:
+                self._load_whisper_model(model_class, fallback)
+            except Exception as inner:
+                raise VoiceError(
+                    f"local Whisper model could not load: {str(inner)[:300]}"
+                ) from inner
+            return fallback
+
+    def _load_whisper_model(self, model_class: Any, name: str | None = None) -> None:
+        name = name or self.config.stt_whisper_model
         device = "cpu"
         compute_type = "int8"
         try:
@@ -995,41 +1316,44 @@ class VoiceService:
                 compute_type = "float16"
         except Exception:  # noqa: BLE001 - automatic acceleration is best-effort
             pass
-        self._whisper_model = None
-        self._whisper_device = None
+        self._whisper_models.pop(name, None)
+        self._whisper_devices.pop(name, None)
         try:
-            self._whisper_model = model_class(
-                self.config.stt_whisper_model,
-                device=device,
-                compute_type=compute_type,
-            )
+            model = model_class(name, device=device, compute_type=compute_type)
         except Exception:
             if device != "cuda":
                 raise
             device = "cpu"
-            self._whisper_model = model_class(
-                self.config.stt_whisper_model,
-                device=device,
-                compute_type="int8",
-            )
-        self._whisper_model_name = self.config.stt_whisper_model
-        self._whisper_device = device
+            model = model_class(name, device=device, compute_type="int8")
+        self._whisper_models[name] = model
+        self._whisper_devices[name] = device
 
-    def _run_whisper_transcription(self, audio_path: Path) -> str:
-        segments, _info = self._whisper_model.transcribe(
-            str(audio_path),
+    def _run_whisper_transcription(
+        self, name: str, samples: Any, audio_ms: float, profile: str, marks: dict[str, Any]
+    ) -> str:
+        beam_size = self.beam_size(profile, audio_ms)
+        marks["beam_size"] = beam_size
+        marks["model"] = name
+        # Set here rather than at thread entry so a first-use model download or a
+        # CUDA→CPU reload is reported as queueing, not as decode time: they are one
+        # startup cost, and folding them into decode would hide the steady-state
+        # number the latency work is judged on.
+        marks["decode_start"] = time.perf_counter()
+        segments, _info = self._whisper_models[name].transcribe(
+            samples,
             language=self.config.stt_language.split("-", 1)[0],
-            beam_size=5,
+            beam_size=beam_size,
             temperature=0,
             condition_on_previous_text=False,
             vad_filter=False,
-            hotwords=(
-                "swe-mux, Mux, Muxie, Claude, Codex, Git, GitHub, Python, "
-                "TypeScript, terminal, API, send, submit, cancel, undo, mute, "
-                "read reply, summary, verbatim, interrupt, stop listening"
-            ),
+            hotwords=self._hotwords(profile),
         )
-        return " ".join(str(segment.text).strip() for segment in segments).strip()
+        # faster-whisper's generator is lazy: the decode only happens while this join
+        # consumes it, so the end mark has to be taken after it, not after the
+        # `transcribe` call returns.
+        text = " ".join(str(segment.text).strip() for segment in segments).strip()
+        marks["decode_end"] = time.perf_counter()
+        return text
 
     def _ensure_sapi_stt_script(self) -> Path:
         if self._sapi_stt_script_path and self._sapi_stt_script_path.exists():
@@ -1097,9 +1421,17 @@ class VoiceService:
                 stt_available = False
                 stt_diagnostic = "faster-whisper is missing; reinstall/sync swe-mux"
             else:
-                runtime = self._whisper_device or "automatic GPU/CPU"
+                runtime = (
+                    ", ".join(
+                        f"{name} on {device}" for name, device in sorted(
+                            self._whisper_devices.items()
+                        )
+                    )
+                    or "not loaded yet"
+                )
                 stt_diagnostic = (
-                    f"local Whisper model {self.config.stt_whisper_model}; runtime {runtime}"
+                    f"dictation {self.config.stt_whisper_model}, routing "
+                    f"{self.decode_model(COMMAND_PROFILE)}; loaded: {runtime}"
                 )
         return {
             "enabled": self.config.tts_enabled,
@@ -1121,6 +1453,7 @@ class VoiceService:
             "stt_diagnostic": stt_diagnostic,
             "stt_language": self.config.stt_language,
             "stt_whisper_model": self.config.stt_whisper_model,
+            "stt_routing_model": self.decode_model(COMMAND_PROFILE),
             "wake_words": list(self.config.voice_wake_words),
             "commands": [
                 {

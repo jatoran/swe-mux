@@ -16,7 +16,15 @@ def publish_frontend(staging: Path, destination: Path) -> None:
 
     current = {path.relative_to(staging) for path in files}
     assets = destination / "assets"
-    for pattern in ("index-*", "continuity_wasm_bg-*"):
+    # Content-addressed names change on every rebuild, so anything large enough to
+    # matter has to be swept explicitly or a superseded copy stays for the life of the
+    # install. The voice detector alone is ~13 MB per onnxruntime-web version.
+    for pattern in (
+        "index-*",
+        "continuity_wasm_bg-*",
+        "ort-wasm-simd-threaded-*",
+        "silero_vad_v5-*",
+    ):
         for stale in assets.glob(pattern):
             if stale.relative_to(destination) in current:
                 continue

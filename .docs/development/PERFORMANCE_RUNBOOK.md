@@ -109,6 +109,12 @@ synthetic `WheelEvent`s in-page when the notch rate is the variable under test.
   classification has regressed (`terminal-input.md` §Geometry).
 - Window-resize sweep and warm-tab switching: zero frames over 25 ms.
 
+For a terminal that accepts keystrokes but displays them several seconds later, check both queue boundaries.
+The events WebSocket must not refetch the full sessions/projects/previews/groups/harnesses snapshot for observation-only traffic such as `tool_use`, `tool_result`, `PreToolUse`, `PostToolUse`, or `project_files_changed`.
+`GET /api/sessions` uses a one-second display-only PTY classification cache; authorization checks never use that cache.
+The PTY WebSocket should advertise `output_flow_control` and emit `output_ack` frames from xterm write callbacks.
+Durable `terminal_client_repair` events with phase `write_pipeline_backlog` mean live parsing exceeded 32 KiB for at least 750 ms, while `write_pipeline_dead` still means parse progress stopped entirely.
+
 ### 2. Ask which loop is expensive, not which is frequent
 
 ```

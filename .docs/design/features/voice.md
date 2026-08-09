@@ -64,10 +64,11 @@ affect the PTY, session state, transcripts, history, or projects.
   Windows would leave audio nothing can ever find again: synthesis failure unlinks its
   destination, an unlink that raises is logged rather than escaping as an unhandled task
   exception, and a sweep removes clip-directory files with no matching row.
-- Temporary STT utterances are swept too. `asyncio.to_thread` cannot be cancelled, so a
-  timed-out transcription keeps its WAV open past the request and the inline unlink can lose;
-  a timeout surfaces as a typed `VoiceError` and anything older than the timeout window is
-  deleted on the next transcription, keeping "audio is always deleted" true.
+- Temporary STT utterances are swept, but only on the legacy `sapi` path, which is the only one
+  that still writes audio to disk. `asyncio.to_thread` cannot be cancelled, so an abandoned
+  recognizer keeps its WAV open past the request and the inline unlink can lose; anything older
+  than the timeout window is deleted on the next SAPI transcription. The Whisper path decodes
+  from memory and leaves nothing to sweep.
 - `GET /voice/clips/{id}/audio` serves the file (range support via `FileResponse`); the
   browser player is one HTML5 audio element, so seeking is native. `voice_clip_ready` /
   `voice_clip_failed` events drive the UI and autoplay. Autoplay fires only for live events:
@@ -98,12 +99,25 @@ affect the PTY, session state, transcripts, history, or projects.
 ### Capture pipeline (browser, `frontend/src/conversation.ts`)
 
 - `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
-  auto gain) and a `ScriptProcessorNode`, and stays armed across silence. The microphone is a
+  auto gain) and stays armed across silence. The microphone is a
   device singleton, so the controller that owns it (`useConversation`) is held **once at the
   app root**, not once per pane: the Talk chip in every agent pane header and the dictation
   panel under the owning pane are views of that one controller, and starting capture on a
   second pane stops the first by construction. Capture is released when the workspace
   unmounts, so a reload never leaves the browser's recording indicator lit.
+- Audio arrives through an **`AudioWorklet`** that batches ~32 ms of microphone blocks on the
+  audio thread and posts them to the main thread. A `ScriptProcessorNode` runs its callback on
+  the main thread, so every endpointing decision used to be jittered by whatever the UI was
+  doing; it remains only as the fallback for browsers without `AudioWorklet`. Both paths
+  terminate in a muted gain node feeding the destination, because the graph is rendered by
+  pulling backwards from the destination and a capture node with nothing downstream is not
+  guaranteed to run.
+- Both paths then share one resampler and one framing rule (`audioFrames.ts`): a streaming
+  averaging decimator to 16 kHz that carries its partial output across blocks, and a frame
+  assembler that emits exactly 512 samples (32 ms) — the only length Silero accepts. The
+  decimator is streaming rather than per-block because block lengths are unrelated to the
+  resample ratio, and rounding each block independently accumulates drift over a long
+  dictation.
 - The **draft is an append log of utterances**, not a string (`conversationDraft.ts`): `undo`
   must take back exactly the last phrase recognized, and a typed correction must survive the
   next utterance landing on top of it. A typed edit flattens the log to one segment, because
@@ -116,29 +130,125 @@ affect the PTY, session state, transcripts, history, or projects.
   Starting it does call `unlockPlayback`, which is not a setting: it is the user gesture mobile
   browsers demand before any later programmatic `play()`, so the `read` command can speak at
   all. Only the `read` command needs TTS, and it says so if read aloud is off.
-- Voice activity detection is energy-based on an adaptive noise floor (EMA). Speech starts
-  when RMS exceeds `max(0.012, noiseFloor*3.2, playbackActive ? 0.035 : 0)` — the raised floor
-  during playback keeps the agent's own TTS from self-triggering. A ~320 ms pre-roll is
-  retained so the leading phoneme is not clipped. An utterance ends after ≥900 ms of trailing
-  silence following ≥220 ms of speech, or a hard 30 s cap.
-- Each finished utterance is averaged-downsampled to 16 kHz mono and encoded as 16-bit PCM
-  WAV, then POSTed to `voice/transcribe`. Utterances are transcribed through a serialized
-  promise chain so independent utterances never interleave.
+### Endpointing
+
+- **Detection is Silero VAD v5 over `onnxruntime-web`** (`sileroVad.ts`), with the energy
+  detector kept as a fallback. The runtime (~11 MB) and the model (~2.3 MB) load lazily on the
+  first Talk start and are never part of the app bundle; the runtime is pinned to one thread
+  because multi-threaded WASM needs `SharedArrayBuffer`, which needs COOP/COEP headers swe-mux
+  does not send on the Tailscale Serve path. A load failure is not fatal: capture keeps running
+  on the energy detector, because a microphone that refuses to open is worse than one that
+  endpoints slowly. Silero's recurrent state is cleared between utterances.
+- **The endpointing rules live in one frame-counted state machine** (`speechGate.ts`) that both
+  detectors drive, so they end an utterance the same way. It counts 32 ms frames rather than
+  reading a clock, which keeps the decision deterministic when inference falls a block behind —
+  exactly when the endpoint matters most. A ~320 ms pre-roll is retained so the leading phoneme
+  is not clipped, and a hard 30 s cap ends a monologue.
+- **The two detectors are not interchangeable and the gate says so.** Silero ends an utterance
+  after **352 ms** of trailing silence, entering speech at probability 0.5 and leaving at 0.35 so
+  a marginal frame cannot flap the counter. The energy detector keeps its **900 ms** tail: that
+  tail exists *because* RMS-over-noise-floor false-triggers on breath and room noise, so a
+  shorter one would cut words in half. Its threshold is unchanged
+  (`max(0.012, noiseFloor*3.2, playbackActive ? 0.035 : 0)`) — the raised floor during playback
+  keeps the agent's own TTS from self-triggering.
+- **Speculative decode.** After 160 ms of silence, Silero capture sends what it has so far to the
+  routing decoder while still listening. If speech resumes, the gate voids the speculation and
+  the in-flight request is aborted. The trigger is well under the endpoint on purpose: a decode
+  begun at 300 ms cannot finish before a 352 ms endpoint, which would leave the grammar
+  short-circuit unable to ever fire. Speculation is off for the energy detector, whose false
+  triggers would make most speculative decodes garbage.
+- **The suffix grammar is an endpoint signal.** A speculative transcript that already ends in a
+  wake word plus a complete command phrase is strong evidence the utterance is over, so commands
+  skip the rest of the trailing silence; anything else is discarded and the same audio arrives
+  again moments later as the real utterance. `commitSpeculative` is the race guard: it refuses if
+  speech resumed between the decode starting and the text arriving, which is what stops "…mux,
+  send me the file" from submitting at the pause after "send". **Dictation always waits the full
+  tail**, because only the wake-word grammar carries that evidence.
+- **Push-to-talk** (hold `Ctrl`+`Alt`+`Space`) suspends endpointing entirely: the key release is
+  the endpoint. It is the escape hatch for when detection is the problem rather than the fix — a
+  noisy room, a deliberate mid-sentence pause. Captured on the window rather than through the
+  command registry, which fires on press and cannot express a hold; window blur ends it, so a key
+  released over another window cannot latch the microphone open.
+- **The endpoint is acknowledged before any text exists**, by flipping the phase to `heard`.
+  Silence after speaking reads as broken; the same silence after an acknowledgement reads as
+  thinking.
+- **Warm-up is reported rather than hidden.** Both cold starts are left in place — the ONNX
+  runtime is a lazy download most sessions never need, and warming Whisper on the daemon would
+  spend GPU for users who never dictate — so the states say what is true instead:
+  - `talk:warming` covers the window between the microphone opening and the detector resolving.
+    Capture is genuinely listening in that window, on the energy fallback and its 900 ms tail, so
+    reporting `listening` would be true and still misleading. The phase is derived from the
+    detector being unresolved, which keeps readiness to one source of truth; `null` (still
+    loading) is deliberately distinct from having settled on `energy` (Silero failed).
+  - A transcription still running after 1.2 s says the model is loading. Whisper models are
+    cached for the life of the **daemon**, not the tab, so the first utterance after a restart or
+    a redeploy waits on a model load — an unexplained pause there reads as a hang.
+- Each finished utterance is encoded as 16-bit PCM WAV (already at 16 kHz from the capture
+  frames) and POSTed to `voice/transcribe`. Real utterances go through a serialized promise chain
+  so two can never interleave into the draft out of order; speculative decodes deliberately
+  bypass that queue, since waiting behind the previous utterance would put them past their own
+  endpoint.
 
 ### Transcription (daemon, `src/swe_mux/voice.py`)
 
-- `transcribe_wav` validates the upload first: mono 16-bit PCM, 8–48 kHz, ≤35 s, ≤2 MiB.
-  Audio is written to `<data_dir>/voice/stt/`, transcribed, then the audio and text files are
-  **always deleted** — no audio or recognized draft is retained as telemetry.
-- Default engine is local **faster-whisper** (`turbo`), auto-preferring CUDA/float16 and
+- `transcribe_wav` validates the upload first: mono 16-bit PCM at 16 kHz, ≤35 s, ≤2 MiB. One
+  rate, not a range, because decoding runs from the raw PCM and accepting another would resample
+  silently. **The Whisper path never writes the audio to disk** — validation returns the PCM
+  frames and the decoder takes a numpy array — so "no audio is retained" holds by construction
+  rather than by a cleanup sweep that can lose a race.
+- Default engine is local **faster-whisper**, auto-preferring CUDA/float16 and
   falling back to CPU/int8 both at model load and at transcription time (CTranslate2 can see a
-  GPU whose CUDA/cuDNN runtime DLLs are missing). Decoding uses beam size 5, temperature 0,
-  `condition_on_previous_text=False`, and software-development hotwords (product name, agent
-  names, and the command verbs) to bias recognition. The model downloads once from Hugging
-  Face on first use, then runs from the local cache; download, load, GPU-runtime, and
+  GPU whose CUDA/cuDNN runtime DLLs are missing). Models download once from Hugging
+  Face on first use, then run from the local cache; download, load, GPU-runtime, and
   CPU-fallback failures surface through the STT diagnostic without submitting the utterance.
+- **Two decoders by job, chosen by the `X-Mux-Decode-Profile` request header.** A spoken command
+  is a reflex and a dictated paragraph is read afterwards, so they get opposite trade-offs:
+  - `command` (the routing pass, used by speculative decodes and the wake-word tester) decodes on
+    `stt_routing_model` (default `small.en`) with greedy search.
+  - `dictation` (the default) decodes on `stt_whisper_model` (default `turbo`), greedy under
+    three seconds of audio and `beam_size=5` above it. Beam search costs roughly 10% on a
+    one-second utterance and 30% on a twelve-second one, and buys accuracy that only shows up in
+    the longer text.
+  - The profiles hold **separate locks**, so a speculative routing decode can never queue the
+    real utterance behind it — which would cost exactly the latency speculation exists to save.
+  - A missing or unloadable routing model is not a failure: commands fall back to the dictation
+    model, slower but correct.
+- Recognition bias (`hotwords`) is a short technical word list. The routing pass adds the
+  configured **wake words** and nothing else: a made-up trigger word is where a general model is
+  weakest, while command phrases are ordinary English it already knows. Adding those phrases too
+  was measured and reverted — the default set of 57 short, near-identical phrases ("send it",
+  "send that", "send message") drove `small.en` into a repetition loop at roughly sixteen times
+  the decode time. The wake-word contribution is capped for the same reason.
 - Legacy offline Windows `System.Speech` (`sapi`) remains available via a generated PowerShell
-  dictation script.
+  dictation script. It is the only path that still writes the utterance to disk, because the
+  recognizer takes a file and nothing else, and therefore the only reason the stale-utterance
+  sweep still exists.
+
+### Latency instrumentation
+
+Phase 1 of `development/VOICE_INTERACTION_ROADMAP.md` is judged on one number — end of speech to
+executed action — so that number is measured rather than estimated.
+
+- A sample is assembled from both halves of the path. The browser is the only party that knows
+  when speech actually stopped, and the daemon is the only party that can separate queueing from
+  decoding, so the daemon returns `timings` on the transcribe response and the browser posts the
+  merged record to `/voice/stt-latency` **after** the action has already run, where it cannot add
+  to what it measures.
+- The utterance is dated from **one trailing-silence window before the endpoint fired**, not from
+  the endpoint. Dating it from the endpoint would hide the largest stage inside a stage nobody
+  looks at.
+- Four reported stages: `endpoint → sent` (trailing silence, encode, any queueing behind an
+  earlier utterance), `sent → decoding` (transport and daemon queueing; a cold model load lands
+  here), `decoding`, and `text → action`. The last is taken as the **residual**, so the four
+  always sum to the total and a cost cannot quietly fall out of the breakdown.
+- Every posted field is clamped on arrival. A readout that can be poisoned into showing
+  impossible stages is worse than none, because it is still believed.
+- The Settings → Voice readout reports per-stage p50/p95/max plus a **separate command-only
+  total**, since the exit criterion is stated for a short command and dictation decodes several
+  times longer audio. Percentiles rather than a mean: one cold model load is a seven-second
+  outlier. Samples are also written to `daemon.log`, which is what outlives a restart, and each
+  carries the `X-Mux-Utterance-Id` that joins it to the daemon's own decode line.
+- The dictation panel shows the last utterance's total, with the breakdown on hover.
 
 ### Command grammar and submission
 
@@ -151,6 +261,16 @@ affect the PTY, session state, transcripts, history, or projects.
   matched longest-first, so `read the reply again` wins over `read`, and a bare wake word or an
   unmatched tail leaves the text as draft. `parseMuxVoice` is the default matcher (built from
   the `DEFAULT_WAKE_WORDS` / `DEFAULT_COMMANDS` fallbacks that mirror `config.py`).
+- **The wake word is chosen from measurement, not from how it looks.** Settings → Voice carries a
+  tester: speak N utterances, and each one goes through the same capture pipeline, the same
+  transcribe endpoint on the same routing decoder the command path uses, and the matcher compiled
+  from the live configuration. It reports the raw transcript per trial, which wake-word spelling
+  (if any) was heard as a whole word, and which action fired. That split is the point: "the
+  trigger came back as *bucks*" and "the trigger was heard but the phrase after it was not" are
+  different problems with different fixes, and neither is visible from the configuration form. A
+  transcript with no speech recognized is recorded as a trial rather than discarded, since it is
+  the strongest evidence against a trigger word. Good wake words are two to three syllables,
+  phonetically distinctive, rare in ordinary speech, and not a prefix of a common word.
 - The **action set is fixed** (each is wired to code); only its trigger phrases change:
   `send`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`,
   `standby`, `resume`, `stop`. Defaults ship `mux`/`mucks`/`max` as wake words with phrases
@@ -247,7 +367,12 @@ and never touches the daemon or an LLM.
 ## HTTP surface
 
 - `GET  /api/voice` — engine/STT availability, content/mode defaults, spend, cache stats.
-- `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → recognized text (audio discarded).
+- `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`; audio is never
+  written to disk. Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and
+  `X-Mux-Utterance-Id` headers.
+- `POST /api/voice/transcribe` — the same decoder without a session, for the wake-word tester.
+- `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,
+  record one browser-measured sample, start a fresh run.
 - `POST /api/sessions/{sid}/voice/submit` — idempotent voice prompt commit to the PTY.
 - `POST /api/sessions/{sid}/voice/interrupt` — send Ctrl-C to the agent.
 - `POST /api/sessions/{sid}/voice/generate` — synthesize one clip of the last reply on demand.
@@ -260,18 +385,33 @@ and never touches the daemon or an LLM.
 `tts_enabled`, `tts_default_mode`, `tts_content`, `tts_engine`, `tts_edge_voice`/`_rate`/
 `_pitch`, `tts_soften_stops`, `tts_sapi_voice`/`_rate`, `tts_summary_model`,
 `tts_summary_max_tokens`, `tts_verbatim_max_chars`, `tts_daily_budget_usd`, `tts_cache_mb`;
-`stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model`; `voice_wake_words`,
-`voice_commands` (configurable wake words and per-action trigger phrases).
+`stt_enabled`, `stt_engine`, `stt_language`, `stt_whisper_model` (dictation),
+`stt_routing_model` (spoken commands; blank falls back to the dictation model);
+`voice_wake_words`, `voice_commands` (configurable wake words and per-action trigger phrases).
 
 ## Key files
 
-- `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`.
+- `src/swe_mux/voice.py` — `VoiceService` (TTS generate + STT transcribe), `VoiceStore`, the
+  decode profiles, and the latency report helpers.
 - `src/swe_mux/server.py` — voice HTTP handlers.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx` — `useConversation` (the app-root capture controller
-  and command loop), `ConversationChip` (header switch), `DictationPanel` (draft row).
+- `frontend/src/ConversationControl.tsx` — `useConversation` (the app-root capture controller,
+  the command loop, speculative decoding, and push-to-talk), `ConversationChip` (header switch),
+  `DictationPanel` (draft surface).
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
-- `frontend/src/conversation.ts` — VAD capture, WAV encoding, `Mux` command parser.
+- `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.
+- `frontend/src/audioFrames.ts` — streaming resampler and 512-sample framing.
+- `frontend/src/speechGate.ts` — the frame-counted endpointing state machine and both gate
+  configurations.
+- `frontend/src/sileroVad.ts`, `frontend/src/voiceCaptureWorklet.ts` — the ONNX detector and the
+  audio-thread capture worklet.
+- `frontend/src/voiceLatency.ts`, `frontend/src/VoiceLatencyReport.tsx` — the stage sample and its
+  readout.
+- `frontend/src/wakeWordTest.ts`, `frontend/src/WakeWordTester.tsx` — trial scoring and the
+  Settings surface.
+- `frontend/test/renderer/voice-capture.spec.ts` — pins the two failures that are silent in
+  production: the ONNX runtime not loading, and the capture worklet not being rendered by the
+  audio graph.
 - `frontend/src/mobileVoice.ts`, `frontend/src/Settings.tsx` — mobile setup + configuration UI.

@@ -26,6 +26,10 @@ from swe_mux.voice import (
     clip_snapshot,
     estimate_duration_seconds,
     last_reply_text,
+    latency_report,
+    latency_stages,
+    normalize_latency_sample,
+    percentile,
     soften_stops,
     speechify,
     streaming_segments,
@@ -442,22 +446,51 @@ def wav_bytes(seconds: float = 0.2, rate: int = 16_000) -> bytes:
     return target.getvalue()
 
 
-async def test_daemon_stt_validates_wav_and_deletes_temporary_audio(tmp_path: Path) -> None:
+async def test_daemon_stt_validates_wav_and_reports_stage_timings(tmp_path: Path) -> None:
     service, _events, _emitted, _record = make_service(tmp_path)
     service.config.stt_engine = "sapi"
-    seen: list[Path] = []
+    seen: list[bytes] = []
 
-    async def transcribe(audio_path: Path, text_path: Path) -> str:
-        assert audio_path.exists()
-        seen.extend([audio_path, text_path])
+    async def transcribe(audio: bytes, marks: dict[str, Any]) -> str:
+        seen.append(audio)
+        marks["decode_start"] = time.perf_counter()
+        marks["decode_end"] = time.perf_counter()
         return "  Mux   send that  "
 
     service._transcribe_sapi = transcribe  # type: ignore[method-assign]
     try:
-        assert await service.transcribe_wav(wav_bytes()) == "Mux send that"
-        assert seen and all(not path.exists() for path in seen)
+        result = await service.transcribe_wav(wav_bytes())
+        assert result.text == "Mux send that"
+        assert result.audio_ms == pytest.approx(200, abs=1)
+        assert result.queue_ms >= 0 and result.decode_ms >= 0
+        assert seen == [wav_bytes()]
         with pytest.raises(VoiceError, match="valid WAV"):
             await service.transcribe_wav(b"not audio")
+        # The capture contract is one rate now that decoding runs from raw PCM;
+        # accepting another would resample silently and mis-time every utterance.
+        with pytest.raises(VoiceError, match="16000 Hz"):
+            await service.transcribe_wav(wav_bytes(rate=8_000))
+    finally:
+        service.store.close()
+
+
+def test_whisper_decoding_never_touches_the_disk(tmp_path: Path) -> None:
+    """Audio is discarded by construction, not by a sweep that can lose a race."""
+    service, _events, _emitted, _record = make_service(tmp_path)
+    seen: list[Any] = []
+
+    class Model:
+        def transcribe(self, samples: Any, **_options: object):
+            seen.append(samples)
+            return [SimpleNamespace(text=" run the tests ")], SimpleNamespace()
+
+    service._whisper_models["turbo"] = Model()
+    marks: dict[str, Any] = {}
+    try:
+        _length, frames = service._validate_wav(wav_bytes(seconds=0.1))
+        assert service._transcribe_whisper(frames, 100, "dictation", marks) == "run the tests"
+        assert not (service.clip_directory / "stt").exists()
+        assert len(seen[0]) == 1_600
     finally:
         service.store.close()
 
@@ -471,14 +504,85 @@ def test_whisper_transcription_uses_accuracy_and_technical_context(tmp_path: Pat
             calls.append(options)
             return [SimpleNamespace(text=" Run the TypeScript tests. ")], SimpleNamespace()
 
-    service._whisper_model = Model()
+    service._whisper_models["turbo"] = Model()
+    marks: dict[str, Any] = {}
     try:
-        result = service._run_whisper_transcription(tmp_path / "speech.wav")
+        result = service._run_whisper_transcription("turbo", [], 12_000, "dictation", marks)
         assert result == "Run the TypeScript tests."
+        # The decode window is bracketed inside the decoder, so a first-use model
+        # download or a CUDA→CPU reload is reported as queueing, not as decode time.
+        assert marks["decode_end"] >= marks["decode_start"]
+        assert marks["beam_size"] == calls[0]["beam_size"] and marks["model"] == "turbo"
         assert calls[0]["beam_size"] == 5
         assert calls[0]["condition_on_previous_text"] is False
         assert calls[0]["vad_filter"] is False
         assert "TypeScript" in str(calls[0]["hotwords"])
+    finally:
+        service.store.close()
+
+
+def test_decoder_choice_splits_the_reflex_path_from_dictation(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        # A spoken command is a reflex: small model, greedy, no beam search.
+        assert service.decode_model("command") == "small.en"
+        assert service.beam_size("command", 12_000) == 1
+        # Dictation gets the accurate model, and beam search only where the extra
+        # 30% of decode time buys accuracy that shows up in the text.
+        assert service.decode_model("dictation") == "turbo"
+        assert service.beam_size("dictation", 1_600) == 1
+        assert service.beam_size("dictation", 12_000) == 5
+        # A blank routing model is not a failure; commands decode on the dictation
+        # model, slower but correct.
+        service.config.stt_routing_model = "  "
+        assert service.decode_model("command") == "turbo"
+    finally:
+        service.store.close()
+
+
+def test_routing_hotwords_carry_the_wake_words_and_stay_bounded(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    service.config.voice_wake_words = ["swee", "swe", "swee"]
+    service.config.voice_commands = [{"action": "send", "phrases": ["ship it"]}]
+    try:
+        routing = service._hotwords("command")
+        # A made-up trigger word is where a general model is weakest, so it is worth
+        # biasing toward. Command phrases are not: adding the default 57 of them was
+        # measured driving small.en into a repetition loop at 16x the decode time.
+        assert routing.startswith("swee, swe, ")
+        assert "ship it" not in routing
+        assert "TypeScript" in routing
+        assert "TypeScript" in service._hotwords("dictation")
+
+        # `voice_wake_words` allows 64 entries, and a long list of short similar
+        # tokens is exactly the shape that made the decoder loop.
+        service.config.voice_wake_words = [f"word{index}" for index in range(40)]
+        bounded = service._hotwords("command")
+        assert bounded.startswith("word0, ") and "word7" in bounded and "word8" not in bounded
+    finally:
+        service.store.close()
+
+
+def test_routing_model_failure_falls_back_to_the_dictation_model(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    loaded: list[str] = []
+
+    class Model:
+        def __init__(self, name: str, *, device: str, compute_type: str) -> None:
+            loaded.append(name)
+            if name == "small.en":
+                raise RuntimeError("model not found")
+
+    try:
+        # The routing model is a latency optimisation. Losing it must cost speed,
+        # not the command path.
+        assert service._ensure_whisper_model(Model, "command") == "turbo"
+        # A machine with a visible GPU retries the routing model on CPU first, so
+        # assert the order rather than the exact attempt count.
+        assert loaded[0] == "small.en" and loaded[-1] == "turbo"
+        with pytest.raises(VoiceError, match="could not load"):
+            service.config.stt_whisper_model = "small.en"
+            service._ensure_whisper_model(Model, "dictation")
     finally:
         service.store.close()
 
@@ -499,10 +603,10 @@ def test_whisper_model_load_falls_back_when_cuda_runtime_fails(
 
     monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 1)
     try:
-        service._load_whisper_model(Model)
+        service._load_whisper_model(Model, "turbo")
         assert calls == [("cuda", "float16"), ("cpu", "int8")]
-        assert service._whisper_device == "cpu"
-        assert service._whisper_model is not None
+        assert service._whisper_devices["turbo"] == "cpu"
+        assert service._whisper_models["turbo"] is not None
     finally:
         service.store.close()
 
@@ -638,3 +742,94 @@ async def test_store_prune_removes_oldest_ready_clips_beyond_cap(tmp_path: Path)
         assert clip_snapshot(remaining[0]).get("file_path") is None
     finally:
         store.close()
+
+
+def latency_sample(**overrides: Any) -> dict[str, Any]:
+    sample = {
+        "utterance_id": "u1",
+        "audio_ms": 1600,
+        "endpoint_ms": 900,
+        "encode_ms": 12,
+        "wait_ms": 3,
+        "upload_ms": 10,
+        "queue_ms": 40,
+        "decode_ms": 240,
+        "action_ms": 13,
+        "total_ms": 1218,
+        "command": "send",
+    }
+    sample.update(overrides)
+    return sample
+
+
+def test_latency_sample_clamps_untrusted_browser_numbers() -> None:
+    stored = normalize_latency_sample(
+        latency_sample(decode_ms=-5, endpoint_ms="nonsense", total_ms=1e12)
+    )
+    # A readout that can be poisoned into showing impossible stages is worse than
+    # none, because it is still believed.
+    assert stored["decode_ms"] == 0
+    assert stored["endpoint_ms"] == 0
+    assert stored["total_ms"] == 600_000
+    assert stored["queue_ms"] == 40
+    assert stored["at"] > 0
+
+
+def test_latency_sample_rejects_a_non_object_and_scrubs_the_correlation_id() -> None:
+    with pytest.raises(VoiceError):
+        normalize_latency_sample(["not", "an", "object"])
+    stored = normalize_latency_sample(latency_sample(utterance_id="a b/c<script>"))
+    assert stored["utterance_id"] == "abcscript"
+
+
+def test_latency_stages_sum_the_recorded_fields() -> None:
+    stages = latency_stages(normalize_latency_sample(latency_sample()))
+    assert stages == {
+        "to_post_ms": 915.0,
+        "to_decode_ms": 50.0,
+        "decode_ms": 240.0,
+        "action_ms": 13.0,
+    }
+    assert sum(stages.values()) == 1218.0
+
+
+def test_percentile_is_nearest_rank_and_survives_an_empty_run() -> None:
+    assert percentile([], 0.5) == 0.0
+    assert percentile([10.0], 0.95) == 10.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 0.5) == 2.0
+    assert percentile([1.0, 2.0, 3.0, 4.0], 0.95) == 4.0
+
+
+def test_latency_report_separates_commands_from_dictation() -> None:
+    samples = [
+        normalize_latency_sample(latency_sample(total_ms=1200, command="send")),
+        normalize_latency_sample(latency_sample(total_ms=1400, command="send")),
+        # Dictation decodes several times longer audio, so blending the two totals
+        # would answer neither the exit criterion nor the dictation question.
+        normalize_latency_sample(latency_sample(total_ms=2600, command="", decode_ms=700)),
+    ]
+    report = latency_report(samples)
+    assert report["count"] == 3
+    assert report["total_ms"]["p50"] == 1400
+    assert report["command_total_ms"] == {"count": 2, "p50": 1200, "p95": 1400}
+    assert report["stages"]["decode_ms"]["max"] == 700
+    assert [item["stages"]["decode_ms"] for item in report["recent"]] == [240, 240, 700]
+
+
+def test_latency_report_is_empty_before_anything_is_spoken() -> None:
+    report = latency_report([])
+    assert report["count"] == 0
+    assert report["stages"]["decode_ms"] == {"p50": 0.0, "p95": 0.0, "max": 0.0}
+    assert report["recent"] == []
+
+
+def test_service_records_and_clears_latency_samples(tmp_path: Path) -> None:
+    service, _events, _emitted, _record = make_service(tmp_path)
+    try:
+        service.record_stt_latency(latency_sample())
+        service.record_stt_latency(latency_sample(total_ms=1400))
+        assert service.stt_latency_report()["count"] == 2
+        service.clear_stt_latency()
+        assert service.stt_latency_report()["count"] == 0
+    finally:
+        service.store.close()

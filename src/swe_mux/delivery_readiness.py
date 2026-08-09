@@ -87,11 +87,45 @@ class DeliveryReadinessTracker:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.clock = clock
         self._sessions: dict[str, ReadinessMemory] = {}
+        self._snapshot_pty_states: dict[str, tuple[str | None, float, str]] = {}
         self._evaluation_counts: Counter[str] = Counter()
         self._reason_counts: Counter[str] = Counter()
 
     def forget(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
+        self._snapshot_pty_states.pop(session_id, None)
+
+    def _pty_state(self, session: ReadinessSession, *, snapshot_max_age: float) -> str:
+        """Classify the screen, with a bounded cache only for UI snapshots.
+
+        Delivery authorization always passes ``snapshot_max_age=0`` and reads the
+        current PTY tail. The fleet endpoint is diagnostic-only (``authorized`` is
+        always false), so it may reuse a sub-second verdict instead of synchronously
+        rescanning 32 KiB for every browser refresh.
+        """
+        session_id = str(session.record.id)
+        run_id = session.record.agent_run_id
+        now = self.clock()
+        cached = self._snapshot_pty_states.get(session_id)
+        if (
+            snapshot_max_age > 0
+            and cached is not None
+            and cached[0] == run_id
+            and now - cached[1] <= snapshot_max_age
+        ):
+            return cached[2]
+
+        from .scrollback import SCREEN_TAIL_BYTES
+        from .session import pty_tail_state
+
+        try:
+            tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
+            state = pty_tail_state(tail, backend=session.record.backend)
+        except (AttributeError, OSError, ValueError):
+            state = "unknown"
+        if snapshot_max_age > 0:
+            self._snapshot_pty_states[session_id] = (run_id, now, state)
+        return state
 
     def _memory(self, session: ReadinessSession) -> ReadinessMemory:
         session_id = str(session.record.id)
@@ -394,7 +428,11 @@ class DeliveryReadinessTracker:
         return None
 
     def evaluate(
-        self, session: ReadinessSession, *, record_metrics: bool = True
+        self,
+        session: ReadinessSession,
+        *,
+        record_metrics: bool = True,
+        snapshot_pty_cache_seconds: float = 0.0,
     ) -> dict[str, Any]:
         now = self.clock()
         memory = self._memory(session)
@@ -414,14 +452,9 @@ class DeliveryReadinessTracker:
             else None
         )
         screen_mode, screen_source = self._screen_evidence(session, now)
-        from .scrollback import SCREEN_TAIL_BYTES
-        from .session import pty_tail_state
-
-        try:
-            tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
-            pty_state = pty_tail_state(tail, backend=record.backend)
-        except (AttributeError, OSError, ValueError):
-            pty_state = "unknown"
+        pty_state = self._pty_state(
+            session, snapshot_max_age=max(0.0, snapshot_pty_cache_seconds)
+        )
         screen_at_agent_prompt = self._screen_check(
             record, memory, screen_mode, screen_source, pty_state
         )

@@ -64,62 +64,88 @@ Earlier drafts of this work listed them as open.
   (`frontend/src/conversationDraft.ts`) backing per-phrase undo and typed corrections.
 - Both voice surfaces float over the terminal rather than taking pane rows, pinned by
   `frontend/test/renderer/pane-layout.spec.ts`.
+- Phase 1 (all ten items) and the Phase 2 tester. Behaviour lives in `design/features/voice.md`;
+  the measurements and the two places the plan changed are recorded under Phase 1.
 
-## Phase 1 — STT latency
+## Phase 1 — STT latency (built 2026-08-08)
 
-First, because everything else is judged through it, and because every item improves what exists
-today regardless of what is built later.
+All ten items are implemented; behaviour is documented in `design/features/voice.md`.
+What follows is the measurement that drove them and the two places the plan changed on contact.
 
-Measured constants today: a 900 ms trailing-silence endpoint (`conversation.ts`, `finish` gate),
-`beam_size=5` decoding, and a WAV written to disk before transcription (`src/swe_mux/voice.py`).
+### Baseline, measured before any change
 
-1. **Instrument four stages** before changing anything: speech-end → POST sent, POST → decode
-   start, decode start → text, text → action.
-   Expectation is that the endpoint is over half the total, but the fixes have very different
-   payoffs depending on whether decode is 200 ms or 800 ms, and this path has no timing today.
-2. **Replace the energy VAD with Silero** and drop the trailing silence to ~350 ms.
-   The 900 ms tail exists *because* an RMS-over-noise-floor detector false-triggers on breath and
-   room noise; an accurate detector does not need to ride that out. Largest single win.
-3. **Speculative decode.** Begin transcribing at ~300 ms of silence while still listening, and
-   discard the result if speech resumes.
-   Spends idle GPU to hide inference inside the endpoint wait.
-4. **Use the suffix grammar as an endpoint signal.** A speculative transcript that already ends in
-   a complete wake word plus command phrase is strong evidence the utterance is over, so commands
-   short-circuit the remaining silence. Dictation still waits the full tail.
-5. **Adaptive beam size:** greedy under ~3 s, `beam_size=5` only for longer dictation.
-6. **Two models by job:** a small English model for the routing pass, `turbo` for dictation text,
-   run concurrently on the same audio.
-7. **Decode from memory**, deleting the WAV write and its stale-utterance sweep.
-   Also makes "no audio is retained" true by construction rather than by cleanup.
-8. **`AudioWorklet` instead of `ScriptProcessorNode`**, which runs on the main thread and adds
-   jitter exactly when the UI is busy.
-9. **Instant speech-end acknowledgment** (tone or mic state flip) before any text exists.
-   Two seconds of silence reads as broken; two seconds after "heard you" reads as thinking.
-10. **Push-to-talk keybinding** as a desktop escape hatch with no endpointing at all.
+Whisper `turbo` on CUDA, `beam_size=5`, WAV written to disk, against the live daemon:
 
-Deferred until measurement justifies them: WebSocket audio streaming so decode overlaps speech,
-and a prefix wake word with on-device wake-word detection.
+| audio | endpoint (by construction) | POST → text | of which decode |
+| --- | --- | --- | --- |
+| 1.6 s command | 900 ms | 303 ms | 237 ms |
+| 4.2 s dictation | 900 ms | 363 ms | 292 ms |
+| 12.5 s dictation | 900 ms | 694 ms | 447 ms |
+
+Cold model load, first utterance of a daemon's life: 7.8 s.
+So the endpoint was roughly three quarters of the ~1.2 s a short command actually cost, as
+expected — but decode was not negligible either.
+
+Supporting measurements: `small.en` greedy decodes the 1.6 s clip in 102 ms against `turbo`'s
+237 ms; greedy versus `beam_size=5` is worth ~24 ms on short audio and ~100 ms on long; the WAV
+disk round trip is 5.6 ms.
+
+### After
+
+Measured per stage, on the same clips: routing decode 94 ms, dictation decode 216 ms (short) and
+552 ms (12.5 s, beam 5), and no `stt` directory is created at all.
+A short command's projected path is 160 ms of silence before speculation starts, ~20 ms of
+transport and queueing, 94 ms of routing decode, ~15 ms to act — landing near **290 ms**, inside
+the exit criterion, and short-circuiting the remaining tail entirely.
+That is a projection from measured components; the end-to-end number needs a microphone and is
+what the Settings → Voice readout exists to report.
+
+### Where the plan changed
+
+- **The speculative trigger is 160 ms of silence, not ~300 ms.** With a 352 ms endpoint and a
+  ~94 ms routing decode, a decode begun at 300 ms cannot finish before the endpoint fires, which
+  would leave item 4's grammar short-circuit unable to ever fire. Starting earlier is what makes
+  the two items compose.
+- **The routing pass is not additionally biased toward the command phrases.** Feeding the default
+  57 phrases as `hotwords` drove `small.en` into a repetition loop: 1530 ms on a 1.6 s utterance
+  and 3035 ms on a long one, against 94 ms with the wake words alone. Only the wake words bias
+  the routing decoder, capped at eight.
+- **"Two models run concurrently on the same audio"** is realized through the speculative pass
+  rather than by decoding every utterance twice: the routing model answers the reflex question
+  while the tail is still running, and the dictation model answers the text question after the
+  endpoint. They hold separate locks, so the two overlap rather than queue.
+- **The energy detector is kept as a fallback**, with its 900 ms tail and no speculation. A
+  microphone that refuses to open is worse than one that endpoints slowly, and the ONNX runtime is
+  a 13 MB lazy download that can fail.
+
+Still deferred, and still not justified by measurement: WebSocket audio streaming so decode
+overlaps speech, and a prefix wake word with on-device wake-word detection.
 The prefix form would let a local detector gate the pipeline so nothing is transcribed unless the
 wake word fired, at the cost of the suffix ergonomics that make dictation work.
 Supporting both (prefix for commands, suffix retained for `send`) is the compromise if it is ever
 needed.
 
 **Exit criterion:** under ~500 ms from end of speech to action for a short command.
+Confirm it from the Settings → Voice command-only total after real use.
 
-## Phase 2 — Wake word and the tester
+## Phase 2 — Wake word and the tester (tester built 2026-08-08)
 
 Ordered before the trigger word is changed, because wake-word choice is an ASR problem wearing a
 configuration problem's clothes.
 
-- **Tester in Settings → Voice:** capture N utterances, run them through the real transcribe
-  endpoint and the real matcher, and report heard-versus-matched.
-  Config already exists (`voice_wake_words`, `voice_commands`, `buildVoiceMatcher`); only the
-  measurement surface is missing.
-- **Choose the trigger word from that data.**
+- **Tester in Settings → Voice.** Built. It drives the real capture pipeline, posts to the real
+  transcribe endpoint on the routing decoder the command path uses, and scores with the matcher
+  compiled from the live configuration. It reports the raw transcript, which wake-word spelling
+  was heard as a whole word, and which action fired — because "heard as *bucks*" and "heard, but
+  the phrase after it did not match" are different problems with different fixes.
+- **Choose the trigger word from that data.** Not yet done: it needs spoken trials.
   Good wake words are two to three syllables, phonetically distinctive, rare in ordinary speech,
   and not a prefix of a common word.
   A bare "swe" is a poor candidate on every count and will return as sway/swee/sweet; the shipped
   `mux`/`mucks`/`max` variant set exists because the same problem was already hit once.
+  The tester's whole-word matching is deliberately strict for exactly this case: counting "swe"
+  inside "sweet" as a hit would report the trigger surviving in the situation that proves it did
+  not.
 
 ## Phase 3 — Global talk surface and targeting
 
@@ -207,7 +233,10 @@ Prototype it before building rundown content.
 
 ## Key files
 
-- `frontend/src/conversation.ts` — VAD capture, WAV encoding, wake word and command matcher.
+- `frontend/src/conversation.ts` — capture, WAV encoding, wake word and command matcher.
+- `frontend/src/speechGate.ts` — endpointing rules, speculative trigger, both gate configurations.
+- `frontend/src/sileroVad.ts`, `frontend/src/audioFrames.ts` — the detector and its frame plumbing.
+- `frontend/src/voiceLatency.ts`, `frontend/src/wakeWordTest.ts` — the two measurement models.
 - `frontend/src/ConversationControl.tsx` — `useConversation` controller, chip, dictation panel.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model.
 - `frontend/src/commands.ts` — command registry, `runCommand`, `searchCommands`.

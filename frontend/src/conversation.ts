@@ -1,3 +1,10 @@
+import { FrameAssembler, frameRms, joinFrames, StreamingDownsampler, VAD_FRAME_MS, VAD_SAMPLE_RATE } from './audioFrames.ts'
+import { SileroVad } from './sileroVad.ts'
+import { ENERGY_GATE, SILERO_GATE, SpeechGate } from './speechGate.ts'
+import type { GateConfig } from './speechGate'
+import { CAPTURE_WORKLET_NAME, captureWorkletUrl } from './voiceCaptureWorklet.ts'
+import type { CaptureMarks } from './voiceLatency'
+
 export type MuxVoiceCommand='send'|'cancel'|'undo'|'mute'|'read'|'summary'|'verbatim'|'help'|'stop'|'interrupt'|'standby'|'resume'
 export type ParsedMuxVoice={command:MuxVoiceCommand|null;text:string}
 export type VoiceCommandConfig={action:string;phrases:string[]}
@@ -72,21 +79,6 @@ export function conversationCapability():ConversationCapability{
     reason:!secureContext?'HTTPS or localhost is required.':!mediaDevices?'Microphone capture is unavailable in this browser.':!audioContext?'Web Audio is unavailable in this browser.':'Persistent swe-mux microphone capture is available.'}
 }
 
-export function downsample(input:Float32Array,inputRate:number,outputRate=16_000):Float32Array{
-  if(outputRate>=inputRate)return input.slice()
-  const ratio=inputRate/outputRate
-  const length=Math.max(1,Math.round(input.length/ratio))
-  const result=new Float32Array(length)
-  let inputOffset=0
-  for(let outputOffset=0;outputOffset<length;outputOffset++){
-    const nextInputOffset=Math.min(input.length,Math.round((outputOffset+1)*ratio))
-    let total=0,count=0
-    for(;inputOffset<nextInputOffset;inputOffset++){total+=input[inputOffset];count++}
-    result[outputOffset]=count?total/count:0
-  }
-  return result
-}
-
 export function encodeWav(samples:Float32Array,sampleRate=16_000):Blob{
   const buffer=new ArrayBuffer(44+samples.length*2)
   const view=new DataView(buffer)
@@ -102,27 +94,68 @@ export function encodeWav(samples:Float32Array,sampleRate=16_000):Blob{
   return new Blob([buffer],{type:'audio/wav'})
 }
 
-type CaptureHandlers={
+export type CaptureDetector='silero'|'energy'
+
+export type CaptureHandlers={
   onSpeechStart():void
-  onUtterance(audio:Blob,durationMs:number):void
+  /** The endpoint fired. Raised before any text exists, so the UI can acknowledge instantly. */
+  onSpeechEnd():void
+  /**
+   * Enough trailing silence to be worth decoding, while capture keeps listening.
+   * The result is usable only while `commitSpeculative` still accepts this id.
+   */
+  onSpeculative(audio:Blob,marks:CaptureMarks):void
+  /** Speech resumed: anything decoded for this id is a prefix and must be dropped. */
+  onSpeculativeAbort(utteranceId:string):void
+  onUtterance(audio:Blob,marks:CaptureMarks):void
   onError(message:string):void
+  /** Reports how capture settled, once the detector is known. */
+  onDetector(detector:CaptureDetector,diagnostic:string):void
   playbackActive():boolean
 }
 
+const newUtteranceId=():string=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+/** Audio kept before speech starts, so the leading phoneme is not clipped. */
+const PRE_ROLL_MS=320
+const PRE_ROLL_FRAMES=Math.ceil(PRE_ROLL_MS/VAD_FRAME_MS)
+
+/**
+ * The persistent microphone: one stream, armed across silence, cut into utterances.
+ *
+ * Detection is Silero over ONNX when it loads and an RMS-over-noise-floor detector
+ * when it does not. The two are not interchangeable and the gate config says so:
+ * Silero endpoints after 352 ms and speculates at 160 ms, while the energy detector
+ * keeps the 900 ms tail it needs to avoid cutting words in half on breath noise, and
+ * never speculates. A Silero load failure therefore degrades how dictation feels
+ * rather than disabling it.
+ *
+ * Audio reaches the detector as 512-sample 16 kHz frames whether it came from the
+ * AudioWorklet or the ScriptProcessorNode fallback, so the endpoint rules are
+ * identical on both paths and there is one resampler to be wrong about.
+ */
 export class PersistentVoiceCapture{
   private handlers:CaptureHandlers
   private context:AudioContext|null=null
   private stream:MediaStream|null=null
   private source:MediaStreamAudioSourceNode|null=null
+  private worklet:AudioWorkletNode|null=null
   private processor:ScriptProcessorNode|null=null
   private sink:GainNode|null=null
+  private resampler:StreamingDownsampler|null=null
+  private frames=new FrameAssembler()
+  private gateConfig:GateConfig=ENERGY_GATE
+  private gate=new SpeechGate(ENERGY_GATE)
+  private silero:SileroVad|null=null
+  private detector:CaptureDetector='energy'
   private preRoll:Float32Array[]=[]
   private utterance:Float32Array[]=[]
-  private speaking=false
-  private silenceMs=0
-  private speechMs=0
-  private totalMs=0
   private noiseFloor=0.004
+  private utteranceId=''
+  private pending:Promise<void>=Promise.resolve()
+  private stopped=false
+  /** Push-to-talk suspends endpointing entirely; the key release is the endpoint. */
+  private pushToTalk=false
 
   constructor(handlers:CaptureHandlers){this.handlers=handlers}
 
@@ -130,66 +163,207 @@ export class PersistentVoiceCapture{
     if(this.context)return
     const capability=conversationCapability()
     if(!capability.available)throw new Error(capability.reason)
+    this.stopped=false
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false})
     this.context=new AudioContext({latencyHint:'interactive'})
     await this.context.resume()
+    this.resampler=new StreamingDownsampler(this.context.sampleRate)
     this.source=this.context.createMediaStreamSource(this.stream)
-    this.processor=this.context.createScriptProcessor(2048,1,1)
-    this.sink=this.context.createGain();this.sink.gain.value=0
-    this.source.connect(this.processor);this.processor.connect(this.sink);this.sink.connect(this.context.destination)
-    this.processor.onaudioprocess=event=>this.process(event.inputBuffer.getChannelData(0))
+    await this.attachSource()
+    // Started after capture is live rather than before it: the model is 2.3 MB over
+    // whatever link a phone is on, and blocking the microphone on that download would
+    // make Talk look broken for seconds. The energy detector is already running until
+    // it lands, so no speech is lost while it downloads.
+    void this.loadSilero()
   }
 
   stop():void{
+    this.stopped=true
     if(this.processor)this.processor.onaudioprocess=null
-    try{this.source?.disconnect();this.processor?.disconnect();this.sink?.disconnect()}catch{/* already disconnected */}
+    if(this.worklet)this.worklet.port.onmessage=null
+    try{this.source?.disconnect();this.worklet?.disconnect();this.processor?.disconnect();this.sink?.disconnect()}catch{/* already disconnected */}
     for(const track of this.stream?.getTracks()||[])track.stop()
     void this.context?.close()
-    this.context=null;this.stream=null;this.source=null;this.processor=null;this.sink=null
-    this.resetUtterance();this.preRoll=[]
+    this.silero?.dispose();this.silero=null
+    this.context=null;this.stream=null;this.source=null;this.worklet=null;this.processor=null;this.sink=null;this.resampler=null
+    this.detector='energy';this.gateConfig=ENERGY_GATE
+    this.resetUtterance();this.preRoll=[];this.frames.reset();this.pushToTalk=false
   }
 
-  private process(input:Float32Array):void{
-    const chunk=input.slice()
-    const durationMs=chunk.length/(this.context?.sampleRate||48_000)*1000
-    let squareSum=0
-    for(const sample of chunk)squareSum+=sample*sample
-    const rms=Math.sqrt(squareSum/Math.max(1,chunk.length))
-    if(!this.speaking)this.noiseFloor=this.noiseFloor*.97+Math.min(rms,.04)*.03
-    const threshold=Math.max(.012,this.noiseFloor*3.2,this.handlers.playbackActive()?.035:0)
-    if(!this.speaking){
-      this.preRoll.push(chunk)
-      let preRollMs=this.preRoll.reduce((total,item)=>total+item.length/(this.context?.sampleRate||48_000)*1000,0)
-      while(preRollMs>320&&this.preRoll.length>2){
-        const removed=this.preRoll.shift()
-        if(removed)preRollMs-=removed.length/(this.context?.sampleRate||48_000)*1000
-      }
-      if(rms<=threshold)return
-      this.speaking=true;this.silenceMs=0;this.speechMs=durationMs;this.totalMs=preRollMs
+  /**
+   * Claim a speculative decode's result and end the utterance on it.
+   *
+   * Returns false when speech resumed or the utterance already ended by itself, in
+   * which case the caller must discard the text: acting on it then would submit a
+   * prefix of a sentence still being spoken.
+   */
+  commitSpeculative(utteranceId:string):boolean{
+    if(this.stopped||!this.gate.speaking||!this.gate.speculating)return false
+    if(!utteranceId||utteranceId!==this.utteranceId)return false
+    this.handlers.onSpeechEnd()
+    this.resetUtterance()
+    return true
+  }
+
+  /** Begin a push-to-talk utterance: capture everything, endpoint on release only. */
+  beginPushToTalk():void{
+    if(!this.context||this.stopped||this.pushToTalk)return
+    this.pushToTalk=true
+    if(!this.gate.speaking){
+      this.utteranceId=newUtteranceId()
       this.utterance=this.preRoll.splice(0)
       this.handlers.onSpeechStart()
-      return
     }
-    this.utterance.push(chunk);this.totalMs+=durationMs
-    if(rms>threshold){this.silenceMs=0;this.speechMs+=durationMs}else this.silenceMs+=durationMs
-    if((this.silenceMs>=900&&this.speechMs>=220)||this.totalMs>=30_000)this.finish()
   }
 
-  private finish():void{
+  /** End a push-to-talk utterance. The key release *is* the endpoint: no tail at all. */
+  endPushToTalk():void{
+    if(!this.pushToTalk)return
+    this.pushToTalk=false
+    if(!this.utterance.length){this.resetUtterance();return}
+    this.handlers.onSpeechEnd()
+    this.finish(0)
+  }
+
+  private async attachSource():Promise<void>{
     const context=this.context
-    const chunks=this.utterance
-    const durationMs=this.totalMs
+    const source=this.source
+    if(!context||!source)return
+    // Both paths terminate in a muted gain node feeding the destination. The graph is
+    // rendered by pulling backwards from the destination, so a capture node with
+    // nothing downstream is not guaranteed to run at all.
+    this.sink=context.createGain();this.sink.gain.value=0
+    this.sink.connect(context.destination)
+    if(context.audioWorklet){
+      try{
+        await context.audioWorklet.addModule(captureWorkletUrl())
+        if(this.stopped)return
+        this.worklet=new AudioWorkletNode(context,CAPTURE_WORKLET_NAME,{
+          numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],
+          channelCount:1,channelCountMode:'explicit',
+        })
+        this.worklet.port.onmessage=event=>this.ingest(event.data as Float32Array)
+        source.connect(this.worklet);this.worklet.connect(this.sink)
+        return
+      }catch{/* fall through to the ScriptProcessorNode path */}
+    }
+    // Kept for browsers without AudioWorklet: it runs its callback on the main
+    // thread, so every endpoint decision is jittered by whatever the UI is doing.
+    this.processor=context.createScriptProcessor(2048,1,1)
+    this.processor.onaudioprocess=event=>this.ingest(event.inputBuffer.getChannelData(0))
+    source.connect(this.processor);this.processor.connect(this.sink)
+  }
+
+  private async loadSilero():Promise<void>{
+    const silero=new SileroVad()
+    try{
+      await silero.load()
+      if(this.stopped){silero.dispose();return}
+      this.silero=silero
+      this.detector='silero'
+      this.gateConfig=SILERO_GATE
+      // Swapped only between utterances: changing the endpoint rule mid-utterance
+      // would mix 900 ms and 352 ms accounting inside one gate.
+      if(!this.gate.speaking)this.gate=new SpeechGate(SILERO_GATE)
+      this.handlers.onDetector('silero','Silero voice activity detection; utterances end after a short pause.')
+    }catch(cause){
+      silero.dispose()
+      const reason=cause instanceof Error?cause.message:String(cause)
+      this.handlers.onDetector('energy',`Silero VAD unavailable (${reason}); using the energy detector, which needs a longer pause.`)
+    }
+  }
+
+  /** Resample and frame one block of microphone audio, then queue it for detection. */
+  private ingest(block:Float32Array):void{
+    const resampler=this.resampler
+    if(!resampler||this.stopped)return
+    const frames=this.frames.push(resampler.push(block))
+    if(!frames.length)return
+    // Serialized: Silero carries recurrent state between frames, so two overlapping
+    // inferences would interleave that state and corrupt both probabilities.
+    this.pending=this.pending.then(()=>this.consume(frames)).catch(cause=>{
+      if(!this.stopped)this.handlers.onError(cause instanceof Error?cause.message:String(cause))
+    })
+  }
+
+  private async consume(frames:Float32Array[]):Promise<void>{
+    for(const frame of frames){
+      if(this.stopped)return
+      this.advance(frame,await this.probability(frame))
+    }
+  }
+
+  private async probability(frame:Float32Array):Promise<number>{
+    const silero=this.silero
+    if(this.detector==='silero'&&silero?.ready)return silero.probability(frame)
+    // Energy fallback, reduced to the same 0/1 signal the gate consumes. The raised
+    // floor during playback is what keeps the agent's own read-aloud from
+    // self-triggering the microphone.
+    const rms=frameRms(frame)
+    if(!this.gate.speaking)this.noiseFloor=this.noiseFloor*.97+Math.min(rms,.04)*.03
+    const threshold=Math.max(.012,this.noiseFloor*3.2,this.handlers.playbackActive()?.035:0)
+    return rms>threshold?1:0
+  }
+
+  private advance(frame:Float32Array,probability:number):void{
+    // Push-to-talk owns its own boundaries: the gate is not allowed to end the
+    // utterance while the key is held, because having no endpointing is the point.
+    if(this.pushToTalk){this.utterance.push(frame);return}
+    const speakingBefore=this.gate.speaking
+    if(!speakingBefore){
+      this.preRoll.push(frame)
+      while(this.preRoll.length>PRE_ROLL_FRAMES)this.preRoll.shift()
+    }
+    const events=this.gate.push(probability)
+    // Appended before the events are handled, so an endpoint on this frame reads a
+    // complete utterance and a reset afterwards cannot be undone by a late push.
+    if(speakingBefore)this.utterance.push(frame)
+    for(const event of events){
+      if(event.type==='speech-start'){
+        this.utteranceId=newUtteranceId()
+        // The pre-roll already holds this frame, so it is not appended again.
+        this.utterance=this.preRoll.splice(0)
+        this.handlers.onSpeechStart()
+      }else if(event.type==='speculate'){
+        this.emit(this.handlers.onSpeculative,this.gate.silenceMs,true)
+      }else if(event.type==='resume'){
+        this.handlers.onSpeculativeAbort(this.utteranceId)
+      }else if(event.type==='endpoint'){
+        this.handlers.onSpeechEnd()
+        this.finish(event.reason==='silence'?this.gate.silenceMs:0)
+      }
+    }
+  }
+
+  private finish(silenceMs:number):void{
+    this.emit(this.handlers.onUtterance,silenceMs,false)
     this.resetUtterance()
-    if(!context||!chunks.length)return
-    const length=chunks.reduce((total,item)=>total+item.length,0)
-    const joined=new Float32Array(length)
-    let offset=0
-    for(const chunk of chunks){joined.set(chunk,offset);offset+=chunk.length}
-    try{this.handlers.onUtterance(encodeWav(downsample(joined,context.sampleRate)),durationMs)}
-    catch(cause){this.handlers.onError(cause instanceof Error?cause.message:String(cause))}
+  }
+
+  /** Encode what has been captured so far and hand it to one of the two sinks. */
+  private emit(sink:(audio:Blob,marks:CaptureMarks)=>void,silenceMs:number,speculative:boolean):void{
+    const chunks=this.utterance
+    if(!chunks.length)return
+    const finishedAt=performance.now()
+    try{
+      const audio=encodeWav(joinFrames(chunks),VAD_SAMPLE_RATE)
+      sink(audio,{
+        utteranceId:this.utteranceId,
+        // Speech physically stopped one trailing-silence window ago, not now. Dating
+        // the utterance from here would hide the endpoint wait — the single largest
+        // stage — inside a stage nobody is looking at.
+        speechEndAt:finishedAt-silenceMs,
+        finishedAt,
+        encodedAt:performance.now(),
+        audioMs:chunks.length*VAD_FRAME_MS,
+        speculative,
+      })
+    }catch(cause){this.handlers.onError(cause instanceof Error?cause.message:String(cause))}
   }
 
   private resetUtterance():void{
-    this.speaking=false;this.silenceMs=0;this.speechMs=0;this.totalMs=0;this.utterance=[]
+    this.gate=new SpeechGate(this.gateConfig)
+    this.silero?.reset()
+    this.utterance=[];this.utteranceId=''
   }
 }

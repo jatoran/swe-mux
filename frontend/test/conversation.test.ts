@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { buildVoiceMatcher, downsample, parseMuxVoice } from '../src/conversation.ts'
+import { buildVoiceMatcher, parseMuxVoice } from '../src/conversation.ts'
 
 assert.deepEqual(parseMuxVoice('Please run the focused tests. Mux send that.'),{
   command:'send',text:'Please run the focused tests.',
@@ -40,8 +40,5 @@ assert.deepEqual(swe.parse('Swee ship it'),{command:'send',text:''})
 assert.deepEqual(swe.parse('sway wake up'),{command:'resume',text:''})
 assert.deepEqual(swe.parse('Swe send'),{command:null,text:'Swe send'})
 assert.deepEqual(swe.parse('go ahead and merge'),{command:null,text:'go ahead and merge'})
-
-const source=new Float32Array([1,1,-1,-1,0,0,0,0])
-assert.deepEqual([...downsample(source,8,4)],[1,-1,0,0])
 
 console.log('conversation tests passed')

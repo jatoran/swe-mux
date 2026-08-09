@@ -161,6 +161,16 @@ poison byte sequence in the retained buffer degrades into one visible error rath
 remount loop. Both detections leave `surface_drift_repair` / `write_pipeline_dead`
 breadcrumbs in the render diagnostics.
 
+**Live terminal output is credit-limited at the parser boundary.**
+`attach_ready` advertises `output_flow_control:true`, and the client returns byte credit with `output_ack` only from xterm write callbacks.
+The daemon stops sending binary output to that connection when unparsed output reaches 128 KiB and resumes below the threshold.
+This is separate from TCP and WebSocket backpressure, which only prove that Chromium accepted a frame and say nothing about whether xterm parsed it.
+Attach and resync replay use the same accounting so a late replay acknowledgement cannot release credit belonging to newer live output.
+Clients that do not advertise the capability keep the previous protocol and cannot deadlock waiting for acknowledgements they never send.
+The health sweep records `write_pipeline_backlog` when at least 32 KiB has remained queued for 750 ms; backlog is diagnostic because credit already bounds it, while a dead parser still follows the existing remount path.
+A hidden warm pane withholds parsed-byte credit after its first bounded window and returns the accumulated credit when revealed.
+This keeps hidden busy agents from continuously consuming the browser UI thread while preserving their subscriber and session.
+
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
 session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm
@@ -207,7 +217,7 @@ work, while a claim that changes owners must use the freshly registered viewport
 PTY WebSocket frames, typed in `design/interfaces.md`: `claim_input`, `input_owner`,
 `input_owner_released`, `input_rejected`, `resize`/`attach_ready` (with `hidden`),
 `geometry`, `repaint` (client-requested transcript restatement, `features/sessions.md`),
-`client_diagnostic` (durable client repair telemetry).
+`output_ack` (xterm parser credit), `client_diagnostic` (durable client repair telemetry).
 
 ## Diagnostics
 

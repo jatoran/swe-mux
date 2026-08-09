@@ -68,6 +68,7 @@ test('attach readiness carries fitted dimensions, renderer, and visibility', () 
     rows: 41,
     renderer: 'webgl',
     hidden: false,
+    output_flow_control: true,
   })
   // A pane attaching while its window is hidden registers no viewport at all, so it
   // cannot size the PTY for the device the user is actually looking at.
@@ -77,6 +78,7 @@ test('attach readiness carries fitted dimensions, renderer, and visibility', () 
     rows: 41,
     renderer: 'dom',
     hidden: true,
+    output_flow_control: true,
   })
 })
 

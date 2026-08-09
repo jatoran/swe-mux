@@ -66,5 +66,14 @@ export function terminalAttachReadyFrame(
   renderer: ActiveTerminalRenderer,
   hidden = false,
 ) {
-  return { type: 'attach_ready' as const, cols, rows, renderer, hidden }
+  return {
+    type: 'attach_ready' as const,
+    cols,
+    rows,
+    renderer,
+    hidden,
+    // The daemon enables output credit only after the client advertises parser
+    // acknowledgements. Older clients therefore keep the pre-credit protocol.
+    output_flow_control: true,
+  }
 }

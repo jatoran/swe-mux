@@ -82,7 +82,7 @@ import {
   recordTerminalRenderDiagnostic,
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
-import { remountDecision, scrollbackRepaintNeeded, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineStalled } from './terminalHealth'
+import { remountDecision, scrollbackRepaintNeeded, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineBacklogged, writePipelineStalled } from './terminalHealth'
 import { reportPromptSubmitted } from './projectRecency'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
@@ -791,6 +791,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // the health sweep compares these two clocks instead (`writePipelineStalled`).
     let lastBytesAt: number | null = null
     let lastParsedAt: number | null = null
+    // Unlike WebSocket delivery, xterm's write callback means the bytes reached the
+    // parser. Acknowledging that boundary lets the daemon cap the queue ahead of echo.
+    const pendingLiveWrites: { bytes: number; at: number }[] = []
+    let pendingLiveWriteBytes = 0
+    let outputAckBytes = 0
+    let outputAckTimer: number | undefined
+    let outputAckSocket: WebSocket | null = null
     // Keystrokes typed while the buffer replays. Returning to a tab always re-attaches
     // (and a long absence reconnects), so the tap-and-type right after coming back lands
     // mid-replay; sending it then would race the replayed bytes, and dropping it loses
@@ -826,6 +833,32 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if (now - lastRepairReportAt < 1000) return
       lastRepairReportAt = now
       socket.send(JSON.stringify({ type: 'client_diagnostic', phase, detail }))
+    }
+    const flushOutputAck = (source = outputAckSocket) => {
+      if (!source || socket !== source || source.readyState !== WebSocket.OPEN) return
+      // A retained warm pane is not interactive. Withhold credit after its first
+      // bounded window so busy hidden agents do not keep consuming the UI thread.
+      if (paneIsHidden()) return
+      const bytes = outputAckBytes
+      outputAckBytes = 0
+      if (bytes > 0) source.send(JSON.stringify({ type: 'output_ack', bytes }))
+    }
+    const acknowledgeParsedOutput = (source: WebSocket, byteCount: number) => {
+      if (socket !== source || source.readyState !== WebSocket.OPEN) return
+      if (outputAckSocket !== source) {
+        if (outputAckTimer !== undefined) window.clearTimeout(outputAckTimer)
+        outputAckSocket = source
+        outputAckBytes = 0
+        outputAckTimer = undefined
+      }
+      outputAckBytes += byteCount
+      if (outputAckTimer !== undefined) return
+      // Collapse adjacent xterm callbacks into one small control frame. Sixteen
+      // milliseconds still keeps the daemon credit window tight enough for echo.
+      outputAckTimer = window.setTimeout(() => {
+        outputAckTimer = undefined
+        flushOutputAck(source)
+      }, 16)
     }
     const renderDiagnostic = terminalRenderDiagnosticsEnabled ? term.onRender(event => {
       if (!awaitingFullRedraw) return
@@ -891,9 +924,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // show and route any drift through the ordinary repair machinery.
     const sweepTerminalHealth = () => {
       if (disposed) return
+      const now = performance.now()
+      const oldestLiveWriteAt = pendingLiveWrites[0]?.at ?? null
+      if (writePipelineBacklogged(pendingLiveWriteBytes, oldestLiveWriteAt, now)) {
+        reportRepair('write_pipeline_backlog', {
+          pendingBytes: pendingLiveWriteBytes,
+          pendingWrites: pendingLiveWrites.length,
+          oldestAgeMs: oldestLiveWriteAt === null ? 0 : Math.round(now - oldestLiveWriteAt),
+          renderer: activeRenderer,
+        })
+      }
       if (
         socket?.readyState === WebSocket.OPEN
-        && writePipelineStalled(lastBytesAt, lastParsedAt, performance.now())
+        && writePipelineStalled(lastBytesAt, lastParsedAt, now)
       ) {
         reportRepair('write_pipeline_dead', {
           lastBytesAt,
@@ -1321,6 +1364,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // RenderService, and a still-paused service would defer it all into a flag
       // nobody flushes until the next resize.
       renderControl.resume()
+      flushOutputAck()
       // Record this before scheduling either frame. The debt survives if both land while
       // the host still measures zero and is resumed by the first successful measurement.
       surfaceRepair?.markOwed()
@@ -1551,21 +1595,31 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       scheduleFullRedraw()
       maybeRequestScrollbackRepaint()
     }
-    const handleMessage=(event:MessageEvent)=>{
+    const handleMessage=(event:MessageEvent, source:WebSocket)=>{
       if (event.data instanceof ArrayBuffer) {
         scheduleLatestReply()
         lastBytesAt = performance.now()
+        const byteCount = event.data.byteLength
         if (replaying) {
           pendingReplayWrites += 1
           term.write(new Uint8Array(event.data), () => {
             pendingReplayWrites -= 1
+            acknowledgeParsedOutput(source, byteCount)
             if (replayEndReceived && pendingReplayWrites === 0) finishReplay()
           })
         } else {
           // Output arriving is the ack the wheel pacer's clock runs on: the repaint
           // answering the last scroll report means the CLI is ready for the next one.
           wheelPacer.noteOutput()
-          term.write(new Uint8Array(event.data))
+          const pending = { bytes: byteCount, at: performance.now() }
+          pendingLiveWrites.push(pending)
+          pendingLiveWriteBytes += byteCount
+          term.write(new Uint8Array(event.data), () => {
+            const index = pendingLiveWrites.indexOf(pending)
+            if (index >= 0) pendingLiveWrites.splice(index, 1)
+            pendingLiveWriteBytes = Math.max(0, pendingLiveWriteBytes - byteCount)
+            acknowledgeParsedOutput(source, byteCount)
+          })
         }
       }
       else {
@@ -1726,7 +1780,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // believing the field is active without actually opening the keyboard.
         if(!reconnecting&&!mobileLiveInput)term.focus()
       }
-      next.onmessage=event=>{if(socket===next)handleMessage(event)}
+      next.onmessage=event=>{if(socket===next)handleMessage(event,next)}
       next.onclose=()=>{if(socket!==next)return;socket=null;attachmentReadyRef.current=false;setAttachmentReady(false);scheduleReconnect()}
       next.onerror=()=>{if(socket===next)next.close()}
     }
@@ -2367,7 +2421,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // owns the attempt bookkeeping and can also recover from a stalled handshake.
     // Scheduled in both directions: becoming hidden is what deregisters this pane's
     // viewport, so the PTY stops being sized for a window nobody is looking at.
-    const onVisibility=()=>{if(paneIsHidden()){cancelCaretPlacement();scheduleFit()}else scheduleFullRedraw()}
+    const onVisibility=()=>{if(paneIsHidden()){cancelCaretPlacement();scheduleFit()}else{flushOutputAck();scheduleFullRedraw()}}
     const onPageShow=()=>scheduleFullRedraw()
     const onWindowFocus=()=>scheduleFullRedraw()
     document.addEventListener('visibilitychange',onVisibility)
@@ -2385,7 +2439,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so

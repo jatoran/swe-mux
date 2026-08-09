@@ -23,6 +23,8 @@ export const TERMINAL_HEALTH_SWEEP_MS = 5000
  * bundling-broken DECRQM handler killed every OMP pane exactly this way).
  */
 export const WRITE_PIPELINE_STALL_MS = 4000
+export const WRITE_PIPELINE_BACKLOG_MS = 750
+export const WRITE_PIPELINE_BACKLOG_BYTES = 32 * 1024
 
 /** Auto-remount budget: more failures than this inside the window means the
  *  poison is in the replayed bytes themselves and remounting only loops. */
@@ -47,6 +49,23 @@ export function writePipelineStalled(
   if (now - lastBytesAt < 1000) return false
   const parsed = lastParsedAt ?? 0
   return lastBytesAt - parsed > stallMs
+}
+
+/**
+ * Whether live output is still progressing but far enough behind to delay echo.
+ * This is diagnostic rather than a remount trigger: parser acknowledgements apply
+ * backpressure at the daemon, while the metric tells us how often users reach it.
+ */
+export function writePipelineBacklogged(
+  pendingBytes: number,
+  oldestWriteAt: number | null,
+  now: number,
+  backlogBytes = WRITE_PIPELINE_BACKLOG_BYTES,
+  backlogMs = WRITE_PIPELINE_BACKLOG_MS,
+): boolean {
+  return pendingBytes >= backlogBytes
+    && oldestWriteAt !== null
+    && now - oldestWriteAt >= backlogMs
 }
 
 /**

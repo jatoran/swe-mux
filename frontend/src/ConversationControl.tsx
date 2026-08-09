@@ -1,14 +1,26 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, PersistentVoiceCapture } from './conversation'
+import type { CaptureDetector, ParsedMuxVoice } from './conversation'
 import { appendUtterance, clearDraft, editDraft, EMPTY_DRAFT, undoUtterance } from './conversationDraft'
 import type { Draft } from './conversationDraft'
 import { enableMobileVoice, mobileVoiceDestination } from './mobileVoice'
+import { buildLatencySample, formatLatency } from './voiceLatency'
+import type { CaptureMarks, LatencySample, ServerTimings } from './voiceLatency'
 import type { Session, VoiceClip, VoiceStatus } from './types'
 import { bargeInPlayback, getPlayback, playClip, unlockPlayback } from './voice'
 import { reportPromptSubmitted } from './projectRecency'
 
-type Phase='off'|'starting'|'listening'|'hearing'|'transcribing'|'sending'|'standby'|'error'
+// `heard` exists to answer the user the instant the endpoint fires, before any text
+// can exist. Silence after speaking reads as broken; the same silence after an
+// acknowledgement reads as thinking.
+//
+// `warming` is never set directly: it is derived, and reported while the microphone is
+// open but the speech detector has not finished loading. Capture is genuinely
+// listening in that window — on the energy detector and its 900 ms tail — so calling
+// it `listening` would be true and still misleading, and calling it `starting` would
+// be a lie in the other direction.
+type Phase='off'|'starting'|'warming'|'listening'|'hearing'|'heard'|'transcribing'|'sending'|'standby'|'error'
 
 // The first configured wake word, shown in prompts so the hints match the user's
 // own trigger word rather than a hardcoded "Mux".
@@ -26,6 +38,13 @@ export type Conversation={
   wake:string
   /** Bumped whenever an utterance lands, so the panel can flash what just arrived. */
   landedAt:number
+  /** Stage breakdown for the most recent utterance; null until one completes. */
+  latency:LatencySample|null
+  /**
+   * Which speech detector capture settled on, which sets how long a pause has to be.
+   * Null while it is still loading — reported as the `warming` phase.
+   */
+  detector:CaptureDetector|null
   toggle:(session:Session)=>void
   stop:()=>void
   send:()=>void
@@ -57,12 +76,21 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   const [active,setActive]=useState(false)
   const [standby,setStandby]=useState(false)
   const [landedAt,setLandedAt]=useState(0)
+  const [latency,setLatency]=useState<LatencySample|null>(null)
+  // null while the detector is still resolving, which is a different state from
+  // having settled on the energy fallback: one is "not yet", the other is "Silero
+  // failed and this is as good as it gets".
+  const [detector,setDetector]=useState<CaptureDetector|null>(null)
+  const latencyRef=useRef<LatencySample|null>(null)
   const sessionRef=useRef<Session|null>(null)
   const captureRef=useRef<PersistentVoiceCapture|null>(null)
   const enabledRef=useRef(false)
   const standbyRef=useRef(false)
   const draftRef=useRef<Draft>(EMPTY_DRAFT)
   const queueRef=useRef<Promise<void>>(Promise.resolve())
+  // The speculative decode in flight, so speech resuming can abort it rather than
+  // leave the daemon decoding audio whose result is already void.
+  const speculationRef=useRef<{utteranceId:string;controller:AbortController}|null>(null)
   // Capture callbacks outlive the render that built them, so everything they read
   // from props goes through a ref: a wake word or command phrase edited in Settings
   // mid-dictation has to take effect without restarting the microphone.
@@ -71,6 +99,12 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   const wakeRef=useRef(wake);wakeRef.current=wake
   const onSessionRef=useRef(onSession);onSessionRef.current=onSession
 
+  const listeningDetail=()=>`Listening. Say “${wakeRef.current}, send” to submit.`
+  // Matched exactly when the detector resolves, so the readiness line is replaced only
+  // if it is still the thing on screen. Comparing the text avoids tracking the phase
+  // in a ref that a mid-utterance callback could read one render stale.
+  const WARMING_DETAIL='Starting the speech detector — utterances need a longer pause until it loads.'
+
   const setDraft=(next:Draft)=>{draftRef.current=next;setDraftState(next)}
   const enterStandby=(value:boolean)=>{standbyRef.current=value;setStandby(value)}
 
@@ -78,12 +112,58 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
     enabledRef.current=false;enterStandby(false)
     captureRef.current?.stop();captureRef.current=null
     sessionRef.current=null
-    setActive(false);setSessionId(null);setPhase('off');setDetail('')
+    setActive(false);setSessionId(null);setPhase('off');setDetail('');setDetector(null)
   }
   const stopRef=useRef(stop);stopRef.current=stop
   // Capture is a device resource: a reload or a route away from the workspace must
   // release the microphone rather than leave the browser's recording indicator lit.
   useEffect(()=>()=>stopRef.current(),[])
+
+  /**
+   * Push-to-talk: hold the chord and there is no endpointing at all.
+   *
+   * The escape hatch for when detection is the problem rather than the fix — a noisy
+   * room, a deliberate pause mid-sentence, a phrase the VAD keeps cutting. The key
+   * release *is* the endpoint, so the whole trailing-silence question disappears.
+   *
+   * Captured on the window rather than routed through the command registry, because
+   * a registry command fires on press and this needs both edges. Blur ends it too: a
+   * key released over another window would otherwise leave the mic latched open.
+   */
+  useEffect(()=>{
+    const engaged={current:false}
+    const begin=()=>{
+      if(engaged.current||!enabledRef.current||!captureRef.current)return
+      engaged.current=true
+      captureRef.current.beginPushToTalk()
+      setPhase('hearing');setDetail('Push to talk — release to send the phrase.')
+    }
+    const end=()=>{
+      if(!engaged.current)return
+      engaged.current=false
+      captureRef.current?.endPushToTalk()
+    }
+    const down=(event:KeyboardEvent)=>{
+      if(event.code!=='Space'||!event.ctrlKey||!event.altKey||event.repeat)return
+      if(!enabledRef.current||!captureRef.current)return
+      event.preventDefault();event.stopPropagation()
+      begin()
+    }
+    const up=(event:KeyboardEvent)=>{
+      // Any part of the chord releasing ends the phrase; the modifiers and the key
+      // are rarely released in the same order twice.
+      if(event.code==='Space'||event.key==='Control'||event.key==='Alt')end()
+    }
+    window.addEventListener('keydown',down,true)
+    window.addEventListener('keyup',up,true)
+    window.addEventListener('blur',end)
+    return()=>{
+      end()
+      window.removeEventListener('keydown',down,true)
+      window.removeEventListener('keyup',up,true)
+      window.removeEventListener('blur',end)
+    }
+  },[])
 
   const submit=async(text:string)=>{
     const session=sessionRef.current
@@ -98,9 +178,8 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
   }
   const reportFailure=(cause:unknown)=>{setPhase('error');setDetail(cause instanceof Error?cause.message:String(cause))}
 
-  const handleTranscript=async(transcript:string)=>{
+  const handleTranscript=async(parsed:ParsedMuxVoice)=>{
     if(!enabledRef.current)return
-    const parsed=matcherRef.current.parse(transcript)
     const wakeWord=wakeRef.current
     if(standbyRef.current){
       // Standby keeps the mic and transcription running but ignores everything
@@ -168,14 +247,88 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
     setPhase('listening');setDetail(`Listening. Say “${wakeWord}, send” to submit.`)
   }
 
-  const transcribe=async(audio:Blob)=>{
+  // Latency reporting runs after the action has already happened, so it can never
+  // add to the number it measures; a failed report is dropped rather than surfaced,
+  // because a diagnostic that can fail an utterance is worse than no diagnostic.
+  const reportLatency=(sample:LatencySample)=>{
+    latencyRef.current=sample;setLatency(sample)
+    void api('POST','/api/voice/stt-latency',sample,{timeoutMs:4000}).catch(()=>{})
+  }
+
+  type Decoded={parsed:ParsedMuxVoice;postAt:number;responseAt:number;server:ServerTimings}
+  const decode=async(audio:Blob,marks:CaptureMarks,profile:'command'|'dictation',signal?:AbortSignal):Promise<Decoded>=>{
     const session=sessionRef.current
-    if(!enabledRef.current||!session)return
-    if(!standbyRef.current){setPhase('transcribing');setDetail('Transcribing locally on muxd…')}
-    const response=await fetch(`/api/sessions/${encodeURIComponent(session.id)}/voice/transcribe`,{method:'POST',headers:{'Content-Type':'audio/wav'},body:audio})
-    const payload=await response.json() as {text?:string;error?:string}
+    if(!session)throw new Error('no session owns the microphone')
+    const postAt=performance.now()
+    const response=await fetch(`/api/sessions/${encodeURIComponent(session.id)}/voice/transcribe`,{
+      method:'POST',
+      // The profile picks the daemon's decoder: a routing pass wants the fast small
+      // English model and its own slot, so a speculative decode cannot delay the
+      // real one behind a shared lock.
+      headers:{'Content-Type':'audio/wav','X-Mux-Utterance-Id':marks.utteranceId,'X-Mux-Decode-Profile':profile},
+      body:audio,
+      signal,
+    })
+    const payload=await response.json() as {text?:string;error?:string;timings?:ServerTimings}
+    const responseAt=performance.now()
     if(!response.ok)throw new Error(payload.error||`transcription failed (${response.status})`)
-    await handleTranscript(String(payload.text||''))
+    return {parsed:matcherRef.current.parse(String(payload.text||'')),postAt,responseAt,server:payload.timings||{}}
+  }
+
+  const transcribe=async(audio:Blob,marks:CaptureMarks)=>{
+    if(!enabledRef.current||!sessionRef.current)return
+    if(!standbyRef.current){setPhase('transcribing');setDetail('Transcribing locally on muxd…')}
+    // Whisper models are cached for the life of the *daemon*, not the tab, so the
+    // first utterance after a restart or a redeploy waits seconds on a model load.
+    // Naming it is the whole fix: an unexplained pause here reads as a hang.
+    const slow=setTimeout(()=>{
+      if(enabledRef.current&&!standbyRef.current)setDetail('Loading the transcription model — the first utterance after a daemon restart is slow.')
+    },1_200)
+    let decoded:Decoded
+    try{decoded=await decode(audio,marks,'dictation')}
+    finally{clearTimeout(slow)}
+    try{await handleTranscript(decoded.parsed)}
+    finally{
+      reportLatency(buildLatencySample({
+        marks,postAt:decoded.postAt,responseAt:decoded.responseAt,actionAt:performance.now(),
+        server:decoded.server,command:decoded.parsed.command||'',
+      }))
+    }
+  }
+
+  /**
+   * A decode started before the utterance is certainly over.
+   *
+   * Only a complete wake word plus command phrase acts on it, per the suffix
+   * grammar: that is the one shape whose presence at the end of a transcript is
+   * strong evidence the speaker has finished, so commands skip the rest of the
+   * trailing silence while dictation still waits it out. Everything else is
+   * discarded — the same audio arrives again as the real utterance moments later.
+   *
+   * `commitSpeculative` is the race guard: it refuses if speech resumed between the
+   * decode starting and the text arriving, which is what stops "…mux, send me the
+   * file" from submitting at the pause after "send".
+   */
+  const speculate=async(audio:Blob,marks:CaptureMarks)=>{
+    const capture=captureRef.current
+    if(!enabledRef.current||!capture||standbyRef.current)return
+    const controller=new AbortController()
+    speculationRef.current={utteranceId:marks.utteranceId,controller}
+    let decoded:Decoded
+    try{decoded=await decode(audio,marks,'command',controller.signal)}
+    // A speculative decode is invisible by design: it may be aborted, refused while
+    // the daemon is busy, or return nothing, and none of that is the user's problem.
+    catch{return}
+    finally{if(speculationRef.current?.utteranceId===marks.utteranceId)speculationRef.current=null}
+    if(!decoded.parsed.command)return
+    if(!capture.commitSpeculative(marks.utteranceId))return
+    try{await handleTranscript(decoded.parsed)}
+    finally{
+      reportLatency(buildLatencySample({
+        marks:{...marks,speculative:true},postAt:decoded.postAt,responseAt:decoded.responseAt,
+        actionAt:performance.now(),server:decoded.server,command:decoded.parsed.command||'',
+      }))
+    }
   }
 
   // Talk mode is mic → transcribe → PTY. It does not require read aloud and never
@@ -208,7 +361,28 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
     const capture=new PersistentVoiceCapture({
       playbackActive:()=>getPlayback().playing,
       onSpeechStart:()=>{if(!enabledRef.current)return;if(standbyRef.current){setPhase('standby');return}bargeInPlayback();setPhase('hearing');setDetail('Listening…')},
-      onUtterance:audio=>{queueRef.current=queueRef.current.then(()=>transcribe(audio)).catch(cause=>{if(enabledRef.current)reportFailure(cause)})},
+      // Fired at the endpoint, before any text exists. It is the whole point of the
+      // phase: the answer has to arrive when the user stops talking, not when the
+      // decode does, or the pause reads as a failure.
+      onSpeechEnd:()=>{if(!enabledRef.current||standbyRef.current)return;setPhase('heard');setDetail('Heard you.')},
+      onSpeculative:(audio,marks)=>{void speculate(audio,marks)},
+      onSpeculativeAbort:utteranceId=>{
+        const pending=speculationRef.current
+        if(pending&&pending.utteranceId===utteranceId){pending.controller.abort();speculationRef.current=null}
+      },
+      // Utterances stay serialized so two of them can never interleave into the
+      // draft out of order. Speculative decodes deliberately bypass this queue:
+      // waiting behind the previous utterance would put them past their own endpoint.
+      onUtterance:(audio,marks)=>{queueRef.current=queueRef.current.then(()=>transcribe(audio,marks)).catch(cause=>{if(enabledRef.current)reportFailure(cause)})},
+      onDetector:(resolved,diagnostic)=>{
+        setDetector(resolved)
+        // Only the readiness line is replaced, and only if it is still what is on
+        // screen: the detector can resolve in the middle of an utterance, and
+        // overwriting "Heard you." with a status message would undo the one thing
+        // that stage exists to say.
+        if(enabledRef.current)setDetail(current=>current!==WARMING_DETAIL?current
+          :resolved==='silero'?listeningDetail():diagnostic)
+      },
       onError:message=>{if(enabledRef.current){setPhase('error');setDetail(message)}},
     })
     try{
@@ -218,12 +392,21 @@ export function useConversation(status:VoiceStatus|null,onSession:(session:Sessi
       // the user just left, so the losing start releases the microphone instead.
       if(sessionRef.current!==session){capture.stop();return}
       captureRef.current=capture;enabledRef.current=true;enterStandby(false);setActive(true)
-      setPhase('listening');setDetail(`Listening. Say “${wake}, send” to submit.`)
+      // Always warming here: `start` fires the detector load without awaiting it, and
+      // nothing between that and this line yields, so `onDetector` cannot have run
+      // yet. The displayed phase derives `warming` from `detector` being null, so
+      // readiness has one source of truth rather than a phase and a flag to disagree.
+      setPhase('listening');setDetail(WARMING_DETAIL)
     }catch(cause){capture.stop();if(sessionRef.current!==session)return;enabledRef.current=false;setActive(false);reportFailure(cause)}
   }
 
   return {
-    sessionId,phase,detail,draft:draft.text,active,standby,wake,landedAt,
+    sessionId,
+    // Derived rather than stored: readiness has one source of truth (`detector`), and
+    // an idle phase that claimed `listening` before the detector loaded would be true
+    // and still misleading — capture is listening, on the fallback's 900 ms tail.
+    phase:phase==='listening'&&detector===null?'warming':phase,
+    detail,draft:draft.text,active,standby,wake,landedAt,latency,detector,
     toggle:session=>{
       if(sessionRef.current?.id===session.id&&(enabledRef.current||phase==='error')){stop();return}
       void start(session)
@@ -257,8 +440,10 @@ export function ConversationChip({session,conversation}:{session:Session;convers
   const listening=owned&&conversation.active
   const label=phase==='error'?'talk:error'
     :!listening?'talk:off'
+    :phase==='warming'?'talk:warming'
     :phase==='standby'?'talk:standby'
     :phase==='hearing'?'talk:hearing'
+    :phase==='heard'?'talk:heard'
     :phase==='transcribing'?'talk:typing'
     :'talk:on'
   const detail=owned&&conversation.detail?conversation.detail:`Say “${conversation.wake}, send” when your message is ready.`
@@ -321,8 +506,16 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
   const send=()=>conversation.send()
   return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">
     <header>
-      <span class={`dictation-phase ${conversation.phase}`}>talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>
+      <span
+        class={`dictation-phase ${conversation.phase}`}
+        title={conversation.detector===null
+          ? 'The speech detector is still loading. Capture is already listening, but on the fallback detector, so an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
+          : conversation.detector==='silero'
+            ? 'Silero voice activity detection: an utterance ends after a short pause. Hold Ctrl+Alt+Space to talk with no pause detection at all.'
+            : 'Energy-based detection: an utterance needs a longer pause to end. Hold Ctrl+Alt+Space to talk with no pause detection at all.'}
+      >talk:{conversation.phase==='transcribing'?'typing':conversation.phase}</span>
       <span class="dictation-detail" role="status" aria-live="polite">{conversation.detail}</span>
+      {conversation.latency&&<span class="dictation-latency" title={`End of speech to action — ${formatLatency(conversation.latency)}`}>{Math.round(conversation.latency.total_ms)} ms</span>}
       <div class="dictation-actions">
         <button class="dictation-send" title="Send the draft to the agent (Ctrl+Enter)" disabled={!conversation.draft.trim()} onClick={send}>send</button>
         <button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>

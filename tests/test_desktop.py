@@ -69,7 +69,12 @@ def test_frontend_publish_never_empties_live_static_tree(tmp_path: Path) -> None
     (destination / "assets").mkdir(parents=True)
     (staging / "assets" / "index-current.css").write_text("current", encoding="utf-8")
     (staging / "index.html").write_text("index-current.css", encoding="utf-8")
+    (staging / "assets" / "ort-wasm-simd-threaded-new.wasm").write_bytes(b"runtime")
     (destination / "assets" / "index-stale.css").write_text("stale", encoding="utf-8")
+    # The voice detector is ~13 MB per onnxruntime-web version, so a superseded copy
+    # left behind is the largest thing this sweep exists to prevent.
+    (destination / "assets" / "ort-wasm-simd-threaded-old.wasm").write_bytes(b"old runtime")
+    (destination / "assets" / "silero_vad_v5-old.onnx").write_bytes(b"old model")
     (destination / "notification-sounds").mkdir()
     (destination / "notification-sounds" / "ding.mp3").write_bytes(b"sound")
 
@@ -78,6 +83,9 @@ def test_frontend_publish_never_empties_live_static_tree(tmp_path: Path) -> None
     assert (destination / "assets" / "index-current.css").read_text() == "current"
     assert (destination / "index.html").read_text() == "index-current.css"
     assert not (destination / "assets" / "index-stale.css").exists()
+    assert (destination / "assets" / "ort-wasm-simd-threaded-new.wasm").read_bytes() == b"runtime"
+    assert not (destination / "assets" / "ort-wasm-simd-threaded-old.wasm").exists()
+    assert not (destination / "assets" / "silero_vad_v5-old.onnx").exists()
     assert (destination / "notification-sounds" / "ding.mp3").read_bytes() == b"sound"
 
 

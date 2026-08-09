@@ -546,10 +546,14 @@ startup probe can expire during the browser/WebSocket round trip and would then 
 reply as composer text. Codex falls back to the console palette. The daemon also rejects exact
 Codex OSC 10/11 reply payloads from older cached browser builds that labeled them as user input.
 On initial attach, the daemon sends `state` and waits up to 250 ms for
-`{type:"attach_ready", cols, rows, renderer, hidden}`. It applies those dimensions before
+`{type:"attach_ready", cols, rows, renderer, hidden, output_flow_control}`. It applies those dimensions before
 `replay_start`; an old-style `resize` frame also releases replay, and timeout preserves
 compatibility with clients that send neither. Other frames arriving during this window are
 buffered and handled after `replay_end`. Later `attach_ready` frames are equivalent to `resize`.
+When `output_flow_control` is true, the daemon counts binary output sent to that connection and pauses at 128 KiB unacknowledged.
+The client sends `{type:"output_ack", bytes}` from xterm write callbacks, where `bytes` is the newly parsed byte count, and the daemon resumes as credit returns.
+Attach and resync replay participate in the same accounting.
+The capability is opt-in so older browser bundles that never send acknowledgements retain unlimited delivery rather than stalling.
 Replay is bounded by `attach_replay_bytes` (default 512 KiB) rather than by full retention, and
 the same bound applies to a resync, which resets the client's terminal and so receives a complete
 replay into an empty buffer rather than a patch. A pane the client is keeping mounted but not
@@ -781,19 +785,41 @@ It does not change tailnet policy or make swe-mux public.
 GET    /voice
 POST   /sessions/{id}/voice/generate
 POST   /sessions/{id}/voice/transcribe   Content-Type: audio/wav; bounded mono PCM
+POST   /voice/transcribe                 same body and headers, no session
 POST   /sessions/{id}/voice/submit       {utterance_id, text}
 POST   /sessions/{id}/voice/interrupt
+GET    /voice/stt-latency
+POST   /voice/stt-latency                one browser-measured stage sample
+DELETE /voice/stt-latency
 GET    /voice/clips[?session=&run=&limit=]
 GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
 ```
 
-Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 8–48 kHz. Raw audio is
-temporary and deleted after recognition. Submit is agent-only, rejects control characters, caps
-text at 20,000 characters, deduplicates bounded recent `utterance_id` values, writes text plus one
-Enter, and advances the ordinary human-input revision. Interrupt sends one Ctrl-C and records the
-same boundary. Neither route approves provider prompts or derives authorization from delivery
-readiness.
+Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 16 kHz, decodes it from
+memory, and never writes it to disk. Two request headers steer it, both optional:
+`X-Mux-Utterance-Id` correlates the daemon's decode log line with the browser's latency sample,
+and `X-Mux-Decode-Profile` selects `command` (small routing model, greedy) or `dictation`
+(default: the accurate model, beam search above three seconds). The profiles hold separate locks,
+so a speculative routing decode cannot queue a real utterance behind it. The response carries
+`{text, timings}`, where `timings` reports the daemon's own `queue_ms`, `decode_ms`, `server_ms`,
+`audio_ms`, model, and beam size.
+
+The session-free transcribe form exists for the wake-word tester: choosing a trigger word is a
+recognition question, not a dictation one, and requiring a live agent to ask it would have forced
+a parallel implementation of the decoder and the matcher.
+
+`/voice/stt-latency` is the end-of-speech-to-action stage breakdown. Only the browser can measure
+the whole path, so it posts the merged sample; every field is clamped on arrival rather than
+trusted, because a diagnostic that can be poisoned into showing impossible stages is still
+believed. `GET` returns per-stage p50/p95/max plus a separate command-only total, `DELETE` starts
+a fresh measurement run, and every sample is also written to `daemon.log`, which is what survives
+a restart.
+
+Submit is agent-only, rejects control characters, caps text at 20,000 characters, deduplicates
+bounded recent `utterance_id` values, writes text plus one Enter, and advances the ordinary
+human-input revision. Interrupt sends one Ctrl-C and records the same boundary. Neither route
+approves provider prompts or derives authorization from delivery readiness.
 
 Automatic completed-reply synthesis emits ordered `voice_clip_ready` events sharing
 `stream_id`, `segment_index`, and `segment_count`; each ready segment is independently playable.

@@ -96,6 +96,7 @@ import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
+import { eventRequiresFleetRefresh } from './eventRefresh'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import { DEFAULT_UI_SCALE, applyUiScale, watchUiScaleProfile, type UiScale } from './uiScale'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command } from './commands'
@@ -1369,12 +1370,12 @@ export function App() {
       next.onerror = () => { if (socket === next) next.close() }
       next.onmessage = message => {
         if (socket !== next) return
-        queueRefresh()
         try {
           const event = JSON.parse(String(message.data))
           // The daemon says the gap was wider than the replay window: nothing in the
           // stream can reconstruct it, so fall back to a full REST refresh.
           if (event.type === 'events_gap') { queueRefresh(); return }
+          if (eventRequiresFleetRefresh(event.type)) queueRefresh()
           if (typeof event.seq === 'number' && event.seq > lastEventSeq.current) lastEventSeq.current = event.seq
           // Catch-up events (marked replay by the daemon) are a historical resync sent on
           // every (re)connect. They must drive state refresh but never re-fire live-only
@@ -1423,7 +1424,11 @@ export function App() {
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
           if(event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
-        } catch { /* malformed events are ignored */ }
+        } catch {
+          // A malformed event cannot be classified safely. Keep the REST snapshot as
+          // the recovery path, while well-formed telemetry events avoid that cost.
+          queueRefresh()
+        }
       }
       next.onclose = () => { if (socket !== next) return; socket = null; scheduleRetry() }
     }

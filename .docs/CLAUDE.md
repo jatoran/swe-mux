@@ -147,16 +147,22 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   (`speechify`, no LLM) → edge-tts MP3 / Windows SAPI WAV clips in `<data_dir>/voice/` +
   `voice_clips` SQLite. Browser plays one singleton audio element; autoplay/barge-in are
   per-device. Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
-- **Conversation (STT):** browser VAD capture (`conversation.ts`) → mono 16 kHz WAV →
-  `voice/transcribe` → faster-whisper (`turbo`, CUDA→CPU fallback; audio discarded after) →
-  wake-word + command-phrase **suffix** → idempotent `voice/submit` writes `{text}\r` to the
+- **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
+  **Silero VAD** (`sileroVad.ts`, lazy ~13 MB ONNX; energy detector as fallback) → the
+  frame-counted endpoint gate (`speechGate.ts`: 352 ms tail, speculative decode at 160 ms) →
+  `voice/transcribe` → faster-whisper, **two decode profiles** (`command` = `small.en` greedy,
+  `dictation` = `turbo` with beam 5 above 3 s), decoded from memory with no disk write →
+  wake-word + command-phrase **suffix**, which a speculative transcript can use to short-circuit
+  the remaining tail → idempotent `voice/submit` writes `{text}\r` to the
   PTY (a multi-line edited draft goes as bracketed paste + a separate Enter instead). The draft
   is an utterance log shown in the pane's `.dictation-panel` row, editable in place.
   Wake words and the phrase→action map are user-configurable (`voice_wake_words` /
   `voice_commands` in config, editable in Settings → Voice; `buildVoiceMatcher` compiles them).
   Fixed action set: `send`/`cancel`/`undo`/`mute`/`read`/`summary`/`verbatim`/`interrupt`/
   `help`/`standby`/`resume`/`stop`. `standby` keeps the mic on but ignores everything except a
-  `resume`/`stop` command; `stop` releases the mic.
+  `resume`/`stop` command; `stop` releases the mic. Hold `Ctrl+Alt+Space` for push-to-talk with
+  no endpointing. `GET/POST/DELETE /api/voice/stt-latency` is the end-of-speech-to-action stage
+  breakdown (also in `daemon.log`), read in Settings → Voice beside the wake-word tester.
 
 **Mobile mic needs HTTPS (secure context).** swe-mux runs **Tailscale Serve on 443**
 (`https://<device>.ts.net/`) proxying to the daemon's loopback port — auto-started at boot

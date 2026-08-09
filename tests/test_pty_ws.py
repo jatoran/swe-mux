@@ -13,8 +13,29 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux.device_presence import DevicePresenceStore, DeviceReport
 from swe_mux.event_bus import EventBus
 from swe_mux.models import SessionRecord
-from swe_mux.server import deliver_broadcast, pty_ws
+from swe_mux.server import PtyOutputFlow, deliver_broadcast, pty_ws
 from swe_mux.session import Session
+
+
+async def test_pty_output_flow_waits_for_xterm_parse_credit() -> None:
+    flow = PtyOutputFlow(high_water_bytes=8)
+    flow.enable()
+    flow.sent(8)
+
+    waiter = asyncio.create_task(flow.wait_for_credit())
+    await asyncio.sleep(0)
+    assert not waiter.done()
+
+    flow.acknowledge(3)
+    await asyncio.wait_for(waiter, timeout=0.1)
+    assert flow.unacknowledged_bytes == 5
+
+
+async def test_pty_output_flow_is_compatible_with_clients_without_ack_support() -> None:
+    flow = PtyOutputFlow(high_water_bytes=1)
+    flow.sent(1024)
+    await asyncio.wait_for(flow.wait_for_credit(), timeout=0.1)
+    assert flow.unacknowledged_bytes == 0
 
 
 async def next_json(ws: Any, skip: tuple[str, ...] = ("geometry",)) -> Any:

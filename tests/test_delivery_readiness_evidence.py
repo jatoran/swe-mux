@@ -73,6 +73,27 @@ def _idle_agent(
     return session, tracker, clock
 
 
+def test_ui_snapshot_reuses_a_bounded_pty_classification(monkeypatch: Any) -> None:
+    session, tracker, clock = _idle_agent()
+    calls = 0
+
+    def classify(_tail: str, *, backend: str | None = None) -> str:
+        nonlocal calls
+        del backend
+        calls += 1
+        return "idle"
+
+    monkeypatch.setattr("swe_mux.session.pty_tail_state", classify)
+    tracker.evaluate(session, record_metrics=False, snapshot_pty_cache_seconds=1.0)
+    session.scrollback.data += b"new repaint traffic"
+    tracker.evaluate(session, record_metrics=False, snapshot_pty_cache_seconds=1.0)
+    assert calls == 1
+
+    clock.advance(1.01)
+    tracker.evaluate(session, record_metrics=False, snapshot_pty_cache_seconds=1.0)
+    assert calls == 2
+
+
 def test_an_unwatched_session_is_deliverable() -> None:
     """No browser, no input owner — a daemon PTY write does not need either.
 
