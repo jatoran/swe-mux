@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import {
-  appendVoiceConversationEntry, loadVoiceConversationHistory, saveVoiceConversationHistory,
-  VOICE_CONVERSATION_HISTORY_KEY, VOICE_CONVERSATION_HISTORY_LIMIT,
+  appendVoiceConversationEntry, loadVoiceConversationHistory, loadVoiceConversationHistoryOpen,
+  saveVoiceConversationHistory, saveVoiceConversationHistoryOpen,
+  VOICE_CONVERSATION_HISTORY_KEY, VOICE_CONVERSATION_HISTORY_LIMIT, VOICE_CONVERSATION_HISTORY_OPEN_KEY,
 } from '../src/voiceConversationHistory.ts'
 
 const values=new Map<string,string>()
@@ -30,5 +31,12 @@ assert.equal(history[0].text,'5')
 
 saveVoiceConversationHistory([],storage)
 assert.equal(storage.getItem(VOICE_CONVERSATION_HISTORY_KEY),null)
+
+assert.equal(loadVoiceConversationHistoryOpen(storage),true)
+saveVoiceConversationHistoryOpen(false,storage)
+assert.equal(storage.getItem(VOICE_CONVERSATION_HISTORY_OPEN_KEY),'closed')
+assert.equal(loadVoiceConversationHistoryOpen(storage),false)
+saveVoiceConversationHistoryOpen(true,storage)
+assert.equal(loadVoiceConversationHistoryOpen(storage),true)
 
 console.log('voice conversation history tests passed')

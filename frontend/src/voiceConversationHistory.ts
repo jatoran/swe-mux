@@ -8,6 +8,7 @@ export type VoiceConversationEntry = {
 }
 
 export const VOICE_CONVERSATION_HISTORY_KEY='mux:voice-conversation-history:v1'
+export const VOICE_CONVERSATION_HISTORY_OPEN_KEY='mux:voice-conversation-history-open:v1'
 export const VOICE_CONVERSATION_HISTORY_LIMIT=120
 const ENTRY_TEXT_LIMIT=12_000
 
@@ -58,4 +59,14 @@ export function saveVoiceConversationHistory(history:VoiceConversationEntry[],st
     if(history.length)storage.setItem(VOICE_CONVERSATION_HISTORY_KEY,JSON.stringify(history.slice(-VOICE_CONVERSATION_HISTORY_LIMIT)))
     else storage.removeItem(VOICE_CONVERSATION_HISTORY_KEY)
   }catch{/* A full or private browser store must not break capture. */}
+}
+
+export function loadVoiceConversationHistoryOpen(storage:HistoryStorage=localStorage):boolean{
+  try{return storage.getItem(VOICE_CONVERSATION_HISTORY_OPEN_KEY)!=='closed'}
+  catch{return true}
+}
+
+export function saveVoiceConversationHistoryOpen(open:boolean,storage:HistoryStorage=localStorage):void{
+  try{storage.setItem(VOICE_CONVERSATION_HISTORY_OPEN_KEY,open?'open':'closed')}
+  catch{/* A display preference must not break capture. */}
 }

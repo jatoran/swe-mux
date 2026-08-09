@@ -109,6 +109,10 @@ import {
   parseVoiceQuery, projectListPage, sessionListPage, spokenSessionStatus, voiceHelpPage,
   voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
 } from './voiceQueries'
+import {
+  clearSpokenListContext, loadSpokenListContext, saveSpokenListContext,
+  spokenProjectId, spokenSessionHandle, SPOKEN_LIST_TTL_MS, type SpokenListContext,
+} from './spokenListContext'
 import { copyPreparedText } from './terminalClipboard'
 import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
@@ -162,12 +166,6 @@ function isEndedSession(session: Session) {
 // re-implementation because the copies drifted — the workspace tab strip read
 // `session.name` directly and so was the one place a generated title never appeared.
 const sessionName=(session:Session):string=>agentTargetName(session)
-
-const SPOKEN_LIST_TTL_MS=90_000
-type SpokenSessionHandle={id:string;agentRunId:string|null}
-type SpokenListContext=
-  | {kind:'sessions';items:SpokenSessionHandle[];pageFrom:number;shownThrough:number;expiresAt:number;lastSpeech:string}
-  | {kind:'projects';ids:string[];pageFrom:number;shownThrough:number;expiresAt:number;lastSpeech:string}
 
 // Compact standing-activity glyphs for dense surfaces (sidebar rows, tab
 // strips): the dot's color never changes — green keeps meaning "ready" — so
@@ -3037,29 +3035,35 @@ export function App() {
   }
   const fleetVoiceModel=buildFleetReadModel(sessions,projects)
   const fleetItemById=new Map(fleetVoiceModel.sessions.map(item=>[item.session.id,item]))
+  const rememberSpokenContext=(context:SpokenListContext)=>{
+    spokenListContext.current=context
+    saveSpokenListContext(context)
+  }
   const freshSpokenContext=():SpokenListContext|null=>{
-    const context=spokenListContext.current
-    if(!context||context.expiresAt<Date.now()){
+    const context=spokenListContext.current||loadSpokenListContext()
+    if(!context||context.expiresAt<=Date.now()){
       spokenListContext.current=null
+      clearSpokenListContext()
       return null
     }
+    spokenListContext.current=context
     return context
   }
   const rememberSessionPage=(items:FleetSession[],pageFrom:number,page:{shownThrough:number;speech:string})=>{
-    spokenListContext.current={
+    rememberSpokenContext({
       kind:'sessions',
       items:items.map(item=>({id:item.session.id,agentRunId:item.session.agent_run_id||null})),
       pageFrom,
       shownThrough:page.shownThrough,
       expiresAt:Date.now()+SPOKEN_LIST_TTL_MS,
       lastSpeech:page.speech,
-    }
+    })
   }
   const rememberProjectPage=(items:Project[],pageFrom:number,page:{shownThrough:number;speech:string})=>{
-    spokenListContext.current={
+    rememberSpokenContext({
       kind:'projects',ids:items.map(item=>item.id),pageFrom,shownThrough:page.shownThrough,
       expiresAt:Date.now()+SPOKEN_LIST_TTL_MS,lastSpeech:page.speech,
-    }
+    })
   }
   type SessionResolution={item:FleetSession|null;expectedRun:string|null;candidates:FleetSession[];error:string}
   type ProjectResolution={item:Project|null;candidates:Project[];error:string}
@@ -3078,12 +3082,11 @@ export function App() {
     if(named.length>1)return{item:null,expectedRun:null,candidates:named,error:'More than one session has that name.'}
     if(/^\d+$/.test(normalized)){
       const context=freshSpokenContext()
-      const index=Number(normalized)-1
-      if(!context||context.kind!=='sessions'||index<0||index>=context.shownThrough){
+      const handle=spokenSessionHandle(context,Number(normalized))
+      if(!handle){
         return{item:null,expectedRun:null,candidates:[],error:'That session number is not in the current spoken list. List sessions again.'}
       }
-      const handle=context.items[index]
-      const item=handle?fleetItemById.get(handle.id)||null:null
+      const item=fleetItemById.get(handle.id)||null
       return item?{item,expectedRun:handle.agentRunId,candidates:[],error:''}
         :{item:null,expectedRun:null,candidates:[],error:'That session is no longer available. List sessions again.'}
     }
@@ -3099,11 +3102,11 @@ export function App() {
     if(named.length>1)return{item:null,candidates:named,error:'More than one project has that name.'}
     if(/^\d+$/.test(normalized)){
       const context=freshSpokenContext()
-      const index=Number(normalized)-1
-      if(!context||context.kind!=='projects'||index<0||index>=context.shownThrough){
+      const projectId=spokenProjectId(context,Number(normalized))
+      if(!projectId){
         return{item:null,candidates:[],error:'That project number is not in the current spoken list. List projects again.'}
       }
-      const item=projects.find(project=>project.id===context.ids[index])||null
+      const item=projects.find(project=>project.id===projectId)||null
       return item?{item,candidates:[],error:''}:{item:null,candidates:[],error:'That project is no longer available. List projects again.'}
     }
     return{item:null,candidates:[],error:`No project named ${reference} is available.`}
@@ -3174,13 +3177,13 @@ export function App() {
           return `Project ${context.pageFrom+index+1}, ${project.name}, has ${live} live session${live===1?'':'s'}.`
         }).filter(Boolean)
         const speech=lines.length?lines.join(' '):'The project list changed. List projects again.'
-        context.lastSpeech=speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS
+        context.lastSpeech=speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS;rememberSpokenContext(context)
         return{detail:speech,speech}
       }
       const items=context.items.map(handle=>fleetItemById.get(handle.id)).filter((item):item is FleetSession=>!!item)
       if(items.length!==context.items.length)return{detail:'The session list changed. List sessions again.',speech:'The session list changed. List sessions again.'}
       const page=sessionListPage(items,context.pageFrom,context.shownThrough-context.pageFrom,true)
-      context.lastSpeech=page.speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS
+      context.lastSpeech=page.speech;context.expiresAt=Date.now()+SPOKEN_LIST_TTL_MS;rememberSpokenContext(context)
       return{detail:page.detail,speech:page.speech}
     }
     if(query.kind==='list_sessions'){

@@ -16,7 +16,8 @@ import { extractWakeIntent } from './voiceIntents'
 import type { VoiceCommandResult } from './commands'
 import { safeDuringSystemPlayback } from './voiceQueries'
 import {
-  appendVoiceConversationEntry, loadVoiceConversationHistory, saveVoiceConversationHistory,
+  appendVoiceConversationEntry, loadVoiceConversationHistory, loadVoiceConversationHistoryOpen,
+  saveVoiceConversationHistory, saveVoiceConversationHistoryOpen,
 } from './voiceConversationHistory'
 import type { VoiceConversationEntry, VoiceConversationRole } from './voiceConversationHistory'
 
@@ -574,7 +575,7 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
   const historyRef=useRef<HTMLDivElement|null>(null)
   const [landed,setLanded]=useState(false)
-  const [historyOpen,setHistoryOpen]=useState(true)
+  const [historyOpen,setHistoryOpen]=useState(()=>loadVoiceConversationHistoryOpen())
   // Whisper returns whole utterances, never partial words, so there is no stream to
   // animate. A brief flash is the honest signal that something arrived.
   useEffect(()=>{
@@ -614,6 +615,11 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
   useLayoutEffect(()=>{
     if(historyOpen&&historyRef.current)historyRef.current.scrollTop=historyRef.current.scrollHeight
   },[conversation.history.length,historyOpen])
+  const toggleHistory=()=>setHistoryOpen(value=>{
+    const next=!value
+    saveVoiceConversationHistoryOpen(next)
+    return next
+  })
   const send=()=>conversation.send()
   return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">
     <header>
@@ -632,7 +638,6 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
         <button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>
         <button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>
         <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
-        <button class={historyOpen?'active':''} aria-expanded={historyOpen} title="Show everything you and Mux said during Talk" onClick={()=>setHistoryOpen(value=>!value)}>history</button>
         <button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop</button>
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
@@ -648,15 +653,22 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
         onClick={()=>conversation.togglePin()}
       >{conversation.pinned?'unpin':'pin'}</button>
     </div>
-    {historyOpen&&<section class="conversation-history-shell" aria-label="Talk transcript history">
-      <header><strong>Talk history</strong><span>{conversation.history.length} message{conversation.history.length===1?'':'s'}</span><button disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>clear</button></header>
-      <div ref={historyRef} class="conversation-history" role="log" aria-live="polite">
+    <section class={`conversation-history-shell${historyOpen?'':' collapsed'}`} aria-label="Talk transcript history">
+      <header>
+        <button class="conversation-history-toggle" aria-expanded={historyOpen} aria-controls="talk-transcript-history" onClick={toggleHistory}>
+          <span class="conversation-history-caret" aria-hidden="true">{historyOpen?'▾':'▸'}</span>
+          <strong>Talk history</strong>
+          <span>{conversation.history.length} message{conversation.history.length===1?'':'s'}</span>
+        </button>
+        <button class="conversation-history-clear" disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>clear</button>
+      </header>
+      {historyOpen&&<div id="talk-transcript-history" ref={historyRef} class="conversation-history" role="log" aria-live="polite">
         {conversation.history.length?conversation.history.map(entry=><article key={entry.id} class={entry.role}>
           <header><strong>{entry.role}</strong><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></header>
           <p>{entry.text}</p>
         </article>):<p class="conversation-history-empty">Your transcripts and Mux responses will appear here.</p>}
-      </div>
-    </section>}
+      </div>}
+    </section>
     <textarea
       ref={draftRef}
       class="dictation-draft"

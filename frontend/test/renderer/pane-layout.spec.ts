@@ -81,3 +81,17 @@ test('the pane-local dictation layer stays below modal overlays', async ({ page 
   })
   expect(bands.conversation).toBeLessThan(bands.modal)
 })
+
+test('Talk history collapses from its own header without moving the terminal', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 })
+  await page.goto('/pane-harness.html?overlay=1&mobile=0')
+  const toggle=page.locator('.conversation-history-toggle')
+  await expect(toggle).toHaveAttribute('aria-expanded','true')
+  const before=await page.evaluate(bounds)
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded','false')
+  await expect(page.locator('.conversation-history')).toHaveCount(0)
+  const after=await page.evaluate(bounds)
+  expect(after.surface).toEqual(before.surface)
+  expect(after.host).toEqual(before.host)
+})

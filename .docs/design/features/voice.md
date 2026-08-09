@@ -290,7 +290,8 @@ executed action — so that number is measured rather than estimated.
   Natural read-only forms such as `active sessions`, `list approvals`, `do I have pending sessions in the current project`, and `list Project Alpha sessions` normalize into those same typed queries.
   An unmatched wake-word query speaks its refusal as well as displaying it, so failure cannot look like silence.
   `pending sessions` is an input alias for sessions needing a human answer or approval; spoken output uses `needing you` so it cannot be confused with pending Queue messages.
-  Result lists speak at most five entries, number every entry, announce item boundaries and the end of the list, support `next page`, `repeat`, and `more detail`, and assign `Session N` or `Project N` handles for 90 seconds.
+  Result lists speak at most five entries, number every entry, announce item boundaries and the end of the list, support `next page`, `repeat`, and `more detail`, and assign `Session N` or `Project N` handles for five minutes.
+  The validated handle context is stored device-locally so a pane or app-view remount between the list and follow-up cannot lose the numbering.
   A handle is frozen to the exact entity id, and a session handle also freezes the agent-run id; reply reading refuses a handle whose run changed.
   Resolution priority is current focus, an exact unique visible name, then a valid recent ordinal; ambiguity produces a numbered list instead of guessing.
   Project ordinals follow visible sidebar order.
@@ -425,7 +426,8 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, and fleet speech projection.
-- `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes.
+- `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes, plus the persisted open or collapsed state of the Talk history disclosure.
+- `frontend/src/spokenListContext.ts` - validated five-minute device-local binding for numbered Project and session follow-ups.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
 - `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (toolbar control), `ConversationSurface` (pane placement or top fallback), and `DictationPanel` (draft and history surface).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.

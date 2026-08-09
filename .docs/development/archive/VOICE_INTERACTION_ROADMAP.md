@@ -217,12 +217,13 @@ One-line and detailed speech are templates over that projection, and the same pr
 No model call and no second status cache exist on this path.
 
 The post-phase spoken dialog adds a closed typed query grammar in `voiceQueries.ts`.
-It filters session status overall or by current/named/numbered Project, speaks at most five numbered results, and keeps exact id plus agent-run handles for 90 seconds so `next`, `repeat`, `more detail`, `open session 2`, `status of session 2`, and `read session 2 reply` remain deterministic.
+It filters session status overall or by current/named/numbered Project, speaks at most five numbered results, and keeps exact id plus agent-run handles in validated device-local storage for five minutes so `next`, `repeat`, `more detail`, `open session 2`, `status of session 2`, and `read session 2 reply` remain deterministic across UI remounts.
 Exact visible names remain available without a handle.
 Explicit last-reply `summary` or `verbatim` is a one-shot request and does not mutate the session's saved content mode.
 The grammar accepts natural read-only noun forms and scope orderings without broadening the mutation grammar.
 Spoken lists announce numbered item boundaries and end markers, while the Talk panel retains a separate line-broken display transcript.
 The device-local 120-entry Talk history records both recognized user text and final Mux outcomes across focus and target changes.
+Its header is an explicit disclosure control, and the expanded or collapsed preference survives view remounts.
 
 - **One read-model projection** composing the existing control plane into a small snapshot, with
   per-field freshness and provenance, invalidated by the events that already drive the UI.

@@ -1799,12 +1799,17 @@ body {
 .dictation-target button.active{color:var(--amber)}
 .dictation-target button:disabled{opacity:.35;cursor:default}
 .conversation-history-shell{min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--bg)}
-.conversation-history-shell>header{min-height:22px;display:flex;align-items:center;gap:7px;padding:2px 6px;border-bottom:1px solid var(--line);color:var(--muted)}
-.conversation-history-shell>header strong{color:var(--text);font-weight:500}
-.conversation-history-shell>header span{flex:1}
-.conversation-history-shell>header button{height:18px;padding:0 5px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.conversation-history-shell.collapsed{grid-template-rows:auto}
+.conversation-history-shell>header{min-height:22px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px;padding:2px 4px;border-bottom:1px solid var(--line);color:var(--muted)}
+.conversation-history-shell.collapsed>header{border-bottom:0}
+.conversation-history-shell>header button{height:18px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .conversation-history-shell>header button:hover:not(:disabled){color:var(--text);background:var(--panel2)}
 .conversation-history-shell>header button:disabled{opacity:.35;cursor:default}
+.conversation-history-toggle{min-width:0;padding:0 3px;display:flex;align-items:center;gap:7px;text-align:left}
+.conversation-history-toggle strong{color:var(--text);font-weight:500}
+.conversation-history-toggle>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-history-caret{flex:0 0 8px;color:var(--muted)}
+.conversation-history-clear{padding:0 5px}
 .conversation-history{min-height:52px;max-height:min(30dvh,230px);overflow:auto;overscroll-behavior:contain;padding:5px;display:grid;align-content:start;gap:5px}
 .conversation-history article{display:grid;gap:2px;padding:5px 6px;border-left:2px solid var(--line);background:var(--panel)}
 .conversation-history article.you{border-left-color:var(--blue,#7aa2f7)}
