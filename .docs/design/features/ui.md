@@ -1665,6 +1665,11 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 - **The indicator is not a field.**
   It sits outside both sections, is always drawn, and its colour, pulse, and hollow "engaged" variant are not configurable.
   Only its *shape* is: hexagon (default), circle, or square.
+  It is vertically aligned to the **title line**, not to the middle of the row: centred on a two-line row it belongs to neither line.
+- **The indicator's box, the row's gutter column, and the stack thread all derive from `--session-dot` and the `--session-row-inset-*` pair.**
+  The thread is drawn through the sessions' own status dots, so a hard-coded offset stops covering the dot the moment the indicator's size changes and paints a rule straight across it.
+  Expressing both from the same variables is what keeps that impossible; `frontend/test/renderer/session-row-layout.spec.ts` measures it, because pure CSS geometry is invisible to every unit test.
+  The indicator is deliberately **not** multiplied by `--ui-scale`, matching every other icon and touch target.
 - **The row never prints the state word.**
   The indicator already carries it, so `working`, `ready`, and `turn complete` are duplication rather than information.
   The `state` field exists for anyone who wants it back but is defined as never notable, so it renders only in `always` mode.

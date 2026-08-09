@@ -17,10 +17,12 @@ import { shapePath } from './dotShapes.ts'
 import type { DotShape } from './sessionRowConfig.ts'
 import type { Session } from './types'
 
-/** Outer radius of the gauge ring, chosen to leave room for its own stroke. */
-const RING_RADIUS = 9
-/** Radius of the filled core. Sized so a bare indicator matches the former dot. */
-const CORE_RADIUS = 5.2
+/** Outer radius of the gauge ring, sized so ring plus stroke still fits the viewBox. */
+const RING_RADIUS = 10.2
+/** Radius of the filled core, in a 24-unit box. */
+const CORE_RADIUS = 6.2
+/** Stroke width of the hollow "standing" core. */
+const HOLLOW_STROKE = 2.4
 
 export interface StateIndicatorProps {
   session: Session | undefined
@@ -50,7 +52,13 @@ export function StateIndicator({ session, shape, gauge, class: extra }: StateInd
       {/* The peak sits on the same normalized outline as a 1.5-unit dash, so it
           follows whichever shape is selected without any per-shape geometry. */}
       {gauge && peak > pct && <path class="ind-peak" d={outline} pathLength={100} stroke-dasharray="1.5 98.5" stroke-dashoffset={-peak * 100} />}
-      <path class={hollow ? 'ind-core hollow' : 'ind-core'} d={shapePath(shape, hollow ? CORE_RADIUS : CORE_RADIUS - 0.6)} />
+      {/* The hollow path is inset by half its stroke so both variants occupy the
+          same outer silhouette; drawn at the same radius, the stroked one would
+          read as the larger shape and "engaged" would look like a bigger state. */}
+      <path
+        class={hollow ? 'ind-core hollow' : 'ind-core'}
+        d={shapePath(shape, hollow ? CORE_RADIUS - HOLLOW_STROKE / 2 : CORE_RADIUS)}
+      />
     </svg>
   </span>
 }

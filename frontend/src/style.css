@@ -998,18 +998,21 @@ body {
    diagram. */
 .layout-cluster{position:relative;min-width:0}
 .layout-cluster>.layout-branch{position:relative;min-width:0}
-/* The thread's x is the state dot's centre: the row's 8px left padding plus half
-   of the 6px dot. It is drawn as two segments per branch so it stops above the
-   dot it arrives at and resumes below it — one unbroken rule would paint a blue
-   stripe straight across dots whose colour *is* the status being reported. The
+/* The thread's x is the state indicator's centre, and its gap is exactly the
+   indicator's box, both derived from `--session-dot` / `--session-row-pad` rather
+   than restated as pixels — a hard-coded offset silently stopped covering the dot
+   the first time the indicator changed size. It is drawn as two segments per
+   branch so it stops above the dot it arrives at and resumes below it — one
+   unbroken rule would paint a blue stripe straight across dots whose colour *is*
+   the status being reported. The
    segments sit above the rows (z-index 3 over the row's 2) because the focused
    row's selection plate is opaque and would otherwise cut the thread there; they
    clear the row text, which starts at 26px. First and last drop their outer
    segment so the thread begins and ends on a dot rather than dangling past the
    note/preview rows a branch may carry. */
-.layout-cluster.stack>.layout-branch:before,.layout-cluster.stack>.layout-branch:after{content:"";position:absolute;z-index:3;left:10px;width:2px;background:color-mix(in srgb,var(--blue) 62%,transparent);pointer-events:none}
-.layout-cluster.stack>.layout-branch:before{top:0;height:10px}
-.layout-cluster.stack>.layout-branch:after{top:16px;bottom:0}
+.layout-cluster.stack>.layout-branch:before,.layout-cluster.stack>.layout-branch:after{content:"";position:absolute;z-index:3;left:calc(var(--session-row-inset-x) + var(--session-dot)/2 - 1px);width:2px;background:color-mix(in srgb,var(--blue) 62%,transparent);pointer-events:none}
+.layout-cluster.stack>.layout-branch:before{top:0;height:var(--session-row-inset-y)}
+.layout-cluster.stack>.layout-branch:after{top:calc(var(--session-row-inset-y) + var(--session-dot));bottom:0}
 .layout-cluster.stack>.layout-branch.first:before,.layout-cluster.stack>.layout-branch.last:after{content:none}
 .layout-cluster .session-row{position:relative;z-index:2}.layout-resource-row{height:calc(40px*var(--ui-scale));display:flex;align-items:center;gap:8px;color:var(--muted)}.layout-loose{margin-top:4px;padding-top:3px}.layout-loose-divider{height:10px;display:grid;grid-template-columns:13px 1fr;align-items:center;color:var(--muted);font-size:8px}.layout-loose-divider i{display:block;border-top:1px dotted var(--line)}.foreign-scope{margin-left:6px;color:var(--amber)}.anchor-badge{color:var(--green);margin-left:auto}.project-row .anchor-badge+small{margin-left:0}
 .pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:calc(31px*var(--ui-scale)) minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs-rail{--overflow-rail-bg:var(--panel);--overflow-rail-accent:var(--green)}.stack-tabs{width:100%;height:100%;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:none}.stack-tabs::-webkit-scrollbar{display:none}.stack-tabs button{flex:0 0 auto;max-width:220px;height:calc(31px*var(--ui-scale));border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}/* The active tab was distinguished only by swapping --panel for --bg, a difference of a few
@@ -2807,8 +2810,24 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    shape, its hollow "standing" variant, and the context gauge that follows the
    shape's outline are all geometry CSS cannot express on a bordered box. */
 .session-list{container-type:inline-size}
+/* The indicator's box, the sidebar row's gutter column, and the stack thread's
+   geometry all derive from these two numbers, so the thread cannot drift off the
+   dots it is drawn through the way a hard-coded offset did.
+   Deliberately NOT multiplied by `--ui-scale`: like every other icon and touch
+   target, the indicator stays put while type and row heights scale. */
+:root{
+  --session-dot:15px;
+  /* Mirrors `.session-row`'s effective padding, which is asymmetric (5px 8px), so
+     the thread needs both axes: the horizontal inset places its rule on the dot's
+     centre, the vertical one places the break it leaves for the dot. Keep these
+     equal to that padding — they are a restatement of it, not a second opinion. */
+  --session-row-inset-x:8px;
+  --session-row-inset-y:5px;
+}
 .state-dot.state-indicator{
-  width:calc(13px*var(--ui-scale));height:calc(13px*var(--ui-scale));
+  /* Dense surfaces — tab strips, menus, pane headers — keep the former dot's
+     visual weight; only the sidebar row, which has the room, goes larger. */
+  width:13px;height:13px;
   background:none!important;border:0!important;border-radius:0!important;box-shadow:none!important;
   display:inline-flex;align-items:center;justify-content:center;flex:none;--dot:#727b88
 }
@@ -2830,16 +2849,31 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Only one element in a row may go red, and the indicator owns that vocabulary. */
 .ind-fill.crit{stroke:var(--red)}
 .ind-peak{fill:none;stroke:#9fb3a8;stroke-width:2.6;opacity:.55}
-.session-row .state-dot.state-indicator{align-self:center;margin-top:0}
+/* The gutter column is exactly the indicator, and the indicator is top-aligned
+   against the title line rather than centred in the row. Centring put the dot
+   between the two lines, which reads as belonging to neither, and left the stack
+   thread painting straight across it. */
+.session-row{grid-template-columns:var(--session-dot) minmax(0,1fr)}
+.session-row .state-dot.state-indicator{
+  width:var(--session-dot);height:var(--session-dot);align-self:start;margin-top:0
+}
 
 .session-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
 .row-line{display:flex;align-items:baseline;gap:10px;min-width:0}
-.row-line.top{font-size:12px}
+/* Same height as the indicator and centred, so the two boxes start together and
+   their centres coincide at any type size instead of only at the default one. */
+.row-line.top{font-size:12px;min-height:var(--session-dot);align-items:center}
 .row-line.bottom{font:9px 'Cascadia Mono',Consolas,monospace;color:var(--muted);min-height:12px}
 /* The blank bottom line is kept on desktop — constant row height is what makes
    the list scannable — but dropped on mobile, where vertical space is the
    scarce resource and identity-only rows are the point. */
-@media(max-width:760px){.row-line.bottom.empty{display:none;min-height:0}}
+/* Mobile rows are shorter and their titles smaller, so the indicator steps down
+   with them rather than towering over a 9px name. The thread and the gutter
+   column follow automatically, being expressed in the same variable. */
+@media(max-width:760px){
+  :root{--session-dot:13px}
+  .row-line.bottom.empty{display:none;min-height:0}
+}
 .row-section{display:flex;align-items:baseline;min-width:0;white-space:nowrap}
 .row-section.left{flex:1 1 auto;overflow:hidden}
 /* Fixed rather than flexible so a value changing from `22m` to `1h30` cannot
