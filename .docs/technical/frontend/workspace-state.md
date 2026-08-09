@@ -51,6 +51,11 @@ Mobile derives one depth-first tab rail and one selected body from the desktop t
 Responsive transitions never flatten or persist replacement geometry.
 The drawer tab strips and desktop right rail have separate icon/title config fields; only `utility_rail_display` feeds `--utility-rail-width`, so changing drawer tabs never reflows the workspace grid.
 
+The desktop right rail renders only while the drawer is closed, and the docked drawer takes the same last grid column when open.
+`--utility-rail-width` is reserved in both states: closed it sizes the rail, open it is added to `--drawer-width` to size the drawer's column.
+The workspace's remaining width is therefore identical whether the rail or the drawer holds that column, so `drawerMaximumWidth` keeps reserving the launcher width and the outer resizer keeps reading and writing the stored drawer width unchanged.
+Both `.utility-drawer.docked` and `.drawer-resizer` address that column with negative grid lines, which silently retarget if the open template's column count changes.
+
 `OverflowRail` wraps workspace and utility tablists without taking over their ARIA roles or drag targets.
 It owns endpoint detection, non-layout-consuming fade chevrons, wheel translation, boundary-aware paging, and selected or focused tab reveal.
 Selection changes and pane-focus changes are separate reveal triggers because moving focus to an already-active pane tab does not change the selected child ID.
@@ -107,7 +112,11 @@ The slow health sweep independently compares the current grid with a fresh fit p
 Reveal is also when a warm pane that attached hidden judges its replayed transcript: if the parse left less than one screen of scrollback on a normal-screen `repaintsScrollback` harness, the pane sends one `repaint` frame per parsed buffer and the daemon makes the child restate its transcript (`scrollbackRepaintNeeded` in `terminalHealth.ts`; the same check runs when a visible pane finishes replay).
 
 Viewport measurement also owns the agent width envelope.
-Claude's host is centered and capped at 120 columns, so parent growth beyond that width does not emit another PTY resize.
+Claude's host is centered and capped at the configured `claude_max_columns` (`claudeWidthCap` in `terminalViewport.ts`, `0` for none), so parent growth beyond that width does not emit another PTY resize.
+The cap is applied to the host box as a `max-width` and never to the proposed column count, so FitAddon measures the clamped result and xterm, the registered geometry, and the pixels on screen all derive from one number.
+The transient width notice is driven by a second `ResizeObserver` on the host's track rather than by the viewport pass, because the pass is scheduled from an observer on the host and a capped host is exactly the one that stops resizing: a pane already at the cap and dragged wider produces no host resize at all.
+Each track resize compares host against track (`claudeWidthCapClamping`) and raises the notice only when a width that actually changed comes back clamped, which keeps a restored wide layout from explaining itself at boot.
+The observer is separate from `scheduleBurstFit` so that a drag the cap absorbs costs two `clientWidth` reads rather than a fit proposal per frame, none of which could change the grid.
 For narrow desktop Codex panes, the measurement first proposes at the configured base font, derives a smaller font when the proposal is below 80 columns, and proposes again before changing xterm or sending the viewport frame.
 The policy runs on pre-connect attach, ordinary resize, reconnect, explicit Resize, and health repair through the same `fitVisiblePane` path, so replay bytes cannot be parsed at a different width from the one registered with ConPTY.
 

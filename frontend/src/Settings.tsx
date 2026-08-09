@@ -10,7 +10,8 @@ import { listShortcutBindings, type ShortcutPolicy } from '@continuity-editor/ed
 import { applyNoteEditorConfig, DEFAULT_NOTE_SHORTCUT_OVERRIDES, resetNoteRailArrangement } from './noteEditorSettings'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { ThemePicker } from './ThemePicker'
-import { applyUiScale, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
+import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
+import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
 import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
@@ -56,6 +57,7 @@ type Config = {
   note_command_rail:'auto'|'on'|'off';note_rail_button_size_px:number
   note_indent_guides:boolean
   ui_scale_desktop:UiScale;ui_scale_mobile:UiScale
+  claude_max_columns:ClaudeMaxColumns
   note_shortcut_overrides:Record<string,string>
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   usage_commands:Record<string,string[]>
@@ -112,7 +114,7 @@ type RemoteStatus = {
   mobile_voice_configured:boolean;mobile_voice_url?:string|null;mobile_voice_https_port:number
 }
 type KeybindingCommand = {id:string;label:string;category:string}
-type KeybindingPolicy = {browser_reserved:string[];desktop_only:string[];terminal_reserved:string[];rules:string[]}
+type KeybindingPolicy = {browser_reserved:string[];desktop_only:string[];application_reserved:string[];terminal_reserved:string[];rules:string[]}
 type KeybindingsResponse = {
   bindings:Record<string,string>;defaults:Record<string,string>;commands:KeybindingCommand[]
   policy:KeybindingPolicy;rejected:Record<string,string>
@@ -199,7 +201,7 @@ const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
   stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
 }
 
-export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General', voiceCommands=[] }: { onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
+export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection='General', voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -210,7 +212,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const [bindings, setBindings] = useState<Record<string,string>>({})
   const [bindingDefaults, setBindingDefaults] = useState<Record<string,string>>({})
   const [bindingCommands, setBindingCommands] = useState<KeybindingCommand[]>([])
-  const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],desktop_only:[],terminal_reserved:[],rules:[]})
+  const [bindingPolicy, setBindingPolicy] = useState<KeybindingPolicy>({browser_reserved:[],desktop_only:[],application_reserved:[],terminal_reserved:[],rules:[]})
   const [capturingCommand, setCapturingCommand] = useState<string|null>(null)
   const [bindingError, setBindingError] = useState('')
   const [harnessArgs, setHarnessArgs] = useState<Record<string,string>>({})
@@ -261,7 +263,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)])))
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy({
-        browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],
+        browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],application_reserved:keyData.policy?.application_reserved||[],
         terminal_reserved:keyData.policy?.terminal_reserved||[],rules:keyData.policy?.rules||[],
       })
       if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
@@ -275,6 +277,14 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   useEffect(() => {
     setActiveTab(tabForSection(initialSection))
   },[initialSection])
+
+  // Ctrl+wheel/+/- is owned by App so it can intercept before xterm and browser zoom.
+  // While Settings is open, reflect that active-profile preview into this panel's draft
+  // so its existing Save/Discard transaction remains the only persistence authority.
+  useEffect(()=>{
+    const key=currentProfile()==='mobile'?'ui_scale_mobile':'ui_scale_desktop'
+    setDraft(current=>current&&current[key]!==activeUiScale?{...current,[key]:activeUiScale}:current)
+  },[activeUiScale,config?.revision])
 
   useEffect(()=>setThemePickerOpen(false),[activeTab])
 
@@ -360,6 +370,9 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   useEffect(() => {
     if (!capturingCommand) return
     const capture = (event:KeyboardEvent) => {
+      // Fixed scale keys are application-reserved, including while the shortcut
+      // recorder is open. Leave them untouched for App's scale capture listener.
+      if(uiScaleKeyboardIntent(event))return
       event.preventDefault();event.stopImmediatePropagation()
       if(event.key==='Escape'){setCapturingCommand(null);setBindingError('');return}
       if(event.repeat||['Control','Shift','Alt','Meta'].includes(event.key))return
@@ -436,7 +449,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   const changeUiScale = (key:'ui_scale_desktop'|'ui_scale_mobile', raw:string) => {
     const scale = Number(raw) as UiScale
     change(key,scale)
-    applyUiScale({...draft!,[key]:scale})
+    onUiScalePreview({...draft!,[key]:scale})
   }
   // Only the overlay is stored, never the whole table: a chord left on the
   // editor's default keeps following the editor, so a Continuity upgrade that
@@ -480,7 +493,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
       setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)])));setErrors({})
       setSavedRules(rules);setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
-      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next)
+      configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next)
       return true
     } catch (error) {
       const typed = error as Error & {fields?:Record<string,string>}
@@ -490,7 +503,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
   }
   const reset = async () => {
     const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); applyUiScale(next); setStatus('defaults restored')
+    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); setStatus('defaults restored')
   }
   const exportConfig = () => {
     if (!draft) return
@@ -572,7 +585,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
     if(!closeIntent)return
     // Theme and chrome scale are previewed live as you pick them, so discarding
     // has to put both back — not just the draft that was never saved.
-    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);applyUiScale(config)}
+    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);onUiScalePreview(config)}
     leaveSettings(closeIntent)
   }
   const saveAndLeave=async()=>{
@@ -643,6 +656,8 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
           <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
         <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback.</p>
+          <label>Claude width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
+          <p>Claude Code's renderer can leave stale and duplicated cells when its width changes by a lot, so a Claude pane dragged past this many columns adds margin instead of resizing the terminal again. That is why a wide Claude pane stops growing its text while Codex and shell panes keep filling the space. Raise it for wide diffs and long log lines; choose <strong>No limit</strong> to let Claude fill its pane like every other session, and watch for leftover text on the right after a resize. Phone and other compact panes are never limited - they are narrower than the smallest setting here.</p>
           <label>Global default profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured terminal profiles">
@@ -765,7 +780,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <div class="keybinding-list">
             {[...new Set(bindingCommands.map(command=>command.category))].map(category=><section class="keybinding-group" aria-label={`${category} shortcuts`}><h4>{category}</h4>{bindingCommands.filter(command=>command.category===category).map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):'not set'}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>)}
           </div>
-          <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
+          <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>APPLICATION</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
         </section>}
 
         {activeTab==='commandrail'&&<RailEditor/>}
@@ -922,7 +937,7 @@ export function Settings({ onClose, onOpenUsage:openUsage, onOpenAutomation:open
           <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
           <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
-          <p>Scale moves the text of every menu, tab, sidebar row, and panel together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put — that is what keeps a bigger interface from also becoming a sparser one. The terminal has its own font size and is not affected, and the note editor keeps its own typography under <strong>Notes</strong>.</p></section>}
+          <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Notes</strong>.</p></section>}
   </Fragment>
 
   // Rebuilt on the first keystroke of a search and then reused until the search

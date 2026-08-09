@@ -122,4 +122,7 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - `delivery-readiness.md` — the operator-input evidence contract this phase also closed.
 - `status-detection.md` — the status contract MCP reads through.
 - `history.md` — the archive `search_history` queries.
-- `../development/CONTROL_PLANE_ROADMAP.md` §7 — the full return-path design and v1 plan.
+- `../development/CONTROL_PLANE_ROADMAP.md` §7 - the full return-path design: §7.5 for the
+  planned v0.5 situational-awareness reads (`ROADMAP.md` Phase 5.6) and the v1 memory tools
+  (Phase 7.5), §7.6 for the planned session-control tools and their authority grant
+  (Phase 7.6). None of that is implemented; this document describes what ships today.

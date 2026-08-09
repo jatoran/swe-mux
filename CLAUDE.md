@@ -73,11 +73,12 @@ hazard, restart contract).
 
 ## Worktrees and parallel changes
 
-Use each provider's native worktree lifecycle: Claude Code native worktrees for Claude and
-Codex Worktree/Handoff for Codex.
+Use provider-native worktree lifecycle controls when available.
+Codex may also use `git worktree add` directly when its native control is unavailable or the user
+requests manual creation.
 `master` is the single shared trunk; there is no agent-only integration branch or `gwt` landing flow.
 Claude worktrees own their generated branches.
-Codex-managed worktrees begin detached and use Create branch here before final commits.
+Codex worktrees may begin detached but must create a named branch before committing.
 Worktree agents commit only their own branch.
 Reconcile a finished branch with current `master`, verify it, and integrate branches one at a time.
 

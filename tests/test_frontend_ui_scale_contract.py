@@ -168,8 +168,9 @@ def test_the_terminal_font_follows_the_chrome_scale() -> None:
     pane = (SRC / "TerminalPane.tsx").read_text(encoding="utf-8")
 
     assert "uiScale={uiScale}" in app
-    assert "setUiScale(applyUiScale(config))" in app
-    assert "watchUiScaleProfile(setUiScale)" in app
+    assert "previewUiScaleConfig(config)" in app
+    assert "watchUiScaleProfile(scale=>" in app
+    assert "activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig}" in app
 
     assert "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)" in pane
     assert "useEffect(() => { applyBaseFontRef.current() }, [uiScale])" in pane
@@ -184,3 +185,12 @@ def test_the_terminal_font_follows_the_chrome_scale() -> None:
     assert "BASE_FONT_SIZE" not in body.replace(
         "const baseFont = scaledFontSize(BASE_FONT_SIZE, uiScale)", ""
     )
+
+
+def test_scale_inputs_are_captured_before_browser_zoom_and_terminal_input() -> None:
+    app = (SRC / "App.tsx").read_text(encoding="utf-8")
+
+    assert "window.addEventListener('keydown',onKey,true)" in app
+    assert "window.addEventListener('wheel',onWheel,{capture:true,passive:false})" in app
+    assert "event.stopImmediatePropagation()" in app
+    assert "showInteractionHud(`UI scale ${Math.round(next*100)}%${limit}`)" in app

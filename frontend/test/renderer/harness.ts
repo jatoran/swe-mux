@@ -2,7 +2,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
-import { CLAUDE_MAX_DESKTOP_COLUMNS, reflowVisibleTerminalRenderer, terminalWidthPolicyFontSize } from '../../src/terminalViewport'
+import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeHostMaxWidth, reflowVisibleTerminalRenderer, terminalWidthPolicyFontSize } from '../../src/terminalViewport'
 import { terminalRenderControl } from '../../src/terminalRenderPause'
 import {
   dispatchTerminalMouseTap,
@@ -383,7 +383,7 @@ window.runTerminalWidthPolicies = async () => {
   claudeGrid.append(domHost)
   domHost.style.width = '100%'
   domHost.style.height = '420px'
-  domHost.style.maxWidth = `calc(${CLAUDE_MAX_DESKTOP_COLUMNS}ch + 11px)`
+  domHost.style.maxWidth = claudeHostMaxWidth(DEFAULT_CLAUDE_MAX_COLUMNS)
   domHost.style.justifySelf = 'center'
   domHost.style.fontFamily = 'Consolas, monospace'
   domHost.style.fontSize = '11px'

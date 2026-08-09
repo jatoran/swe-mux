@@ -199,6 +199,88 @@ async def test_strict_head_of_line_blocks_armed_later_items(harness: Harness) ->
 
 
 @pytest.mark.asyncio
+async def test_delete_erases_any_non_delivering_item_and_releases_the_head(
+    harness: Harness,
+) -> None:
+    head = await harness.service.enqueue(target_session_id="s1", body="remove me", armed=True)
+    later = await harness.service.enqueue(target_session_id="s1", body="send me", armed=True)
+
+    deleted = await harness.service.delete(head["id"])
+    assert deleted["previous_state"] == "armed"
+    view = await harness.service.target_view("s1")
+    assert [item["id"] for item in view["messages"]] == [later["id"]]
+    assert view["messages"][0]["position"] == 0
+    assert view["pending"] == 1
+    assert (await harness.service.send_next(later["id"], revision=1))["status"] == "sent"
+
+    tombstone = await harness.store.message(head["id"])
+    assert tombstone is not None
+    assert tombstone["state"] == "deleted"
+    assert tombstone["body"] == ""
+    assert tombstone["deleted_at"] is not None
+    assert (await harness.service.delete(head["id"]))["already_deleted"] is True
+    assert any(
+        event == "queue_updated" and payload.get("state") == "deleted"
+        for event, payload in harness.events.emitted
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_closed_items_but_keeps_delivery_audit(harness: Harness) -> None:
+    sent = await harness.service.enqueue(target_session_id="s1", body="delivered body")
+    await harness.service.send_next(sent["id"], revision=1)
+    skipped = await harness.service.enqueue(target_session_id="s1", body="skipped body")
+    await harness.service.cancel(skipped["id"], kind="skipped")
+    assert len(await harness.store.deliveries(sent["id"])) == 1
+
+    await harness.service.delete(sent["id"])
+    await harness.service.delete(skipped["id"])
+    assert await harness.service.export_target("s1", redact_secrets=False) == {
+        "target_session_id": "s1",
+        "messages": [],
+    }
+    audit = await harness.store.deliveries(sent["id"])
+    assert len(audit) == 1 and audit[0]["outcome"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_a_message_already_claimed_for_delivery(harness: Harness) -> None:
+    message = await harness.service.enqueue(target_session_id="s1", body="in flight")
+    await harness.store.claim_for_delivery(message["id"], revision=1, idempotency_key=None)
+
+    with pytest.raises(QueueError) as caught:
+        await harness.service.delete(message["id"])
+    assert caught.value.code == "delivery_in_progress"
+    assert caught.value.status == 409
+
+
+@pytest.mark.asyncio
+async def test_deleted_correlation_tombstone_prevents_retry_resurrection(
+    harness: Harness,
+) -> None:
+    original = await harness.service.enqueue(
+        target_session_id="s1",
+        body="agent message",
+        sender_kind="agent",
+        sender_id="s2",
+        correlation_id="retry-1",
+    )
+    await harness.service.delete(original["id"])
+
+    retry = await harness.service.enqueue(
+        target_session_id="s1",
+        body="agent message retried",
+        sender_kind="agent",
+        sender_id="s2",
+        correlation_id="retry-1",
+    )
+    assert retry["id"] == original["id"]
+    assert retry["state"] == "deleted"
+    assert retry["deduplicated"] is True
+    assert (await harness.service.target_view("s1"))["messages"] == []
+
+
+@pytest.mark.asyncio
 async def test_queues_are_per_target(harness: Harness) -> None:
     await harness.service.enqueue(target_session_id="s1", body="s1 head")
     other = await harness.service.enqueue(target_session_id="s2", body="s2 head")
@@ -514,6 +596,8 @@ async def test_prune_ages_out_terminal_items_only(harness: Harness) -> None:
     sent = await harness.service.enqueue(target_session_id="s1", body="old sent")
     await harness.service.send_next(sent["id"], revision=1)
     keep = await harness.service.enqueue(target_session_id="s1", body="still pending")
+    deleted = await harness.service.enqueue(target_session_id="s1", body="old tombstone")
+    await harness.service.delete(deleted["id"])
 
     def age(message_id: str) -> None:
         harness.store._db.execute(
@@ -528,8 +612,12 @@ async def test_prune_ages_out_terminal_items_only(harness: Harness) -> None:
     await asyncio.get_running_loop().run_in_executor(
         harness.store._executor, age, keep["id"]
     )
+    await asyncio.get_running_loop().run_in_executor(
+        harness.store._executor, age, deleted["id"]
+    )
     await harness.store.prune(90)
     assert await harness.store.message(sent["id"]) is None
+    assert await harness.store.message(deleted["id"]) is None
     survivor = await harness.store.message(keep["id"])
     assert survivor is not None and survivor["state"] == "draft"
 
@@ -547,6 +635,7 @@ def test_queue_routes_are_registered(tmp_path: Path) -> None:
     assert ("GET", "/api/queue/messages") in routes
     assert ("POST", "/api/queue/messages") in routes
     assert ("PATCH", "/api/queue/messages/{message_id}") in routes
+    assert ("DELETE", "/api/queue/messages/{message_id}") in routes
     assert ("POST", "/api/queue/messages/{message_id}/cancel") in routes
     assert ("GET", "/api/queue/messages/{message_id}/deliveries") in routes
     assert ("POST", "/api/queue/send-next") in routes
@@ -563,7 +652,7 @@ def test_queue_routes_are_registered(tmp_path: Path) -> None:
     ) in routes
 
 
-# ------------------------------------------------------------- schema v2
+# ------------------------------------------------------------- schema v3
 
 
 @pytest.mark.asyncio
@@ -611,6 +700,7 @@ async def test_a_v1_database_migrates_in_place(tmp_path: Path) -> None:
         kept = await store.message("m1")
         assert kept is not None and kept["body"] == "legacy"
         assert kept["chain_depth"] == 0 and kept["correlation_id"] is None
+        assert kept["deleted_at"] is None
         fresh = await store.create_message(
             target_session_id="s1",
             target_agent_run_id="run-s1",

@@ -47,9 +47,85 @@ export const UI_SCALE_BASE_PX = 11
 export const uiScaleLabel = (scale: UiScale): string =>
   `${Math.round(scale * 100)}%  (${+(UI_SCALE_BASE_PX * scale).toFixed(1)}px)`
 
-const CONFIG_KEY: Record<SettingsProfile, string> = {
+const CONFIG_KEY: Record<SettingsProfile, 'ui_scale_desktop' | 'ui_scale_mobile'> = {
   desktop: 'ui_scale_desktop',
   mobile: 'ui_scale_mobile',
+}
+
+export const uiScaleConfigKey = (profile: SettingsProfile): 'ui_scale_desktop' | 'ui_scale_mobile' =>
+  CONFIG_KEY[profile]
+
+export type UiScaleIntent = 'increase' | 'decrease' | 'reset'
+
+type UiScaleKeyboardInput = Pick<
+  KeyboardEvent,
+  'altKey' | 'code' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'
+>
+
+/**
+ * Classify the fixed browser-style scale keys before an editor or xterm can consume them.
+ *
+ * `Ctrl+=` is accepted as `Ctrl++`, matching browser zoom on keyboards where `+` shares
+ * the equals key. `code` keeps the classification stable across Shift and keyboard
+ * layouts; `key` is the fallback used by synthetic events and older engines.
+ */
+export function uiScaleKeyboardIntent(event: UiScaleKeyboardInput): UiScaleIntent | null {
+  if (!event.ctrlKey || event.altKey || event.metaKey) return null
+  if (!event.shiftKey && (event.code === 'Digit0' || event.code === 'Numpad0' || event.key === '0')) {
+    return 'reset'
+  }
+  if (
+    event.code === 'Equal'
+    || event.code === 'NumpadAdd'
+    || event.key === '='
+    || event.key === '+'
+  ) return 'increase'
+  if (
+    !event.shiftKey
+    && (event.code === 'Minus' || event.code === 'NumpadSubtract' || event.key === '-')
+  ) return 'decrease'
+  return null
+}
+
+/** Resolve one discrete step, clamped at the published endpoints. */
+export function uiScaleForIntent(scale: UiScale, intent: UiScaleIntent): UiScale {
+  if (intent === 'reset') return DEFAULT_UI_SCALE
+  const currentIndex = UI_SCALE_STEPS.indexOf(scale)
+  const offset = intent === 'increase' ? 1 : -1
+  const nextIndex = Math.max(0, Math.min(UI_SCALE_STEPS.length - 1, currentIndex + offset))
+  return UI_SCALE_STEPS[nextIndex]
+}
+
+export const UI_SCALE_WHEEL_THRESHOLD_PX = 50
+export const UI_SCALE_WHEEL_GESTURE_GAP_MS = 250
+
+type UiScaleWheelInput = Pick<WheelEvent, 'deltaMode' | 'deltaY' | 'timeStamp'>
+
+/**
+ * Turn a high-resolution Ctrl+wheel stream into discrete scale steps.
+ *
+ * A mouse notch normally clears the threshold in one event. Trackpad/pinch streams
+ * accumulate until they do, reset after a pause, and discard accumulated travel when
+ * direction reverses. One unusually large event still produces only one step.
+ */
+export function createUiScaleWheelIntent() {
+  let accumulated = 0
+  let lastAt = Number.NEGATIVE_INFINITY
+  return (event: UiScaleWheelInput): UiScaleIntent | null => {
+    const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 800 : 1
+    const delta = event.deltaY * unit
+    if (!Number.isFinite(delta) || delta === 0) return null
+    if (
+      event.timeStamp - lastAt > UI_SCALE_WHEEL_GESTURE_GAP_MS
+      || (accumulated !== 0 && Math.sign(accumulated) !== Math.sign(delta))
+    ) accumulated = 0
+    lastAt = event.timeStamp
+    accumulated += delta
+    if (Math.abs(accumulated) < UI_SCALE_WHEEL_THRESHOLD_PX) return null
+    const intent = accumulated < 0 ? 'increase' : 'decrease'
+    accumulated = 0
+    return intent
+  }
 }
 
 /**

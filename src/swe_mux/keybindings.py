@@ -198,6 +198,12 @@ _DESKTOP_ONLY = {
     "ctrl+tab",
     "ctrl+shift+tab",
 }
+_APPLICATION_RESERVED = {
+    "ctrl+0",
+    "ctrl+-",
+    "ctrl+=",
+    "ctrl+shift+=",
+}
 _TERMINAL_RESERVED = {
     "ctrl+a",
     "ctrl+c",
@@ -218,11 +224,13 @@ def keybinding_policy() -> dict[str, object]:
     return {
         "browser_reserved": sorted(_BROWSER_RESERVED),
         "desktop_only": sorted(_DESKTOP_ONLY),
+        "application_reserved": sorted(_APPLICATION_RESERVED),
         "terminal_reserved": sorted(_TERMINAL_RESERVED),
         "rules": [
             "Use Ctrl, Alt, or Meta plus a non-modifier key.",
             "Shift alone is rejected so normal typing always reaches the terminal.",
             "Known browser and terminal shortcuts are reserved.",
+            "UI scale shortcuts are fixed application controls and cannot be rebound.",
             "Desktop-only chords work in the desktop app; an ordinary browser keeps them.",
             "One chord can be assigned to only one command.",
         ],
@@ -243,6 +251,8 @@ def normalize_binding(chord: object, command: object) -> tuple[str, str]:
         raise ValueError("binding contains a duplicate modifier")
     if key in _BROWSER_RESERVED:
         raise ValueError("browser-reserved chord")
+    if key in _APPLICATION_RESERVED:
+        raise ValueError("application-reserved chord")
     if key in _TERMINAL_RESERVED:
         raise ValueError("terminal-reserved chord")
     command_id = _COMMAND_MIGRATIONS.get(str(command), str(command))

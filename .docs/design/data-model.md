@@ -59,8 +59,8 @@
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.
   Version 1 is legacy root-relative attribution; version 2 proves current per-edge causal validation or live Job Object membership.
-- `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention
-  summaries. `quota_reset_events` retains reset/correlation evidence plus nullable durable user
+- `quota_samples` and `quota_sample_rollups`: durable raw observations and daily retention summaries keyed by local account slot and verified provider account identity.
+  `quota_reset_events` retains reset/correlation evidence plus nullable durable user
   review (`manual_usage | discarded`, timestamp); `quota_attributions` retains correlation
   estimates.
 - `context_compactions`, `tool_events`, and `transcript_telemetry_coverage`: deduplicated
@@ -99,7 +99,7 @@
   Keyed to `target_session_id` + the bound `target_agent_run_id` (nullable until the
   target's first run binds, then never re-bound), with a target label/backend/project
   snapshot for stranded queues, gap-free `position` per target, state
-  (`draft|armed|blocked|delivering|sent|failed|cancelled|stranded`), body, `revision`,
+  (`draft|armed|blocked|delivering|sent|failed|cancelled|stranded|deleted`), body, `revision`,
   and the provenance-rich sender model — `sender_kind`
   (`user|remote_user|agent|rule|queue_draft`, derived from the transport or the caller's
   MCP token, never claimed), `sender_id`/`sender_label`, `origin_session_id`,
@@ -107,7 +107,10 @@
   `chain_depth`, `origin_json` (relay path / rule id / Tier 0 fact fingerprints),
   `payload_json` (typed action payload for control-plane drafts), `constraints_json`
   (`not_before`, `expires_at`) — plus blocked reasons, stranded reason, `cancel_kind`
-  (`cancelled|skipped|revoked|expired`), `retargeted_from_json`, and lifecycle timestamps.
+  (`cancelled|skipped|revoked|expired`), `retargeted_from_json`, and lifecycle timestamps
+  including `deleted_at`. Delete blanks the body and action-bearing JSON immediately, hides
+  the row from every read surface, and retains the content-free row until normal retention
+  so sender correlation retries resolve to the deleted identity instead of recreating it.
 - `queue_deliveries`: the delivery audit — per attempt: revision, target identity,
   readiness state + reasons, explicit-confirmation flag, `initiator` (`user|auto` — who
   pressed send), outcome (`pending|sent|refused|failed`), error, byte count, and a

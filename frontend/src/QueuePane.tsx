@@ -3,7 +3,7 @@ import { browserUuid } from './layout'
 import { sessionDotClass } from './sessionStatus'
 import { agentTargetName, agentTargets } from './agentTargets'
 import {
-  armQueueMessage, cancelQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
+  armQueueMessage, cancelQueueMessage, deleteQueueMessage, editQueueMessage, enqueueMessage, fetchAutoStatus,
   fetchQueue, isPendingQueueState, moveQueueMessage, queueHead, reportUnsafeDelivery,
   retargetQueueMessage, scheduleQueueMessage, scheduleStatus, senderLabel, sendQueueMessage,
   setAutoPaused, setSessionAutoPolicy,
@@ -143,6 +143,7 @@ export function QueuePane({
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState('')
   const [confirmId, setConfirmId] = useState('')
+  const [deleteConfirmId, setDeleteConfirmId] = useState('')
   const [menuId, setMenuId] = useState('')
   const [editing, setEditing] = useState<{ id: string; revision: number; body: string } | null>(null)
   const [composer, setComposer] = useState('')
@@ -225,7 +226,7 @@ export function QueuePane({
   // Retargeting drops per-message UI that named a message of the previous target: the
   // drawer's target changes under it every time focus moves to another pane.
   useEffect(() => {
-    setEditing(null); setConfirmId(''); setMenuId(''); setRetargetFor(''); setError('')
+    setEditing(null); setConfirmId(''); setDeleteConfirmId(''); setMenuId(''); setRetargetFor(''); setError('')
   }, [sessionId])
 
   // A chip or command can open an already-selected Queue tab; the token still earns focus.
@@ -361,6 +362,23 @@ export function QueuePane({
           </button>
         )}
         <button type="button" disabled={busy} onClick={() => copyBody(message)}>Copy</button>
+        {message.state !== 'delivering' && (
+          <button
+            type="button"
+            class={`danger${deleteConfirmId === message.id ? ' confirming' : ''}`}
+            disabled={busy}
+            onClick={() => {
+              if (deleteConfirmId !== message.id) {
+                setDeleteConfirmId(message.id)
+                return
+              }
+              setDeleteConfirmId('')
+              void run(message.id, () => deleteQueueMessage(message.id))
+            }}
+          >
+            {deleteConfirmId === message.id ? 'Delete permanently' : 'Delete'}
+          </button>
+        )}
       </div>
     )
   }
@@ -492,7 +510,10 @@ export function QueuePane({
               aria-label="More actions for this message"
               title="More actions"
               disabled={busy}
-              onClick={() => setMenuId(current => (current === message.id ? '' : message.id))}
+              onClick={() => {
+                setDeleteConfirmId('')
+                setMenuId(current => (current === message.id ? '' : message.id))
+              }}
             >
               ⋯
             </button>

@@ -4,15 +4,76 @@ import {
   DEFAULT_UI_SCALE,
   UI_SCALE_BASE_PX,
   UI_SCALE_STEPS,
+  createUiScaleWheelIntent,
   scaledFontSize,
+  uiScaleConfigKey,
+  uiScaleForIntent,
   uiScaleFrom,
+  uiScaleKeyboardIntent,
   uiScaleLabel,
 } from '../src/uiScale.ts'
+
+const scaleKey = (overrides: Partial<{
+  altKey:boolean;code:string;ctrlKey:boolean;key:string;metaKey:boolean;shiftKey:boolean
+}> = {}) => ({
+  altKey:false,code:'',ctrlKey:true,key:'',metaKey:false,shiftKey:false,...overrides,
+})
 
 test('each device class reads its own key', () => {
   const config = { ui_scale_desktop: 1.0, ui_scale_mobile: 1.25 }
   assert.equal(uiScaleFrom(config, 'desktop'), 1.0)
   assert.equal(uiScaleFrom(config, 'mobile'), 1.25)
+})
+
+test('device classes expose the field shortcuts persist', () => {
+  assert.equal(uiScaleConfigKey('desktop'), 'ui_scale_desktop')
+  assert.equal(uiScaleConfigKey('mobile'), 'ui_scale_mobile')
+})
+
+test('keyboard scale controls match browser zoom conventions', () => {
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Equal',key:'='})), 'increase')
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Equal',key:'+',shiftKey:true})), 'increase')
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'NumpadAdd',key:'+'})), 'increase')
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Minus',key:'-'})), 'decrease')
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'NumpadSubtract',key:'-'})), 'decrease')
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Digit0',key:'0'})), 'reset')
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Numpad0',key:'0'})), 'reset')
+})
+
+test('keyboard scale controls require exact Ctrl modifiers', () => {
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Equal',key:'=',ctrlKey:false})), null)
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Equal',key:'=',altKey:true})), null)
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Equal',key:'=',metaKey:true})), null)
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Minus',key:'_',shiftKey:true})), null)
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'Digit0',key:')',shiftKey:true})), null)
+  assert.equal(uiScaleKeyboardIntent(scaleKey({code:'KeyA',key:'a'})), null)
+})
+
+test('scale intents move one published step and clamp at both ends', () => {
+  assert.equal(uiScaleForIntent(1.0, 'increase'), 1.1)
+  assert.equal(uiScaleForIntent(1.25, 'decrease'), 1.1)
+  assert.equal(uiScaleForIntent(1.4, 'increase'), 1.4)
+  assert.equal(uiScaleForIntent(0.9, 'decrease'), 0.9)
+  assert.equal(uiScaleForIntent(1.4, 'reset'), 1.0)
+})
+
+test('Ctrl+wheel accumulation gives mouse notches and trackpads discrete steps', () => {
+  const intent=createUiScaleWheelIntent()
+  assert.equal(intent({deltaMode:0,deltaY:-20,timeStamp:0}), null)
+  assert.equal(intent({deltaMode:0,deltaY:-30,timeStamp:10}), 'increase')
+  assert.equal(intent({deltaMode:0,deltaY:100,timeStamp:20}), 'decrease')
+  // One large event is still one step, not a jump across the complete scale.
+  assert.equal(intent({deltaMode:0,deltaY:-500,timeStamp:30}), 'increase')
+  assert.equal(intent({deltaMode:0,deltaY:0,timeStamp:31}), null)
+})
+
+test('Ctrl+wheel accumulation resets on direction changes and gesture gaps', () => {
+  const intent=createUiScaleWheelIntent()
+  assert.equal(intent({deltaMode:0,deltaY:30,timeStamp:0}), null)
+  assert.equal(intent({deltaMode:0,deltaY:-30,timeStamp:10}), null)
+  assert.equal(intent({deltaMode:0,deltaY:-20,timeStamp:20}), 'increase')
+  assert.equal(intent({deltaMode:0,deltaY:30,timeStamp:1000}), null)
+  assert.equal(intent({deltaMode:1,deltaY:1,timeStamp:1010}), 'decrease')
 })
 
 test('every published step round-trips', () => {

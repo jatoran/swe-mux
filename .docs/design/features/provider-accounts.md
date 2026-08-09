@@ -158,6 +158,10 @@
   The second row shows the selected account label's first four characters followed by the corresponding usage percentages.
   The collapsed desktop rail remains icon plus weekly percentage because its fixed 28 px width cannot contain the grid.
   The full switcher is a viewport-level overlay anchored to the status block, so sidebar width and overflow never clip it.
+- The Usage dashboard queries durable quota history by provider, saved local account, date range, and raw/daily resolution.
+- Friendly saved-account labels are shown beside verified provider identity, while legacy samples without provider identity are marked unverified.
+- Separate 5-hour and weekly timelines include reset markers and daily first/last/min/max/sample-count summaries.
+- These account-specific charts describe quota utilization only; they are not joined to `ccusage` historical token or model totals.
 - Removing the selected saved account removes mux ownership metadata and its private
   snapshot; live system auth remains untouched and becomes external.
 
@@ -176,6 +180,7 @@ POST   /api/provider-accounts/{provider}/{account-id}/adopt
 POST   /api/provider-accounts/{provider}/{account-id}/purge-telemetry
 DELETE /api/provider-accounts/{provider}/{account-id}
 PATCH  /api/telemetry/quota-resets/{reset-id}
+GET    /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily
 ```
 
 `mux accounts [list|verify|audit]` reaches the same surface from the CLI.

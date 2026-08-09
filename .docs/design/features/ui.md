@@ -299,6 +299,8 @@ responsive controls.
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
   inputs. Modified Tab chords never enter focus traps, drawer-tab traversal, or editor indentation.
+  Application-reserved UI scale chords are fixed controls rather than command bindings, so a saved
+  binding cannot compete with browser zoom suppression or leak the same input into xterm.
 - Notes configures the shared Markdown editor behind every note and Markdown file: spellcheck,
   Markdown rendering, `Tab`, typography, the touch command rail, and the editor's own shortcut
   policy and per-chord overrides (`project-resources.md`). The chord table is enumerated from
@@ -366,6 +368,18 @@ responsive controls.
     `config.py` and `uiScale.ts`) rather than a free number. There is no useful difference
     between 1.13 and 1.15, only a way to land on a value that looks broken, and a hand-edited
     `config.toml` carrying one falls back to `1.0` rather than rendering at it.
+  - `Ctrl+wheel`, `Ctrl++`, and `Ctrl+-` move one step, while `Ctrl+0` restores `1.0`.
+    The capture listener runs before browser zoom, xterm, editors, and configurable command bindings;
+    exact scale inputs are consumed and every other wheel or key combination continues normally.
+    High-resolution wheel streams accumulate into discrete steps, reset on reversal or a pause, and
+    never turn one oversized event into a jump across multiple steps.
+    Every accepted input reports `UI scale <percent>` through the shared bottom-right interaction HUD.
+    Outside Settings the final value is persisted after a short debounce; inside Settings it joins the
+    existing draft so Save and Discard remain atomic with the panel's other changes.
+  - The Appearance selectors, shortcut inputs, config refresh, chrome, and xterm all pass through the
+    same browser scale state.
+    A live selector or shortcut preview therefore changes terminal type without disposing the terminal,
+    and discarding the Settings draft restores both chrome and terminal type together.
   - The split is by device class because the same UI is driven from a desktop browser and a
     phone and one number cannot say "the phone is too small but the desktop is fine". A window
     resolves its value through the same `(max-width:760px)` breakpoint as the mobile workspace
@@ -434,7 +448,11 @@ responsive controls.
 - A retained warm pane keeps parsing but not rendering.
   Its renderer is explicitly paused while hidden and resumed on reveal ahead of the reveal's redraw, because xterm's own pause is geometric and never triggers for a measurable `visibility:hidden` box (`terminalRenderPause.ts`, `technical/frontend/workspace-state.md`).
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
-  Claude's terminal body stops at 120 columns and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
+  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Terminals; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
+  A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
+  That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.
+  `0` removes the host style entirely rather than relaxing its maximum, so a disabled envelope is the same code path as no envelope.
   The centered grid item retains an explicit `width:100%` before its maximum is applied.
   Centering without that definite width makes CSS Grid intrinsically size the host from xterm's own fitted child, creating a repeated shrink-and-refit loop.
   Codex panes that would fit fewer than 80 columns reduce their font, down to 8 px, and fit again before attach or resize; this preserves Codex's documented 80-column composer floor for ordinary narrow desktop panes.
@@ -471,7 +489,9 @@ responsive controls.
   provider-native Claude/Codex login or current-login capture, Run menu, shell launch, pane/tab
   lifetime, second-tab creation, tab movement, pane-edge splitting, Project notes, menu browsers,
   and keyboard shortcuts. Replay with an existing Project opens it instead of forcing a duplicate.
-- The notes step is anchored on the utility rail's persistent **Notes** button.
+- The notes step is anchored on whichever **Notes** control the drawer currently shows: the
+  launcher rail's button while the drawer is closed, and the drawer's own pane strip while it is
+  open. Exactly one carries the anchor at a time, which a click-gated step requires.
   It opens the Project-owned collection and teaches note creation independently of sessions.
 - Highlighted product controls replace **Next** for action steps. Transparent blockers leave only
   the spotlight opening and tutorial card interactive; Project creation, account save, terminal
@@ -885,6 +905,14 @@ responsive controls.
   inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
   rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
   over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- Talk exposes a deliberately smaller rail-derived command set through `railVoice.ts` when a live session is focused.
+  Built-in keys and Paste require explicit `voicePhrases`; non-submitting configured agent skills and slash commands derive aliases from their names.
+  Submitted custom commands require their own explicit voice phrases.
+  Copy is the existing focused-terminal registry command because it is not a rail catalog item.
+  Literal text and prompt macros are excluded, as are destructive and UI-only actions such as clear-input, Attach, keyboard mode, relaunch, and End session.
+  Only items placed on the current device's strip or Commands panel participate, and duplicate placements collapse to one spoken command.
+  The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
+  Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
 - The command-rail editor (`RailEditor.tsx`) shows the two device layouts as columns above a catalog of every command.
   Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
   Each column holds its two surfaces, each surface its rows, each row its draggable chips.
@@ -1234,6 +1262,29 @@ responsive controls.
   Its launcher rail takes a second tonal step, while internal drawer panes reuse the workspace's neutral gutter and focus-frame language.
   It has no fixed maximum; its live maximum is the available viewport width after reserving the navigation chrome, utility rail, and a 150 px main workspace.
   Dragging its divider below 260 px previews collapse, and reversing the same drag past 280 px reopens it before release.
+- **The launcher rail is what the closed drawer looks like**, exactly as the collapsed sidebar rail
+  is what the closed sidebar looks like. It is desktop-only, holds the workspace's last column while
+  the drawer is closed, and is replaced by the drawer itself on open.
+  Keeping it beside an open drawer duplicated that drawer's own tab strip: with the default
+  single-stack layout the two lists are the same twelve icons, and the rail spent a column
+  restating what the strip already said.
+  The rail's width stays reserved in both states and is handed to the drawer on open, so the
+  Project workspace is exactly as wide either way and opening the drawer sends no larger reflow to
+  the PTYs than it did when the rail stayed put.
+  What the rail uniquely provides — discoverability without a menu or a chord, and the Alerts unread
+  badge — only matters while the drawer is closed, which is precisely when it is drawn.
+  The cost is a split drawer, where the rail was the one place all twelve tabs appeared together and
+  each pane strip shows only its own subset. The per-tab palette commands, their voice phrases, and
+  pane tab cycling all still reach any tab, and a rail that appears and disappears with split
+  geometry would be harder to predict than one that simply means "collapsed".
+- Losing the rail on open also loses the pointer affordance for closing again, since clicking an
+  already-selected tab collapses the drawer but does not advertise that it will.
+  Exactly one pane heading therefore carries a **collapse control**: the pane holding the drawer's
+  top-right corner, resolved by taking the right branch of horizontal splits and the top branch of
+  vertical ones. One per drawer rather than one per pane, because the drawer collapses as a whole
+  and a heading is the only chrome available to hang it on.
+  Escape inside the drawer, the outer resizer's collapse threshold, and the `drawer.toggle` command
+  remain the other ways out.
 - Every width change reflows the pane tree and refits its terminals, which sends a resize to each
   PTY and makes agent TUIs redraw. Width persists globally for the device and the drag commits on
   pointer-up rather than per-frame.
@@ -1260,7 +1311,7 @@ responsive controls.
 - Tabs move only through pane rails.
   Dragging across a rail gap performs exact insertion, dropping in a pane center joins that pane, and dropping on a pane edge creates a left, right, top, or bottom split.
   Moving the last tab out of a stack collapses its redundant parent split immediately.
-  The desktop outer launcher is a depth-first mirror and activation control only, so it never becomes a second layout editor or content host.
+  The desktop outer launcher is a depth-first mirror and activation control only, so it never becomes a second layout editor or content host, and it is not on screen at all while the drawer is open.
 - Dragging uses the shared pointer contract with a 5 px threshold, pointer ownership after activation, one fixed ghost, direct DOM indicators, a prospective tree in refs, and one commit on pointer-up.
   Escape, invalid targets, pointer cancellation, lost capture, window blur, Project changes, breakpoint changes, drawer closure, and unmount cancel without persistence.
   Mobile exposes no drag targets or split separators.
