@@ -602,6 +602,7 @@ def create_app(
             web.get("/api/queue/messages", queue_messages),
             web.post("/api/queue/messages", queue_create_message),
             web.patch("/api/queue/messages/{message_id}", queue_patch_message),
+            web.delete("/api/queue/messages/{message_id}", queue_delete_message),
             web.post("/api/queue/messages/{message_id}/cancel", queue_cancel_message),
             web.get("/api/queue/messages/{message_id}/deliveries", queue_message_deliveries),
             web.post("/api/queue/send-next", queue_send_next),
@@ -4811,6 +4812,26 @@ async def queue_cancel_message(request: web.Request) -> web.Response:
             request.match_info["message_id"],
             kind=str(body.get("kind") or "cancelled"),
         )
+    )
+
+
+async def queue_delete_message(request: web.Request) -> web.Response:
+    result = await request.app["prompt_queue"].delete(request.match_info["message_id"])
+    log.info(
+        "queue message deleted message_id=%s target_session_id=%s previous_state=%s "
+        "sender_kind=%s already_deleted=%s",
+        result["id"],
+        result["target_session_id"],
+        result["previous_state"],
+        result["sender_kind"],
+        result["already_deleted"],
+    )
+    return json_response(
+        {
+            "deleted": True,
+            "message_id": result["id"],
+            "already_deleted": result["already_deleted"],
+        }
     )
 
 

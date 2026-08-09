@@ -348,6 +348,7 @@ POST   /queue/messages                              {target_session_id, body, ar
                                                      constraints?, correlation_id?}
 PATCH  /queue/messages/{message_id}                 {body, revision} | {armed} | {after} |
                                                      {retarget_session_id} | {constraints}
+DELETE /queue/messages/{message_id}                 erase and hide; 409 while delivering
 POST   /queue/messages/{message_id}/cancel          {kind: cancelled|skipped|revoked}
 GET    /queue/messages/{message_id}/deliveries      audit rows (no prompt text)
 POST   /queue/send-next                             {message_id, revision, idempotency_key?, confirm?}

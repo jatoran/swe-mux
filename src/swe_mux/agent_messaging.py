@@ -238,6 +238,9 @@ class AgentMessagingService:
             "deduplicated": bool(message.get("deduplicated")),
             "expires_at": time.time() + ttl_seconds,
             "note": (
+                "The matching message was deleted by the receiving operator and was not recreated."
+                if message["state"] == "deleted"
+                else
                 "Delivered under the receiving session's queue policy: it waits for"
                 " head-of-line order and delivery readiness, and never interrupts an"
                 " active turn."

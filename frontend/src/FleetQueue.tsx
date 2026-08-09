@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
-  cancelQueueMessage, fetchAutoStatus, fetchFleetQueue, scheduleStatus, senderLabel,
+  cancelQueueMessage, deleteQueueMessage, fetchAutoStatus, fetchFleetQueue, scheduleStatus, senderLabel,
   type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus, type QueueMessage,
 } from './queueApi'
 import { useModalFocus } from './modalFocus'
@@ -61,6 +61,7 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   const [view, setView] = useState<FleetQueueView>({ author: 'non_human', messages: [], targets: [] })
   const [auto, setAuto] = useState<QueueAutoStatus | null>(null)
   const [busyId, setBusyId] = useState('')
+  const [deleteConfirmId, setDeleteConfirmId] = useState('')
   const [error, setError] = useState('')
   const alive = useRef(true)
   const panel = useRef<HTMLElement>(null)
@@ -260,6 +261,23 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                       </button>
                     )}
                     <button type="button" disabled={busy} onClick={() => void copyBody(message)}>Copy</button>
+                    {message.state !== 'delivering' && (
+                      <button
+                        type="button"
+                        class={`danger${deleteConfirmId === message.id ? ' confirming' : ''}`}
+                        disabled={busy}
+                        onClick={() => {
+                          if (deleteConfirmId !== message.id) {
+                            setDeleteConfirmId(message.id)
+                            return
+                          }
+                          setDeleteConfirmId('')
+                          void run(message.id, () => deleteQueueMessage(message.id))
+                        }}
+                      >
+                        {deleteConfirmId === message.id ? 'Delete permanently' : 'Delete'}
+                      </button>
+                    )}
                   </div>
                 </li>
               )

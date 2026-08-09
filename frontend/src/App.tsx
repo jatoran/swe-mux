@@ -4525,20 +4525,21 @@ export function App() {
         sessions={sessions}
         onSendPrompt={deliverToAgent}
       />}
-      {/* Desktop only: the always-visible strip that makes these surfaces
-          discoverable without a menu or a chord. Mobile reaches the same tabs
-          through the drawer's own tab strip after a two-finger swipe. */}
-      {!mobileWorkspace&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
+      {/* Desktop only, and only while the drawer is closed: this rail *is* what the collapsed
+          drawer looks like, the same way `.sidebar-rail` is what the collapsed navigation
+          sidebar looks like. It makes these surfaces discoverable without a menu or a chord;
+          once the drawer is open its pane strips own tab selection, so keeping the rail beside
+          them would only repeat the same icons and spend a column doing it. Mobile reaches the
+          same tabs through the drawer's own tab strip after a two-finger swipe. */}
+      {!mobileWorkspace&&!clipboardOpen&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
         {drawerLauncherTabs.filter(tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
-          const owner=drawerStackForTab(drawerLayout,tab.id)
-          const visible=!!owner&&clipboardOpen&&activeDrawerPresentation.selected_tabs[owner.id]===tab.id
+          // No selected state to draw: the rail is only rendered while the drawer is closed,
+          // so no tab it lists is showing anywhere.
           return <button
             key={tab.id}
             data-tutorial={tab.id==='notes'?'project-notes':undefined}
             data-scope={tab.scope}
-            class={visible?'active':''}
-            aria-pressed={visible}
             aria-label={`${tab.title}${tab.scope==='session'?'. Session scoped.':''}`}
             title={`${tab.title}${tab.scope==='session'?' - session scoped':''}`}
             onContextMenu={event=>{
