@@ -150,6 +150,13 @@ import {
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
 
+// `/events` is authoritative for live changes. These are only visible-tab recovery
+// backstops, so keeping them sub-minute re-sent whole fleet payloads without improving
+// convergence. Process watch stays fresher but uses the reduced summary representation.
+const FLEET_SAFETY_REFRESH_MS=60_000
+const KEYBINDING_SAFETY_REFRESH_MS=60_000
+const PROCESS_SUMMARY_REFRESH_MS=10_000
+
 const paneDirectionOptions:Array<{id:PaneDirection;glyph:string;direction:SplitDirection;position:'before'|'after'}>=[
   {id:'left',glyph:'←',direction:'horizontal',position:'before'},
   {id:'right',glyph:'→',direction:'horizontal',position:'after'},
@@ -1189,8 +1196,8 @@ export function App() {
     // re-rendering a backgrounded tab) and refresh once on return to foreground.
     const tick = () => { if (!document.hidden) void refresh() }
     const keyTick = () => { if (!document.hidden) loadKeys() }
-    const timer = setInterval(tick, 15000)
-    const keyTimer = setInterval(keyTick, 30000)
+    const timer = setInterval(tick, FLEET_SAFETY_REFRESH_MS)
+    const keyTimer = setInterval(keyTick, KEYBINDING_SAFETY_REFRESH_MS)
     const onVisible = () => { if (!document.hidden) { void refresh(); loadKeys() } }
     document.addEventListener('visibilitychange', onVisible)
     // Backstop for every `void api(...)` call site. Kill, create, and delete are
@@ -1215,7 +1222,7 @@ export function App() {
   // the daemon; this raw fleet sample is never navigation state by itself.
   const loadProcesses = async () => {
     try {
-      const snapshot = await api<FleetSnapshot>('GET','/api/processes')
+      const snapshot = await api<FleetSnapshot>('GET','/api/processes?summary=1')
       setProcessFleet(snapshot)
     } catch { setProcessFleet(null) }
   }
@@ -1223,7 +1230,7 @@ export function App() {
   useEffect(() => {
     void loadProcesses()
     const tick = () => { if (!document.hidden) void loadProcesses() }
-    const timer = setInterval(tick, 8000)
+    const timer = setInterval(tick, PROCESS_SUMMARY_REFRESH_MS)
     const onVisible = () => { if (!document.hidden) void loadProcesses() }
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }

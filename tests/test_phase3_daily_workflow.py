@@ -143,6 +143,8 @@ def test_phase3_routes_are_registered(tmp_path: Path) -> None:
     assert ("POST", "/api/prompts") in routes
     assert ("PUT", "/api/prompts/{scope}/{template_id}") in routes
     assert ("PATCH", "/api/prompts/{scope}/{template_id}/favorite") in routes
+    assert ("GET", "/api/diagnostics/network") in routes
+    assert ("DELETE", "/api/diagnostics/network") in routes
     assert any(canonical == "/notification-sounds" for _, canonical in routes)
 
 
