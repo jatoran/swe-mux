@@ -14,6 +14,7 @@ from swe_mux.harness import (
     harnesses_at_least,
     has_observable_transcript,
     is_agent_harness,
+    needs_resize_repaint,
     provider_account_harnesses,
     public_harness_registry,
     reports_lifecycle_hooks,
@@ -124,6 +125,25 @@ def test_current_harness_capabilities_match_measured_sources() -> None:
     assert claude.repaints_scrollback is False
     assert codex.repaints_scrollback is True
     assert omp.repaints_scrollback is True
+
+
+def test_only_alternate_screen_harnesses_need_a_repaint_after_a_resize() -> None:
+    """The two repaint traits answer opposite questions and must not be conflated.
+
+    `repaints_scrollback` asks whether a harness floods the ring and can therefore
+    replay to an empty-looking screen; `needs_resize_repaint` asks whether it can
+    repair its own screen after a width change. Claude is False for the first and True
+    for the second, which is exactly the pairing a single flag would have lost.
+    """
+    assert needs_resize_repaint("claude") is True
+    assert needs_resize_repaint("codex") is False
+    assert needs_resize_repaint("omp") is False
+    # Shells and unknown names are not agent screens and are never pulsed.
+    assert needs_resize_repaint("shell") is False
+    assert needs_resize_repaint(None) is False
+    assert {name for name in HARNESSES if needs_resize_repaint(name)} == {
+        name for name, harness in HARNESSES.items() if harness.screen == "alternate"
+    }
 
 
 def test_harness_level_is_derived_from_capability_axes() -> None:

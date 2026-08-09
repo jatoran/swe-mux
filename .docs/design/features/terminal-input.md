@@ -95,6 +95,15 @@ reshape the PTY for the device in use. Every client is told the result and any c
 own fit differs LETTERBOXES: shrink the font, never re-fit, because re-fitting is what put
 two devices into a resize loop.
 
+**An alternate-screen child is pulsed into repainting once its size settles**
+(`needs_resize_repaint`, `RESIZE_REPAINT_SETTLE_SECONDS`).
+Three participants disagree after a width change and none of them can see it: xterm never reflows the alternate buffer, because reflow is gated on the buffer having scrollback and the alternate buffer has none, so lines are padded or truncated in place with the old wrapping intact; ConPTY does rewrap its own console buffer and then emits only what changed against it; and the child's SIGWINCH repaint lands in that already-rewrapped buffer and mostly diffs away to nothing.
+The browser is left holding cells from the old wrapping with nothing on the way to overwrite them.
+Growing is the direction users see, because rewrapping wider changes least in ConPTY's buffer and therefore emits least exactly when the browser needs most, while shrinking pushes text down and emits enough to repair the screen incidentally.
+So a settled arbitrated geometry change schedules one `repaint_current_geometry` pulse on a trailing-edge debounce: a drag emits changes at frame rate and costs exactly one pulse after the pointer stops, on the size the user actually stopped on.
+Every pulse is recorded as `terminal_repaint_requested` with `source=daemon` and `reason=resize_settled`, so its firing rate is measurable rather than assumed.
+Normal-screen harnesses are excluded because they keep repainting their live region and fill any gap within a frame; their opposite problem, a ring wrapped into a scrollback-free replay, stays client-requested under `repaints_scrollback`.
+
 **Desktop agent width policy is applied before viewport registration.**
 Claude's host has a centered column maximum, so making its pane wider adds margin instead of repeatedly resizing the PTY through Claude Code's known stale-cell and duplicate-live-region failure.
 The maximum is the `claude_max_columns` setting (Settings → Terminals), one of a fixed set of steps with `0` meaning no cap at all, defaulting to the 120 columns the app has always used.

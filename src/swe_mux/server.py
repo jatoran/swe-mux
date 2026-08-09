@@ -73,6 +73,7 @@ from .harness import (
     descriptor,
     has_observable_transcript,
     is_agent_harness,
+    needs_resize_repaint,
     public_harness_registry,
     repaints_scrollback,
 )
@@ -8286,8 +8287,10 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         session.claim_refusals.pop(connection_id, None)
         session.unsubscribe(subscriber)
         # A detach can hand geometry back to whoever is left: the phone closing its tab
-        # returns the PTY to the desktop's width.
-        session.apply_geometry()
+        # returns the PTY to the desktop's width — a width change like any other, and
+        # one nobody is dragging, so the screen it lands on has to be repaired too.
+        if session.apply_geometry():
+            _schedule_resize_repaint(request, session)
         if released:
             session.publish_control(
                 {
@@ -8503,7 +8506,8 @@ async def _claim_terminal_input(
             )
     if decision.changed:
         # The device a human is typing into dictates the size everyone else renders.
-        session.apply_geometry()
+        if session.apply_geometry():
+            _schedule_resize_repaint(request, session)
         request.app["events"].emit_background(
             "terminal_input_owner",
             session_id=session.record.id,
@@ -8602,6 +8606,11 @@ async def _handle_terminal_input(
 # session), so back-to-back requests — several panes of one session finishing replay
 # together, or a reconnect storm — collapse into one restatement they all receive.
 CLIENT_REPAINT_MIN_INTERVAL_SECONDS = 2.0
+# How long the arbitrated geometry must hold still before an alternate-screen child is
+# pulsed into restating its screen. Long enough that a drag (which emits changes at
+# frame rate) settles first and costs one pulse rather than hundreds, short enough that
+# a corrupt screen is not something the user has time to start working around.
+RESIZE_REPAINT_SETTLE_SECONDS = 0.25
 
 # Client repair events persisted to the durable event log. An allowlist rather than a
 # free phase field: the browser page is same-user but still untrusted input, and the
@@ -8620,6 +8629,59 @@ CLIENT_REPAIR_PHASES = frozenset(
 )
 CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS = 1.0
 CLIENT_DIAGNOSTIC_DETAIL_LIMIT = 512
+
+
+async def _repaint_when_resize_settles(request: web.Request, session: Session) -> None:
+    """Wait out a resize gesture, then make the child restate its screen once.
+
+    Trailing edge, not leading: pulsing while the pointer is still moving would repaint
+    a size the user has already dragged past, and the screen that has to end up correct
+    is the one they stop on. The deadline is re-read every wake rather than captured,
+    so a gesture that outlives the first sleep extends this task instead of starting a
+    second one.
+    """
+    # unsupervised-loop-ok: one settle window for one session's resize gesture, and it
+    # can only extend while that gesture keeps pushing the deadline forward.
+    while True:
+        remaining = session.resize_repaint_deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(remaining)
+    if session.stopping:
+        return
+    size = session.geometry
+    repainted = await session.repaint_current_geometry()
+    request.app["events"].emit_background(
+        "terminal_repaint_requested",
+        session_id=session.record.id,
+        source="daemon",
+        reason="resize_settled",
+        backend=session.record.backend,
+        cols=size[0] if size else None,
+        rows=size[1] if size else None,
+        applied=repainted,
+    )
+
+
+def _schedule_resize_repaint(request: web.Request, session: Session) -> None:
+    """Arm (or extend) the trailing repaint for a harness that cannot self-repair.
+
+    Called on every arbitrated geometry change, so it must stay cheap and idempotent:
+    the common case is pushing a float forward while a task already waits on it.
+    """
+    if not needs_resize_repaint(session.record.backend):
+        return
+    session.resize_repaint_deadline = time.monotonic() + RESIZE_REPAINT_SETTLE_SECONDS
+    pending = session.resize_repaint_task
+    if pending is not None and not pending.done():
+        return
+    task = asyncio.create_task(
+        _repaint_when_resize_settles(request, session),
+        name=f"resize-repaint-{session.record.id}",
+    )
+    session.resize_repaint_task = task
+    session.tasks.add(task)
+    task.add_done_callback(session.tasks.discard)
 
 
 async def _handle_client_repaint(request: web.Request, session: Session) -> None:
@@ -8730,7 +8792,8 @@ async def _handle_pty_client_message(
                     mode=mode,
                 )
         elif frame.get("type") in {"attach_ready", "resize"}:
-            _apply_client_viewport(session, connection_id, frame)
+            if _apply_client_viewport(session, connection_id, frame):
+                _schedule_resize_repaint(request, session)
         elif frame.get("type") == "repaint":
             await _handle_client_repaint(request, session)
         elif frame.get("type") == "client_diagnostic":
