@@ -11,6 +11,7 @@ class FakeAudio {
   duration = NaN
   paused = true
   ended = false
+  muted = false
   private source = ''
   private handlers: Record<string, Array<() => void>> = {}
   constructor() { FakeAudio.instances.push(this) }
@@ -120,6 +121,16 @@ test('playback explicitly distinguishes trusted application speech from agent te
   await voice.playClip('clip-agent', 'session-a')
   assert.equal(voice.getPlayback().origin, 'agent')
   voice.stopAllPlayback()
+})
+
+test('a capture probe ducks playback and a confirmed interruption abandons it', async () => {
+  await voice.playClip('clip-probe','system','system')
+  voice.setPlaybackDucked(true)
+  assert.equal(element().muted,true)
+  assert.equal(voice.getPlayback().playing,true,'ducking must keep playback state available to the probe')
+  voice.bargeInPlayback()
+  assert.equal(element().muted,false)
+  assert.deepEqual(voice.getPlayback(),{clipId:null,playing:false,position:0,duration:0,origin:null})
 })
 
 test('requested segmented speech starts at the first clip and continues in order', async () => {
