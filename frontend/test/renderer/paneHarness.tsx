@@ -27,9 +27,13 @@ const conversation: Conversation = {
   target: {kind:'session',id:session.id,label:'Agent · harness',available:()=>true},
   targetAvailable: true, pinned: false, phase: 'listening', active: true, standby: false, wake: 'mux',
   detail: 'Listening. Say “mux, send” to submit.', landedAt: 0, latency: null, detector: 'silero',
+  history:[
+    {id:'1',role:'you',text:'Mux, list active sessions.',at:1},
+    {id:'2',role:'mux',text:'2 matching sessions\n\nSession 1 - Alpha\nStatus: working',at:2},
+  ],
   draft: 'refactor the scrollback ring so it keeps bracketed paste mode across replay',
   toggle: () => {}, togglePin: () => {}, stop: () => {}, send: () => {}, undo: () => {}, clear: () => {},
-  toggleStandby: () => {}, edit: () => {},
+  clearHistory:()=>{},toggleStandby: () => {}, edit: () => {},
 }
 
 // The strip lists clips on mount. The harness has no daemon; VoicePlayer already treats a
@@ -46,6 +50,7 @@ const pane = <section class="terminal-pane focused">
   </div>
   {overlay && <div class="voice-overlay-anchor"><div class="voice-overlay">
     <VoicePlayer session={session} status={status} mode="auto" onSession={() => {}} onOpenSettings={() => {}} />
+    <ConversationSurface conversation={conversation} onOpenSettings={() => {}} placement="pane"/>
   </div></div>}
   <div class="terminal-surface">
     <div class="terminal-host" />
@@ -61,7 +66,6 @@ render(
   <>{mobile
     ? <div class="mobile-unified-active">{pane}</div>
     : <div class="pane-grid count-1">{pane}</div>}
-    {overlay&&<ConversationSurface conversation={conversation} onOpenSettings={() => {}}/>}
   </>,
   root,
 )

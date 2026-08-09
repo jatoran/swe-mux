@@ -39,25 +39,29 @@ export type SpokenPage = {
   hasMore: boolean
 }
 
+export type VoiceHelpPage = { speech:string; detail:string }
+
 const helpCategory = (value: string): VoiceHelpCategory | null => {
+  if (/approv|confirm/.test(value)) return 'approvals'
   if (/read|reply|response|summary|verbatim/.test(value)) return 'reading'
   if (/session|status|active|pending|approval|question|stuck|failed/.test(value)) return 'sessions'
   if (/project/.test(value)) return 'projects'
   if (/navigate|navigation|open|focus|switch/.test(value)) return 'navigation'
   if (/dictat|draft|send|undo|cancel|listen/.test(value)) return 'dictation'
-  if (/approv|confirm/.test(value)) return 'approvals'
   return null
 }
 
 const parseScope = (value: string): { text: string; scope: VoiceScope } => {
   let text = value.trim()
-  if (/(?:\s+)(?:overall|everywhere|across all projects|in all projects)$/.test(text)) {
-    return { text: text.replace(/(?:\s+)(?:overall|everywhere|across all projects|in all projects)$/, '').trim(), scope: { kind: 'all' } }
+  if (/(?:\s+)(?:overall|globally|everywhere|across all projects|in all projects|for all projects)$/.test(text)) {
+    return { text: text.replace(/(?:\s+)(?:overall|globally|everywhere|across all projects|in all projects|for all projects)$/, '').trim(), scope: { kind: 'all' } }
   }
-  if (/(?:\s+)in (?:the )?(?:current|this) project$/.test(text)) {
-    return { text: text.replace(/(?:\s+)in (?:the )?(?:current|this) project$/, '').trim(), scope: { kind: 'current' } }
+  if (/(?:\s+)(?:(?:in|for|from|within) )?(?:the )?(?:current|this) project$/.test(text)) {
+    return { text: text.replace(/(?:\s+)(?:(?:in|for|from|within) )?(?:the )?(?:current|this) project$/, '').trim(), scope: { kind: 'current' } }
   }
-  const project = text.match(/(?:\s+)in project (.+)$/)
+  const currentPrefix=text.match(/^(?:(?:list|show|read(?: out)?|tell me|give me)(?: me)?(?: the)? )?(?:in |for )?(?:the )?(?:current|this) project(?:s)?[,:]?\s+(.+)$/)
+  if(currentPrefix)return{text:currentPrefix[1].trim(),scope:{kind:'current'}}
+  const project = text.match(/(?:\s+)(?:(?:in|for|from|within) )?(?:the )?project (.+)$/)
   if (project) {
     text = text.slice(0, project.index).trim()
     return { text, scope: { kind: 'project', reference: project[1].trim() } }
@@ -66,16 +70,16 @@ const parseScope = (value: string): { text: string; scope: VoiceScope } => {
 }
 
 const sessionFilter = (value: string): VoiceSessionFilter | null => {
-  if (/\b(?:pending|need me|needs me|needing me|waiting for me)\b/.test(value)) return 'needs_me'
+  if (/\b(?:pending|attention|need me|needs me|needing me|waiting for me|require my attention)\b/.test(value)) return 'needs_me'
   if (/\bapprovals?\b|waiting for approval/.test(value)) return 'approval'
-  if (/\bquestions?\b|waiting for (?:an )?answer/.test(value)) return 'question'
-  if (/rate limit/.test(value)) return 'rate_limited'
-  if (/\bstuck\b|unresponsive/.test(value)) return 'stuck'
-  if (/\bfailed\b|\bcrashed\b/.test(value)) return 'failed'
-  if (/\bactive\b|what is running/.test(value)) return 'active'
+  if (/\bquestions?\b|waiting for (?:an )?answer|need(?:s)? an answer/.test(value)) return 'question'
+  if (/rate[ -]?limit/.test(value)) return 'rate_limited'
+  if (/\bstuck\b|unresponsive|not responding/.test(value)) return 'stuck'
+  if (/\bfailed\b|\bfailures?\b|\bcrashed\b|\bcrashes\b/.test(value)) return 'failed'
+  if (/\bactive\b|what is running|whats running/.test(value)) return 'active'
   if (/\bworking\b|\brunning\b/.test(value)) return 'working'
   if (/\bready\b|\bidle\b/.test(value)) return 'ready'
-  if (/\b(?:all|live)?\s*sessions?\b/.test(value)) return 'live'
+  if (/\b(?:all|live)?\s*(?:sessions?|agents?)\b|session statuses|agent statuses/.test(value)) return 'live'
   return null
 }
 
@@ -98,10 +102,12 @@ export function parseVoiceQuery(value: string): VoiceQuery | null {
   if (/^(?:repeat|say that again|repeat that|repeat list)$/.test(text)) return { kind: 'repeat' }
   if (/^(?:details|more detail|give me details|full details)$/.test(text)) return { kind: 'detail' }
 
-  const help = text.match(/^(?:help|list|read|tell me|what are|what can i say)(?: me)?(?: the)?(?: possible| available)? voice commands?(?: for (.+))?$/)
+  const scopedHelp = text.match(/^(?:voice )?(?:commands?|help)(?: me)? (?:for|about|with) (.+)$/)
+  if (scopedHelp) return { kind: 'help', category: helpCategory(scopedHelp[1] || '') }
+  const help = text.match(/^(?:(?:voice )?help|help(?: me)?(?: with voice commands?)?|(?:voice )?commands?|(?:possible|available) voice commands?|(?:list|show|read(?: out)?|tell me|give me)(?: me)?(?: the)?(?: possible| available)?(?: voice)? commands?|what are(?: the)?(?: possible| available)?(?: voice)? commands?|what commands can i (?:say|use)|what can i say|what can you do)(?: (?:for|about) (.+))?$/)
   if (help) return { kind: 'help', category: helpCategory(help[1] || '') }
 
-  if (/^(?:list|read|tell me)(?: the)? projects?$/.test(text)) return { kind: 'list_projects' }
+  if (/^(?:list|show|read|tell me|give me)(?: the)?(?: all)? projects?$|^(?:all )?projects$/.test(text)) return { kind: 'list_projects' }
 
   const summarize = text.match(/^summari[sz]e(?: the)?(?: last)? (?:reply|response)(?: (?:of|from|in) (.+))?$/)
   if (summarize) return { kind: 'read_reply', reference: cleanReference(summarize[1] || 'current'), mode: 'summary' }
@@ -119,17 +125,7 @@ export function parseVoiceQuery(value: string): VoiceQuery | null {
     mode: (readLeadingTarget[2] as VoiceReplyMode | undefined) || 'current',
   }
 
-  const scoped = parseScope(text)
-  scoped.text = scoped.text.replace(/(?: and)?(?: their)? statuses?$/, '').trim()
-  const list = scoped.text.match(/^(?:list|read|tell me|which|what)(?: me)?(?: the)? (.+?sessions?|sessions? .+)$/)
-  if (list) {
-    const filter = sessionFilter(list[1])
-    if (filter) return { kind: 'list_sessions', filter, scope: scoped.scope }
-  }
-  if (/^what is running$/.test(scoped.text)) return { kind: 'list_sessions', filter: 'active', scope: scoped.scope }
-  if (/^(?:fleet status|status report)$/.test(scoped.text)) return { kind: 'status', entity: 'fleet', reference: '', scope: scoped.scope }
-
-  let match = text.match(/^(?:open|go to|focus|switch to) (session|project) (.+)$/)
+  let match = text.match(/^(?:open|go to|focus(?: on)?|switch to|show me|take me to) (?:the )?(session|project) (.+)$/)
   if (match) return { kind: 'open', entity: match[1] as 'session' | 'project', reference: cleanReference(match[2]) }
 
   match = text.match(/^status (?:of )?(session|project) (.+)$/)
@@ -138,6 +134,25 @@ export function parseVoiceQuery(value: string): VoiceQuery | null {
   if (match) return { kind: 'status', entity: match[1] as 'session' | 'project', reference: cleanReference(match[2]), scope: { kind: 'all' } }
   if (/^status (?:of )?(?:the )?(?:current|this) project$/.test(text)) {
     return { kind: 'status', entity: 'fleet', reference: '', scope: { kind: 'current' } }
+  }
+  const projectFirst=text.match(/^(?:(?:list|show|read(?: out)?|tell me|give me)(?: me)?(?: the)? )?project (.+?) ((?:(?:all|live|active|pending|working|running|ready|idle|stuck|failed|crashed|rate limited) )?(?:sessions?|agents?)|approvals?|questions?)$/)
+  if(projectFirst){
+    const filter=sessionFilter(projectFirst[2])
+    if(filter)return{kind:'list_sessions',filter,scope:{kind:'project',reference:projectFirst[1]}}
+  }
+  const scoped = parseScope(text)
+  const hasListLead=/^(?:list|show|read(?: out)?|tell me|give me|which are|which|what is|whats|what are|what|are there(?: any)?|do i have(?: any)?)\b/.test(scoped.text)
+  scoped.text = scoped.text
+    .replace(/(?: and)?(?: their)? statuses?$/, '')
+    .replace(/^(?:list|show|read(?: out)?|tell me|give me|which are|which|what is|whats|what are|what|are there(?: any)?|do i have(?: any)?)(?: me)?(?: the)?(?: all)?\s+/, '')
+    .trim()
+  if (/^(?:fleet status|status report|overall status|session status|sessions status|agent status|agents status|status)$/.test(scoped.text)) {
+    return { kind: 'status', entity: 'fleet', reference: '', scope: scoped.scope }
+  }
+  const isBareList=/^(?:(?:all|live|active|pending|working|running|ready|idle|stuck|failed|crashed|rate limited) )?(?:sessions?|agents?)$|^sessions? (?:needing me|waiting for (?:my |an )?(?:approval|answer))$|^(?:approvals?|questions?)$|^(?:what is|whats) running$/.test(scoped.text)
+  if(hasListLead||isBareList){
+    const filter=sessionFilter(scoped.text)
+    if(filter)return{kind:'list_sessions',filter,scope:scoped.scope}
   }
   return null
 }
@@ -172,37 +187,62 @@ export function sessionListPage(items: FleetSession[], offset = 0, limit = 5, de
   const start = Math.max(0, Math.min(offset, items.length))
   const page = items.slice(start, start + limit)
   if (!page.length) return { speech: 'There are no more sessions in that list.', detail: 'There are no more sessions in that list.', shownFrom: start, shownThrough: start, hasMore: false }
-  const body = page.map((item, index) => {
+  const speechItems = page.map((item, index) => {
     const number = start + index + 1
-    return `Session ${number}, ${item.session.name}, in ${item.projectName}, ${spokenSessionStatus(item, detailed)}.`
+    const boundary=index?'Next session. ':''
+    return `${boundary}Session ${number}. Name, ${item.session.name}. Project, ${item.projectName}. Status, ${spokenSessionStatus(item, detailed)}.`
   }).join(' ')
-  const tail = start + page.length < items.length ? ` ${items.length - start - page.length} more. Say next to continue.` : ''
-  const speech = `${items.length} matching session${items.length === 1 ? '' : 's'}. ${body}${tail}`
-  return { speech, detail: speech, shownFrom: start, shownThrough: start + page.length, hasMore: start + page.length < items.length }
+  const detailItems=page.map((item,index)=>`Session ${start+index+1} - ${item.session.name}\nProject: ${item.projectName}\nStatus: ${spokenSessionStatus(item,detailed)}`).join('\n\n')
+  const remaining=items.length-start-page.length
+  const speechTail=remaining>0?`${remaining} more session${remaining===1?'':'s'}. Say, next page, to continue.`:'End of session list.'
+  const detailTail=remaining>0?`\n\n${remaining} more. Say “next page” to continue.`:'\n\nEnd of list.'
+  const speech=`Session list. ${items.length} matching session${items.length===1?'':'s'}. ${speechItems} ${speechTail}`
+  const detail=`${items.length} matching session${items.length===1?'':'s'}\n\n${detailItems}${detailTail}`
+  return { speech, detail, shownFrom: start, shownThrough: start + page.length, hasMore: remaining > 0 }
 }
 
 export function projectListPage(projects: Array<{ name: string }>, offset = 0, limit = 5): SpokenPage {
   const start = Math.max(0, Math.min(offset, projects.length))
   const page = projects.slice(start, start + limit)
   if (!page.length) return { speech: 'There are no more projects in that list.', detail: 'There are no more projects in that list.', shownFrom: start, shownThrough: start, hasMore: false }
-  const body = page.map((project, index) => `Project ${start + index + 1}, ${project.name}.`).join(' ')
-  const tail = start + page.length < projects.length ? ` ${projects.length - start - page.length} more. Say next to continue.` : ''
-  const speech = `${projects.length} project${projects.length === 1 ? '' : 's'}. ${body}${tail}`
-  return { speech, detail: speech, shownFrom: start, shownThrough: start + page.length, hasMore: start + page.length < projects.length }
+  const speechItems=page.map((project,index)=>`${index?'Next project. ':''}Project ${start+index+1}. Name, ${project.name}.`).join(' ')
+  const detailItems=page.map((project,index)=>`Project ${start+index+1} - ${project.name}`).join('\n')
+  const remaining=projects.length-start-page.length
+  const speechTail=remaining>0?`${remaining} more project${remaining===1?'':'s'}. Say, next page, to continue.`:'End of project list.'
+  const detailTail=remaining>0?`\n${remaining} more. Say “next page” to continue.`:'\nEnd of list.'
+  const speech=`Project list. ${projects.length} project${projects.length===1?'':'s'}. ${speechItems} ${speechTail}`
+  const detail=`${projects.length} project${projects.length===1?'':'s'}\n\n${detailItems}\n${detailTail}`
+  return { speech, detail, shownFrom: start, shownThrough: start + page.length, hasMore: remaining > 0 }
 }
 
-export function voiceHelpText(category: VoiceHelpCategory | null): string {
-  const help: Record<VoiceHelpCategory, string> = {
-    reading: 'Reading commands: read the last reply; read the last reply verbatim; summarize the last reply; read session 2 reply; mute.',
-    sessions: 'Session commands: list active sessions; list pending sessions; list approvals; list stuck sessions; status of session 2; list active sessions in the current project.',
-    projects: 'Project commands: list projects; open project 2; status of project 2; list sessions in project 2.',
-    navigation: 'Navigation commands: open session 2; open project 2; open a session or project by its visible name; next; repeat; more detail.',
-    dictation: 'Dictation commands: send; undo last phrase; cancel; standby; resume; stop listening; pin the current voice target from the Talk panel.',
-    approvals: 'Approval commands: open a session awaiting approval; approve; listen to the exact operation; then confirm approval or cancel approval. Approval confirmation never works during playback.',
-  }
-  if (category) return help[category]
-  return `Voice command groups are reading, sessions and status, projects, navigation, dictation, and approvals. ${help.reading} ${help.sessions} Say commands for a group to hear the rest.`
+const HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
+  reading:['read the last reply','read the last reply verbatim','summarize the last reply','read session 2 reply','mute'],
+  sessions:['list sessions','list active sessions','list pending sessions','list approvals','list questions','list stuck sessions','list failed sessions','status of session 2','list sessions in the current project'],
+  projects:['list projects','open project 2','status of project 2','list sessions in project 2'],
+  navigation:['open session 2','open project 2','open a session or project by its visible name','next page','repeat','more detail'],
+  dictation:['send','undo last phrase','cancel','standby','resume','stop listening','pin the current voice target from the Talk panel'],
+  approvals:['open a session awaiting approval','approve','listen to the exact operation','confirm approval','cancel approval'],
 }
+
+const helpGroup=(category:VoiceHelpCategory):VoiceHelpPage=>{
+  const title=category[0].toUpperCase()+category.slice(1)
+  const commands=HELP_COMMANDS[category]
+  const speech=`${title} commands. ${commands.map((command,index)=>`${index?'Next command. ':''}Command ${index+1}. ${command}.`).join(' ')} End of ${category} commands.`
+  const detail=`${title} commands\n${commands.map((command,index)=>`${index+1}. ${command}`).join('\n')}`
+  return{speech,detail}
+}
+
+export function voiceHelpPage(category:VoiceHelpCategory|null):VoiceHelpPage{
+  if(category)return helpGroup(category)
+  const categories=Object.keys(HELP_COMMANDS) as VoiceHelpCategory[]
+  const pages=categories.map(helpGroup)
+  return{
+    speech:`Complete voice command list. ${pages.map((page,index)=>`${index?'Next group. ':''}${page.speech}`).join(' ')} End of voice command list.`,
+    detail:pages.map(page=>page.detail).join('\n\n'),
+  }
+}
+
+export function voiceHelpText(category:VoiceHelpCategory|null):string{return voiceHelpPage(category).speech}
 
 /** Only read-only lookup and navigation queries may interrupt trusted application speech. */
 export function safeDuringSystemPlayback(value: string): boolean {

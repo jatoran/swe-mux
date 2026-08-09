@@ -100,8 +100,9 @@ affect the PTY, session state, transcripts, history, or projects.
 - `PersistentVoiceCapture` opens `getUserMedia` (mono, echo cancellation, noise suppression,
   auto gain) and stays armed across silence. The microphone is a
   device singleton, so the controller that owns it (`useConversation`) is held **once at the
-  app root**, not once per pane. The global Talk control and floating dictation panel are views
-  of that one controller. Capture is released when the workspace
+  app root**, not once per pane. The global Talk control and pane-attached floating panel are views
+  of that one controller. Moving the panel between focused panes never moves the capture state.
+  Capture is released when the workspace
   unmounts, so a reload never leaves the browser's recording indicator lit.
 - Audio arrives through an **`AudioWorklet`** that batches ~32 ms of microphone blocks on the
   audio thread and posts them to the main thread. A `ScriptProcessorNode` runs its callback on
@@ -286,8 +287,10 @@ executed action — so that number is measured rather than estimated.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
 - **Spoken lookup is a bounded dialog, not open-ended intent inference.**
   The closed grammar covers command help; Project lists; live, active, working, ready, pending, approval, question, rate-limit, stuck, and failed session filters; overall/current/named Project scopes; entity status; navigation; and last-reply reading.
+  Natural read-only forms such as `active sessions`, `list approvals`, `do I have pending sessions in the current project`, and `list Project Alpha sessions` normalize into those same typed queries.
+  An unmatched wake-word query speaks its refusal as well as displaying it, so failure cannot look like silence.
   `pending sessions` is an input alias for sessions needing a human answer or approval; spoken output uses `needing you` so it cannot be confused with pending Queue messages.
-  Result lists speak at most five entries, support `next`, `repeat`, and `more detail`, and assign `Session N` or `Project N` handles for 90 seconds.
+  Result lists speak at most five entries, number every entry, announce item boundaries and the end of the list, support `next page`, `repeat`, and `more detail`, and assign `Session N` or `Project N` handles for 90 seconds.
   A handle is frozen to the exact entity id, and a session handle also freezes the agent-run id; reply reading refuses a handle whose run changed.
   Resolution priority is current focus, an exact unique visible name, then a valid recent ordinal; ambiguity produces a numbered list instead of guessing.
   Project ordinals follow visible sidebar order.
@@ -355,10 +358,15 @@ into mobile-voice setup instead.
 - **Read aloud remains session-scoped.** Each Agent pane header carries only its `tts:` chip (off / tap / auto).
   The player strip (play/pause, seek, clip navigation, on-demand generate, verbatim/summary, device autoplay) floats from the pane's zero-height `.voice-overlay-anchor`.
   It never changes terminal geometry.
-- **Conversation is app-level.** The Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
-  While Talk is on, `.conversation-layer` is a corner card on desktop and a bottom sheet on mobile with z-index 24.
-  Workspace panes use lower z-index values, while palette and modal layers use higher values.
-  The surface stays mounted across Project, pane, and target changes.
+- **Conversation state is app-level and its primary view is pane-attached.** The Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
+  While Talk is on and an Agent pane is focused, the panel floats at the top of that pane in the same `.voice-overlay` stack as the read-aloud player strip.
+  The zero-height anchor keeps both surfaces out of terminal layout.
+  A fixed top `.conversation-layer` is used only when the active sink has no visible terminal pane, such as a note or Queue composer.
+  Capture, draft, target pin, and history stay mounted across Project, pane, and target changes.
+- **Talk keeps a reviewable conversation history.** Every recognized utterance and every final Mux outcome is stored in a device-local, app-wide 120-entry ring.
+  Lists and help retain their line-broken display text while TTS receives the separately paced speech form.
+  Last-reply requests retain the generated reply text, not only a playback status message.
+  The panel opens with history visible, follows the newest entry, and provides an explicit clear action.
 - **The panel names its sink.** The `to:` row carries the Agent or text-surface label, its pin control, and an unavailable state.
   Send is disabled when the named target disappeared.
   Unpin resumes focus-following without changing the draft.
@@ -369,7 +377,7 @@ into mobile-voice setup instead.
   `Ctrl`/`Cmd`+`Enter` sends from the textarea; `Escape` releases its keyboard focus.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- The player strip and global dictation card each end with a gear into Settings → Voice.
+- The player strip and Talk panel each end with a gear into Settings → Voice.
   Disabled read aloud keeps `tts:setup` in Agent headers; disabled Conversation turns the global mic into `Set up voice`.
 - `voice.toggleTalk` and `voice.toggleTargetPin` are ordinary registered commands exposed to the palette, keybindings, and optional mobile gesture slots.
 - Browser/PWA background survival is not guaranteed; capture stops if the tab is suspended.
@@ -417,8 +425,9 @@ and never touches the daemon or an LLM.
 - `src/swe_mux/tailscale.py`, `src/swe_mux/__main__.py` — mobile HTTPS Serve setup/auto-start.
 - `frontend/src/voice.ts` — singleton playback, autoplay, barge-in.
 - `frontend/src/voiceIntents.ts`, `frontend/src/voiceQueries.ts`, `frontend/src/fleetStatus.ts` - deterministic registry resolution, typed spoken lookup/paging/help, and fleet speech projection.
+- `frontend/src/voiceConversationHistory.ts` - bounded device-local storage for recognized utterances and Mux outcomes.
 - `frontend/src/VoicePlayer.tsx` — per-pane player strip.
-- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, and push-to-talk), `ConversationToggle` (toolbar control), `ConversationSurface` (global active card), and `DictationPanel` (draft surface).
+- `frontend/src/ConversationControl.tsx`: `useConversation` (the app-root capture controller, target pin, command loop, speculative decoding, push-to-talk, and Talk history), `ConversationToggle` (toolbar control), `ConversationSurface` (pane placement or top fallback), and `DictationPanel` (draft and history surface).
 - `frontend/src/conversationTarget.ts`, `frontend/src/insertTarget.ts`: pure target resolution plus the shared terminal/editor focus ledger used by Agent, note, Scratchpad, Markdown, and Queue sinks.
 - `frontend/src/conversationDraft.ts` — the utterance-log draft model behind undo and editing.
 - `frontend/src/conversation.ts` — `PersistentVoiceCapture` and the `Mux` command matcher.

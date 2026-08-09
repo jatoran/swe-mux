@@ -3,6 +3,8 @@ export type CommandCategory = 'session' | 'pane' | 'project' | 'terminal' | 'vie
 export type VoiceCommandResult = {
   detail: string
   speech?: string
+  /** Full response shown in Talk history when it differs from the short status line. */
+  transcript?: string
 }
 
 export type CommandVoice = {

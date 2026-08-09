@@ -153,9 +153,10 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `voice/transcribe` → faster-whisper, **two decode profiles** (`command` = `small.en` greedy,
   `dictation` = `turbo` with beam 5 above 3 s), decoded from memory with no disk write →
   wake-word + command-phrase **suffix**, which a speculative transcript can use to short-circuit the remaining tail → one workspace-level draft targeting the focused Agent or text surface.
-  The app-level `.conversation-layer` names that target, supports an exact-target pin, and keeps the draft across focus changes.
+  App-owned Talk state renders in the focused pane's floating voice overlay, with a fixed top fallback when no terminal pane is visible.
+  It names the target, supports an exact-target pin, keeps the draft across focus changes, and retains a device-local user/Mux history.
   Dynamic navigation, direct spawn, typed fleet/help/reply queries, and guarded approvals resolve through voice aliases on the ordinary command registry.
-  Spoken lists issue 90-second numbered Project/session handles, speak five items at a time, and support next/repeat/detail/open/status/read follow-ups.
+  Spoken lists issue 90-second numbered Project/session handles, speak five explicitly separated items at a time, and support next/repeat/detail/open/status/read follow-ups.
   Playback leaves capture open; agent speech permits only exact `mute`, while trusted application speech may be interrupted by the closed read-only lookup/navigation grammar.
   Agent Send uses idempotent `voice/submit`; note, Scratchpad, Markdown, and Queue-composer Send inserts at the caret without staging or delivering a queue item.
   Capture always decodes through session-free `/api/voice/transcribe`.

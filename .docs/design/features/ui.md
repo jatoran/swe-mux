@@ -798,8 +798,9 @@ responsive controls.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
   The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
-  Active workspace dictation renders outside the pane tree in the fixed `.conversation-layer`, so changing targets or showing its draft cannot change any terminal's geometry (`features/voice.md`).
-  Any new pane-local overlay belongs on the pane anchor; any workspace-global control belongs outside the pane tree.
+  Active Talk renders in the focused terminal pane's `.voice-overlay`, immediately after the read-aloud strip, while its capture, draft, target, and history remain app-owned (`features/voice.md`).
+  A fixed top `.conversation-layer` is only the fallback when no visible terminal can host the view.
+  Any new pane-local overlay belongs on the pane anchor, and any view placed there must remain out of flow.
   Anything sharing the surface's cell must pin **both** `grid-row` and `grid-column`: the
   pane declares no columns, so a second item with an auto column is auto-placed into an
   implicit column 2 and the pane splits in half. This contract is enforced by
@@ -814,8 +815,8 @@ responsive controls.
   these has to stay reachable while the others are up. Overlay containers are click-through
   (`pointer-events:none`) with their cards opting back in, so the space between floating
   cards still belongs to the terminal.
-- The app-level Conversation layer uses z-index 24; workspace chrome uses lower values, while command-palette and modal layers use higher values.
-  Its compact mic control expands into the named-target draft surface, follows focus unless pinned, and becomes a mobile bottom sheet without entering pane or drawer layout.
+- The app-level Conversation fallback uses z-index 24; workspace chrome uses lower values, while command-palette and modal layers use higher values.
+  The normal named-target Talk panel follows focus inside the pane voice overlay without entering pane or drawer layout.
 - Prose of unbounded length belongs on a floating surface of this kind, never in the header
   chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
   placed there can only ever show a truncated tail.

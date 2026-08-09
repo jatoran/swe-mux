@@ -158,8 +158,9 @@ configuration problem's clothes.
 - **Pin freezes the exact sink.**
   Unpin returns to focus-following mode.
   If a pinned editor unmounts or a following Queue panel retargets in place, the old handle becomes unavailable and Send is disabled rather than inserting into a different surface under the old name.
-- **The dictation surface is app-level.**
-  It is a desktop corner card and mobile bottom sheet at z-index 24; panes use lower values and modal surfaces use higher values.
+- **The dictation state is app-level and its view follows the focused pane.**
+  The view floats at the top of the focused terminal in the same zero-height overlay stack as TTS, with a fixed top fallback for non-terminal sinks.
+  Capture, draft, target pin, and history do not belong to the pane and survive view relocation.
   The persistent Talk toggle sits directly before Run in the mobile toolbar and desktop app header.
   The floating dictation surface exists only while Talk is active.
 - **Per-session Talk controls are gone.**
@@ -219,6 +220,9 @@ The post-phase spoken dialog adds a closed typed query grammar in `voiceQueries.
 It filters session status overall or by current/named/numbered Project, speaks at most five numbered results, and keeps exact id plus agent-run handles for 90 seconds so `next`, `repeat`, `more detail`, `open session 2`, `status of session 2`, and `read session 2 reply` remain deterministic.
 Exact visible names remain available without a handle.
 Explicit last-reply `summary` or `verbatim` is a one-shot request and does not mutate the session's saved content mode.
+The grammar accepts natural read-only noun forms and scope orderings without broadening the mutation grammar.
+Spoken lists announce numbered item boundaries and end markers, while the Talk panel retains a separate line-broken display transcript.
+The device-local 120-entry Talk history records both recognized user text and final Mux outcomes across focus and target changes.
 
 - **One read-model projection** composing the existing control plane into a small snapshot, with
   per-field freshness and provenance, invalidated by the events that already drive the UI.

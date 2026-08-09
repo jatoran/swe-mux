@@ -15,6 +15,10 @@ import type { ConversationTarget } from './conversationTarget'
 import { extractWakeIntent } from './voiceIntents'
 import type { VoiceCommandResult } from './commands'
 import { safeDuringSystemPlayback } from './voiceQueries'
+import {
+  appendVoiceConversationEntry, loadVoiceConversationHistory, saveVoiceConversationHistory,
+} from './voiceConversationHistory'
+import type { VoiceConversationEntry, VoiceConversationRole } from './voiceConversationHistory'
 
 // `heard` exists to answer the user the instant the endpoint fires, before any text
 // can exist. Silence after speaking reads as broken; the same silence after an
@@ -47,6 +51,8 @@ export type Conversation={
   landedAt:number
   /** Stage breakdown for the most recent utterance; null until one completes. */
   latency:LatencySample|null
+  /** Device-local app-wide history across focus and target changes. */
+  history:VoiceConversationEntry[]
   /**
    * Which speech detector capture settled on, which sets how long a pause has to be.
    * Null while it is still loading — reported as the `warming` phase.
@@ -58,6 +64,7 @@ export type Conversation={
   send:()=>void
   undo:()=>void
   clear:()=>void
+  clearHistory:()=>void
   toggleStandby:()=>void
   edit:(text:string)=>void
 }
@@ -87,6 +94,7 @@ export function useConversation(
   const [standby,setStandby]=useState(false)
   const [landedAt,setLandedAt]=useState(0)
   const [latency,setLatency]=useState<LatencySample|null>(null)
+  const [history,setHistory]=useState<VoiceConversationEntry[]>(()=>loadVoiceConversationHistory())
   // null while the detector is still resolving, which is a different state from
   // having settled on the energy fallback: one is "not yet", the other is "Silero
   // failed and this is as good as it gets".
@@ -122,8 +130,15 @@ export function useConversation(
 
   const setDraft=(next:Draft)=>{draftRef.current=next;setDraftState(next)}
   const enterStandby=(value:boolean)=>{standbyRef.current=value;setStandby(value)}
+  const recordHistory=(role:VoiceConversationRole,text:string)=>setHistory(current=>{
+    const next=appendVoiceConversationEntry(current,role,text)
+    if(next!==current)saveVoiceConversationHistory(next)
+    return next
+  })
+  const respond=(text:string)=>{setDetail(text);recordHistory('mux',text)}
 
-  const stop=()=>{
+  const stop=(record=true)=>{
+    if(record&&enabledRef.current)recordHistory('mux','Talk stopped.')
     enabledRef.current=false;enterStandby(false)
     speculationRef.current?.controller.abort();speculationRef.current=null
     startingRef.current?.stop();startingRef.current=null
@@ -133,7 +148,7 @@ export function useConversation(
   const stopRef=useRef(stop);stopRef.current=stop
   // Capture is a device resource: a reload or a route away from the workspace must
   // release the microphone rather than leave the browser's recording indicator lit.
-  useEffect(()=>()=>stopRef.current(),[])
+  useEffect(()=>()=>stopRef.current(false),[])
 
   /**
    * Push-to-talk: hold the chord and there is no endpointing at all.
@@ -183,23 +198,23 @@ export function useConversation(
 
   const submit=async(text:string)=>{
     const body=text.trim()
-    if(!body){setPhase('listening');setDetail(`Nothing buffered yet. Keep talking, then say “${wakeRef.current}, send”.`);return}
+    if(!body){setPhase('listening');respond(`Nothing buffered yet. Keep talking, then say “${wakeRef.current}, send”.`);return}
     const target=targetRef.current
     if(!target||!conversationTargetAvailable(target)){
-      setPhase('listening');setDetail('Draft kept. Focus an agent, note, Scratchpad, or Queue composer before sending.');return
+      setPhase('listening');respond('Draft kept. Focus an agent, note, Scratchpad, or Queue composer before sending.');return
     }
     setPhase('sending');setDetail('Submitting voice message…')
     if(target.kind==='text'){
       target.editor.insertText(body)
-      setDraft(clearDraft());setPhase('listening');setDetail(`Inserted into ${target.label}. Still listening.`)
+      setDraft(clearDraft());setPhase('listening');respond(`Inserted into ${target.label}. Still listening.`)
       return
     }
     const utteranceId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`
     await api('POST',`/api/sessions/${target.id}/voice/submit`,{utterance_id:utteranceId,text:body})
     reportPromptSubmitted(target.id)
-    setDraft(clearDraft());setPhase('listening');setDetail('Sent. Still listening for your next message.')
+    setDraft(clearDraft());setPhase('listening');respond('Sent. Still listening for your next message.')
   }
-  const reportFailure=(cause:unknown)=>{setPhase('error');setDetail(cause instanceof Error?cause.message:String(cause))}
+  const reportFailure=(cause:unknown)=>{setPhase('error');respond(cause instanceof Error?cause.message:String(cause))}
   const sessionTarget=():Extract<ConversationTarget,{kind:'session'}>|null=>{
     const target=targetRef.current
     return target?.kind==='session'&&conversationTargetAvailable(target)?target:null
@@ -216,9 +231,13 @@ export function useConversation(
     if(!handler)return false
     const outcome=await handler(spoken)
     setPhase('listening');setDetail(outcome.detail)
+    recordHistory('mux',outcome.transcript||outcome.detail)
     if(outcome.speech){
       try{await speakSystem(outcome.speech)}
-      catch(cause){setDetail(`${outcome.detail} Read aloud failed: ${cause instanceof Error?cause.message:String(cause)}`)}
+      catch(cause){
+        const failure=`${outcome.detail} Read aloud failed: ${cause instanceof Error?cause.message:String(cause)}`
+        setDetail(failure);recordHistory('mux',failure)
+      }
     }
     return true
   }
@@ -230,14 +249,14 @@ export function useConversation(
       // Standby keeps the mic and transcription running but ignores everything
       // except the resume/stop commands, so speech does nothing until woken.
       if(parsed.command==='resume'){
-        enterStandby(false);setPhase('listening');setDetail('Resumed. Listening for your message.');return
+        enterStandby(false);setPhase('listening');respond('Resumed. Listening for your message.');return
       }
       if(parsed.command==='stop'){stop();return}
       setPhase('standby');setDetail(`Standby — say “${wakeWord}, resume” to continue.`);return
     }
     if(parsed.command==='standby'){
       enterStandby(true);setPhase('standby')
-      setDetail(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
+      respond(`Standby. Still listening; say “${wakeWord}, resume” to continue.`);return
     }
     if(parsed.command===null&&onIntentRef.current){
       const spoken=extractWakeIntent(rawText,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
@@ -249,11 +268,11 @@ export function useConversation(
       }
     }
     if(parsed.command==='cancel'){
-      setDraft(clearDraft());setPhase('listening');setDetail('Voice message cleared. Still listening.');return
+      setDraft(clearDraft());setPhase('listening');respond('Voice message cleared. Still listening.');return
     }
     if(parsed.command==='undo'){
       const next=undoUtterance(draftRef.current);setDraft(next);setPhase('listening')
-      setDetail(next.text?'Removed the last phrase.':'Removed the last phrase. Draft is empty.');return
+      respond(next.text?'Removed the last phrase.':'Removed the last phrase. Draft is empty.');return
     }
     const pending=appendUtterance(draftRef.current,parsed.text)
     if(pending!==draftRef.current){setDraft(pending);setLandedAt(current=>current+1)}
@@ -262,38 +281,38 @@ export function useConversation(
       return
     }
     if(parsed.command==='mute'){
-      bargeInPlayback();setPhase('listening');setDetail('Playback stopped. Still listening.');return
+      bargeInPlayback();setPhase('listening');respond('Playback stopped. Still listening.');return
     }
     if(parsed.command==='read'){
       try{if(await runRegistryIntent('read last reply'))return}catch(cause){reportFailure(cause);return}
       const session=sessionTarget()
-      if(!session){setPhase('listening');setDetail('Read reply needs an agent target. Draft kept.');return}
-      if(!statusRef.current?.enabled){setPhase('listening');setDetail('Read aloud is off — enable it in Settings → Voice. Still listening.');return}
+      if(!session){setPhase('listening');respond('Read reply needs an agent target. Draft kept.');return}
+      if(!statusRef.current?.enabled){setPhase('listening');respond('Read aloud is off. Enable it in Settings, Voice. Still listening.');return}
       setPhase('sending');setDetail('Preparing the latest reply…')
       try{
         const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`)
-        unlockPlayback();await playClip(clip.id,session.id);setPhase('listening');setDetail('Reply read. Still listening.')
+        unlockPlayback();await playClip(clip.id,session.id);setPhase('listening');respond('Reply read. Still listening.')
       }catch(cause){reportFailure(cause)}
       return
     }
     if(parsed.command==='summary'||parsed.command==='verbatim'){
       const session=sessionTarget()
-      if(!session){setPhase('listening');setDetail('Reply mode needs an agent target. Draft kept.');return}
+      if(!session){setPhase('listening');respond('Reply mode needs an agent target. Draft kept.');return}
       const mode=parsed.command
       try{
         const updated=await api<Session>('PATCH',`/api/sessions/${session.id}`,{voice_content:mode})
-        onSessionRef.current(updated);setPhase('listening');setDetail(`${mode==='summary'?'Summary':'Verbatim'} replies enabled. Still listening.`)
+        onSessionRef.current(updated);setPhase('listening');respond(`${mode==='summary'?'Summary':'Verbatim'} replies enabled. Still listening.`)
       }catch(cause){reportFailure(cause)}
       return
     }
     if(parsed.command==='help'){
       try{if(await runRegistryIntent('list voice commands'))return}catch(cause){reportFailure(cause);return}
-      setPhase('listening');setDetail(`${wakeWord} commands: send, cancel, undo, mute, read reply, summary, verbatim, interrupt, standby/resume, stop.`);return
+      setPhase('listening');respond(`${wakeWord} commands: send, cancel, undo, mute, read reply, summary, verbatim, interrupt, standby, resume, and stop.`);return
     }
     if(parsed.command==='interrupt'){
       const session=sessionTarget()
-      if(!session){setPhase('listening');setDetail('Interrupt needs an agent target. Draft kept.');return}
-      bargeInPlayback();setPhase('listening');setDetail('Playback stopped; interrupt sent to the agent.')
+      if(!session){setPhase('listening');respond('Interrupt needs an agent target. Draft kept.');return}
+      bargeInPlayback();setPhase('listening');respond('Playback stopped. Interrupt sent to the agent.')
       try{await api('POST',`/api/sessions/${session.id}/voice/interrupt`)}catch(cause){reportFailure(cause)}
       return
     }
@@ -343,6 +362,7 @@ export function useConversation(
     try{decoded=await decode(audio,marks,'dictation')}
     finally{clearTimeout(slow)}
     try{
+      recordHistory('you',decoded.text)
       if(marks.playbackAtStart&&decoded.parsed.command!=='mute'){
         const spoken=marks.playbackOriginAtStart==='system'
           ?extractWakeIntent(decoded.text,statusRef.current?.wake_words?.length?statusRef.current.wake_words:DEFAULT_WAKE_WORDS)
@@ -352,7 +372,7 @@ export function useConversation(
           await handleTranscript({command:null,text:''},decoded.text)
         }else{
           setPhase('listening')
-          setDetail(marks.playbackOriginAtStart==='system'
+          respond(marks.playbackOriginAtStart==='system'
             ?'Playback command ignored. Only read-only lookup and navigation can interrupt application speech.'
             :`Playback echo ignored. Say “${wakeRef.current}, mute” before another command.`)
         }
@@ -392,6 +412,7 @@ export function useConversation(
     finally{if(speculationRef.current?.utteranceId===marks.utteranceId)speculationRef.current=null}
     if(!decoded.parsed.command)return
     if(!capture.commitSpeculative(marks.utteranceId))return
+    recordHistory('you',decoded.text)
     try{await handleTranscript(decoded.parsed,decoded.text)}
     finally{
       reportLatency(buildLatencySample({
@@ -475,7 +496,7 @@ export function useConversation(
     // an idle phase that claimed `listening` before the detector loaded would be true
     // and still misleading — capture is listening, on the fallback's 900 ms tail.
     phase:phase==='listening'&&detector===null?'warming':phase,
-    detail,draft:draft.text,active,standby,wake,landedAt,latency,detector,
+    detail,draft:draft.text,active,standby,wake,landedAt,latency,detector,history,
     toggle:()=>{
       if(enabledRef.current||startingRef.current||phase!=='off'){stop();return}
       void start()
@@ -488,6 +509,7 @@ export function useConversation(
       setDetail(next.text?'Removed the last phrase.':'Removed the last phrase. Draft is empty.')
     },
     clear:()=>{setDraft(clearDraft());setDetail('Draft cleared. Still listening.')},
+    clearHistory:()=>{setHistory([]);saveVoiceConversationHistory([])},
     toggleStandby:()=>{
       const next=!standbyRef.current
       enterStandby(next)
@@ -533,21 +555,26 @@ export function ConversationToggle({
 export function ConversationSurface({
   conversation,
   onOpenSettings,
+  placement='fallback',
 }:{
   conversation:Conversation
   onOpenSettings:()=>void
+  placement?:'pane'|'fallback'
 }){
   if(conversation.phase==='off')return null
-  return <div class="conversation-layer active"><DictationPanel conversation={conversation} onOpenSettings={onOpenSettings}/></div>
+  const panel=<DictationPanel conversation={conversation} onOpenSettings={onOpenSettings}/>
+  return placement==='pane'?panel:<div class="conversation-layer active">{panel}</div>
 }
 
 /**
- * The app-level dictation draft. It is outside every pane, so focus and target changes
- * cannot unmount it or resize a PTY.
+ * The app-level dictation state can render in a pane overlay without belonging to that pane.
+ * Moving the view follows focus; capture, history, target pinning, and the draft stay alive.
  */
 export function DictationPanel({conversation,onOpenSettings}:{conversation:Conversation;onOpenSettings:()=>void}){
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
+  const historyRef=useRef<HTMLDivElement|null>(null)
   const [landed,setLanded]=useState(false)
+  const [historyOpen,setHistoryOpen]=useState(true)
   // Whisper returns whole utterances, never partial words, so there is no stream to
   // animate. A brief flash is the honest signal that something arrived.
   useEffect(()=>{
@@ -584,6 +611,9 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
     element.style.height='auto'
     element.style.height=`${element.scrollHeight+element.offsetHeight-element.clientHeight}px`
   },[conversation.draft])
+  useLayoutEffect(()=>{
+    if(historyOpen&&historyRef.current)historyRef.current.scrollTop=historyRef.current.scrollHeight
+  },[conversation.history.length,historyOpen])
   const send=()=>conversation.send()
   return <section class={`dictation-panel ${conversation.phase}${landed?' landed':''}`} aria-label="Voice dictation draft">
     <header>
@@ -602,6 +632,7 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
         <button title="Remove the last phrase that was heard" disabled={!conversation.draft} onClick={()=>conversation.undo()}>undo</button>
         <button title="Clear the draft" disabled={!conversation.draft} onClick={()=>conversation.clear()}>clear</button>
         <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
+        <button class={historyOpen?'active':''} aria-expanded={historyOpen} title="Show everything you and Mux said during Talk" onClick={()=>setHistoryOpen(value=>!value)}>history</button>
         <button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop</button>
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
@@ -617,6 +648,15 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
         onClick={()=>conversation.togglePin()}
       >{conversation.pinned?'unpin':'pin'}</button>
     </div>
+    {historyOpen&&<section class="conversation-history-shell" aria-label="Talk transcript history">
+      <header><strong>Talk history</strong><span>{conversation.history.length} message{conversation.history.length===1?'':'s'}</span><button disabled={!conversation.history.length} onClick={()=>conversation.clearHistory()}>clear</button></header>
+      <div ref={historyRef} class="conversation-history" role="log" aria-live="polite">
+        {conversation.history.length?conversation.history.map(entry=><article key={entry.id} class={entry.role}>
+          <header><strong>{entry.role}</strong><time dateTime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></header>
+          <p>{entry.text}</p>
+        </article>):<p class="conversation-history-empty">Your transcripts and Mux responses will appear here.</p>}
+      </div>
+    </section>}
     <textarea
       ref={draftRef}
       class="dictation-draft"

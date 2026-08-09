@@ -3,7 +3,7 @@ import type { Project, Session } from '../src/types.ts'
 import { buildFleetReadModel } from '../src/fleetStatus.ts'
 import {
   parseVoiceQuery, projectListPage, safeDuringSystemPlayback, sessionListPage,
-  voiceHelpText, voiceSessionFilterMatches,
+  voiceHelpPage, voiceHelpText, voiceSessionFilterMatches,
 } from '../src/voiceQueries.ts'
 
 assert.deepEqual(parseVoiceQuery('read me the last response of focused pane verbatim'), {
@@ -32,6 +32,39 @@ assert.deepEqual(parseVoiceQuery('status of session two'), {
 })
 assert.deepEqual(parseVoiceQuery('open project 3'), { kind: 'open', entity: 'project', reference: '3' })
 assert.deepEqual(parseVoiceQuery('what are the possible voice commands for navigation'), { kind: 'help', category: 'navigation' })
+assert.deepEqual(parseVoiceQuery('read me possible voice commands'), { kind: 'help', category: null })
+assert.deepEqual(parseVoiceQuery('help with session statuses'), { kind: 'help', category: 'sessions' })
+assert.deepEqual(parseVoiceQuery('what can I say'), { kind: 'help', category: null })
+assert.deepEqual(parseVoiceQuery('voice commands for approvals'), { kind: 'help', category: 'approvals' })
+assert.deepEqual(parseVoiceQuery('list approvals'), {
+  kind: 'list_sessions', filter: 'approval', scope: { kind: 'all' },
+})
+assert.deepEqual(parseVoiceQuery('show me questions in this project'), {
+  kind: 'list_sessions', filter: 'question', scope: { kind: 'current' },
+})
+assert.deepEqual(parseVoiceQuery('active sessions'), {
+  kind: 'list_sessions', filter: 'active', scope: { kind: 'all' },
+})
+assert.deepEqual(parseVoiceQuery('do I have pending sessions in the current project'), {
+  kind: 'list_sessions', filter: 'needs_me', scope: { kind: 'current' },
+})
+assert.deepEqual(parseVoiceQuery('list current project sessions'), {
+  kind: 'list_sessions', filter: 'live', scope: { kind: 'current' },
+})
+assert.deepEqual(parseVoiceQuery('current project active sessions'), {
+  kind: 'list_sessions', filter: 'active', scope: { kind: 'current' },
+})
+assert.deepEqual(parseVoiceQuery('pending sessions current project'), {
+  kind: 'list_sessions', filter: 'needs_me', scope: { kind: 'current' },
+})
+assert.deepEqual(parseVoiceQuery('list active sessions project alpha'), {
+  kind: 'list_sessions', filter: 'active', scope: { kind: 'project', reference: 'alpha' },
+})
+assert.deepEqual(parseVoiceQuery('list project alpha pending sessions'), {
+  kind: 'list_sessions', filter: 'needs_me', scope: { kind: 'project', reference: 'alpha' },
+})
+assert.deepEqual(parseVoiceQuery('focus on session two'), { kind: 'open', entity: 'session', reference: '2' })
+assert.deepEqual(parseVoiceQuery('take me to project Alpha'), { kind: 'open', entity: 'project', reference: 'alpha' })
 assert.equal(safeDuringSystemPlayback('open session two'), true)
 assert.equal(safeDuringSystemPlayback('confirm approval'), false)
 assert.equal(safeDuringSystemPlayback('kill session two'), false)
@@ -52,10 +85,15 @@ const model = buildFleetReadModel([
 assert.deepEqual(model.sessions.filter(item=>voiceSessionFilterMatches(item,'needs_me')).map(item=>item.session.id), ['two','five'])
 assert.deepEqual(model.sessions.filter(item=>voiceSessionFilterMatches(item,'active')).map(item=>item.session.id), ['one','six'])
 const page = sessionListPage(model.sessions, 0, 5)
-assert.match(page.speech, /Session 2, Agent two, in Alpha, awaiting your approval/)
-assert.match(page.speech, /1 more\. Say next to continue/)
+assert.match(page.speech, /Next session\. Session 2\. Name, Agent two\. Project, Alpha\. Status, awaiting your approval\./)
+assert.match(page.speech, /1 more session\. Say, next page, to continue\./)
+assert.match(page.detail, /Session 2 - Agent two\nProject: Alpha\nStatus: awaiting your approval/)
 assert.equal(page.shownThrough, 5)
 assert.match(sessionListPage(model.sessions, 5).speech, /Session 6/)
-assert.equal(projectListPage([{name:'Alpha'},{name:'Beta'}]).speech, '2 projects. Project 1, Alpha. Project 2, Beta.')
+assert.equal(projectListPage([{name:'Alpha'},{name:'Beta'}]).speech, 'Project list. 2 projects. Project 1. Name, Alpha. Next project. Project 2. Name, Beta. End of project list.')
+const helpPage=voiceHelpPage('sessions')
+assert.match(helpPage.speech,/Command 1\. list sessions\. Next command\. Command 2\./)
+assert.match(helpPage.speech,/End of sessions commands\./)
+assert.match(helpPage.detail,/1\. list sessions\n2\. list active sessions/)
 
 console.log('voice query tests passed')

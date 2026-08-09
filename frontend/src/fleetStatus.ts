@@ -69,22 +69,20 @@ export function sessionsMatchingFleetPredicate(model:FleetReadModel, predicate:F
   return model.sessions.filter(item => fleetPredicateMatches(item,predicate))
 }
 
-const plural = (count:number, noun:string):string => `${count} ${noun}${count === 1 ? '' : 's'}`
-
 /** Short by default because an open phone microphone cannot reliably reject its own TTS. */
 export function fleetRundown(model:FleetReadModel):string {
   const active = model.counts.running + model.counts.working
   const approvals = sessionsMatchingFleetPredicate(model,'approval').length
   const questions = sessionsMatchingFleetPredicate(model,'question').length
   const problems = model.counts.crashed + sessionsMatchingFleetPredicate(model,'stuck').length
-  return `${plural(model.sessions.length,'session')}: ${active} active, ${approvals} awaiting approval, ${questions} awaiting an answer, ${problems} needing attention.`
+  return `Fleet status. Total sessions, ${model.sessions.length}. Active sessions, ${active}. Awaiting your approval, ${approvals}. Awaiting your answer, ${questions}. Needing attention, ${problems}. End of fleet status.`
 }
 
 export function fleetRundownDetail(model:FleetReadModel):string {
   if (!model.sessions.length) return 'No sessions are running.'
-  return model.sessions.map(item => {
+  return `Detailed fleet status. ${model.sessions.map((item,index) => {
     const reason = item.awaiting.value ? ` awaiting ${item.awaiting.value.replace('_',' ')}` : ` ${item.state.value}`
     const freshness = item.activity.ageSeconds < 2 ? 'now' : `${item.activity.ageSeconds} seconds ago`
-    return `${item.session.name} in ${item.projectName} is${reason}; observed ${freshness} from ${item.state.source}.`
-  }).join(' ')
+    return `${index?'Next session. ':''}Session ${index+1}. Name, ${item.session.name}. Project, ${item.projectName}. Status,${reason}. Observed ${freshness} from ${item.state.source}.`
+  }).join(' ')} End of detailed fleet status.`
 }

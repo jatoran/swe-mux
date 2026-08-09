@@ -1765,10 +1765,10 @@ body {
 .app-identity .conversation-talk-toggle:hover{background:color-mix(in srgb,var(--green,#8bd450) 17%,transparent);color:var(--text)}
 .app-identity .conversation-talk-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green,#8bd450) 18%,transparent)}
 .app-identity .conversation-talk-toggle.setup{border-color:var(--line);background:transparent;color:var(--muted)}
-.conversation-layer{position:fixed;right:12px;bottom:12px;z-index:24;width:min(620px,calc(100vw - 24px));pointer-events:none}
+.conversation-layer{position:fixed;right:12px;top:calc(38px*var(--ui-scale));z-index:24;width:min(620px,calc(100vw - 24px));pointer-events:none}
 .conversation-layer>*{pointer-events:auto}
-.dictation-panel{display:grid;gap:3px;padding:4px 8px 5px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted)}
-.dictation-panel>header{display:flex;align-items:center;gap:7px;min-width:0}
+.dictation-panel{display:grid;gap:4px;min-width:0;max-height:min(72dvh,560px);padding:5px 8px 6px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted);overflow:hidden}
+.dictation-panel>header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:3px 7px;min-width:0}
 .dictation-phase{flex:none}
 .dictation-phase.listening{color:var(--green,#8bd450)}
 .dictation-phase.hearing{color:var(--error,#f07178);animation:voice-rec-pulse .9s ease-in-out infinite}
@@ -1777,13 +1777,14 @@ body {
 .dictation-phase.error{color:var(--error,#f07178)}
 /* The status line is the elastic member and the actions are fixed, so a long diagnostic
    ellipsizes instead of pushing send/stop off the row. Its full text is the panel itself. */
-.dictation-detail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dictation-detail{min-width:0;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;line-height:1.35}
 .dictation-panel.error .dictation-detail{color:var(--error,#f07178)}
 /* End of speech to action for the last utterance. Present because Phase 1 of the
    voice roadmap is judged on this number, and a breakdown nobody can see while
    speaking is a breakdown nobody tunes against. */
 .dictation-latency{flex:0 0 auto;color:var(--muted);opacity:.7;font-variant-numeric:tabular-nums;cursor:help}
-.dictation-actions{flex:0 0 auto;display:flex;align-items:center;gap:3px}
+.dictation-actions{grid-column:1/-1;min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:3px;overflow-x:auto;scrollbar-width:none}
+.dictation-actions::-webkit-scrollbar{display:none}
 .dictation-actions button{height:calc(20px*var(--ui-scale));min-width:22px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .dictation-actions button:hover:not(:disabled){background:#252b32;color:var(--text)}
 .dictation-actions button:disabled{opacity:.4;cursor:default}
@@ -1797,6 +1798,23 @@ body {
 .dictation-target button:hover:not(:disabled){background:var(--panel2);color:var(--text)}
 .dictation-target button.active{color:var(--amber)}
 .dictation-target button:disabled{opacity:.35;cursor:default}
+.conversation-history-shell{min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--bg)}
+.conversation-history-shell>header{min-height:22px;display:flex;align-items:center;gap:7px;padding:2px 6px;border-bottom:1px solid var(--line);color:var(--muted)}
+.conversation-history-shell>header strong{color:var(--text);font-weight:500}
+.conversation-history-shell>header span{flex:1}
+.conversation-history-shell>header button{height:18px;padding:0 5px;border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
+.conversation-history-shell>header button:hover:not(:disabled){color:var(--text);background:var(--panel2)}
+.conversation-history-shell>header button:disabled{opacity:.35;cursor:default}
+.conversation-history{min-height:52px;max-height:min(30dvh,230px);overflow:auto;overscroll-behavior:contain;padding:5px;display:grid;align-content:start;gap:5px}
+.conversation-history article{display:grid;gap:2px;padding:5px 6px;border-left:2px solid var(--line);background:var(--panel)}
+.conversation-history article.you{border-left-color:var(--blue,#7aa2f7)}
+.conversation-history article.mux{border-left-color:var(--green,#8bd450)}
+.conversation-history article>header{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.06em}
+.conversation-history article>header strong{color:inherit;font-weight:600}
+.conversation-history article.you>header strong{color:var(--blue,#7aa2f7)}
+.conversation-history article.mux>header strong{color:var(--green,#8bd450)}
+.conversation-history article p,.conversation-history-empty{margin:0;color:var(--text);font:10px/1.45 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere}
+.conversation-history-empty{padding:6px;color:var(--muted)}
 /* Always editable, never a mode: this textarea *is* the draft, so there is no read-only
    state and no edit button to find. Click it and type.
    It grows with the draft between one line and the cap, then scrolls. Growing is only
@@ -1811,8 +1829,10 @@ body {
 .dictation-panel.landed .dictation-draft{border-color:var(--green,#8bd450)}
 @media(max-width:760px){
   .mobile-toolbar>.conversation-talk-toggle{min-width:52px;height:calc(36px*var(--ui-scale));padding:0 6px;font-size:9px}
-  .conversation-layer{left:0;right:0;bottom:0;width:auto;padding:0 max(5px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(5px,env(safe-area-inset-left))}
+  .conversation-layer{left:0;right:0;top:calc(46px*var(--ui-scale));width:auto;padding:0 max(5px,env(safe-area-inset-right)) 0 max(5px,env(safe-area-inset-left))}
   .dictation-target button{min-width:44px;height:calc(30px*var(--ui-scale));font-size:10px}
+  .dictation-actions button{min-width:42px;height:calc(28px*var(--ui-scale))}
+  .conversation-history{max-height:min(28dvh,210px)}
 }
 
 /* The header is both the section label and the section's drag handle, so the whole
@@ -2002,8 +2022,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    border and the colour are set and whichever the host applies wins. */
 .pane-voice .voice-chip.auto{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
 .pane-voice .voice-chip.on_demand{color:var(--text)}
-/* Read aloud remains session-scoped in the pane header. Conversation capture moved to
-   `.conversation-layer`, where target changes cannot resize or unmount a terminal. */
+/* Read aloud remains session-scoped in the pane header. Talk state stays app-owned while
+   its panel renders in the focused pane's floating voice stack. */
 .pane-voice .voice-mic.recording{color:var(--error,#f07178);animation:voice-rec-pulse 1.2s ease-in-out infinite}
 @keyframes voice-rec-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media(pointer:coarse){.pane-voice .voice-mic{display:none}}

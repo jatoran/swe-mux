@@ -106,7 +106,7 @@ import { bindingFor, displayChord, runCommand, searchCommands, type Command, typ
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
 import { buildFleetReadModel, fleetRundown, fleetRundownDetail, type FleetSession } from './fleetStatus'
 import {
-  parseVoiceQuery, projectListPage, sessionListPage, spokenSessionStatus, voiceHelpText,
+  parseVoiceQuery, projectListPage, sessionListPage, spokenSessionStatus, voiceHelpPage,
   voiceSessionFilterMatches, type VoiceQuery, type VoiceSessionFilter, type VoiceScope,
 } from './voiceQueries'
 import { copyPreparedText } from './terminalClipboard'
@@ -1584,7 +1584,8 @@ export function App() {
         const list=numberedCandidates(resolution.candidates)
         return {detail:`More than one command matches. ${list}`,speech:`I found more than one. ${list} Choose option 1 or option 2 after this finishes.`}
       }
-      return {detail:`No voice command matched “${spoken}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list commands” for the fixed commands.`}
+      const detail=`No voice command matched “${spoken}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list voice commands” for help.`
+      return {detail,speech:detail}
     }
     pendingVoiceCandidates.current=[]
     const {command,text}=resolution.match
@@ -1600,6 +1601,10 @@ export function App() {
   // Sessions on screen right now (visible pane of the displayed project) count as
   // "read": their sidebar rows stay muted even while their agent keeps working.
   const visibleSessionIds=visibleTerminalIds(activeLayout)
+  const conversationPaneCandidate=focusedViewId||activeId
+  const conversationPaneId=conversation.phase!=='off'&&conversationPaneCandidate&&visibleSessionIds.includes(conversationPaneCandidate)
+    ?conversationPaneCandidate
+    :null
   const visibleSessionKey=visibleSessionIds.join('\n')
   useEffect(()=>{
     setSeenActivity(prev=>reconcileSeen(prev,sessions,visibleSessionIds))
@@ -3125,8 +3130,8 @@ export function App() {
   }
   voiceQueryHandler.current=async(query:VoiceQuery):Promise<VoiceCommandResult>=>{
     if(query.kind==='help'){
-      const speech=voiceHelpText(query.category)
-      return{detail:speech,speech}
+      const page=voiceHelpPage(query.category)
+      return{detail:page.detail,speech:page.speech,transcript:page.detail}
     }
     if(query.kind==='list_projects'){
       if(!displayProjects.length)return{detail:'No projects are registered.',speech:'No projects are registered.'}
@@ -3222,7 +3227,7 @@ export function App() {
       const clip=await api<VoiceClip>('POST',`/api/sessions/${session.id}/voice/generate`,body)
       await playClip(clip.id,session.id)
       const mode=query.mode==='current'?(session.voice_content||voiceStatus.content):query.mode
-      return{detail:`Reading ${sessionName(session)}'s last reply ${mode}.`}
+      return{detail:`Reading ${sessionName(session)}'s last reply ${mode}.`,transcript:clip.text}
     }
     if(query.kind==='status'){
       if(query.entity==='session'){
@@ -3394,7 +3399,10 @@ export function App() {
       phrases:['{text}'],
       execute:text=>{
         const query=parseVoiceQuery(text)
-        if(!query)return{detail:`No voice command matched “${text}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list commands” for help.`}
+        if(!query){
+          const detail=`No voice command matched “${text}”. Say “${voiceStatus?.wake_words?.[0]||'Mux'}, list voice commands” for help.`
+          return{detail,speech:detail}
+        }
         return voiceQueryHandler.current(query)
       },
     }},
@@ -3971,8 +3979,11 @@ export function App() {
     const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
     // The read-aloud strip hangs off a zero-height pane anchor. Dictation no longer
     // participates in pane layout at all.
-    const voiceOverlayNode=voiceStripNode
-      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}</div></div>
+    const conversationSurface=id===conversationPaneId
+      ?<ConversationSurface conversation={conversation} onOpenSettings={openVoiceSettings} placement="pane"/>
+      :null
+    const voiceOverlayNode=voiceStripNode||conversationSurface
+      ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
       :null
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
@@ -4230,7 +4241,7 @@ export function App() {
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
-    {voiceStatus&&<ConversationSurface conversation={conversation} onOpenSettings={()=>openSettings('Voice')}/>}
+    {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} onOpenSettings={()=>openSettings('Voice')}/>}
 
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
