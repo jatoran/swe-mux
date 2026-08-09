@@ -5,7 +5,7 @@ Hands-free is the goal, not a convenience: the feature is judged on whether the 
 navigated and understood without touching the screen.
 
 Current behaviour is documented in `design/features/voice.md`.
-This document records the decisions behind the remaining work and the order to do it in.
+This document records the decisions, measurements, and implementation order behind the completed work.
 
 ## Standing decisions
 
@@ -64,7 +64,8 @@ Earlier drafts of this work listed them as open.
   (`frontend/src/conversationDraft.ts`) backing per-phrase undo and typed corrections.
 - Both voice surfaces float over the terminal rather than taking pane rows, pinned by
   `frontend/test/renderer/pane-layout.spec.ts`.
-- Phase 1 (all ten items), the Phase 2 tester, and Phase 3 global targeting. Behaviour lives in `design/features/voice.md`;
+- Phases 1 through 6, the wake-word tester, global targeting, and the constrained full-duplex prototype.
+  Behaviour lives in `design/features/voice.md`;
   the measurements and the two places the plan changed are recorded under Phase 1.
 
 ## Phase 1 — STT latency (built 2026-08-08)
@@ -115,8 +116,7 @@ what the Settings → Voice readout exists to report.
   while the tail is still running, and the dictation model answers the text question after the
   endpoint. They hold separate locks, so the two overlap rather than queue.
 - **The energy detector is kept as a fallback**, with its 900 ms tail and no speculation. A
-  microphone that refuses to open is worse than one that endpoints slowly, and the ONNX runtime is
-  a 13 MB lazy download that can fail.
+  microphone that refuses to open is worse than one that endpoints slowly, and the browser must lazily fetch roughly 13 MB of WASM runtime plus ONNX model assets that can fail.
 
 Still deferred, and still not justified by measurement: WebSocket audio streaming so decode
 overlaps speech, and a prefix wake word with on-device wake-word detection.
@@ -128,7 +128,7 @@ needed.
 **Exit criterion:** under ~500 ms from end of speech to action for a short command.
 Confirm it from the Settings → Voice command-only total after real use.
 
-## Phase 2 — Wake word and the tester (tester built 2026-08-08)
+## Phase 2 — Wake word and the tester (built 2026-08-08)
 
 Ordered before the trigger word is changed, because wake-word choice is an ASR problem wearing a
 configuration problem's clothes.
@@ -138,7 +138,7 @@ configuration problem's clothes.
   compiled from the live configuration. It reports the raw transcript, which wake-word spelling
   was heard as a whole word, and which action fired — because "heard as *bucks*" and "heard, but
   the phrase after it did not match" are different problems with different fixes.
-- **Choose the trigger word from that data.** Not yet done: it needs spoken trials.
+- **Choose the trigger word from that data.** Spoken trials retained `mux`, with `mucks` and `max` kept as recognition variants for the same wake word.
   Good wake words are two to three syllables, phonetically distinctive, rare in ordinary speech,
   and not a prefix of a common word.
   A bare "swe" is a poor candidate on every count and will return as sway/swee/sweet; the shipped

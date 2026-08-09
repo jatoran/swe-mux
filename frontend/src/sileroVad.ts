@@ -3,9 +3,9 @@ import { VAD_FRAME_SAMPLES, VAD_SAMPLE_RATE } from './audioFrames.ts'
 /**
  * Silero VAD v5 over onnxruntime-web, as the speech detector for hands-free capture.
  *
- * The runtime and the 2.3 MB model are loaded lazily, on the first Talk start, and
- * never as part of the app bundle: the WASM runtime alone is ~11 MB and most
- * sessions never dictate. A failure to load is not fatal — capture falls back to
+ * The runtime and the 2.3 MB model are split into build assets and fetched lazily
+ * on the first Talk start: the WASM runtime alone is ~11 MB and most sessions never
+ * dictate. A failure to load is not fatal — capture falls back to
  * the energy detector and its long tail, because a microphone that refuses to open
  * is worse than one that endpoints slowly.
  *

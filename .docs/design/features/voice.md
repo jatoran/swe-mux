@@ -132,8 +132,8 @@ affect the PTY, session state, transcripts, history, or projects.
 ### Endpointing
 
 - **Detection is Silero VAD v5 over `onnxruntime-web`** (`sileroVad.ts`), with the energy
-  detector kept as a fallback. The runtime (~11 MB) and the model (~2.3 MB) load lazily on the
-  first Talk start and are never part of the app bundle; the runtime is pinned to one thread
+  detector kept as a fallback.
+  The build emits the runtime (~11 MB) and model (~2.3 MB) as separate assets that the browser fetches lazily on the first Talk start; the runtime is pinned to one thread
   because multi-threaded WASM needs `SharedArrayBuffer`, which needs COOP/COEP headers swe-mux
   does not send on the Tailscale Serve path. A load failure is not fatal: capture keeps running
   on the energy detector, because a microphone that refuses to open is worse than one that
@@ -276,6 +276,7 @@ executed action — so that number is measured rather than estimated.
   transcript with no speech recognized is recorded as a trial rather than discarded, since it is
   the strongest evidence against a trigger word. Good wake words are two to three syllables,
   phonetically distinctive, rare in ordinary speech, and not a prefix of a common word.
+  Spoken tester trials retained `mux`; `mucks` and `max` remain recognition variants for that same wake word.
 - The **capture-control action set is fixed** (each is wired to code); only its trigger phrases change:
   `send`, `cancel`, `undo`, `mute`, `read`, `summary`, `verbatim`, `interrupt`, `help`,
   `standby`, `resume`, `stop`. Defaults ship `mux`/`mucks`/`max` as wake words with phrases
@@ -404,8 +405,9 @@ and never touches the daemon or an LLM.
 ## HTTP surface
 
 - `GET  /api/voice` — engine/STT availability, content/mode defaults, spend, cache stats.
-- `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`; audio is never
-  written to disk. Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and
+- `POST /api/sessions/{sid}/voice/transcribe` — WAV utterance → `{text, timings}`.
+  Whisper decodes from memory; the optional legacy SAPI engine uses bounded temporary files.
+  Optional `X-Mux-Decode-Profile` (`command`/`dictation`) and
   `X-Mux-Utterance-Id` headers.
 - `POST /api/voice/transcribe`: the target-independent decoder used by workspace Conversation capture and the wake-word tester.
 - `GET|POST|DELETE /api/voice/stt-latency` — the end-of-speech-to-action stage breakdown: report,

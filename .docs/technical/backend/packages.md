@@ -238,9 +238,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   conversation (`transcript_path`) matches on the file name and would otherwise pay a second walk.
   Expensive-but-honest metrics (unique set size) are opt-in per request, never on the cadence.
   See `design/features/processes-and-previews.md` §Sampling cost.
-- Voice STT/TTS subprocesses and local models stay off the event loop. Incoming WAV duration,
-  encoding, and bytes are validated before transcription; temporary utterances are deleted on
-  success, error, or cancellation.
+- Voice STT/TTS subprocesses and local models stay off the event loop.
+  Incoming WAV duration, encoding, and bytes are validated before transcription.
+  Whisper decodes validated PCM from memory; the optional legacy SAPI recognizer deletes its bounded temporary WAV/text files after the request and sweeps stale files left by an abandoned recognizer.
 - Desktop presentation and daemon lifetime remain separate processes. Close/minimize hides the
   WebView; only authenticated loopback Quit stops the daemon. Never expose shutdown through the
   ordinary remote-control authority.

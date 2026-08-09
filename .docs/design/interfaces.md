@@ -798,8 +798,10 @@ GET    /voice/clips/{clip_id}/audio
 DELETE /voice/clips/{clip_id}
 ```
 
-Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 16 kHz, decodes it from
-memory, and never writes it to disk. Two request headers steer it, both optional:
+Transcription accepts at most 2 MiB and 35 seconds of mono 16-bit PCM at 16 kHz.
+Whisper decodes the validated PCM from memory and never writes it to disk.
+The optional legacy Windows SAPI engine writes bounded temporary WAV/text files, removes them after the request, and sweeps stale files left by an abandoned recognizer.
+Two request headers steer transcription, both optional:
 `X-Mux-Utterance-Id` correlates the daemon's decode log line with the browser's latency sample,
 and `X-Mux-Decode-Profile` selects `command` (small routing model, greedy) or `dictation`
 (default: the accurate model, beam search above three seconds). The profiles hold separate locks,

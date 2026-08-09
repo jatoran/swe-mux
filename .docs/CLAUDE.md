@@ -148,7 +148,7 @@ Full detail: `design/features/voice.md`. Two independent halves in one `VoiceSer
   `voice_clips` SQLite. Browser plays one singleton audio element; autoplay/barge-in are
   per-device. Failures are typed `VoiceError` and never touch the PTY/history/transcripts.
 - **Conversation (STT):** browser capture through an `AudioWorklet` → 512-sample 16 kHz frames →
-  **Silero VAD** (`sileroVad.ts`, lazy ~13 MB ONNX; energy detector as fallback) → the
+  **Silero VAD** (`sileroVad.ts`, lazy ~11 MB WASM runtime + ~2.3 MB ONNX model assets; energy detector as fallback) → the
   frame-counted endpoint gate (`speechGate.ts`: 352 ms tail, speculative decode at 160 ms) →
   `voice/transcribe` → faster-whisper, **two decode profiles** (`command` = `small.en` greedy,
   `dictation` = `turbo` with beam 5 above 3 s), decoded from memory with no disk write →
