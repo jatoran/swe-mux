@@ -104,10 +104,68 @@ export function encodeWav(samples:Float32Array,sampleRate=16_000):Blob{
 
 export type CaptureDetector='silero'|'energy'
 
-/** Reject likely speaker echo without closing the microphone during playback. */
-export function playbackSafeProbability(probability:number,rms:number,playing:boolean):number{
-  if(!playing)return probability
-  return probability>=.8&&rms>=.035?probability:0
+export const PLAYBACK_PROBE_SETTLE_FRAMES=3
+export const PLAYBACK_PROBE_CONFIRM_FRAMES=3
+export const PLAYBACK_PROBE_REJECT_FRAMES=3
+
+export type PlaybackProbeAction='none'|'duck'|'restore'|'confirm'
+export type PlaybackProbeStep={action:PlaybackProbeAction;collect:boolean}
+
+/**
+ * Confirm speech against a quiet microphone instead of demanding that it beat the speaker.
+ *
+ * The first credible frame ducks app audio. Three frames are then ignored while
+ * speaker echo drains, after which three consecutive speech frames confirm a
+ * barge-in. Echo that disappears under the duck restores playback.
+ */
+export class PlaybackSpeechProbe{
+  private active=false
+  private settleFrames=0
+  private confirmFrames=0
+  private rejectFrames=0
+
+  get probing():boolean{return this.active}
+
+  step(candidate:boolean,playing:boolean):PlaybackProbeStep{
+    if(!this.active){
+      if(!playing||!candidate)return{action:'none',collect:false}
+      this.active=true
+      this.settleFrames=PLAYBACK_PROBE_SETTLE_FRAMES
+      this.confirmFrames=0
+      this.rejectFrames=0
+      return{action:'duck',collect:false}
+    }
+    if(!playing){this.clear();return{action:'restore',collect:false}}
+    if(this.settleFrames>0){this.settleFrames--;return{action:'none',collect:false}}
+    if(candidate){
+      this.confirmFrames++
+      this.rejectFrames=0
+      if(this.confirmFrames>=PLAYBACK_PROBE_CONFIRM_FRAMES){this.clear();return{action:'confirm',collect:true}}
+      return{action:'none',collect:true}
+    }
+    this.confirmFrames=0
+    this.rejectFrames++
+    if(this.rejectFrames>=PLAYBACK_PROBE_REJECT_FRAMES){this.clear();return{action:'restore',collect:false}}
+    return{action:'none',collect:false}
+  }
+
+  reset():boolean{
+    const wasActive=this.active
+    this.clear()
+    return wasActive
+  }
+
+  private clear():void{
+    this.active=false
+    this.settleFrames=0
+    this.confirmFrames=0
+    this.rejectFrames=0
+  }
+}
+
+/** A lower candidate floor is safe because the probe verifies it after ducking playback. */
+export function playbackProbeCandidate(probability:number,rms:number,noiseFloor:number):boolean{
+  return probability>=.5&&rms>=Math.max(.008,noiseFloor*2.2)
 }
 
 /** Three accepted 32 ms frames distinguish real barge-in from a speaker transient. */
@@ -121,6 +179,10 @@ export type CaptureHandlers={
   onSpeechStart():void
   /** Confirmed user speech over playback. The utterance continues after playback stops. */
   onBargeIn?():void
+  /** Temporarily silence app audio while capture distinguishes speech from speaker echo. */
+  onPlaybackProbe?(active:boolean):void
+  /** Durable diagnostic input for a completed probe. */
+  onPlaybackProbeResult?(result:PlaybackProbeResult):void
   /** The endpoint fired. Raised before any text exists, so the UI can acknowledge instantly. */
   onSpeechEnd():void
   /**
@@ -136,6 +198,14 @@ export type CaptureHandlers={
   onDetector(detector:CaptureDetector,diagnostic:string):void
   playbackActive():boolean
   playbackOrigin?():'agent'|'system'|null
+}
+
+export type PlaybackProbeResult={
+  outcome:'confirmed'|'rejected'
+  detector:CaptureDetector
+  origin:'agent'|'system'|null
+  peakProbability:number
+  peakRms:number
 }
 
 const newUtteranceId=():string=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -180,6 +250,12 @@ export class PersistentVoiceCapture{
   private utterancePlaybackOrigin:'agent'|'system'|null=null
   private bargeInFrames:Float32Array[]=[]
   private bargeInConfirmed=false
+  private playbackProbe=new PlaybackSpeechProbe()
+  private playbackProbeFrames:Float32Array[]=[]
+  private playbackProbeOrigin:'agent'|'system'|null=null
+  private confirmedPlaybackOrigin:'agent'|'system'|null=null
+  private playbackProbePeakProbability=0
+  private playbackProbePeakRms=0
   private pending:Promise<void>=Promise.resolve()
   private stopped=false
   /** Push-to-talk suspends endpointing entirely; the key release is the endpoint. */
@@ -207,6 +283,7 @@ export class PersistentVoiceCapture{
 
   stop():void{
     this.stopped=true
+    if(this.playbackProbe.reset())this.handlers.onPlaybackProbe?.(false)
     if(this.processor)this.processor.onaudioprocess=null
     if(this.worklet)this.worklet.port.onmessage=null
     try{this.source?.disconnect();this.worklet?.disconnect();this.processor?.disconnect();this.sink?.disconnect()}catch{/* already disconnected */}
@@ -333,15 +410,76 @@ export class PersistentVoiceCapture{
   private async probability(frame:Float32Array):Promise<number>{
     const silero=this.silero
     const rms=frameRms(frame)
+    const playing=this.handlers.playbackActive()
+    let probability:number
     if(this.detector==='silero'&&silero?.ready){
-      return playbackSafeProbability(await silero.probability(frame),rms,this.handlers.playbackActive())
+      probability=await silero.probability(frame)
+      return this.applyPlaybackProbe(frame,probability,rms,playing)
     }
-    // Energy fallback, reduced to the same 0/1 signal the gate consumes. The raised
-    // floor during playback is what keeps the agent's own read-aloud from
-    // self-triggering the microphone.
-    if(!this.gate.speaking)this.noiseFloor=this.noiseFloor*.97+Math.min(rms,.04)*.03
-    const threshold=Math.max(.012,this.noiseFloor*3.2,this.handlers.playbackActive()?.035:0)
-    return rms>threshold?1:0
+    // Energy fallback, reduced to the same 0/1 signal the gate consumes. Its noise
+    // floor is learned only while playback is absent. Teaching speaker output to
+    // the room-noise model made a real voice mathematically unable to clear it.
+    if(!this.gate.speaking&&!playing&&!this.playbackProbe.probing)this.noiseFloor=this.noiseFloor*.97+Math.min(rms,.04)*.03
+    const threshold=Math.max(.012,this.noiseFloor*3.2)
+    probability=rms>threshold?1:0
+    return this.applyPlaybackProbe(frame,probability,rms,playing)
+  }
+
+  private applyPlaybackProbe(frame:Float32Array,probability:number,rms:number,playing:boolean):number{
+    if(!playing&&!this.playbackProbe.probing)return probability
+    const candidate=playbackProbeCandidate(probability,rms,this.noiseFloor)
+    if(!this.playbackProbe.probing&&candidate){
+      this.playbackProbeOrigin=this.handlers.playbackOrigin?.()||null
+      this.playbackProbePeakProbability=probability
+      this.playbackProbePeakRms=rms
+    }else if(this.playbackProbe.probing){
+      this.playbackProbePeakProbability=Math.max(this.playbackProbePeakProbability,probability)
+      this.playbackProbePeakRms=Math.max(this.playbackProbePeakRms,rms)
+    }
+    const step=this.playbackProbe.step(candidate,playing)
+    if(step.action==='duck'){
+      this.preRoll=[]
+      this.playbackProbeFrames=[]
+      this.handlers.onPlaybackProbe?.(true)
+      return 0
+    }
+    if(step.collect)this.playbackProbeFrames.push(frame)
+    if(step.action==='confirm'){
+      const origin=this.playbackProbeOrigin
+      // `advance` adds the current frame itself. Keep the preceding confirmation
+      // frames as clean pre-roll, not the playback audio that preceded the duck.
+      this.preRoll=this.playbackProbeFrames.slice(0,-1)
+      this.confirmedPlaybackOrigin=origin
+      this.handlers.onBargeIn?.()
+      this.handlers.onPlaybackProbeResult?.(this.playbackProbeResult('confirmed',origin))
+      this.clearPlaybackProbe()
+      return probability
+    }
+    if(step.action==='restore'){
+      const origin=this.playbackProbeOrigin
+      this.handlers.onPlaybackProbe?.(false)
+      this.handlers.onPlaybackProbeResult?.(this.playbackProbeResult('rejected',origin))
+      this.preRoll=[]
+      this.clearPlaybackProbe()
+    }
+    return 0
+  }
+
+  private playbackProbeResult(outcome:'confirmed'|'rejected',origin:'agent'|'system'|null):PlaybackProbeResult{
+    return{
+      outcome,
+      detector:this.detector,
+      origin,
+      peakProbability:this.playbackProbePeakProbability,
+      peakRms:this.playbackProbePeakRms,
+    }
+  }
+
+  private clearPlaybackProbe():void{
+    this.playbackProbeFrames=[]
+    this.playbackProbeOrigin=null
+    this.playbackProbePeakProbability=0
+    this.playbackProbePeakRms=0
   }
 
   private advance(frame:Float32Array,probability:number):void{
@@ -373,8 +511,11 @@ export class PersistentVoiceCapture{
     for(const event of events){
       if(event.type==='speech-start'){
         this.utteranceId=newUtteranceId()
-        this.utterancePlayback=this.handlers.playbackActive()
-        this.utterancePlaybackOrigin=this.handlers.playbackOrigin?.()||null
+        const interruptedOrigin=this.confirmedPlaybackOrigin
+        this.confirmedPlaybackOrigin=null
+        this.utterancePlayback=!!interruptedOrigin||this.handlers.playbackActive()
+        this.utterancePlaybackOrigin=interruptedOrigin||this.handlers.playbackOrigin?.()||null
+        if(interruptedOrigin)this.bargeInConfirmed=true
         // The pre-roll already holds this frame, so it is not appended again.
         this.utterance=this.preRoll.splice(0)
         if(this.utterancePlayback&&probability>0)this.bargeInFrames=[frame]
@@ -423,5 +564,6 @@ export class PersistentVoiceCapture{
     this.silero?.reset()
     this.utterance=[];this.utteranceId='';this.utterancePlayback=false;this.utterancePlaybackOrigin=null
     this.bargeInFrames=[];this.bargeInConfirmed=false
+    this.confirmedPlaybackOrigin=null
   }
 }
