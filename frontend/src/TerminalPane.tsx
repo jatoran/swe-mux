@@ -2543,7 +2543,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
   const copy = async () => {
     const term = termRef.current
-    if (!term?.hasSelection()) { reportError('Copy requires a terminal selection.'); setMenu(null); return }
+    if (!term?.hasSelection()) {
+      const problem = 'Copy requires a terminal selection.'
+      reportError(problem)
+      setMenu(null)
+      throw new Error(problem)
+    }
     const text = term.getSelection()
     // Reported here for the provenance label; the global capture hook would
     // otherwise record the same text as a generic 'app' copy (and is deduped).
@@ -2554,20 +2559,24 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       setManualClipboard(false)
     } else {
       prepareClipboardFallback(text)
+      setMenu(null)
+      throw new Error('Clipboard access was blocked. Manual copy is ready in the terminal.')
     }
     setMenu(null)
   }
-  const paste = async () => {
+  const paste = async (textOnly=false) => {
     const term = termRef.current
-    if (term) {
-      try {
-        const pasted=await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
-        focusTerminalInputRef.current()
-        if(pasted==='text')showClipboardStatus('Pasted')
-      } catch {
-        setManualPaste(true)
-        requestAnimationFrame(()=>manualPasteRef.current?.focus())
-      }
+    if(!term)throw new Error('The target terminal is not mounted.')
+    try {
+      const pasted=textOnly
+        ?(pasteIntoTerminal(term,session,await navigator.clipboard.readText()),'text' as const)
+        :await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
+      focusTerminalInputRef.current()
+      if(pasted==='text')showClipboardStatus('Pasted')
+    } catch {
+      setManualPaste(true)
+      requestAnimationFrame(()=>manualPasteRef.current?.focus())
+      throw new Error('Clipboard access was blocked. Manual paste is open in the terminal.')
     }
     setMenu(null)
   }
@@ -2613,23 +2622,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const onAction = (event: Event) => {
       const detail = (event as CustomEvent<{sessionId:string|null;action:string;text?:string;submit?:boolean;requestId?:string}>).detail
       if (detail.sessionId !== session.id) return
-      if (detail.action === 'copy') void copy()
-      else if (detail.action === 'paste') void paste()
-      else if (detail.action === 'selectAll') { termRef.current?.selectAll(); setMenu(null) }
-      else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
-      else if (detail.action === 'find') find()
-      else if (detail.action === 'toggleKeyboard') toggleKeyboard()
-      else if (detail.action === 'insertText' && detail.text) {
-        void injectText(detail.text, detail.submit).then(()=>{
+      const perform = (operation:()=>void|Promise<void>) => {
+        void Promise.resolve().then(operation).then(()=>{
           if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:true}}))
         }).catch(cause=>{
           if(detail.requestId)window.dispatchEvent(new CustomEvent('mux:terminal-action-result',{detail:{requestId:detail.requestId,ok:false,error:cause instanceof Error?cause.message:String(cause)}}))
         })
       }
+      if (detail.action === 'copy') perform(copy)
+      else if (detail.action === 'paste') perform(()=>paste())
+      else if (detail.action === 'pasteText') perform(()=>paste(true))
+      else if (detail.action === 'selectAll') { termRef.current?.selectAll(); setMenu(null) }
+      else if (detail.action === 'clear') { termRef.current?.clear(); setMenu(null) }
+      else if (detail.action === 'find') find()
+      else if (detail.action === 'toggleKeyboard') toggleKeyboard()
+      else if (detail.action === 'insertText' && detail.text) perform(()=>injectText(detail.text!, detail.submit))
       // Rail items rendered outside this pane (the drawer's Commands tab) route
       // here rather than touching xterm: the pane stays the single owner of
       // terminal writes, so broadcast, replay, and read/select mode still apply.
-      else if (detail.action === 'sendKey' && detail.text) sendKey(detail.text)
+      else if (detail.action === 'sendKey' && detail.text) perform(()=>{
+        if(!termRef.current)throw new Error('The target terminal is not mounted.')
+        sendKey(detail.text!)
+      })
       else if (detail.action === 'copyReply') void copyLastReply()
       else if (detail.action === 'copyResume') void copyResumeCommand()
       else if (detail.action === 'branch') onBranch?.()

@@ -890,6 +890,14 @@ responsive controls.
   inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
   rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
   over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- Talk exposes a deliberately smaller rail-derived command set through `railVoice.ts` when a live session is focused.
+  Built-in keys and Paste require explicit `voicePhrases`; non-submitting configured agent skills and slash commands derive aliases from their names.
+  Submitted custom commands require their own explicit voice phrases.
+  Copy is the existing focused-terminal registry command because it is not a rail catalog item.
+  Literal text and prompt macros are excluded, as are destructive and UI-only actions such as clear-input, Attach, keyboard mode, relaunch, and End session.
+  Only items placed on the current device's strip or Commands panel participate, and duplicate placements collapse to one spoken command.
+  The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
+  Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
 - The command-rail editor (`RailEditor.tsx`) shows the two device layouts as columns above a catalog of every command.
   Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
   Each column holds its two surfaces, each surface its rows, each row its draggable chips.
