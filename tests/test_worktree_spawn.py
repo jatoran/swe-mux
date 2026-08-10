@@ -16,6 +16,7 @@ import pytest
 
 from swe_mux import server
 from swe_mux.config import Config
+from swe_mux.worktree_setup import WorktreeSetupResult
 
 # The helper never touches the app on any path under test; typed Any so mypy accepts it.
 APP: Any = SimpleNamespace()
@@ -80,6 +81,36 @@ async def test_a_rejected_spawn_is_reported_not_raised(
     assert result["status"] == "error"
     assert "unknown project" in result["error"]
     assert Path(worktree).is_dir(), "the worktree must survive a rejected spawn"
+
+
+@pytest.mark.asyncio
+async def test_setup_output_is_seeded_before_spawn_and_failure_does_not_block_session(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_spawn(
+        app: Any, body: dict[str, Any], *, initial_output: bytes | None = None
+    ) -> Any:
+        del app, body
+        seen["initial_output"] = initial_output
+        return SimpleNamespace(
+            record=SimpleNamespace(id="sess-1", snapshot=lambda: {"id": "sess-1"})
+        )
+
+    monkeypatch.setattr(server, "_spawn_from_body", fake_spawn)
+    setup = WorktreeSetupResult(
+        "failed", "convention", ".worktree-setup", 7, 50, b"dependency error\n"
+    )
+
+    result = await server._spawn_into_worktree(
+        APP, {"project_id": "p1", "backend": "claude"}, worktree, setup
+    )
+
+    assert result["status"] == "spawned"
+    assert result["setup"]["status"] == "failed"
+    assert b"dependency error" in seen["initial_output"]
+    assert b"not bootstrapped" in seen["initial_output"]
 
 
 @pytest.mark.asyncio

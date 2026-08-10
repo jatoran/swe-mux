@@ -35,6 +35,9 @@ and reattachable browser viewports.
   durable Project/history/event registration continues in the background. Transcript imports or
   other SQLite work therefore cannot hide an already-usable terminal. Lifecycle writes that
   depend on the history row wait for this registration internally.
+- A create-and-spawn worktree request may provide bounded initial terminal output from its completed setup subprocess.
+  `SessionManager.spawn` seeds it before fanout starts, and the supervisor spawn payload seeds the authoritative ring before the harness process starts.
+  The setup prelude therefore appears as ordinary scrollback and survives daemon reattachment.
 - PTY attach replay and input handling never await attachment/input telemetry persistence.
   Startup metrics separate interactive `server_ready` from `durable_registration` latency.
 - xterm device replies are classified separately from human input. Codex OSC 10/11 color
@@ -137,6 +140,8 @@ and reattachable browser viewports.
   launch context for its own terminal. Without it a frozen, tray-launched daemon inherits no
   `TERM`/`COLORTERM` at all and every pane renders monochrome. This is the lowest-precedence
   layer: an adapter's own env, a shell profile, and a task's env all override it.
+  Ambient `FORCE_COLOR` and `CLICOLOR_FORCE` are also scrubbed from the daemon base.
+  Agent panes add controlled values back through `session_terminal_env`, while shells and worktree setup subprocesses keep normal pipe semantics.
 - Agent harnesses additionally get colour forced (`FORCE_COLOR`, `CLICOLOR_FORCE`;
   `spawn_contract.session_terminal_env` gated on `is_agent_harness`). Node-based CLIs (Claude
   Code via chalk/supports-color) refuse colour unless stdout is detected as a TTY, and swe-mux
@@ -173,6 +178,7 @@ and reattachable browser viewports.
   the debounced meta sink: a daemon crash inside that ~0.5s window otherwise left the
   supervisor holding a live session with empty metadata, permanently unadoptable and
   reachable only by reaping everything.
+  The same spawn RPC carries optional initial worktree-setup scrollback, so no second PTY or marker-file polling protocol is needed.
 - **A broken connection is not a dead supervisor.** Only a supervisor whose process is
   actually gone means the kill-on-close Jobs closed and the trees died; a transient socket
   fault leaves sessions running. Treating the second as the first fabricated an exit for

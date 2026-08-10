@@ -28,10 +28,22 @@ from swe_mux.project_files import (
     read_project_file,
     read_project_image_content,
     search_project_files,
+    serialize_project_config,
     write_note,
     write_observations,
     write_project_config,
 )
+
+
+def test_project_config_round_trips_worktree_setup_command() -> None:
+    values = {"worktree": {"setup_command": "uv sync && npm ci"}}
+
+    assert parse_project_config(serialize_project_config(values)) == values
+
+
+def test_project_config_rejects_unknown_worktree_fields() -> None:
+    with pytest.raises(ValueError, match="unknown worktree fields"):
+        parse_project_config(b'version = 1\n[worktree]\nscript = "bad"\n')
 
 
 async def test_project_config_is_explicit_versioned_and_conflict_safe(tmp_path: Path) -> None:
@@ -154,9 +166,7 @@ async def test_generic_note_is_initialized_once_and_never_overwritten(tmp_path: 
     assert note["markdown"] == ""
     assert note_exists(tmp_path, "durable-note")
 
-    saved = await write_note(
-        tmp_path, "durable-note", "# Durable context\n", note["revision"]
-    )
+    saved = await write_note(tmp_path, "durable-note", "# Durable context\n", note["revision"])
     reopened = await initialize_note(tmp_path, "durable-note", "Different title")
     assert reopened["markdown"] == saved["markdown"]
     assert reopened["revision"] == saved["revision"]
@@ -364,9 +374,7 @@ def test_project_resource_creation_is_exclusive_and_parent_scoped(tmp_path: Path
         "a" * 256,
     ],
 )
-def test_project_resource_creation_rejects_unsafe_leaf_names(
-    tmp_path: Path, name: str
-) -> None:
+def test_project_resource_creation_rejects_unsafe_leaf_names(tmp_path: Path, name: str) -> None:
     with pytest.raises(ValueError):
         create_project_resource(tmp_path, "", name, "file")
     assert list(tmp_path.iterdir()) == []

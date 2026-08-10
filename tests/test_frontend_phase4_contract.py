@@ -530,9 +530,15 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     assert "spawn:{project_id:project.id,backend:worktree.backend}" in run_menu
     assert "onSessions([session])" in run_menu
     assert "api<{worktree_root?:string}>('GET','/api/config')" in run_menu
+    assert "timeoutMs:35*60*1000" in run_menu
+    assert "worktree-my-change" in run_menu
+    assert "setup output is in the session scrollback" in run_menu
     settings = source("Settings.tsx")
     assert "<h3>Git and worktrees</h3>" in settings
     assert "change('worktree_root'" in settings
+    projects = source("ProjectsManager.tsx")
+    assert "Worktree setup command" in projects
+    assert "setup_command" in projects
 
 
 def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:

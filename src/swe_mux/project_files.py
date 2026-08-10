@@ -32,6 +32,7 @@ PROJECT_CONFIG_FIELDS = {
     "notification_sounds_enabled",
     "ignore_patterns",
     "automations",
+    "worktree",
 }
 FORBIDDEN_PROJECT_FIELDS = {
     "token",
@@ -987,6 +988,20 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         unknown_automations = sorted(set(automations) - set(AUTOMATION_REGISTRY))
         if unknown_automations:
             raise ValueError(f"unknown automations: {', '.join(unknown_automations)}")
+    if "worktree" in parsed:
+        worktree = parsed["worktree"]
+        if not isinstance(worktree, dict):
+            raise ValueError("worktree must be a table")
+        unknown_worktree = sorted(set(worktree) - {"setup_command"})
+        if unknown_worktree:
+            raise ValueError(f"unknown worktree fields: {', '.join(unknown_worktree)}")
+        setup_command = worktree.get("setup_command")
+        if setup_command is not None and (
+            not isinstance(setup_command, str)
+            or not setup_command.strip()
+            or len(setup_command) > 4096
+        ):
+            raise ValueError("worktree.setup_command must be a non-empty string")
     return parsed
 
 
@@ -1018,6 +1033,10 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
             for key, value in sorted(automations.items())
         )
         lines.append(f"automations = {{ {pairs} }}")
+    worktree = values.get("worktree")
+    if isinstance(worktree, dict) and worktree.get("setup_command"):
+        lines.extend(["", "[worktree]"])
+        lines.append(f"setup_command = {json.dumps(str(worktree['setup_command']))}")
     data = ("\n".join(lines) + "\n").encode("utf-8")
     parse_project_config(data)
     return data

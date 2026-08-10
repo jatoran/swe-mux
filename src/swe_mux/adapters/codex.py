@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import time
+import tomllib
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 from ..codex_tui import with_scrollback_safe_tui
 from ..harness import descriptor
-from .base import SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec
 
 # Shared across every live Codex session: they all scan the same tree on the same
 # cadence, so one pass per window instead of one per session per tick.
@@ -47,7 +50,7 @@ def codex_lifecycle_hook_args(existing_args: list[str] | None = None) -> list[st
         command, windows_command = _codex_hook_commands(event)
         timeout = 3 if event == "SessionEnd" else 15
         value = (
-            f"hooks.{event}=[{{ hooks = [{{ type = \"command\", "
+            f'hooks.{event}=[{{ hooks = [{{ type = "command", '
             f"command = {json.dumps(command)}, "
             f"command_windows = {json.dumps(windows_command)}, "
             f"timeout = {timeout} }}] }}]"
@@ -56,7 +59,7 @@ def codex_lifecycle_hook_args(existing_args: list[str] | None = None) -> list[st
     return args
 
 
-class CodexAdapter:
+class CodexAdapter(BackendAdapter):
     name = "codex"
     # Lifecycle hooks are additive but user/admin policy can disable or leave them
     # untrusted, so `/new` retains the transcript-switch fallback. A resume reports
@@ -97,6 +100,62 @@ class CodexAdapter:
         )
         self.mcp_url = mcp_url
 
+    @staticmethod
+    def _canonical_project_key(path: Path) -> str:
+        return os.path.normcase(str(path.resolve()))
+
+    @staticmethod
+    def _atomic_write(path: Path, data: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+
+    @staticmethod
+    def _table_range(text: str, project_key: str) -> tuple[int, int] | None:
+        headers = list(re.finditer(r"(?m)^[ \t]*(\[[^\n]+\])[ \t]*$", text))
+        for index, match in enumerate(headers):
+            try:
+                parsed = tomllib.loads(f"{match.group(1)}\nprobe = true\n")
+            except tomllib.TOMLDecodeError:
+                continue
+            projects = parsed.get("projects")
+            if isinstance(projects, dict) and project_key in projects:
+                end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+                return match.end(), end
+        return None
+
+    def preflight_worktree(self, project_root: Path, worktree_path: Path) -> None:
+        del project_root
+        config = self._data_home_resolver() / "config.toml"
+        text = config.read_text(encoding="utf-8") if config.exists() else ""
+        parsed = tomllib.loads(text) if text.strip() else {}
+        key = self._canonical_project_key(worktree_path)
+        projects = parsed.get("projects", {})
+        if isinstance(projects, dict):
+            existing = projects.get(key)
+            if isinstance(existing, dict) and existing.get("trust_level") == "trusted":
+                return
+        section = self._table_range(text, key)
+        if section is None:
+            separator = (
+                ""
+                if not text or text.endswith("\n\n")
+                else ("\n" if text.endswith("\n") else "\n\n")
+            )
+            text += f'{separator}[projects.{json.dumps(key)}]\ntrust_level = "trusted"\n'
+        else:
+            start, end = section
+            body = text[start:end]
+            trust = re.search(r"(?m)^[ \t]*trust_level[ \t]*=[ \t]*[^\n]+$", body)
+            if trust:
+                body = body[: trust.start()] + 'trust_level = "trusted"' + body[trust.end() :]
+            else:
+                body = '\ntrust_level = "trusted"' + body
+            text = text[:start] + body + text[end:]
+        tomllib.loads(text)
+        self._atomic_write(config, text.encode("utf-8"))
+
     def _mcp_args(self) -> list[str]:
         """Register the mux MCP server as streamable HTTP (Codex >= 0.145).
 
@@ -112,9 +171,20 @@ class CodexAdapter:
             'mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"',
         ]
 
-    def _args(self, args: list[str]) -> list[str]:
+    def worktree_spawn_args(self, project_root: Path) -> tuple[str, ...]:
+        root = json.dumps(str(project_root.resolve()))
+        return ("-c", f"sandbox_workspace_write.writable_roots=[{root}]")
+
+    def _args(self, args: list[str], worktree_project_root: Path | None = None) -> list[str]:
         configured = with_scrollback_safe_tui([*self.default_args, *args])
-        prefix = self._mcp_args()
+        prefix = [
+            *(
+                self.worktree_spawn_args(worktree_project_root)
+                if worktree_project_root is not None
+                else ()
+            ),
+            *self._mcp_args(),
+        ]
         if self.notify_program:
             prefix = [
                 "-c",
@@ -130,14 +200,26 @@ class CodexAdapter:
         resolved, prefix = (
             self.command_resolver(executable) if self.command_resolver else (executable, ())
         )
-        return SpawnSpec(resolved, (*prefix, *self._args(opts.args)))
+        return SpawnSpec(
+            resolved,
+            (*prefix, *self._args(opts.args, opts.worktree_project_root)),
+        )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
         executable = opts.exe or self.default_exe
         resolved, prefix = (
             self.command_resolver(executable) if self.command_resolver else (executable, ())
         )
-        return SpawnSpec(resolved, (*prefix, *self._args(["resume", native_id, *opts.args])))
+        return SpawnSpec(
+            resolved,
+            (
+                *prefix,
+                *self._args(
+                    ["resume", native_id, *opts.args],
+                    opts.worktree_project_root,
+                ),
+            ),
+        )
 
     def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:
         """`codex resume` always continues the conversation, wherever the pane runs.
@@ -262,10 +344,9 @@ class CodexAdapter:
                         try:
                             if entry.is_dir(follow_symlinks=False):
                                 stack.append(entry.path)
-                            elif (
-                                entry.name.startswith(self.rollout_file_prefix)
-                                and entry.name.endswith(".jsonl")
-                            ):
+                            elif entry.name.startswith(
+                                self.rollout_file_prefix
+                            ) and entry.name.endswith(".jsonl"):
                                 found.append(
                                     (entry.stat(follow_symlinks=False).st_mtime, Path(entry.path))
                                 )

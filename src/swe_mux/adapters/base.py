@@ -27,6 +27,7 @@ class SpawnOptions:
     args: list[str] = field(default_factory=list)
     session_id: str | None = None
     mcp_token: str | None = None
+    worktree_project_root: Path | None = None
 
 
 class BackendAdapter(Protocol):
@@ -54,6 +55,19 @@ class BackendAdapter(Protocol):
     # path exist to follow. False for a backend that addresses a conversation by id
     # alone (Codex rollouts live in a date tree), where the path never moves.
     resolves_transcript_by_cwd: bool
+
+    def preflight_worktree(self, project_root: Path, worktree_path: Path) -> None:
+        """Prepare harness-owned trust or permission state before a worktree spawn.
+
+        Most harnesses have no startup trust gate. Concrete adapters override this
+        only when their CLI persists such a decision outside the checkout.
+        """
+        del project_root, worktree_path
+
+    def worktree_spawn_args(self, project_root: Path) -> tuple[str, ...]:
+        """Return harness-specific argv granting access back to the primary checkout."""
+        del project_root
+        return ()
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec: ...
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec: ...

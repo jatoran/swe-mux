@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..harness import descriptor
-from .base import SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec
 
 _TITLE_SLOT_BYTES = 256
 _SESSION_ID_FROM_NAME = re.compile(r"_(?P<id>[^_]+)\.jsonl$")
@@ -92,7 +92,7 @@ class TerminalBreadcrumb:
     fresh: bool
 
 
-class OmpAdapter:
+class OmpAdapter(BackendAdapter):
     name = "omp"
     reports_conversation_rollover = True
     assigns_conversation_id = False

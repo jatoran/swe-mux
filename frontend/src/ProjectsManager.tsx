@@ -23,6 +23,7 @@ type PortableValues = {
   prompt_library_scope?: PromptLibraryScope
   notification_sounds_enabled?: boolean
   ignore_patterns?: string[]
+  worktree?: { setup_command?: string }
 }
 type ProjectConfig = {
   project: { id: string; label: string; root: string }
@@ -313,7 +314,14 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               <label><span class="project-setting-name">Additional ignore patterns<em class="project-setting-chip">repo</em></span>
                 <textarea value={(values.ignore_patterns||[]).join('\n')} disabled={busy||!config} onInput={event=>setValues(current=>({...current,ignore_patterns:parseIgnorePatternDraft(event.currentTarget.value)}))}/>
               </label>
-              <p>One glob per line, added to the global ignore list. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git. Only typed presentation preferences are portable — never commands, hooks, credentials, or anything that runs.</p>
+              <p>One glob per line, added to the global ignore list. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p>
+              <section class="project-setting">
+                <h4>Git and worktrees<em class="project-setting-chip">repo</em></h4>
+                <label><span class="project-setting-name">Worktree setup command</span>
+                  <input value={values.worktree?.setup_command||''} disabled={busy||!config} placeholder="Use executable .worktree-setup when blank" onInput={event=>setValues(current=>({...current,worktree:event.currentTarget.value?{...current.worktree,setup_command:event.currentTarget.value}:undefined}))}/>
+                </label>
+                <p>Runs only after Run creates a new worktree and before its session starts. Blank uses an executable <code>.worktree-setup</code> in the new checkout. The command is committed in <code>.swe-mux/config.toml</code>, so review changes like other repository code.</p>
+              </section>
               <div><button disabled={busy||!config} onClick={()=>setValues({})}>Reset repo options to inherited</button></div>
               <AutomationOptIns project={selected} busy={busy} onError={setError} />
             </div>}

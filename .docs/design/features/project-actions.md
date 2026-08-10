@@ -80,7 +80,9 @@ the Run menu and its normal trust check.
   changes its runtime cwd.
 - Invalid or unsupported imports remain visible as diagnostics and do not block built-in session
   launchers.
-- Worktree launch fields are user-authored and do not execute repository task files.
+- Worktree launch fields are user-authored and do not execute imported Project Action files.
+  Worktree bootstrap is a separate, narrow repository execution path: an explicit create-and-spawn request runs `[worktree].setup_command` or the executable `.worktree-setup` convention before the harness starts.
+  Its failure is shown in session scrollback and never blocks session creation or removes the worktree.
   A failed session start leaves the successfully created worktree intact and changes the launcher to retry only `POST /api/sessions` against that Git-listed root.
 
 This is an explicit exception to the normally inert repository-configuration rule: a task file
@@ -91,6 +93,7 @@ and process ownership model.
 Project setup commands (`projects.md`) reuse this spawn contract but sit outside the trust
 boundary entirely: they are typed by the user into machine-local settings rather than imported
 from a checkout, so there is nothing to fingerprint and nothing repository-supplied to approve.
+Worktree setup is different: it is committed repository configuration, but it has authority only after the user explicitly selects New worktree session, and only for the newly created Git-listed root before that one session starts.
 
 ## Native file shape
 

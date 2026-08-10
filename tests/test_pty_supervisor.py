@@ -162,6 +162,28 @@ async def test_contract_spawn_write_read_exit_status(
             await asyncio.to_thread(host.stop, graceful=False)
 
 
+async def test_remote_spawn_seeds_initial_scrollback(
+    harness: SupervisorHarness, tmp_path: Path
+) -> None:
+    client = await harness.connect()
+    host = RemotePtyHost(
+        client,
+        "initial-scrollback",
+        appname=CMD,
+        cwd=str(tmp_path),
+        env=dict(os.environ),
+        initial_output=b"setup completed before harness\r\n",
+    )
+    host.prepare()
+    await asyncio.to_thread(host.spawn)
+    try:
+        _, replay = await client.subscribe(host)
+        assert replay.startswith(b"setup completed before harness\r\n")
+    finally:
+        if host.isalive():
+            await asyncio.to_thread(host.stop, graceful=False)
+
+
 @pytest.mark.parametrize("mode", ["local", "remote"])
 async def test_contract_resize_and_stop(
     mode: str, harness: SupervisorHarness, tmp_path: Path

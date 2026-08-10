@@ -1044,7 +1044,11 @@ Success and error logs contain metadata only and never patch bodies or file cont
 
 `POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`.
 With `spawn` present as an ordinary spawn body with required `project_id`, it creates the worktree and then starts a session whose cwd is forced to the new tree.
+Before spawn it runs `[worktree].setup_command` from the Project config, or an executable `.worktree-setup` convention when no override exists.
 The reply always carries `spawn: {status}` where status is `not_requested | spawned | error`, plus `session_id` and the complete `session` snapshot on success or `error` on failure.
+Requested spawns also carry `spawn.setup` with `status: not_configured | succeeded | failed | timed_out | error`, source, command, exit code, duration, truncation state, and an error summary without captured command output.
+Captured setup output is instead seeded into the spawned session's bounded scrollback before harness output.
+Setup failure does not change `spawn.status`: session creation is still attempted and the setup result marks the tree unbootstrapped.
 The worktree is the durable artifact, so a failed spawn is reported rather than raised and never unwinds it.
 If the target parent is missing, the daemon creates it only when it is below the configured `worktree_root`; otherwise the existing-parent requirement remains.
 The public configuration returns `worktree_root` as an absolute path, resolving an empty stored value to `<data_dir>/worktrees`.
