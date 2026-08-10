@@ -2,10 +2,11 @@
   "schema_version": 1,
   "backend": "claude",
   "edge_case": "pending_approval_preserved",
-  "description": "A prompt the user has NOT answered survives everything that could hide it: the tool_use record that triggered it arriving late, a parallel tool's result landing while the dialog is up, and an idle_prompt notification. It clears only once the screen proves the dialog is gone.",
+  "description": "A prompt the user has NOT answered survives everything that could hide it: the tool_use record that triggered it arriving late, a parallel tool's result landing while the dialog is up, an idle_prompt notification, and a later spinner repaint in the raw PTY write log. It clears only once Claude's own state confirms the dialog is gone.",
   "steps": [
     {"kind": "transcript", "ts_offset": 0, "record": {"type": "user", "isSidechain": false, "message": {"content": "edit the file"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
-    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "Edit"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"tool_name": "Edit", "tool_use_id": "tool-1"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "cli_state", "status": "waiting"},
     {"kind": "pty_tail", "data": "Edit file\n\nDo you want to make this edit to app.py?\n\u276f 1. Yes\n  2. No"},
     {"kind": "transcript", "ts_offset": -5, "record": {"type": "assistant", "isSidechain": false, "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Edit", "input": {}}], "stop_reason": "tool_use"}}, "expect_state": "awaiting", "expect_awaiting": "approval"},
     {"kind": "timer", "seconds": 10},
@@ -13,8 +14,10 @@
     {"kind": "hook", "event": "Notification", "payload": {"notification_type": "idle_prompt"}, "expect_state": "awaiting", "expect_awaiting": "approval"},
     {"kind": "timer", "seconds": 120},
     {"kind": "watchdog", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "approval"},
-    {"kind": "pty_tail", "data": "Edit file\n\nDo you want to make this edit to app.py?\n\u276f 1. Yes\n  2. No\n\nEditing\u2026 (esc to interrupt)"},
+    {"kind": "pty_tail", "data": "Edit file\n\nDo you want to make this edit to app.py?\n\u276f 1. Yes\n  2. No\n\nParallel tool animation\u2026 (esc to interrupt)"},
     {"kind": "timer", "seconds": 6},
+    {"kind": "watchdog", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "awaiting", "expect_awaiting": "approval"},
+    {"kind": "cli_state", "status": "busy"},
     {"kind": "watchdog", "expect_state": "working"}
   ],
   "expected": {

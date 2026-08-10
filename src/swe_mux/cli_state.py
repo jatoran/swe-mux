@@ -6,9 +6,9 @@ updatedAt, version}``. Observed ``status`` values are ``busy``, ``idle``, and
 ``waiting`` (measured 2026-08-01: the file reads ``waiting`` for the duration of
 a permission dialog, flipping ``busy`` → ``waiting`` → ``busy`` around it).
 This is the `cli-state` layer of the detection ladder (status-detection.md):
-hook-free, CLI-authoritative, and — in this phase — **corroboration only**. It
-never drives a SessionState transition; it feeds counters and the ledger so a
-release of disagreement telemetry exists before any promotion is considered.
+hook-free and CLI-authoritative. It feeds counters and the ledger, and its
+``waiting`` value conservatively vetoes raw PTY evidence that would otherwise
+hide an approval. It does not initiate a SessionState transition by itself.
 
 Two measured caveats shape what this module does *not* do:
 
@@ -227,11 +227,9 @@ class CliStateMonitor:
         ``awaiting``/``starting``/``running`` involve dialogs and lifecycle the
         comparison deliberately stays out of. ``waiting`` (the CLI's own
         dialog status) therefore counts as neither agreement nor disagreement
-        here — it is recorded as a ``layer_reading`` instead, which is what a
-        post-mortem reads. Making it a disagreement signal for a mux session
-        showing ``working`` is a real candidate, but any expansion of this
-        layer's role is gated on a release of disagreement telemetry first
-        (status-detection.md § detection ladder).
+        here. It is recorded as a ``layer_reading`` and separately used by the
+        effective PTY classifier as a conservative approval veto. It never
+        initiates a transition by itself.
         """
         record = session.record
         mismatch = (state.status == "busy" and record.state == "idle") or (

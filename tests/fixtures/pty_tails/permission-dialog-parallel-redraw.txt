@@ -1,0 +1,23 @@
+Searching for 1 pattern, reading 1 file, listing 1 directory, running 6 shell commands…
+⎿ $ ls ~/.config/opencode/node_modules/
+
+Read file
+Read(C:\Users\example\.config\opencode\opencode.jsonc)
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, allow reading from opencode/ during this session
+  3. No
+Esc to cancel · Tab to amend
+
+4 tasks (0 done, 1 in progress, 3 open)
+◼ Measure installed tools
+◻ Add first harness
+◻ Add second harness
+◻ Fixtures, tests and verification
+
+C:\Users\example\.config\opencode\opencode.jsonc
+●
+· 2s…
+●
+…
+●

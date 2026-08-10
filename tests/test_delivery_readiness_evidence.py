@@ -77,9 +77,14 @@ def test_ui_snapshot_reuses_a_bounded_pty_classification(monkeypatch: Any) -> No
     session, tracker, clock = _idle_agent()
     calls = 0
 
-    def classify(_tail: str, *, backend: str | None = None) -> str:
+    def classify(
+        _tail: str,
+        *,
+        backend: str | None = None,
+        cli_state_status: str | None = None,
+    ) -> str:
         nonlocal calls
-        del backend
+        del backend, cli_state_status
         calls += 1
         return "idle"
 

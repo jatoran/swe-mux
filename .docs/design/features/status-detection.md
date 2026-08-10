@@ -27,7 +27,7 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 
 | Layer | Source tag | What it may do |
 | --- | --- | --- |
-| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries) + the live `cwd` that re-finds a relocated transcript. **Never drives SessionState** - promotion to a transition source requires a release of disagreement telemetry plus its own corpus fixtures. |
+| CLI side state (`~/.claude/sessions/<pid>.json`) | `cli-state` | Corroborate + identity (counters, ledger entries) + the live `cwd` that re-finds a relocated transcript. Claude `waiting` conservatively vetoes raw PTY evidence that would hide an approval, but never initiates a transition by itself. |
 | Hooks (incl. `SubagentStart`/`SubagentStop`) | `hook` | Turn boundaries, blocks, identity (priority 2), and - for a hook speaking for the session's own conversation - the live `cwd` and the `transcript_path` the CLI says it is writing. |
 | Transcript records | `transcript` | Ordered turn evidence (priority 1) + standing-activity extraction. |
 | PTY screen classifier | `pty` / `watchdog-pty` | Recoveries, vetoes, the startup-dialog rule, drift self-check. |
@@ -42,13 +42,10 @@ file reads `waiting` for the duration of a permission dialog). Files map to sess
 conversation id.
 What it feeds:
 
-- **Status corroboration**: a *settled* contradiction (CLI `busy` while mux `idle`, CLI
-  `idle` while mux `working`, both sides ≥ 10 s old) counts `cli_state_disagrees` once per
-  standing fact and ledgers it (`kind: "cli_state"`). One release of this telemetry gates
-  any future promotion to a transition source. `waiting` is deliberately outside that
-  comparison — it is recorded as a `layer_reading` instead. Treating "CLI `waiting` while
-  mux shows `working`" as a disagreement is a real candidate for the next iteration, and
-  it goes through the same telemetry gate as any other expansion of this layer's role.
+- **Status corroboration**: a *settled* contradiction (CLI `busy` while mux `idle`, CLI `idle` while mux `working`, both sides at least 10 s old) counts `cli_state_disagrees` once per standing fact and ledgers it (`kind: "cli_state"`).
+  `waiting` is outside that disagreement counter and is recorded as a `layer_reading`.
+  It also conservatively overrides a raw PTY `working` result to `approval`, because measured Claude behavior makes `waiting` exact for the permission-dialog lifetime while the append-only PTY tail can contain later parallel redraws.
+  This override can preserve or extend an existing approval but cannot initiate a state transition by itself.
 - **Transcript relocation**: the file's `cwd` is the CLI's *live* working directory, which
   the spawn cwd stops describing the moment the agent enters a worktree. It is what
   `_relocated_transcript_candidate` re-derives a moved transcript's path from.
@@ -229,8 +226,11 @@ If the approval remains unresolved for `APPROVAL_STABILIZATION_SECONDS` (5 s), t
 Positive resumed-work evidence or terminal input cancels the pending approval before the boundary.
 Cancellation is its own step (`note_activity_evidence`) rather than a side effect of `_transition`, because the evidence that matters most often changes no state: a `PostToolUse` hook on a session the transcript is driving, and a resume record arriving while the session still reads `working`, both used to return before reaching the cancel and left the timer to expire on its own.
 `PreToolUse` is deliberately not counted - Codex fires it *before* the permission decision, so it proves an attempt, not an answer.
-The PTY approval screen vetoes cancellation from a stale working record.
+The approval candidate retains its `tool_use_id`, so a completion carrying a different id cannot cancel it even during the race before either the PTY dialog or Claude `waiting` state has been observed.
+A matching completion is definitive resolution evidence and may cancel the candidate despite stale screen or CLI state.
+The effective PTY approval result vetoes unidentified cancellation evidence.
 The candidate timestamp and evidence are mirrored into supervisor-owned metadata, so a session-preserving daemon reload resumes the remaining delay instead of losing or restarting it.
+Once stabilized, the active approval retains the same tool identity until it leaves `awaiting(approval)`, so parallel hook completions remain unable to clear the visible status.
 Questions, elicitation prompts, and rate limits remain immediate because they are not routinely auto-approved.
 
 **Delegated approvals.**
@@ -241,7 +241,7 @@ So a delegated approval is held past the stabilization window until this session
 `APPROVAL_AUTO_REVIEW_CEILING_SECONDS` (60 s) is the backstop for a screen the classifier cannot read: a late approval is a nuisance, a hidden one strands the session.
 The setting is read per thread from the rollout's `turn_context` and `thread_settings_applied` rather than from `config.toml`, because the CLI's own picker changes it live and the file would then describe a session that no longer matches it; a session whose setting is unknown keeps the plain window.
 
-The transition ledger records `approval_stabilization_started` (carrying `delegated`), `approval_stabilization_coalesced`, `approval_stabilization_cancelled`, and `approval_stabilization_committed` (carrying `gate`: `stabilized`, `screen`, or `ceiling`) so a missing or late alert is reconstructable.
+The transition ledger records `approval_stabilization_started` (carrying `delegated` and `tool_use_id`), `approval_stabilization_coalesced`, `approval_stabilization_cancelled` (carrying `tool_use_id`), and `approval_stabilization_committed` (carrying `gate` and `tool_use_id`) so a missing or late alert is reconstructable.
 
 ### Idle sub-reason
 
@@ -429,6 +429,7 @@ strength:
    record until it finishes, so the CLI's own working spinner is the only timely proof.
    `resume_working` fires after `STATE_WATCHDOG_AWAITING_RESUME_SECONDS`, and may only
    move `awaiting` → `working` inside a turn that is already running.
+   For Claude, this exit is suppressed while its published CLI state is `waiting`, even if a later parallel spinner repaint makes the raw PTY write order classify as `working`.
 3. **Notification + screen proof**: `idle_prompt` while `awaiting` clears to `idle` only
    when the tail's live frame is the idle input prompt.
 
@@ -541,15 +542,15 @@ cannot pair a virtual start with a real end.
 
 ## Reading the PTY screen
 
-The screen is read from the last `SCREEN_TAIL_BYTES` (32 KiB) via
-`ScrollbackBuffer.tail_bytes`, which walks the chunk deque from the right. It matters that
-this is not a slice of the joined retention: the watchdog reads the screen for every agent
-session twice a pass on a 5-second loop, so joining full retention first cost tens of
-megabytes a second of pure allocation across a fleet — worst for Codex, whose buffers are
-the fullest. The window is sized against redraw *traffic*, not one frame: the current CLI's
-spinner and a waiting dialog's `●` pulse keep writing while the screen is static, and 8 KiB
-of that traffic evicted a dialog's own text within ~90 s (the verdict then degrades to
-`unknown`, which is conservative but blind).
+The screen is read from the last `SCREEN_TAIL_BYTES` (32 KiB) via `ScrollbackBuffer.tail_bytes`, which walks the chunk deque from the right.
+It matters that this is not a slice of the joined retention: the watchdog reads the screen for every agent session twice a pass on a 5-second loop, so joining full retention first cost tens of megabytes a second of pure allocation across a fleet, worst for Codex, whose buffers are the fullest.
+The window is sized against redraw *traffic*, not one frame: the current CLI's spinner and a waiting dialog's `●` pulse keep writing while the screen is static, and 8 KiB of that traffic evicted a dialog's own text within about 90 s.
+The verdict then degrades to `unknown`, which is conservative but blind.
+
+The raw ConPTY stream is a write log, not a snapshot of the terminal's rendered cells.
+A parallel tool can repaint its task list and spinner after Claude draws a permission dialog without removing that dialog from the visible screen.
+Raw prompt-marker ordering therefore remains useful evidence but is not authoritative proof that the dialog disappeared.
+For Claude, `pty_tail_state` combines that raw result with the CLI-published status: `waiting` yields an effective `approval`, and `busy` or `idle` lets the raw screen result stand.
 
 Before matching, the tail is normalized by `_normalize_tail_text`.
 OSC is removed from body text, cursor movement reads as a space, styling reads as nothing, and horizontal whitespace runs collapse.
@@ -582,7 +583,8 @@ The retained real Claude captures likewise contain OSC 0 only.
 No title or progress classification rule was added because the measured title is arbitrary task text and neither harness supplied a verified semantic state signal.
 
 `pty_tail_explain` returns every evaluated rule, its match result, its region, and a bounded region preview.
-The live state-log exposes this as `pty_explain`, so a marker drift can be diagnosed without attaching a debugger.
+It exposes both `screen_outcome` and effective `outcome`, plus `outcome_source` and `cli_state_status`, so the exact arbitration is visible.
+The live state-log exposes this as `pty_explain`, so marker drift and corroboration overrides can be diagnosed without attaching a debugger.
 
 ## Watchdog recovery (pinned behavior)
 
@@ -596,6 +598,7 @@ The live state-log exposes this as `pty_explain`, so a marker drift can be diagn
   proves the block is gone. A Codex question or an elicitation shows neither an approval nor
   an idle marker while redraw history still holds "esc to interrupt" from before the block —
   resuming on that would hide a prompt the user must answer.
+  Claude `waiting` changes the effective screen result to `approval`, so a parallel spinner repaint cannot trigger this exit while the permission dialog remains active.
 - `working`/`awaiting` stalled ≥ `STATE_WATCHDOG_ENDED_STUCK_SECONDS` (6s) with a quiet
   transcript whose tail **proves** the turn ended → force idle (`watchdog`).
 - **Unwitnessed** (no transcript bound and no hook ever received): `idle` + working
@@ -756,7 +759,7 @@ fact, including for sessions that no longer exist.
 `frontend/src/fleetStatus.ts` is a read-only consumer of this contract.
 It recomputes from each current session snapshot, preserves measurement source and activity age on every projected field, and supplies a closed predicate set for deterministic voice targeting.
 It never infers an approval from spoken wording and never caches state separately from the session ledger.
-The guarded approval route requires both stabilized `awaiting(approval)` and a fresh `pty_tail_state(...)=approval` reading before prepare and again before confirmation.
+The guarded approval route requires both stabilized `awaiting(approval)` and a fresh effective `pty_tail_state(...)=approval` reading before prepare and again before confirmation.
 
 `frontend/src/sessionStatus.ts` is the single mapping from `SessionState` (+
 `awaiting_reason`) to the rendered indicator: `stateDotClass` (total, distinct per state,
