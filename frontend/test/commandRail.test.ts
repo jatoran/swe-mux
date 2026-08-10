@@ -27,7 +27,7 @@ test('the default layout seeds one row per surface, identical on both devices', 
 
 test('default rail groups editing helpers after Down and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
-    'relaunch', 'copyReply', 'copyResume', 'branch', 'paste', 'clipboardHistory', 'kbdToggle',
+    'relaunch', 'copyReply', 'copyResume', 'branch', 'paste', 'clipboardHistory', 'kbdToggle', 'draftToggle',
     'esc', 'enter', 'tab', 'ctrlC', 'up', 'down',
     'markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput',
     'left', 'right', 'attach',
@@ -49,7 +49,7 @@ test('desktop and mobile layouts are edited independently', () => {
   config.layouts.mobile.strip[0].items = ['esc', 'enter']
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
-  assert.equal(ids(config, 'strip').length, 20)
+  assert.equal(ids(config, 'strip').length, 21)
 })
 
 test('an item placed in no row is simply absent from that device', () => {
@@ -130,6 +130,19 @@ test('a newly shipped built-in is placed, not merely catalogued', () => {
   assert.equal(config.items.some(item => item.id === 'rewind'), true)
   for (const device of ['desktop', 'mobile'] as const) {
     assert.equal(config.layouts[device].panel.some(row => row.items.includes('rewind')), true)
+  }
+})
+
+test('an existing rail receives Draft beside the keyboard mode toggle', () => {
+  const saved = defaultRailConfig()
+  saved.items = saved.items.filter(item => item.id !== 'draftToggle')
+  for (const device of ['desktop', 'mobile'] as const) {
+    saved.layouts[device].strip[0].items = saved.layouts[device].strip[0].items.filter(id => id !== 'draftToggle')
+  }
+  const config = normalizeRailConfig(saved)
+  for (const device of ['desktop', 'mobile'] as const) {
+    const strip = ids(config, 'strip', { device, backend: 'claude' })
+    assert.equal(strip.indexOf('draftToggle'), strip.indexOf('kbdToggle') + 1)
   }
 })
 

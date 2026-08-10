@@ -61,12 +61,24 @@ class GitChangeSummary(TypedDict):
     truncated: bool
 
 
-class GitComparison(TypedDict):
+class GitComparisonRef(TypedDict):
+    """Which ref a repository is compared against, and how that was decided.
+
+    Separate from `GitComparison` because two callers need the answer at very
+    different costs: the drawer also wants the bounded selector candidate list,
+    while the session monitor polls every checkout on a cadence and must not run
+    `for-each-ref` to learn a name it already had. One resolution, two callers,
+    so the sidebar and the drawer can never disagree about the base.
+    """
+
     ref: str | None
     display: str | None
     source: str
     available: bool
     reason: str | None
+
+
+class GitComparison(GitComparisonRef):
     candidates: list[str]
 
 
@@ -364,8 +376,13 @@ async def comparison_candidates(repository: str) -> list[str]:
     return candidates
 
 
-async def infer_comparison(repository: str, override: str | None) -> GitComparison:
-    candidates = await comparison_candidates(repository)
+async def resolve_comparison_ref(repository: str, override: str | None) -> GitComparisonRef:
+    """Auto (or overridden) comparison ref for one repository, without candidates.
+
+    An explicit override that no longer resolves stays visibly unavailable rather
+    than silently falling back to the inferred ref: a comparison against a base
+    the user did not choose is worse than no comparison at all.
+    """
     if override is not None:
         if await _ref_resolves(repository, override):
             return {
@@ -374,7 +391,6 @@ async def infer_comparison(repository: str, override: str | None) -> GitComparis
                 "source": "project_override",
                 "available": True,
                 "reason": None,
-                "candidates": candidates,
             }
         return {
             "ref": None,
@@ -382,7 +398,6 @@ async def infer_comparison(repository: str, override: str | None) -> GitComparis
             "source": "project_override",
             "available": False,
             "reason": "configured comparison ref is invalid or no longer resolves to a commit",
-            "candidates": candidates,
         }
 
     origin = await _run_git_bytes(
@@ -396,7 +411,6 @@ async def infer_comparison(repository: str, override: str | None) -> GitComparis
             "source": "origin_head",
             "available": True,
             "reason": None,
-            "candidates": candidates,
         }
 
     remotes_result = await _run_git_bytes(repository, "remote")
@@ -421,7 +435,6 @@ async def infer_comparison(repository: str, override: str | None) -> GitComparis
                 "source": "single_remote_head",
                 "available": True,
                 "reason": None,
-                "candidates": candidates,
             }
 
     for fallback in ("main", "master"):
@@ -432,7 +445,6 @@ async def infer_comparison(repository: str, override: str | None) -> GitComparis
                 "source": "local_fallback",
                 "available": True,
                 "reason": None,
-                "candidates": candidates,
             }
     return {
         "ref": None,
@@ -440,8 +452,15 @@ async def infer_comparison(repository: str, override: str | None) -> GitComparis
         "source": "none",
         "available": False,
         "reason": "no symbolic remote default or local main/master ref resolves",
-        "candidates": candidates,
     }
+
+
+async def infer_comparison(repository: str, override: str | None) -> GitComparison:
+    candidates, resolved = await asyncio.gather(
+        comparison_candidates(repository),
+        resolve_comparison_ref(repository, override),
+    )
+    return {**resolved, "candidates": candidates}
 
 
 def parse_name_status(data: bytes) -> list[GitFileChange]:

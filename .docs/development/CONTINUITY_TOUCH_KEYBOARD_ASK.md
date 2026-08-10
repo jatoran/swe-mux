@@ -1,20 +1,15 @@
 # Continuity ask: raise the Android keyboard only on typing intent
 
-**Delivered in SDK 0.2.21, corrected in 0.2.35.**
+**Delivered in SDK 0.2.21 and corrected in SDK 0.2.35.**
 swe-mux currently vendors SDK 0.2.35 as `frontend/vendor/continuity-editor-0.2.35.tgz`
-(sha256 `af0ceb46f9ffd78c16b0e61bee9280202027970c075cc6d3773ed15c01068fc1`).
-The gate ships as `src/soft_keyboard.js`: the internal textarea is held
-at `inputmode="none"` on coarse pointers and lifted only on a resolved tap or an explicit insert,
-with a long-press claim and an adjust-handle grab restoring it. `focus()` stays a pure focus move
-and does not lift the gate, and desktop is untouched. No host change was required.
-
-0.2.21 applied that gate unconditionally, which fixed the reader and broke the writer: the same
-attribute that refuses to *raise* a keyboard takes away one that is already up, so long-pressing
-a word or dragging an adjust handle mid-sentence dismissed the keyboard being typed on. 0.2.35
-gates on keyboard state instead - typing intent as the request, visual-viewport occlusion as the
-observation that corrects it - and closes only when there is no keyboard to lose. With no
-evidence either way it assumes "down", which preserves 0.2.21's behavior exactly: a keyboard
-dismissed by the system back gesture still cannot be re-raised by a selection gesture.
+(sha256 `af0ceb46f9ffd78c16b0e61bee9280202027970c075cc6d3773ed15c01068fc1`, 475128 bytes).
+That is the **rebuilt** 0.2.35 tarball; an earlier build of the same version shipped as
+`a45856c9…` and is superseded, so verify the digest rather than the version string alone.
+SDK 0.2.21 introduced the `inputmode="none"` gate that keeps a dismissed keyboard down during selection, but applying the gate during every selection gesture also dismissed an already-visible keyboard.
+SDK 0.2.35 tracks typing intent and visual-viewport keyboard occlusion per editor, so long-press selection and selection-handle adjustment preserve the keyboard state they found.
+Where there is no evidence either way the answer is "keyboard down", which preserves 0.2.21 exactly: a keyboard dismissed with the system back gesture still cannot be re-raised by a selection gesture.
+When a selection exists with the keyboard down, the first tap inside that selection raises the keyboard without collapsing the range or removing its action bar; a later tap may collapse or reposition it normally.
+Desktop remains untouched and no host change is required.
 
 The platform half is still unverified — headless Chrome has no IME to raise, so the device steps
 below remain the only proof. The rest of this document is the original ask, kept because it

@@ -279,7 +279,17 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .project-group.active>.project-row strong { color:#91e49f }
 .project-group.active>.project-row .project-chevron { color:#77d887 }
 .project-group .session-list { padding:0 0 3px 14px }
-.project-group .session-row,.session-row,.session-row:hover,.session-row.active { height:calc(40px*var(--ui-scale));margin:0;padding:5px 8px;border:0;background:transparent;box-shadow:none }
+/* Height is the scaled row *or* what the row's own content needs, whichever is
+   larger: a constant `40px * --ui-scale` stopped containing that content the
+   moment `--session-dot` became user-configurable. The second term is the
+   indicator's box plus the row's padding, inter-line gap, and second line, plus
+   2px of the slack the fixed value already carried. Every existing
+   configuration keeps exactly the height it had; only a row that would have
+   clipped grows. Computed here rather than as a `:root` variable because a
+   custom property that references another is substituted where it is
+   *declared*: derived at the root it would ignore the `--session-dot` override
+   the settings preview sets on its own container. */
+.project-group .session-row,.session-row,.session-row:hover,.session-row.active { height:max(calc(40px*var(--ui-scale)),calc(25px + max(var(--session-dot),var(--session-line-box))));margin:0;padding:5px 8px;border:0;background:transparent;box-shadow:none }
 .session-row.active { color:#9beaA8 }
 .session-row.active:before { display:none;content:none }
 .agent-prefix { margin-right:6px;color:#79a982;font-weight:500 }.agent-prefix.claude { color:#d49a78 }.agent-prefix.codex { color:#77c9a7 }
@@ -320,6 +330,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .activity-badge { display:inline-flex;align-items:baseline;gap:1px }
 .activity-count { font:600 7px 'JetBrains Mono',monospace;color:#8a94a1 }
 .tab-main .activity-badges { margin-left:2px;margin-right:3px }
+.terminal-draft-indicator{display:inline-block;flex:0 0 auto;width:6px;height:6px;margin:0 3px;border-radius:50%;background:var(--green);box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 28%,transparent)}
 /* The provider mark on a session tab, beside the state dot. Sized against the tab's own 9px
    text rather than the sidebar's 12px, and the strip's 7px flex gap is pulled back in so the
    dot, the mark, and the title read as one group instead of three evenly spaced things. */
@@ -1022,7 +1033,7 @@ body {
    note/preview rows a branch may carry. */
 .layout-cluster.stack>.layout-branch:before,.layout-cluster.stack>.layout-branch:after{content:"";position:absolute;z-index:3;left:calc(var(--session-row-inset-x) + var(--session-dot)/2 - 1px);width:2px;background:color-mix(in srgb,var(--blue) 62%,transparent);pointer-events:none}
 .layout-cluster.stack>.layout-branch:before{top:0;height:var(--session-row-inset-y)}
-.layout-cluster.stack>.layout-branch:after{top:calc(var(--session-row-inset-y) + var(--session-dot));bottom:0}
+.layout-cluster.stack>.layout-branch:after{top:calc(var(--session-row-inset-y) + max(var(--session-dot),var(--session-line-box)));bottom:0}
 .layout-cluster.stack>.layout-branch.first:before,.layout-cluster.stack>.layout-branch.last:after{content:none}
 .layout-cluster .session-row{position:relative;z-index:2}.layout-resource-row{height:calc(40px*var(--ui-scale));display:flex;align-items:center;gap:8px;color:var(--muted)}.layout-loose{margin-top:4px;padding-top:3px}.layout-loose-divider{height:10px;display:grid;grid-template-columns:13px 1fr;align-items:center;color:var(--muted);font-size:8px}.layout-loose-divider i{display:block;border-top:1px dotted var(--line)}.foreign-scope{margin-left:6px;color:var(--amber)}.anchor-badge{color:var(--green);margin-left:auto}.project-row .anchor-badge+small{margin-left:0}
 .pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:calc(31px*var(--ui-scale)) minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs-rail{--overflow-rail-bg:var(--panel);--overflow-rail-accent:var(--green)}.stack-tabs{width:100%;height:100%;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:none}.stack-tabs::-webkit-scrollbar{display:none}.stack-tabs button{flex:0 0 auto;max-width:220px;height:calc(31px*var(--ui-scale));border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}/* The active tab was distinguished only by swapping --panel for --bg, a difference of a few
@@ -1370,8 +1381,21 @@ body {
 .terminal-action-rail .rail-icon svg{width:15px;height:15px;display:block}
 .terminal-action-rail .rail-icon:disabled{color:var(--muted)}
 .terminal-action-rail .kbd-toggle{display:none}
-@media(pointer:coarse){.terminal-action-rail .kbd-toggle{display:inline-flex;align-items:center;justify-content:center}}
+.terminal-action-rail .draft-toggle{display:none;position:relative}
+@media(pointer:coarse){.terminal-action-rail .kbd-toggle,.terminal-action-rail .draft-toggle{display:inline-flex;align-items:center;justify-content:center}}
 .terminal-action-rail .kbd-toggle.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
+.terminal-action-rail .draft-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green,#8bd450)}
+.terminal-action-rail .draft-toggle.has-draft::after{content:'';position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--green,#8bd450);box-shadow:0 0 0 2px var(--panel2)}
+.mobile-terminal-draft{z-index:15;grid-row:1;grid-column:1;align-self:end;justify-self:center;width:min(720px,calc(100% - 16px));max-height:min(48dvh,360px);margin:8px;display:grid;grid-template-rows:auto minmax(76px,auto) auto auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--panel) 96%,transparent);box-shadow:0 8px 28px #000b}
+.mobile-terminal-draft>header{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid var(--line);font:10px 'Cascadia Mono',Consolas,monospace}
+.mobile-terminal-draft>header strong{color:var(--green);letter-spacing:.06em;text-transform:uppercase}.mobile-terminal-draft>header span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.mobile-terminal-draft>header button{width:30px;height:30px;border:0;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+.mobile-terminal-draft>textarea{box-sizing:border-box;width:100%;min-height:76px;max-height:min(30dvh,220px);padding:10px;border:0;outline:0;resize:none;overflow:auto;background:var(--bg);color:var(--text);font:13px/1.45 'Cascadia Mono',Consolas,monospace;caret-color:var(--green)}
+.mobile-terminal-draft>textarea:focus{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 38%,transparent)}
+.mobile-terminal-draft-error{margin:0;padding:5px 8px;border-top:1px solid color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red);font-size:9px}
+.mobile-terminal-draft>footer{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:6px 7px;border-top:1px solid var(--line)}
+.mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
+.mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
 .commandrail-settings .rail-intro{margin:0 0 8px}
 .commandrail-settings .rail-intro b{color:var(--text);font-weight:600}
@@ -1561,7 +1585,23 @@ body {
      `position:fixed` descendants even at zero, which would re-anchor the sidebar and drawer
      overlays. Both of those dismiss the keyboard when they open, so the two never coincide. */
   :root.soft-keyboard-open .terminal-pane{overflow:hidden}
-  :root.soft-keyboard-open .terminal-surface{transform:translateY(calc(-1*var(--keyboard-inset,0px)))}
+  :root.soft-keyboard-open .terminal-surface:not(.keyboard-reserved){transform:translateY(calc(-1*var(--keyboard-inset,0px)))}
+  /* A pane that reserved the keyboard's height out of its own geometry has nothing behind
+     the keyboard to slide out from under it: the grid was sized to the space above the
+     keyboard in the first place, the strip below is dead space the keyboard covers, and
+     the whole conversation stays on screen. Held back at the *surface*, not the host, so
+     the command rail rides up with the terminal and stays next to it rather than being
+     stranded at the bottom of the pane behind the keyboard.
+     `keyboardReserve.ts` owns when this is allowed. In one line: only while everything the
+     harness has painted still fits in the smaller grid, so the resize that reaches the PTY
+     can never be the destructive one.
+     A margin and not a height, because the surface is a flex item under a pane bar whose own
+     height is a layout result: `height:100% - reserve` would measure the reservation from the
+     top of the *pane* and leave the rail sitting the bar's height inside the keyboard. A
+     bottom margin is subtracted from the space the item is shrunk into however tall the
+     chrome above it turns out to be, which is the only way the surface's bottom edge lands
+     exactly on the keyboard's top edge. */
+  .terminal-surface.keyboard-reserved{margin-bottom:var(--terminal-keyboard-reserve,0px)}
   /* The pane's clip protects everything above the pane — the tab rail and the toolbar are
      outside its box — but the pane's own header and read-aloud strip are inside it, and the
      surface is a later sibling, so a translated surface paints straight over them. They are
@@ -1577,7 +1617,12 @@ body {
      Pushing the host back down *inside* the already-slid surface reveals the grid's top while
      the command rail and the chips stay where the slide put them, above the keyboard, so the
      control that got you here is still the control that takes you back. */
-  :root.soft-keyboard-open .terminal-surface.keyboard-peek>.terminal-host{transform:translateY(var(--keyboard-inset,0px))}
+     A drag moves this continuously rather than flipping between the two ends, so the offset
+     is a length the pane writes per pointer move and not a class. The button and the
+     landed-output move are jumps and animate; a dragged offset must not, because a
+     transition on a value the finger is already setting reads as the pane lagging behind. */
+  :root.soft-keyboard-open .terminal-surface>.terminal-host{transform:translateY(var(--peek-offset,0px))}
+  :root.soft-keyboard-open .terminal-surface.keyboard-peek-animated>.terminal-host{transition:transform 140ms ease-out}
   /* Every other mobile surface shortens instead of sliding, and the difference is not a
      stylistic one. The terminal must not resize because shrinking an alternate-screen PTY
      destroys the rows that no longer fit. A note editor, a file view, or the drawer reflows
@@ -1690,6 +1735,9 @@ body {
   .mobile-terminal-live-input{position:absolute;z-index:1;left:8px;bottom:54px;display:block;width:1px;height:1px;min-width:1px;min-height:1px;margin:0;padding:0;border:0;outline:0;opacity:.01;overflow:hidden;resize:none;background:transparent;color:transparent;caret-color:transparent;font-size:16px;pointer-events:none}
   .terminal-surface .xterm .composition-view{display:none!important}
   .terminal-action-rail .terminal-mobile-send{min-height:44px}
+  .mobile-terminal-draft{width:calc(100% - 14px);max-height:min(46dvh,320px);margin:7px}
+  .mobile-terminal-draft>textarea{min-height:92px;max-height:28dvh;font-size:16px}
+  .mobile-terminal-draft>header button,.mobile-terminal-draft>footer button{min-height:44px}
 }
 
 /* Every visible Project resource lives in the same recursive pane tree. */
@@ -2820,13 +2868,29 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    shape, its hollow "standing" variant, and the context gauge that follows the
    shape's outline are all geometry CSS cannot express on a bordered box. */
 .session-list{container-type:inline-size}
-/* The indicator's box, the sidebar row's gutter column, and the stack thread's
-   geometry all derive from these two numbers, so the thread cannot drift off the
-   dots it is drawn through the way a hard-coded offset did.
-   Deliberately NOT multiplied by `--ui-scale`: like every other icon and touch
-   target, the indicator stays put while type and row heights scale. */
+/* The indicator's box, the sidebar row's gutter column, the row's own height,
+   and the stack thread's geometry all derive from these numbers, so the thread
+   cannot drift off the dots it is drawn through the way a hard-coded offset did.
+
+   `--session-dot` is user-configurable per device class (`sessionRowPrefs.ts`
+   writes it onto the root element from the stored row layout); the values here
+   are the shipped defaults and what an unreachable daemon falls back to, so they
+   must stay equal to `DEFAULT_DOT_SIZE_*` in `sessionRowConfig.ts`.
+
+   `--session-dot` is deliberately NOT multiplied by `--ui-scale`: like every
+   other icon and touch target, the indicator stays put while type and row
+   heights scale. `--session-line-box` is, because the type inside that line is. */
 :root{
   --session-dot:15px;
+  /* The title line's own line box, which the indicator's box is floored at and
+     the row height is derived from. An indicator *smaller* than the line it is
+     aligned to top-aligns inside it and sits visibly above the name — the
+     failure a 10px indicator produced once the size became configurable.
+     Measured, not assumed: 14px at scale 1, growing with the type, but never
+     shrinking below 14px because the line also carries a 12px provider mark
+     raised 2px, which sets a floor of its own that no scale-down removes. */
+  --session-title-line:14px;
+  --session-line-box:max(var(--session-title-line),calc(var(--session-title-line)*var(--ui-scale)));
   /* Mirrors `.session-row`'s effective padding, which is asymmetric (5px 8px), so
      the thread needs both axes: the horizontal inset places its rule on the dot's
      centre, the vertical one places the break it leaves for the dot. Keep these
@@ -2872,24 +2936,32 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    between the two lines, which reads as belonging to neither, and left the stack
    thread painting straight across it. */
 .session-row{grid-template-columns:var(--session-dot) minmax(0,1fr)}
+/* Width is the configured size; height is that floored at the title line, and the
+   SVG's own `preserveAspectRatio` then centres the shape in whatever slack is
+   left. So a small indicator is centred on the name rather than top-aligned
+   above it, and a large one sizes the line itself. */
 .session-row .state-dot.state-indicator{
-  width:var(--session-dot);height:var(--session-dot);align-self:start;margin-top:0
+  width:var(--session-dot);
+  height:max(var(--session-dot),var(--session-line-box));
+  align-self:start;margin-top:0
 }
 
 .session-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
 .row-line{display:flex;align-items:baseline;min-width:0}
 /* Same height as the indicator and centred, so the two boxes start together and
    their centres coincide at any type size instead of only at the default one. */
-.row-line.top{font-size:12px;min-height:var(--session-dot);align-items:center}
+.row-line.top{font-size:12px;min-height:max(var(--session-dot),var(--session-line-box));align-items:center}
 .row-line.bottom{font:9px 'Cascadia Mono',Consolas,monospace;color:var(--muted);min-height:12px}
 /* The blank bottom line is kept on desktop — constant row height is what makes
    the list scannable — but dropped on mobile, where vertical space is the
    scarce resource and identity-only rows are the point. */
-/* Mobile rows are shorter and their titles smaller, so the indicator steps down
-   with them rather than towering over a 9px name. The thread and the gutter
-   column follow automatically, being expressed in the same variable. */
+/* Mobile runs the indicator *larger* than desktop, not smaller. It is read at
+   arm's length, it is never hovered for the tooltip that would confirm it, and
+   on a phone it is competing with a touch target rather than with a dense
+   scannable list. The thread, the gutter column, and the row height follow
+   automatically, being expressed in the same variable. */
 @media(max-width:760px){
-  :root{--session-dot:13px}
+  :root{--session-dot:17px}
   .row-line.bottom.empty{display:none;min-height:0}
 }
 .row-section{display:flex;align-items:baseline;min-width:0;white-space:nowrap}
@@ -2925,6 +2997,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-diffbar i.add{background:#5f9e6a}.row-diffbar i.del{background:#a5605a}
 .row-pips{display:inline-flex;gap:2px;align-self:center;flex:none}
 .row-pips i{width:3px;height:3px;border-radius:50%;background:#697381;display:block}
+/* Scope mark on a branch-scoped Git token. Dimmed and tight against its value:
+   it qualifies the number rather than competing with it, and the row cannot
+   afford a token's worth of width to say so in words. */
+.row-prefix{color:#5c6f61;margin-right:2px;flex:none}
+/* A value that describes a checkout more than one live session is working in.
+   A border rather than a glyph because it costs no row width and no shedding
+   decision, and it groups: the rows quoting one shared number underline
+   together, which is the fact being reported. */
+.row-token.shared>:not(.row-sep){
+  border-bottom:1px dotted color-mix(in srgb,currentColor 45%,transparent)
+}
 .session-row.active .row-title{color:var(--text)}
 .session-row .activity-badges{align-self:center}
 /* Width shedding is NOT done here. Hiding a token with `display:none` removes
@@ -2939,6 +3022,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .session-row-settings h5{margin:0 0 3px;color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
 .session-row-preview{width:100%;max-width:420px;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .session-row-preview .session-row{cursor:default}
+/* Slider plus a live readout, because a size in pixels is a number the user has
+   to be able to say back — a bare track leaves "how big is it now" unanswerable
+   and makes the two device values impossible to compare. */
+.row-size-control{display:grid;grid-template-columns:minmax(0,1fr) minmax(90px,140px) auto;align-items:center;gap:8px}
+.row-size-control input[type=range]{width:100%;min-width:0}
+.row-size-control output{color:var(--muted);font-variant-numeric:tabular-nums;font-size:10px;text-align:right}
 .row-line-editor{margin:8px 0 4px;padding:8px;border:1px solid var(--line);border-radius:6px}
 .row-line-editor>h4{margin-top:0}
 .row-line-editor>p{margin:0 0 6px;color:var(--muted);font-size:9px}

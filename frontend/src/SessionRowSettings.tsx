@@ -11,13 +11,14 @@
 // the user nothing about what they just changed; the four sample sessions here
 // are chosen so each mode has something to demonstrate.
 
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { SessionRowBody } from './SessionRowBody'
 import { StateIndicator } from './StateIndicator'
+import { currentProfile, type SettingsProfile } from './deviceSettings'
 import {
-  ROW_FIELDS, ROW_FIELD_BY_ID, ROW_PRESETS, SEPARATORS, SEPARATOR_IDS,
-  defaultSessionRowConfig, lineConfig, placeField, presetConfig, removeField, setFieldMode,
-  unplacedFields,
+  DOT_SIZE_MAX, DOT_SIZE_MIN, ROW_FIELDS, ROW_FIELD_BY_ID, ROW_PRESETS, SEPARATORS, SEPARATOR_IDS,
+  defaultSessionRowConfig, lineConfig, normalizeDotSize, placeField, presetConfig, removeField,
+  setFieldMode, unplacedFields,
   type ContextRender, type CountStyle, type DiffStyle, type DotShape,
   type RowAlign, type RowFieldId, type RowLine, type RowPresetId, type SeparatorId,
   type SessionRowConfig,
@@ -36,28 +37,51 @@ const sample = (overrides: Partial<Session>): Session => ({
   ...overrides,
 } as unknown as Session)
 
+// The first three share one checkout, which is not incidental: it is the state
+// the shared-checkout mark exists to report, and a preview of four sessions in
+// four repositories would never draw it.
+const PRIMARY_ROOT = 'D:/PROJECTS/example'
+
 const PREVIEW_SESSIONS: Session[] = [
   sample({
     id: 'preview-working', name: 'refactor tokenizer', backend: 'codex', model: 'gpt-5-codex',
     state: 'working', state_detail: 'apply_patch', state_since: NOW - 1320,
     context_pct: 0.74, context_peak_pct: 0.74,
-    git: { branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48 },
+    git: {
+      branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
+      root: PRIMARY_ROOT, compare_ref: 'origin/main',
+      compare_added: 486, compare_removed: 91, compare_files: 12,
+    },
     provider_account_hashes: { openai: 'a1b2c3d4e5f6' },
   }),
   sample({
     id: 'preview-ready', name: 'status detection v2', model: 'opus',
     state: 'idle', last_turn_ms: 72_000, context_pct: 0.41, context_peak_pct: 0.55,
+    git: {
+      branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
+      root: PRIMARY_ROOT, compare_ref: 'origin/main',
+      compare_added: 486, compare_removed: 91, compare_files: 12,
+    },
   }),
   sample({
     id: 'preview-awaiting', name: 'push notifications', model: 'opus',
     state: 'awaiting', awaiting_reason: 'approval', state_detail: 'Bash(rm -rf)',
     state_since: NOW - 300, context_pct: 0.63, context_peak_pct: 0.63,
+    git: {
+      branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
+      root: PRIMARY_ROOT, compare_ref: 'origin/main',
+      compare_added: 486, compare_removed: 91, compare_files: 12,
+    },
   }),
   sample({
     id: 'preview-worktree', name: 'audit sweep', backend: 'codex', model: 'gpt-5-codex',
     state: 'working', state_since: NOW - 10_800, context_pct: 0.96, context_peak_pct: 0.97,
     compaction_count: 3, cost_usd: 4.2,
-    git: { branch: 'wt-audit', worktree: 'wt-audit', dirty: 3, ahead: 0, behind: 1, added: 18, removed: 4 },
+    git: {
+      branch: 'wt-audit', worktree: 'wt-audit', dirty: 3, ahead: 0, behind: 1,
+      added: 18, removed: 4, root: `${PRIMARY_ROOT}-wt/wt-audit`, compare_ref: 'origin/main',
+      compare_added: 204, compare_removed: 37, compare_files: 6,
+    },
     provider_account_hashes: { openai: '99aa88bb77cc' },
   }),
 ]
@@ -67,6 +91,14 @@ const PREVIEW_CONTEXT = deriveRowContext(PREVIEW_SESSIONS, { 'preview-worktree':
 const SHAPES: Array<{ id: DotShape; label: string }> = [
   { id: 'hexagon', label: 'Hexagon' }, { id: 'circle', label: 'Circle' }, { id: 'square', label: 'Square' },
 ]
+const SIZE_PROFILES: Array<{ id: SettingsProfile; label: string }> = [
+  { id: 'desktop', label: 'Size on desktop' }, { id: 'mobile', label: 'Size on mobile' },
+]
+const sizeKey = (profile: SettingsProfile): 'dotSizeDesktop' | 'dotSizeMobile' =>
+  profile === 'mobile' ? 'dotSizeMobile' : 'dotSizeDesktop'
+/** How long a continuous control must rest before its value is persisted. */
+const SETTLE_MS = 250
+
 const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> = [
   { id: 'arc', label: 'Around the indicator', hint: 'Costs no row width; peak marked on the outline.' },
   { id: 'gauge', label: 'Gauge', hint: 'Four cells in the row, comparable down the list.' },
@@ -77,6 +109,12 @@ const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> =
 export function SessionRowSettings() {
   const [config, setConfig] = useState(loadSessionRowConfig)
   const [error, setError] = useState('')
+  const thisDevice = currentProfile()
+  // Which device class the preview is drawn at. Starts on this device and
+  // follows whichever slider was last touched, so dragging the mobile size from
+  // a desktop browser shows the mobile result instead of leaving the preview
+  // inert and the change unverifiable until you pick up the phone.
+  const [sizeProfile, setSizeProfile] = useState<SettingsProfile>(thisDevice)
 
   useEffect(() => {
     const sync = () => setConfig(loadSessionRowConfig())
@@ -84,12 +122,27 @@ export function SessionRowSettings() {
     return () => window.removeEventListener('mux:settings-changed', sync)
   }, [])
 
-  const change = (next: SessionRowConfig) => {
-    setConfig(next)
+  const save = (next: SessionRowConfig) => {
     saveSessionRowConfig(next)
       .then(() => setError(''))
       .catch(() => setError('Could not save the row layout. The daemon may be restarting; try again.'))
   }
+
+  const change = (next: SessionRowConfig) => {
+    setConfig(next)
+    save(next)
+  }
+
+  // A slider emits an event per pixel of travel, and every placement edit here
+  // is one `PUT /api/settings`. Continuous controls therefore apply locally at
+  // once — the preview has to track the drag — and persist once the drag settles.
+  const settleTimer = useRef<number>()
+  const changeContinuous = (next: SessionRowConfig) => {
+    setConfig(next)
+    if (settleTimer.current) window.clearTimeout(settleTimer.current)
+    settleTimer.current = window.setTimeout(() => save(next), SETTLE_MS)
+  }
+  useEffect(() => () => { if (settleTimer.current) window.clearTimeout(settleTimer.current) }, [])
 
   const move = (line: RowLine, align: RowAlign, id: RowFieldId, offset: number) => {
     const slots = lineConfig(config, line)[align]
@@ -176,7 +229,10 @@ export function SessionRowSettings() {
     </div>
 
     <h4>Preview</h4>
-    <div class="session-row-preview sidebar">
+    {/* The preview carries the size of whichever device class is being edited,
+        rather than the root variable this device is using, so adjusting the
+        mobile size from a desktop browser still shows what it did. */}
+    <div class="session-row-preview sidebar" style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px` }}>
       <div class="session-list">
         {PREVIEW_SESSIONS.map(session => <div key={session.id} class={`session-row agent ${session.state}`}>
           <StateIndicator session={session} shape={config.dotShape} gauge={sessionContextArc(session, config)} />
@@ -191,6 +247,30 @@ export function SessionRowSettings() {
         {SHAPES.map(shape => <option key={shape.id} value={shape.id}>{shape.label}</option>)}
       </select>
     </label>
+    {SIZE_PROFILES.map(profile => <label key={profile.id} class="row-size-control">
+      <span>
+        {profile.label}
+        {profile.id === thisDevice ? ' (this device)' : ''}
+      </span>
+      <input
+        type="range"
+        min={DOT_SIZE_MIN}
+        max={DOT_SIZE_MAX}
+        step={1}
+        value={config[sizeKey(profile.id)]}
+        aria-label={`${profile.label} indicator size in pixels`}
+        onInput={event => {
+          setSizeProfile(profile.id)
+          changeContinuous({
+            ...config,
+            [sizeKey(profile.id)]:
+              normalizeDotSize(event.currentTarget.valueAsNumber, config[sizeKey(profile.id)]),
+          })
+        }}
+      />
+      <output>{config[sizeKey(profile.id)]}px</output>
+    </label>)}
+    <p>The indicator sizes the sidebar row around it: the gutter column, the context ring, the stack thread, and the row's own height are all derived from this number, so a larger indicator gives a taller row rather than a clipped one. Desktop and mobile are separate because the same size is not read the same way at desk distance and at arm's length.</p>
     <label>Context pressure
       <select value={config.context} onChange={event => change({ ...config, context: event.currentTarget.value as ContextRender })}>
         {CONTEXT_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
@@ -200,6 +280,10 @@ export function SessionRowSettings() {
 
     {lineEditor('top', 'Top line', 'Identity: the indicator sits outside these sections and is always drawn.')}
     {lineEditor('bottom', 'Bottom line', 'Everything else. The state word is off by default because the indicator already carries it.')}
+
+    <h4>Git fields</h4>
+    <p>Every Git number describes the <em>checkout</em> a session is working in, never the session: <code>git status</code> answers for the whole repository however it is invoked, so sessions sharing a working tree necessarily report the same figures. A value shared by more than one live session is underlined, and its tooltip says how many.</p>
+    <p><strong>Uncommitted</strong> is measured against HEAD, so it drops to zero as soon as a session commits. <strong>Branch</strong> (marked ⎇) is measured from the merge base with the project's comparison ref, so it keeps counting committed work — usually the number you want for a worktree-per-branch fleet. Both stay blank rather than showing zero when they could not be measured.</p>
 
     <h4>Token style</h4>
     <label>Lines changed

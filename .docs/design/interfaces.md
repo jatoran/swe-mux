@@ -1018,6 +1018,26 @@ error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 Git review routes are derived, read-only tooling APIs except for the existing worktree create and remove mutations.
 Every review read is Project-scoped and rejects unlisted parameters instead of accepting caller-supplied repositories or arbitrary refs.
 
+The session snapshot's `git` object and the `git_changed` event payload carry the same shape,
+which describes the **checkout** a session is in and never the session:
+
+```text
+git {
+  branch, dirty, ahead, behind,     # branch name, dirty file count, upstream divergence
+  worktree,                         # leaf name when a linked worktree, else null
+  root,                             # absolute working-tree root: the identity of the checkout
+  added, removed,                   # tracked lines vs HEAD; null means unmeasured, not zero
+  compare_ref,                      # base the branch-scoped counts are measured from
+  compare_added, compare_removed, compare_files
+}
+```
+
+Sessions sharing a working tree report identical values by construction.
+`compare_*` measure the working tree against its merge base with `compare_ref`, so they include
+committed work that the HEAD-scoped `added`/`removed` have already lost; the ref is the same one
+`GET /git/worktrees` reports. Any of these being `null` means the measurement could not be made,
+which is deliberately distinct from a measured `0`.
+
 `GET /git/worktrees?project_id=ID` returns repository identity, comparison metadata, and a bounded overview for every listed worktree.
 Comparison inference tries the Project override, `origin/HEAD`, the single non-origin remote default, local `main`, then local `master`.
 It performs no fetch and returns no comparison ref when none resolves.

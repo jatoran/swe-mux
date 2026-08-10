@@ -136,6 +136,7 @@ export const BUILTIN_RAIL: RailItem[] = [
   // touch, where reading the system clipboard is unreliable or refused outright.
   { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', label: 'Clip' },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
+  { id: 'draftToggle', type: 'action', action: 'toggleDraft', label: 'Draft', className: 'draft-toggle', agentOnly: true, title: 'Write in a persistent local draft before sending' },
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
   { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter', voicePhrases: ['enter', 'press enter', 'enter key'] },
   { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab', voicePhrases: ['tab', 'press tab', 'tab key'] },
@@ -288,7 +289,14 @@ export function normalizeRailConfig(saved: unknown): RailConfig {
   // permanently invisible to anyone with an existing layout.
   for (const item of addedBuiltins) {
     const surface = itemDefaultSurface(item)
-    for (const device of RAIL_DEVICES) layouts[device][surface][0].items.push(item.id)
+    for (const device of RAIL_DEVICES) {
+      const row = layouts[device][surface][0].items
+      // Draft is another input mode, so existing rails receive it beside the keyboard
+      // mode control instead of after Attach at the unrelated end of the strip.
+      const keyboard = item.id === 'draftToggle' ? row.indexOf('kbdToggle') : -1
+      if (keyboard >= 0) row.splice(keyboard + 1, 0, item.id)
+      else row.push(item.id)
+    }
   }
   return { items, layouts }
 }

@@ -106,15 +106,14 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.35 editor owns mobile touch arbitration. `pointerdown` does not
-  focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
-  cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
-  editor's shadow DOM or duplicate caret hit-testing for this behavior.
-- 0.2.35 makes that keyboard gate conditional rather than reflexive: it closes only when there is
-  no keyboard to lose, judged from typing intent plus visual-viewport occlusion, so a long-press
-  or an adjust-handle drag mid-sentence no longer dismisses a keyboard already up. A first tap
-  inside an existing selection now buys the keyboard without collapsing the range, once per
-  selection and on coarse pointers only. Both are editor-internal; no host change was required.
+- The vendored Continuity 0.2.35 editor owns mobile touch and soft-keyboard arbitration.
+  `pointerdown` does not focus its textarea; a resolved typing tap projects the caret and focuses
+  synchronously, while scrolling and cancellation do not raise the keyboard.
+  Long-press selection and selection-handle adjustment preserve an already-visible keyboard but
+  leave a dismissed keyboard down.
+  With a selected range and the keyboard down, the first tap inside that range raises the keyboard
+  without collapsing the range or removing its action bar; a later tap may collapse it normally.
+  swe-mux does not inspect the editor's shadow DOM or duplicate caret hit-testing for this behavior.
 - Text held by an open IME composition has not reached the engine, so it has not reached the
   autosave queue either. Because Android keyboards hold one composition open across ordinary
   typing, that run is simply the word being typed: closing the drawer mid-sentence dropped it,

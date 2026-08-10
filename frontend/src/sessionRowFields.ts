@@ -30,6 +30,16 @@ export interface SessionRowContext {
   /** Pending queue depth by target session id. */
   queueDepth: Record<string, number>
   /**
+   * Live sessions per checkout root.
+   *
+   * Every Git measurement is a property of the working tree, not of the agent:
+   * `git status` answers for the whole repository however it is invoked, so two
+   * sessions in one checkout necessarily report identical numbers. This is what
+   * lets a row say so instead of letting the reader assume the number is that
+   * one agent's work.
+   */
+  checkoutSessions: Record<string, number>
+  /**
    * How many low-priority tokens each section sheds for the current width.
    *
    * Shedding lives here rather than in a container query because the separator
@@ -42,7 +52,10 @@ export interface SessionRowContext {
 }
 
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
-  return { now, defaultBranch: {}, defaultModel: {}, multiAccount: false, queueDepth: {}, shed: 0 }
+  return {
+    now, defaultBranch: {}, defaultModel: {}, multiAccount: false,
+    queueDepth: {}, checkoutSessions: {}, shed: 0,
+  }
 }
 
 /** Width thresholds, widest first; the index is how many tokens are shed. */
@@ -67,6 +80,20 @@ export interface RowToken {
   title?: string
   tone?: RowTone
   priority: number
+  /**
+   * Scope mark drawn before the value, for facts that would otherwise be
+   * indistinguishable from a differently-scoped sibling: a branch-scoped
+   * `+312 -48` beside a working-tree `+312 -48` is two numbers that mean
+   * different things and look identical.
+   */
+  prefix?: string
+  /**
+   * The value describes a checkout more than one live session is working in, so
+   * every one of those rows is printing this same number. Rendered as a mark on
+   * the token rather than left to the tooltip, because the misreading it exists
+   * to stop ("this is what *this* agent changed") happens while scanning.
+   */
+  shared?: boolean
   diff?: { added: number; removed: number }
   gauge?: { pct: number; peak: number }
   count?: number
@@ -218,6 +245,24 @@ function accountToken(session: Session): { text: string; title: string } | null 
   return { text: hash.slice(0, 6), title: `${provider} account ${hash}` }
 }
 
+/**
+ * Scope mark for branch-scoped Git tokens.
+ *
+ * Not gated on `gitGlyphs`, which is a preference about decorating branch names.
+ * This one is load-bearing: without it a row carrying both diffs prints the same
+ * `+312 -48` twice with no way to tell which is which.
+ */
+const BRANCH_SCOPE_MARK = '⎇'
+
+/** Live sessions sharing this session's checkout, itself included; 0 when unknown. */
+function checkoutShare(session: Session, context: SessionRowContext): number {
+  const root = session.git?.root
+  return root ? context.checkoutSessions[root] || 0 : 0
+}
+
+const sharedNote = (share: number): string =>
+  share > 1 ? ` — shared checkout, ${share} live sessions report it` : ''
+
 interface Candidate { token: RowToken; notable: boolean }
 
 /**
@@ -301,14 +346,54 @@ function candidateFor(
     case 'diff': {
       const added = session.git?.added, removed = session.git?.removed
       if (typeof added !== 'number' || typeof removed !== 'number') return null
-      const title = `+${added} -${removed} lines against HEAD`
-      return make({ kind: 'diff', text: `+${added} -${removed}`, title, diff: { added, removed } }, added + removed > 0)
+      const share = checkoutShare(session, context)
+      const title = `+${added} -${removed} uncommitted lines against HEAD${sharedNote(share)}`
+      return make(
+        { kind: 'diff', text: `+${added} -${removed}`, title, diff: { added, removed }, shared: share > 1 },
+        added + removed > 0,
+      )
     }
     case 'dirty': {
       const dirty = session.git?.dirty || 0
+      const share = checkoutShare(session, context)
       return make(
-        { kind: 'count', text: String(dirty), count: dirty, title: `${dirty} changed file${dirty === 1 ? '' : 's'}` },
+        {
+          kind: 'count', text: String(dirty), count: dirty, shared: share > 1,
+          title: `${dirty} changed file${dirty === 1 ? '' : 's'} in the working tree${sharedNote(share)}`,
+        },
         dirty > 0,
+      )
+    }
+    // The branch-scoped pair. They answer "what has this work changed" where
+    // `diff`/`dirty` answer "what is uncommitted", and the two diverge the
+    // moment anything is committed — which is why a worktree-per-branch fleet
+    // that commits as it goes reads +0 -0 on the working-tree fields alone.
+    case 'compareDiff': {
+      const added = session.git?.compare_added, removed = session.git?.compare_removed
+      if (typeof added !== 'number' || typeof removed !== 'number') return null
+      const share = checkoutShare(session, context)
+      const base = session.git?.compare_ref || 'its base'
+      const title = `+${added} -${removed} lines vs ${base}, committed and uncommitted${sharedNote(share)}`
+      return make(
+        {
+          kind: 'diff', text: `+${added} -${removed}`, title, prefix: BRANCH_SCOPE_MARK,
+          diff: { added, removed }, shared: share > 1,
+        },
+        added + removed > 0,
+      )
+    }
+    case 'compareFiles': {
+      const files = session.git?.compare_files
+      if (typeof files !== 'number') return null
+      const share = checkoutShare(session, context)
+      const base = session.git?.compare_ref || 'its base'
+      return make(
+        {
+          kind: 'count', text: String(files), count: files,
+          prefix: BRANCH_SCOPE_MARK, shared: share > 1,
+          title: `${files} file${files === 1 ? '' : 's'} changed vs ${base}${sharedNote(share)}`,
+        },
+        files > 0,
       )
     }
     case 'sync': {
@@ -452,8 +537,18 @@ export function deriveRowContext(
     defaultModel[projectId] = mostCommon(list.map(session => session.model))
   }
   const accounts = new Set<string>()
+  // Ended sessions are excluded: the question a shared-checkout mark answers is
+  // "how many rows in front of me are quoting this same number", and an exited
+  // session is not competing for the attribution. A repository whose only live
+  // session is this one is unambiguous however many corpses sit beside it.
+  const checkoutSessions: Record<string, number> = {}
   for (const session of sessions) {
     for (const hash of Object.values(session.provider_account_hashes || {})) if (hash) accounts.add(hash)
+    const root = session.git?.root
+    if (root && !isEnded(session)) checkoutSessions[root] = (checkoutSessions[root] || 0) + 1
   }
-  return { now, defaultBranch, defaultModel, multiAccount: accounts.size > 1, queueDepth, shed }
+  return {
+    now, defaultBranch, defaultModel,
+    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, shed,
+  }
 }

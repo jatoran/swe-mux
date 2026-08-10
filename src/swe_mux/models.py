@@ -52,6 +52,16 @@ class StandingActivity:
 
 @dataclass(slots=True)
 class GitState:
+    """What Git says about the checkout a session is working in.
+
+    **Every field here describes the checkout, not the session.** Sessions
+    sharing a working tree share one measurement by construction: `git status`
+    reports the whole repository regardless of which subdirectory it runs in, so
+    two agents in one checkout cannot be told apart by anything Git can answer.
+    ``root`` is served so a client can say so — a per-session row printing a
+    per-checkout quantity invites reading it as "what this agent changed".
+    """
+
     branch: str | None = None
     dirty: int = 0
     ahead: int = 0
@@ -69,6 +79,24 @@ class GitState:
     #: reports a clean tree for a repository it simply failed to read.
     added: int | None = None
     removed: int | None = None
+    #: Absolute working-tree root. The identity of the checkout every other field
+    #: here is about, and the only key by which two sessions can be known to share
+    #: one. None outside a repository.
+    root: str | None = None
+    #: Comparison base this checkout is measured against, and the change set
+    #: between that base's merge base with HEAD and the current working tree.
+    #:
+    #: This is the branch-scoped answer to "what has this work changed", where
+    #: ``added``/``removed`` are the HEAD-scoped one. They differ the moment a
+    #: session commits: committed work leaves the HEAD diff entirely and stays in
+    #: this one, which is why a worktree-per-branch fleet reads +0 -0 without it.
+    #:
+    #: All four are ``None`` when no base resolves or the diff failed — never 0,
+    #: which would claim a branch identical to its base.
+    compare_ref: str | None = None
+    compare_added: int | None = None
+    compare_removed: int | None = None
+    compare_files: int | None = None
 
 
 @dataclass(slots=True)

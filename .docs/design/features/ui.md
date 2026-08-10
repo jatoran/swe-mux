@@ -1084,6 +1084,16 @@ responsive controls.
   scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
   Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
   rail in this mode never raises the keyboard.
+- Agent terminals also expose a touch-only **Draft** rail action beside the keyboard toggle.
+  It opens a native multiline composer as a floating surface in the terminal cell, so its appearance does not resize the terminal or reflow the running TUI.
+  Live input, read/select, and Draft are exclusive modes: opening Draft suppresses terminal focus, hiding it restores the prior live or read/select mode, and pressing the keyboard toggle from Draft closes it into read/select mode.
+- Draft text is device-local and keyed by session rather than pane, so hiding the composer, changing workspace tabs, remounting the pane, reloading, or browser suspension does not discard it.
+  The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
+  A green dot on the Draft action and every tab for that terminal discloses unsent text without exposing its content.
+- Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Send** button uses the existing session-targeted terminal insertion and submission path.
+  A successful send clears the saved draft, while a rejected send leaves the text editable and reports the error in the composer.
+  The send appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
+  Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target. Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
@@ -1536,18 +1546,18 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.20 separately owns note-touch
-  arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
-  scroll/cancel/long-press paths call no `focus()`. swe-mux adds no shadow-DOM or caret
+  text entry, so the early blur is safe. Continuity 0.2.35 separately owns single-finger note-touch
+  arbitration and the editor's Android soft-keyboard gate. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
-- That arbitration is about focus, and focus is not the whole of what raises an Android
-  keyboard. A note whose keyboard was dismissed with the back gesture keeps its editor
-  `<textarea>` focused, so a long-press-and-drag selection over it can re-raise the keyboard
-  without any `focus()` being called and with nothing for the host to intercept — the surface
-  is inside Continuity's shadow root, and `readOnly` is the only keyboard-adjacent property the
-  host can reach. Closing this needs an `inputmode` gate in the editor, not a host workaround;
-  the ask is `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the
-  terminal side is covered by that pane's own gesture rules.
+- Continuity tracks explicit typing intent and visual-viewport keyboard occlusion per editor.
+  A long-press selection or selection-handle adjustment leaves an already-visible keyboard up and
+  leaves a dismissed keyboard down. When a selection exists with the keyboard down, the first tap
+  inside the selected range raises the keyboard without collapsing the range or removing its
+  action bar; a later tap may collapse or reposition it normally. This policy must stay inside
+  Continuity because Android can hide the IME without blurring its focused shadow-root textarea.
+  The original gate rationale and device verification sequence remain in
+  `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the terminal side
+  is covered by that pane's own gesture rules.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This
@@ -1669,12 +1679,25 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 
 - **The indicator is not a field.**
   It sits outside both sections, is always drawn, and its colour, pulse, and hollow "engaged" variant are not configurable.
-  Only its *shape* is: hexagon (default), circle, or square.
+  Its *shape* is: hexagon (default), circle, or square.
+  Its *size* is, in whole pixels within `DOT_SIZE_MIN`–`DOT_SIZE_MAX` (10–24), and separately per device class.
   It is vertically aligned to the **title line**, not to the middle of the row: centred on a two-line row it belongs to neither line.
-- **The indicator's box, the row's gutter column, and the stack thread all derive from `--session-dot` and the `--session-row-inset-*` pair.**
+- **The indicator's box, the row's gutter column, the row's height, and the stack thread all derive from `--session-dot` and the `--session-row-inset-*` pair.**
   The thread is drawn through the sessions' own status dots, so a hard-coded offset stops covering the dot the moment the indicator's size changes and paints a rule straight across it.
-  Expressing both from the same variables is what keeps that impossible; `frontend/test/renderer/session-row-layout.spec.ts` measures it, because pure CSS geometry is invisible to every unit test.
+  The row's height is the same kind of hazard: a fixed `40px * --ui-scale` stopped containing the row's own content as soon as the indicator became configurable, so it is now that value *or* what the content needs, whichever is larger.
+  Every existing configuration keeps exactly the height it had; only a row that would have clipped grows.
+  The indicator's box is additionally floored at the title line's own line box (`--session-line-box`), because an indicator **smaller** than the line it is aligned to top-aligns inside it and sits visibly above the name.
+  That floor is measured rather than assumed: 14px at scale 1, growing with the type, and never shrinking below 14px because the line also carries a 12px provider mark raised 2px.
+  Above the floor the indicator sizes the line; below it the SVG's own `preserveAspectRatio` centres the shape in the slack.
+  Expressing all of them from the same variables is what keeps drift impossible; `frontend/test/renderer/session-row-layout.spec.ts` measures containment and centring at both ends of the size range, because pure CSS geometry is invisible to every unit test.
   The indicator is deliberately **not** multiplied by `--ui-scale`, matching every other icon and touch target.
+- **Size is the one part of the row configuration split desktop from mobile.**
+  The layout is shared because the same person wants the same facts in the same order on both screens; a physical size is the one property a shared layout cannot express, because the two screens are held at different distances.
+  Mobile's default is **larger** than desktop's (17px against 15px): a phone row is read at arm's length, is never hovered for the tooltip that would confirm it, and competes with a touch target rather than with a dense scannable list.
+  Both values live in the single `sessionRows` blob as `dotSizeDesktop`/`dotSizeMobile` rather than in a second settings profile, so editing either is one write from either device.
+  `sessionRowPrefs.applySessionDotSize` publishes the resolved value as `--session-dot` on the root element and re-resolves when a window crosses the device-class breakpoint, exactly as chrome scale does.
+  Handing the number to `StateIndicator` as a prop instead would resize the glyph and leave the gutter, the thread, and the row height behind.
+  A stored size outside the bounds is **clamped**, not discarded: a blob from a build with wider bounds should render at the nearest size this one can draw rather than silently reset and look like a lost setting.
 - **The row never prints the state word.**
   The indicator already carries it, so `working`, `ready`, and `turn complete` are duplication rather than information.
   The `state` field exists for anyone who wants it back but is defined as never notable, so it renders only in `always` mode.
@@ -1699,6 +1722,15 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
   Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
   A ready session's number is static, so a settled fleet re-renders on no clock at all.
+- **Every Git field describes the checkout, never the session.**
+  `git status` answers for the whole repository however it is invoked, so sessions sharing a working tree necessarily report identical figures and there is no per-session measurement to take.
+  A quantity whose checkout (`GitState.root`) has more than one **live** session is drawn underlined, and its tooltip says how many; ended sessions do not count, because one live session in a checkout is unambiguous however many corpses sit beside it.
+  Only the quantities are marked — lines and files, uncommitted and branch — not the branch or worktree name, which nobody reads as one agent's work.
+- **The Git quantities come in two scopes, and both are offered.**
+  `diff`/`dirty` are measured against HEAD, so they drop to zero the moment a session commits.
+  `compareDiff`/`compareFiles` are measured from the merge base with the Project's comparison ref and therefore keep counting committed work; they carry a `⎇` scope mark so a row holding both does not print the same `+312 -48` twice with no way to tell which is which.
+  A worktree-per-branch fleet that commits as it goes reads `+0 -0` on the HEAD-scoped pair alone, which is what the branch-scoped pair exists to fix.
+  Either pair renders nothing at all when it could not be measured; a zero would claim a clean tree, or a branch identical to its base.
 - **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, or off.
 - **The working pulse animates the indicator's core alone.**
   The arc is a measurement that only moves when the conversation grows, so blinking it alongside the core made a static reading look like live activity.
@@ -1729,6 +1761,8 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/src/ResourceUsage.tsx`
 - `frontend/src/TerminalPane.tsx`
+- `frontend/src/TerminalDraftComposer.tsx`
+- `frontend/src/mobileTerminalDraft.ts`
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/DirectoryPicker.tsx`
 - `frontend/src/terminalRenderDiagnostics.ts`

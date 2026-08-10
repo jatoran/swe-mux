@@ -13,7 +13,8 @@ type Props={
   onClose:()=>void
   onLaunch:(backend:ProjectBackend)=>void
   onCustom:()=>void
-  onSessions:(sessions:Session[],activate?:boolean)=>void
+  onSessions:(sessions:Session[])=>void
+  onWorktreeCreated:(path:string,backend:ProjectBackend)=>void
   onError:(message:string)=>void
 }
 
@@ -22,11 +23,9 @@ const sourceLabel:Record<ProjectAction['source'],string>={
 }
 
 type WorktreeDraft={backend:ProjectBackend;branch:string;startPoint:string;path:string;pathEdited:boolean}
-type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
-type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;cwd?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
-type WorktreeCreateResult={ok:true;path:string;spawn:WorktreeSpawnResult}
+type WorktreeCreateResult={ok:true;path:string}
 
-export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessions,onError}:Props){
+export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,onError}:Props){
   const harnesses=promptDeliveryHarnesses()
   const launchBackends=['shell',...harnesses.map(harness=>harness.name)]
   const preferred=project.effective_options?.backend||project.default_backend||harnesses[0]?.name||'shell'
@@ -113,27 +112,6 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
       ...current,branch,path:current.pathEdited?current.path:worktreePathForBranch(worktreeRoot,project.name,project.id,branch),
     }))
   }
-  const startWorktreeSession=async(path:string,backend:ProjectBackend)=>{
-    try{
-      const result=await api<WorktreeSpawnResult>('POST','/api/git/worktrees/session',{
-        path,spawn:{project_id:project.id,backend},
-      },{timeoutMs:35*60*1000})
-      if(result.status!=='spawned'||!result.session_id){
-        const setupFailed=result.setup&&['failed','timed_out','error'].includes(result.setup.status)
-        const setupDetail=setupFailed?` Setup also failed (${result.setup?.error||result.setup?.exit_code||result.setup?.status}); the tree is not bootstrapped.`:''
-        onError(`Worktree created at ${path}, but the session failed: ${result.error||'unknown error'}.${setupDetail}`)
-        return
-      }
-      const session=result.session||await api<Session>('GET',`/api/sessions/${encodeURIComponent(result.session_id)}`)
-      if(result.setup&&['failed','timed_out','error'].includes(result.setup.status)){
-        const detail=result.setup.error||(result.setup.exit_code!=null?`exit code ${result.setup.exit_code}`:result.setup.status)
-        onError(`Worktree session started, but setup failed (${detail}). The tree is not bootstrapped; setup output is in the session scrollback.`)
-      }
-      onSessions([session],false)
-    }catch(cause){
-      onError(`Worktree created at ${path}, but the session could not be started: ${cause instanceof Error?cause.message:String(cause)}`)
-    }
-  }
   const launchWorktree=async(event:SubmitEvent)=>{
     event.preventDefault()
     const branch=worktree.branch.trim(),path=worktree.path.trim()
@@ -145,7 +123,7 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
         cwd:project.root,path,branch,start_point:worktree.startPoint.trim()||undefined,
       },{timeoutMs:30000})
       onClose()
-      void startWorktreeSession(result.path,worktree.backend)
+      onWorktreeCreated(result.path,worktree.backend)
     }catch(cause){setWorktreeError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }

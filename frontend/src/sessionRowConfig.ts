@@ -24,7 +24,7 @@
 export type RowFieldId =
   | 'glyph' | 'title' | 'broadcast' | 'badges'
   | 'state' | 'detail' | 'duration' | 'idleFor' | 'context'
-  | 'branch' | 'worktree' | 'diff' | 'dirty' | 'sync'
+  | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
 
 export type RowFieldMode = 'notable' | 'always'
@@ -44,12 +44,43 @@ export interface RowLineConfig {
   separator: SeparatorId
 }
 
+/**
+ * Bounds on the state indicator's box, in CSS pixels.
+ *
+ * The floor is where the hollow "standing" variant's stroke stops being legible
+ * against the filled one; the ceiling is where a two-line row stops reading as a
+ * list. The sidebar row's height is derived from the chosen size rather than
+ * fixed, so anything inside these bounds fits without clipping.
+ */
+export const DOT_SIZE_MIN = 10
+export const DOT_SIZE_MAX = 24
+export const DEFAULT_DOT_SIZE_DESKTOP = 15
+/**
+ * Mobile runs larger than desktop, not smaller. The indicator is the one part of
+ * a phone row that is read at arm's length and never hovered for a tooltip, and
+ * it is competing with a touch target rather than with a dense scannable list.
+ */
+export const DEFAULT_DOT_SIZE_MOBILE = 17
+
 export interface SessionRowConfig {
   version: 1
   top: RowLineConfig
   bottom: RowLineConfig
   /** Shape of the state indicator and of any gauge drawn around it. */
   dotShape: DotShape
+  /**
+   * Indicator box in CSS pixels, per device class.
+   *
+   * The one part of the row configuration that is genuinely split desktop from
+   * mobile: the layout is shared because the same person wants the same facts in
+   * the same order on both screens, but a size that reads correctly on a monitor
+   * at desk distance does not read correctly on a phone in one hand. Everything
+   * around the indicator — the gutter column, the context ring, the stack thread,
+   * the row height — is expressed in terms of it, so one number moves all of them
+   * together.
+   */
+  dotSizeDesktop: number
+  dotSizeMobile: number
   context: ContextRender
   diffStyle: DiffStyle
   countStyle: CountStyle
@@ -107,8 +138,10 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'context', label: 'Context used', notable: 'past 60%', priority: 75 },
   { id: 'branch', label: 'Git branch', notable: 'differs from the project default', priority: 60 },
   { id: 'worktree', label: 'Worktree', notable: 'the checkout is a linked worktree', priority: 62 },
-  { id: 'diff', label: 'Lines changed', notable: 'the working tree has changes', priority: 55 },
-  { id: 'dirty', label: 'Changed files', notable: 'at least one file is dirty', priority: 50 },
+  { id: 'diff', label: 'Lines changed (uncommitted)', notable: 'the working tree has changes', priority: 55 },
+  { id: 'dirty', label: 'Changed files (uncommitted)', notable: 'at least one file is dirty', priority: 50 },
+  { id: 'compareDiff', label: 'Lines changed (branch)', notable: 'the branch differs from its base', priority: 56 },
+  { id: 'compareFiles', label: 'Changed files (branch)', notable: 'the branch differs from its base', priority: 51 },
   { id: 'sync', label: 'Ahead / behind', notable: 'diverged from upstream', priority: 45 },
   { id: 'queue', label: 'Queue depth', notable: 'something is queued', priority: 65 },
   { id: 'model', label: 'Model', notable: 'differs from the project default', priority: 40 },
@@ -164,6 +197,8 @@ export function defaultSessionRowConfig(): SessionRowConfig {
       separator: 'dot',
     },
     dotShape: 'hexagon',
+    dotSizeDesktop: DEFAULT_DOT_SIZE_DESKTOP,
+    dotSizeMobile: DEFAULT_DOT_SIZE_MOBILE,
     context: 'arc',
     diffStyle: 'numbers',
     countStyle: 'numbers',
@@ -196,6 +231,7 @@ export function presetConfig(id: RowPresetId): SessionRowConfig {
           { id: 'state', mode: 'always' }, { id: 'detail', mode: 'always' },
           { id: 'worktree', mode: 'always' }, { id: 'branch', mode: 'always' },
           { id: 'diff', mode: 'always' }, { id: 'dirty', mode: 'always' },
+          { id: 'compareDiff', mode: 'always' }, { id: 'compareFiles', mode: 'notable' },
           { id: 'sync', mode: 'notable' }, { id: 'queue', mode: 'always' },
           { id: 'compactions', mode: 'notable' },
         ],
@@ -253,6 +289,18 @@ function pick<T extends string>(value: unknown, allowed: readonly T[], fallback:
 }
 
 /**
+ * A stored indicator size as a usable one: whole pixels, inside the bounds.
+ *
+ * Clamped rather than rejected, so a blob written by a future build with wider
+ * bounds still renders at the nearest size this build can draw instead of
+ * silently snapping back to the default and looking like a lost setting.
+ */
+export function normalizeDotSize(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.max(DOT_SIZE_MIN, Math.min(DOT_SIZE_MAX, Math.round(value)))
+}
+
+/**
  * Coerce any stored blob into a usable configuration.
  *
  * Invariants enforced here rather than in the renderer, so the row never has to
@@ -274,6 +322,8 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
     top,
     bottom,
     dotShape: pick(raw.dotShape, ['hexagon', 'circle', 'square'] as const, base.dotShape),
+    dotSizeDesktop: normalizeDotSize(raw.dotSizeDesktop, base.dotSizeDesktop),
+    dotSizeMobile: normalizeDotSize(raw.dotSizeMobile, base.dotSizeMobile),
     context: pick(raw.context, ['off', 'arc', 'gauge', 'percent'] as const, base.context),
     diffStyle: pick(raw.diffStyle, ['numbers', 'bar'] as const, base.diffStyle),
     countStyle: pick(raw.countStyle, ['numbers', 'pips'] as const, base.countStyle),

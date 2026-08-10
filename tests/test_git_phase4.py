@@ -30,10 +30,31 @@ def _fake_git_responses(porcelain: str) -> dict[tuple[str, ...], tuple[int, str]
     }
 
 
+def _unavailable_comparison(source: str = "none", reason: str = "stubbed") -> dict[str, Any]:
+    return {"ref": None, "display": None, "source": source, "available": False, "reason": reason}
+
+
+def _available_comparison(ref: str) -> dict[str, Any]:
+    return {"ref": ref, "display": ref, "source": "origin_head", "available": True, "reason": None}
+
+
 @pytest.fixture(autouse=True)
-def _clean_diffstat_cache() -> None:
-    """The diffstat memo is process-wide; a test must not inherit another's tree."""
+def _clean_diffstat_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The memos are process-wide; a test must not inherit another's tree.
+
+    Comparison inference is stubbed unavailable by default. It runs through
+    `git_review`'s own subprocess helper rather than this module's `_git`, so
+    without the stub a test that says nothing about a base would reach a real
+    `git` in a directory that does not exist — which is exactly the kind of
+    silent live call the exhaustive fake-git tables exist to make impossible.
+    """
     git_monitor.reset_diffstat_cache()
+
+    async def no_comparison(repository: str, override: str | None) -> dict[str, Any]:
+        del repository, override
+        return _unavailable_comparison()
+
+    monkeypatch.setattr(git_monitor, "resolve_comparison_ref", no_comparison)
 
 
 @pytest.mark.asyncio
@@ -161,6 +182,206 @@ def test_numstat_parsing_survives_binary_files() -> None:
     """Binary rows report `-` for both counts; a PNG must not void the sum."""
     output = "3\t1\tfile.txt\n-\t-\timage.png\n12\t0\tother.txt"
     assert git_monitor.parse_numstat(output) == (15, 1)
+
+
+def test_numstat_summary_counts_binary_files_as_changed_files() -> None:
+    """A binary file contributes no lines and is still a changed file."""
+    output = "3\t1\tfile.txt\n-\t-\timage.png\n12\t0\tother.txt"
+    assert git_monitor.parse_numstat_summary(output) == (15, 1, 3)
+
+
+# --- Branch-scoped comparison -------------------------------------------------
+
+_BASE_REF_SHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+_MERGE_BASE_SHA = "cccccccccccccccccccccccccccccccccccccccc"
+
+
+def _comparison_git_responses(porcelain: str) -> dict[tuple[str, ...], tuple[int, str]]:
+    responses = _fake_git_responses(porcelain)
+    responses[("rev-parse", "--verify", "origin/main^{commit}")] = (0, _BASE_REF_SHA)
+    responses[("merge-base", _BASE_REF_SHA, _FULL_SHA)] = (0, _MERGE_BASE_SHA)
+    responses[("diff", "--numstat", _MERGE_BASE_SHA)] = (
+        0,
+        "40\t8\ta.txt\n5\t0\tb.txt\n-\t-\tlogo.png",
+    )
+    return responses
+
+
+def _use_comparison(monkeypatch: pytest.MonkeyPatch, ref: str = "origin/main") -> list[str | None]:
+    """Stub inference to `ref`, recording every override it was asked about."""
+    asked: list[str | None] = []
+
+    async def resolve(repository: str, override: str | None) -> dict[str, Any]:
+        del repository
+        asked.append(override)
+        return _available_comparison(ref)
+
+    monkeypatch.setattr(git_monitor, "resolve_comparison_ref", resolve)
+    return asked
+
+
+@pytest.mark.asyncio
+async def test_comparison_is_measured_from_the_merge_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The branch-scoped diff covers committed work the HEAD diff has already lost.
+
+    Measured from the merge base rather than from the ref itself: diffing against
+    a base that has advanced reports its inbound commits as this branch's
+    deletions, which reads as work destroyed rather than work not yet merged.
+    """
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        return _comparison_git_responses(" M file.txt")[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    _use_comparison(monkeypatch)
+    state = await read_git_state("C:/repo")
+    assert state.root == "C:/repo"
+    assert state.compare_ref == "origin/main"
+    assert (state.compare_added, state.compare_removed, state.compare_files) == (45, 8, 3)
+    # The HEAD-scoped pair is a different fact and keeps its own, smaller answer.
+    assert (state.added, state.removed) == (3, 1)
+
+
+@pytest.mark.asyncio
+async def test_comparison_is_memoized_on_base_head_and_dirty_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It re-runs when the base moves, when HEAD moves, and when the tree moves.
+
+    All three, because the branch diff changes for a strictly larger set of
+    reasons than the working-tree diff: committing changes it while leaving the
+    dirty fingerprint untouched, and the base advances underneath it.
+    """
+    head = {"value": _FULL_SHA}
+    base_oid = {"value": _BASE_REF_SHA}
+    porcelain = {"value": " M file.txt"}
+    diffs: list[tuple[str, ...]] = []
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _comparison_git_responses(porcelain["value"])
+        responses[("rev-parse", "HEAD")] = (0, head["value"])
+        responses[("rev-parse", "--verify", "origin/main^{commit}")] = (0, base_oid["value"])
+        responses[("merge-base", base_oid["value"], head["value"])] = (0, _MERGE_BASE_SHA)
+        responses[("diff", "--numstat", "HEAD")] = (0, "3\t1\tfile.txt")
+        if args[:2] == ("diff", "--numstat") and args[2] == _MERGE_BASE_SHA:
+            diffs.append(args)
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    _use_comparison(monkeypatch)
+
+    await read_git_state("C:/repo")
+    assert len(diffs) == 1
+    await read_git_state("C:/repo")
+    assert len(diffs) == 1, "nothing moved, so no second measurement"
+
+    porcelain["value"] = " M file.txt\n M other.txt"
+    await read_git_state("C:/repo")
+    assert len(diffs) == 2, "the working tree moved"
+
+    head["value"] = "d" * 40
+    await read_git_state("C:/repo")
+    assert len(diffs) == 3, "a commit moved HEAD without touching the tree"
+
+    base_oid["value"] = "e" * 40
+    await read_git_state("C:/repo")
+    assert len(diffs) == 4, "the base advanced underneath the branch"
+
+
+@pytest.mark.asyncio
+async def test_comparison_ref_is_inferred_once_per_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inference is several git calls answering a question that changes rarely."""
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        return _comparison_git_responses(" M file.txt")[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    asked = _use_comparison(monkeypatch)
+
+    await read_git_state("C:/repo")
+    await read_git_state("C:/repo")
+    await read_git_state("C:/repo/subdir")
+    assert asked == [None], "one inference covers every poll and every subdirectory"
+
+    # A different Project override is a different question, not a cache hit.
+    await read_git_state("C:/repo", "release/2.0")
+    assert asked == [None, "release/2.0"]
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_comparison_ref_is_re_inferred_rather_than_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached ref that stopped resolving must not be trusted until its TTL ends."""
+    resolves = {"value": True}
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _comparison_git_responses(" M file.txt")
+        if not resolves["value"]:
+            responses[("rev-parse", "--verify", "origin/main^{commit}")] = (128, "fatal")
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    asked = _use_comparison(monkeypatch)
+
+    await read_git_state("C:/repo")
+    assert len(asked) == 1
+
+    # The cached name stops resolving. That poll still uses the cached name (it
+    # is what it had), measures nothing, and drops the cache on the way out.
+    resolves["value"] = False
+    state = await read_git_state("C:/repo")
+    assert state.compare_added is None, "an unresolvable base measures nothing"
+    assert len(asked) == 1
+
+    # So the next poll re-infers instead of waiting out the TTL on a dead ref.
+    await read_git_state("C:/repo")
+    assert len(asked) == 2
+
+
+@pytest.mark.asyncio
+async def test_unmeasurable_comparison_is_none_not_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A zero here would claim a branch identical to its base. It never guesses that."""
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        responses = _comparison_git_responses(" M file.txt")
+        responses[("merge-base", _BASE_REF_SHA, _FULL_SHA)] = (128, "fatal: no merge base")
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    _use_comparison(monkeypatch)
+    state = await read_git_state("C:/repo")
+    assert state.compare_ref == "origin/main"
+    assert state.compare_added is None
+    assert state.compare_removed is None
+    assert state.compare_files is None
+
+
+@pytest.mark.asyncio
+async def test_no_resolvable_base_leaves_the_branch_fields_unmeasured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repository with no main, no master, and no remote HEAD simply says nothing."""
+
+    async def fake_git(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del cwd, timeout_seconds
+        return _fake_git_responses(" M file.txt")[args]
+
+    monkeypatch.setattr(git_monitor, "_git", fake_git)
+    state = await read_git_state("C:/repo")
+    assert state.compare_ref is None
+    assert state.compare_added is None
+    # The working-tree pair is independent of the base and stays measured.
+    assert (state.added, state.removed) == (3, 1)
 
 
 @pytest.mark.parametrize(
@@ -314,7 +535,62 @@ async def test_sweeping_the_fleet_costs_one_read_per_working_directory(
     fleet = [_FakeSession("C:/repo", False, git_monitor.GitState()) for _ in range(30)]
     fleet.append(_FakeSession("C:/other", False, git_monitor.GitState()))
     await _monitor(fleet)._poll()
-    assert sorted(seen[0]) == ["C:/other", "C:/repo"]
+    assert sorted(seen[0]) == [("C:/other", None), ("C:/repo", None)]
+
+
+@pytest.mark.asyncio
+async def test_one_checkout_two_projects_do_not_share_a_comparison_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The poll key is the checkout *and* its base, not the checkout alone.
+
+    Two Projects may legitimately point at one directory with different
+    comparison refs. Collapsing them onto the cwd would serve whichever polled
+    first, and the other Project's rows would quote a base nobody configured.
+    """
+    seen: list[list[tuple[str, str | None]]] = []
+
+    async def fake_read(targets):  # type: ignore[no-untyped-def]
+        listed = list(targets)
+        seen.append(listed)
+        empty = git_monitor.GitReading(git_monitor.GitState(), git_monitor.GitEvidence())
+        return dict.fromkeys(listed, empty)
+
+    monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
+    one = _FakeSession("C:/repo", False, git_monitor.GitState())
+    one.record.project_id = "p1"
+    two = _FakeSession("C:/repo", False, git_monitor.GitState())
+    two.record.project_id = "p2"
+    manager = cast(Any, SimpleNamespace(sessions={"1": one, "2": two}))
+    monitor = git_monitor.GitMonitor(
+        manager, EventBus(), compare_override=lambda pid: "origin/main" if pid == "p1" else None
+    )
+    await monitor._poll()
+    assert set(seen[0]) == {("C:/repo", None), ("C:/repo", "origin/main")}
+
+
+@pytest.mark.asyncio
+async def test_a_failing_override_lookup_does_not_stop_the_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken Project lookup degrades to automatic inference, not to no Git state."""
+
+    async def fake_read(targets):  # type: ignore[no-untyped-def]
+        empty = git_monitor.GitReading(
+            git_monitor.GitState(branch="master"), git_monitor.GitEvidence()
+        )
+        return dict.fromkeys(list(targets), empty)
+
+    monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
+
+    def explode(project_id: str) -> str | None:
+        raise RuntimeError(project_id)
+
+    session = _FakeSession("C:/repo", True, git_monitor.GitState())
+    session.record.project_id = "p1"
+    manager = cast(Any, SimpleNamespace(sessions={"1": session}))
+    await git_monitor.GitMonitor(manager, EventBus(), compare_override=explode)._poll()
+    assert session.record.git.branch == "master"
 
 
 @pytest.mark.asyncio

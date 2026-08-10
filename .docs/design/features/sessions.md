@@ -28,6 +28,10 @@ and reattachable browser viewports.
   resolves. Temporary IDs never reach Project persistence or PTY routes; success atomically
   replaces the placeholder with the daemon session, while failure removes it and restores a
   surviving focus target.
+- Worktree launch uses the same optimistic lifecycle after `git worktree add` succeeds.
+  Its pending row names worktree setup, uses the new worktree as its displayed cwd, and receives initial focus while the daemon runs setup and spawn.
+  The worktree placeholder stays outside the durable pane tree: while selected it temporarily occupies the full workspace, and leaving it restores the existing split/tab layout without leaving setup visible in another pane.
+  Resolution replaces the pending identity and follows it only when the pending identity still owns active-session focus.
 - Spawn preparation runs independent Git identity probes concurrently and briefly caches the
   stable result for repeated launches. Synchronous ConPTY creation runs outside the daemon event
   loop, keeping existing terminals, events, and HTTP responsive during Windows process startup.

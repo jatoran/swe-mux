@@ -51,12 +51,24 @@ export interface Session {
    * reads as caught up rather than as a wall of false unread.
    */
   turn_seq?: number; read_turn_seq?: number; last_turn_end_ts?: number
-  /** `worktree` is the leaf name of a *linked* worktree checkout, absent for the
-   *  primary one. `added`/`removed` are lines changed against HEAD across tracked
-   *  files; absent means "not measured", which is not the same as zero. */
+  /**
+   * What Git says about the checkout this session works in — never about the
+   * session. Sessions sharing a working tree share one measurement, because
+   * `git status` answers for the whole repository however it is invoked; `root`
+   * is how a client tells that two rows are reporting the same checkout.
+   *
+   * `worktree` is the leaf name of a *linked* worktree checkout, absent for the
+   * primary one. `added`/`removed` are lines changed against HEAD across tracked
+   * files. `compare_*` are the branch-scoped equivalents, measured from the merge
+   * base with `compare_ref`, and so include committed work the HEAD diff has
+   * already lost. Absent means "not measured", which is not the same as zero.
+   */
   git: {
     branch?: string; dirty: number; ahead: number; behind: number
     worktree?: string | null; added?: number | null; removed?: number | null
+    root?: string | null; compare_ref?: string | null
+    compare_added?: number | null; compare_removed?: number | null
+    compare_files?: number | null
   }
   pinned_attention: boolean; broadcast: boolean
   startup_timing_ms?: Record<string, number>
@@ -85,6 +97,9 @@ export interface Session {
   relaunchable?: boolean
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
+  /** Client-only copy for a pending pane whose preparation is more specific than startup. */
+  pending_label?: string
+  pending_detail?: string
   /** Daemon process generation plus session-local ordering for multi-channel snapshots. */
   _snapshot_generation?: string
   _snapshot_revision?: number

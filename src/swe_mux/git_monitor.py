@@ -7,10 +7,12 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TypeVar
+from time import monotonic
+from typing import Any, TypeVar
 
 from .background_tasks import background
 from .event_bus import EventBus
+from .git_review import resolve_comparison_ref
 from .models import GitState
 from .session import Session, SessionManager
 from .subprocess_flags import background_creation_flags, reap_process_tree
@@ -141,10 +143,33 @@ def _worktree_name(cwd: str, root: str, git_dir: str, common_dir: str) -> str | 
 #: set actually moved — not once per session, and not once per five-second poll.
 _diffstat_memo: OrderedDict[str, tuple[str | None, int, int]] = OrderedDict()
 
+#: (root, ref) -> ((compare oid, head, dirty_hash), added, removed, files). The
+#: branch-scoped diff moves for a strictly larger set of reasons than the
+#: HEAD-scoped one: committing changes it while leaving `dirty_hash` alone, and
+#: the base itself advances under it. All three therefore key the memo.
+_compare_memo: OrderedDict[
+    tuple[str, str], tuple[tuple[str, str, str | None], int, int, int]
+] = OrderedDict()
+
+#: (root, override) -> (expires_at monotonic, resolved ref). Inference costs
+#: several git calls and answers a question that changes when a remote's HEAD is
+#: re-pointed or a branch is created — never between two polls seconds apart.
+_compare_ref_cache: OrderedDict[tuple[str, str | None], tuple[float, str | None]] = OrderedDict()
+
+#: Seconds a resolved comparison ref is trusted before being inferred again.
+COMPARE_REF_TTL_SECONDS = 60.0
+
 
 def reset_diffstat_cache() -> None:
-    """Drop every memoized diffstat. For tests and for daemon restart."""
+    """Drop every memoized diffstat and comparison ref. For tests and daemon restart."""
     _diffstat_memo.clear()
+    _compare_memo.clear()
+    _compare_ref_cache.clear()
+
+
+def _trim(cache: OrderedDict[Any, Any]) -> None:
+    while len(cache) > DIFFSTAT_CACHE_LIMIT:
+        cache.popitem(last=False)
 
 
 def _memoized_diffstat(root: str, dirty_hash: str | None) -> tuple[int, int] | None:
@@ -158,25 +183,31 @@ def _memoized_diffstat(root: str, dirty_hash: str | None) -> tuple[int, int] | N
 def _memoize_diffstat(root: str, dirty_hash: str | None, added: int, removed: int) -> None:
     _diffstat_memo[root] = (dirty_hash, added, removed)
     _diffstat_memo.move_to_end(root)
-    while len(_diffstat_memo) > DIFFSTAT_CACHE_LIMIT:
-        _diffstat_memo.popitem(last=False)
+    _trim(_diffstat_memo)
 
 
-def parse_numstat(output: str) -> tuple[int, int]:
-    """Sum added/removed lines from `git diff --numstat`.
+def parse_numstat_summary(output: str) -> tuple[int, int, int]:
+    """Added lines, removed lines, and changed files from `git diff --numstat`.
 
-    Binary files report `-` for both counts and contribute nothing rather than
-    aborting the sum — a repository with one PNG in it still has a line count.
+    Binary files report `-` for both counts. They contribute no lines rather than
+    aborting the sum — a repository with one PNG in it still has a line count —
+    but they are real changed files and do count toward the file total.
     """
-    added = removed = 0
+    added = removed = files = 0
     for line in output.splitlines():
         parts = line.split("\t")
         if len(parts) < 3:
             continue
+        files += 1
         if parts[0].isdigit():
             added += int(parts[0])
         if parts[1].isdigit():
             removed += int(parts[1])
+    return added, removed, files
+
+
+def parse_numstat(output: str) -> tuple[int, int]:
+    added, removed, _ = parse_numstat_summary(output)
     return added, removed
 
 
@@ -208,22 +239,115 @@ async def _read_diffstat(
     return added, removed
 
 
-async def read_git_reading(cwd: str) -> GitReading:
+async def _comparison_ref(cwd: str, root: str, override: str | None) -> str | None:
+    """The checkout's comparison base, inferred at most once per TTL per root.
+
+    Resolution is several git calls and its answer changes when a remote HEAD is
+    re-pointed or a branch appears — never between two polls five seconds apart —
+    so caching it is what makes a branch-scoped diff affordable on the monitor's
+    cadence. The inference itself is `git_review`'s, not a second copy: one
+    implementation is why the sidebar and the Git drawer cannot disagree about
+    which base a number is measured from.
+    """
+    key = (root, override)
+    now = monotonic()
+    cached = _compare_ref_cache.get(key)
+    if cached is not None and cached[0] > now:
+        _compare_ref_cache.move_to_end(key)
+        return cached[1]
+    resolved = await resolve_comparison_ref(cwd, override)
+    ref = resolved["ref"]
+    _compare_ref_cache[key] = (now + COMPARE_REF_TTL_SECONDS, ref)
+    _compare_ref_cache.move_to_end(key)
+    _trim(_compare_ref_cache)
+    if ref is None:
+        log.debug(
+            "git comparison ref unavailable",
+            extra={"root": root, "source": resolved["source"], "diagnostic": resolved["reason"]},
+        )
+    return ref
+
+
+def _forget_comparison_ref(root: str, override: str | None) -> None:
+    """Drop a cached ref that stopped resolving, so the next poll re-infers it."""
+    _compare_ref_cache.pop((root, override), None)
+
+
+async def _read_comparison(
+    cwd: str,
+    root: str,
+    ref: str | None,
+    ref_oid: str | None,
+    head: str | None,
+    dirty_hash: str | None,
+) -> tuple[int | None, int | None, int | None]:
+    """Working tree versus its merge base with `ref`, memoized on what moves it.
+
+    The merge base, not the ref itself: diffing a branch straight against a base
+    that has advanced reports the *inbound* commits as this branch's deletions,
+    which reads as work destroyed rather than work not yet merged.
+
+    Every failure answers `None` rather than 0. A zero here would claim a branch
+    identical to its base, which is the one thing a reader would act on.
+    """
+    if ref is None or ref_oid is None or head is None:
+        return None, None, None
+    key = (root, ref)
+    fingerprint = (ref_oid, head, dirty_hash)
+    cached = _compare_memo.get(key)
+    if cached is not None and cached[0] == fingerprint:
+        _compare_memo.move_to_end(key)
+        return cached[1], cached[2], cached[3]
+    base_code, base = await _git(cwd, "merge-base", ref_oid, head)
+    base = base.strip()
+    if base_code or not base:
+        log.debug(
+            "git merge base unavailable",
+            extra={"root": root, "ref": ref, "code": base_code, "diagnostic": base[:200]},
+        )
+        return None, None, None
+    code, output = await _git(cwd, "diff", "--numstat", base)
+    if code:
+        log.debug(
+            "git comparison diffstat unavailable",
+            extra={"root": root, "ref": ref, "code": code, "diagnostic": output[:200]},
+        )
+        return None, None, None
+    added, removed, files = parse_numstat_summary(output)
+    _compare_memo[key] = (fingerprint, added, removed, files)
+    _compare_memo.move_to_end(key)
+    _trim(_compare_memo)
+    return added, removed, files
+
+
+async def _unavailable() -> tuple[int, str]:
+    """Stand-in for a git call that is not worth making. Keeps the gather uniform."""
+    return 1, ""
+
+
+async def read_git_reading(cwd: str, compare_override: str | None = None) -> GitReading:
     code, root = await _git(cwd, "rev-parse", "--show-toplevel")
     if code or not root:
         return GitReading(GitState(), GitEvidence())
+    # Resolved before the gather so the ref's own oid can be read inside it: on
+    # the cached path that costs no subprocess and adds no latency to the poll.
+    compare_ref = await _comparison_ref(cwd, root, compare_override)
     (
         (_, branch),
         (_, porcelain),
         (upstream_code, counts),
         (head_code, head),
         (dir_code, dirs),
+        (compare_code, compare_oid),
     ) = await asyncio.gather(
         _git(cwd, "branch", "--show-current"),
         _git(cwd, "status", "--porcelain"),
         _git(cwd, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"),
         _git(cwd, "rev-parse", "HEAD"),
         _git(cwd, "rev-parse", "--absolute-git-dir", "--git-common-dir"),
+        _git(cwd, "rev-parse", "--verify", f"{compare_ref}^{{commit}}")
+        if compare_ref
+        else _unavailable(),
     )
     if not branch:
         _, branch = await _git(cwd, "rev-parse", "--short", "HEAD")
@@ -238,6 +362,14 @@ async def read_git_reading(cwd: str) -> GitReading:
     worktree = _worktree_name(cwd, root, *dir_lines[:2]) if len(dir_lines) >= 2 else None
     dirty_hash = _dirty_hash(porcelain)
     added, removed = await _read_diffstat(cwd, root, dirty_hash, commit is not None)
+    resolved_oid = compare_oid.strip() if compare_ref and not compare_code else ""
+    if compare_ref and not resolved_oid:
+        # The ref was cached from an earlier poll and has since been deleted or
+        # rewritten. Re-infer next tick rather than reporting nothing until TTL.
+        _forget_comparison_ref(root, compare_override)
+    compare_added, compare_removed, compare_files = await _read_comparison(
+        cwd, root, compare_ref, resolved_oid or None, commit, dirty_hash
+    )
     return GitReading(
         GitState(
             branch,
@@ -247,34 +379,46 @@ async def read_git_reading(cwd: str) -> GitReading:
             worktree=worktree,
             added=added,
             removed=removed,
+            root=root,
+            compare_ref=compare_ref,
+            compare_added=compare_added,
+            compare_removed=compare_removed,
+            compare_files=compare_files,
         ),
         GitEvidence(head=commit, dirty_hash=dirty_hash),
     )
 
 
-async def read_git_state(cwd: str) -> GitState:
-    return (await read_git_reading(cwd)).state
+async def read_git_state(cwd: str, compare_override: str | None = None) -> GitState:
+    return (await read_git_reading(cwd, compare_override)).state
 
 
-async def _read_unique[T](
-    cwds: Iterable[str], read_one: Callable[[str], Awaitable[T]]
-) -> dict[str, T]:
-    """Poll unique roots concurrently while keeping subprocess pressure bounded."""
+async def _read_unique[K, T](
+    keys: Iterable[K], read_one: Callable[[K], Awaitable[T]]
+) -> dict[K, T]:
+    """Poll unique targets concurrently while keeping subprocess pressure bounded."""
     semaphore = asyncio.Semaphore(GIT_CONCURRENCY)
 
-    async def read(cwd: str) -> tuple[str, T]:
+    async def read(key: K) -> tuple[K, T]:
         async with semaphore:
-            return cwd, await read_one(cwd)
+            return key, await read_one(key)
 
-    return dict(await asyncio.gather(*(read(cwd) for cwd in dict.fromkeys(cwds))))
+    return dict(await asyncio.gather(*(read(key) for key in dict.fromkeys(keys))))
 
 
 async def read_unique_git_states(cwds: Iterable[str]) -> dict[str, GitState]:
     return await _read_unique(cwds, lambda cwd: read_git_state(cwd))
 
 
-async def read_unique_git_readings(cwds: Iterable[str]) -> dict[str, GitReading]:
-    return await _read_unique(cwds, read_git_reading)
+#: A checkout as the monitor addresses it: where to run git, and which comparison
+#: base that cwd's Project has configured. Both belong to the key because two
+#: Projects can legitimately point at one checkout with different bases, and
+#: collapsing them onto the cwd alone would serve one Project the other's number.
+GitTarget = tuple[str, str | None]
+
+
+async def read_unique_git_readings(targets: Iterable[GitTarget]) -> dict[GitTarget, GitReading]:
+    return await _read_unique(targets, lambda target: read_git_reading(*target))
 
 
 class GitMonitor:
@@ -289,18 +433,33 @@ class GitMonitor:
     kept rendering after the bug that produced it was gone.
 
     The sweep is affordable because `read_unique_git_readings` deduplicates by
-    cwd: a fleet of thirty sessions in one checkout is one git read, not thirty.
-    Cost scales with distinct working directories, which is why polling more
-    sessions is close to free while polling more often would not be.
+    checkout target: a fleet of thirty sessions in one checkout is one git read,
+    not thirty. Cost scales with distinct working directories, which is why
+    polling more sessions is close to free while polling more often would not be.
+
+    That deduplication is also why every session sharing a checkout reports the
+    same numbers, and it is not an artefact worth removing: `git status` answers
+    for the whole repository however it is invoked, so there is no per-session
+    measurement to take. Clients disambiguate with `GitState.root`.
     """
 
     #: Sweeps including detached sessions, in cadence ticks. 12 * 5 s = one minute.
     DETACHED_SWEEP_EVERY = 12
 
-    def __init__(self, sessions: SessionManager, events: EventBus, cadence: float = 5.0) -> None:
+    def __init__(
+        self,
+        sessions: SessionManager,
+        events: EventBus,
+        cadence: float = 5.0,
+        compare_override: Callable[[str], str | None] | None = None,
+    ) -> None:
         self.sessions = sessions
         self.events = events
         self.cadence = cadence
+        #: project id -> configured comparison ref, or None for automatic
+        #: inference. Injected rather than imported so the monitor keeps knowing
+        #: nothing about the Project registry; absent, every checkout infers.
+        self.compare_override = compare_override
         self._task: asyncio.Task[None] | None = None
         self._sweep = 0
 
@@ -332,13 +491,24 @@ class GitMonitor:
             if session.subscribers or everything
         ]
 
+    def _override_for(self, session: Session) -> str | None:
+        if self.compare_override is None:
+            return None
+        try:
+            return self.compare_override(session.record.project_id)
+        except Exception:
+            log.exception("comparison ref override lookup failed")
+            return None
+
     async def _poll(self) -> None:
-        by_cwd: dict[str, list[Session]] = {}
+        by_target: dict[GitTarget, list[Session]] = {}
         for session in self._due():
-            by_cwd.setdefault(session.record.git_cwd, []).append(session)
-        readings = await read_unique_git_readings(by_cwd)
-        for cwd, sessions in by_cwd.items():
-            reading = readings[cwd]
+            target = (session.record.git_cwd, self._override_for(session))
+            by_target.setdefault(target, []).append(session)
+        readings = await read_unique_git_readings(by_target)
+        for target, sessions in by_target.items():
+            cwd = target[0]
+            reading = readings[target]
             state = reading.state
             for session in sessions:
                 if session.record.git != state:

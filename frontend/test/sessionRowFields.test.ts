@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Session } from '../src/types.ts'
 import {
-  ROW_FIELDS, defaultSessionRowConfig, normalizeSessionRowConfig, placeField, presetConfig,
-  removeField, setFieldMode, unplacedFields,
+  DEFAULT_DOT_SIZE_DESKTOP, DEFAULT_DOT_SIZE_MOBILE, DOT_SIZE_MAX, DOT_SIZE_MIN,
+  ROW_FIELDS, defaultSessionRowConfig, normalizeDotSize, normalizeSessionRowConfig, placeField,
+  presetConfig, removeField, setFieldMode, unplacedFields,
   type RowFieldId, type SessionRowConfig,
 } from '../src/sessionRowConfig.ts'
+import { sessionDotSize } from '../src/sessionRowPrefs.ts'
 import {
   buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
   identityRowTokens, sessionContextArc, secondsInState, shedForWidth,
@@ -133,6 +135,77 @@ test('an unmeasured diffstat renders nothing rather than a false clean tree', ()
   assert.deepEqual(bottomText(session(), config), [])
   const measured = session({ git: { branch: 'master', dirty: 0, ahead: 0, behind: 0, added: 0, removed: 0 } })
   assert.deepEqual(bottomText(measured, config), ['+0 -0'])
+})
+
+test('the branch-scoped diff is a separate fact from the uncommitted one', () => {
+  // The case the field exists for: everything is committed, so the working-tree
+  // diff is honestly zero while the branch has changed a great deal. A row with
+  // only `diff` on it reports a worktree session as having done nothing.
+  const config = withBottom(defaultSessionRowConfig(), ['diff', 'compareDiff', 'compareFiles'])
+  const committed = session({
+    git: {
+      branch: 'wt-audit', dirty: 0, ahead: 3, behind: 0, added: 0, removed: 0,
+      root: 'D:/repo-wt/wt-audit', compare_ref: 'origin/main',
+      compare_added: 486, compare_removed: 91, compare_files: 12,
+    },
+  })
+  assert.deepEqual(bottomText(committed, config), ['+0 -0', '+486 -91', '12'])
+  const tokens = buildSessionRowTokens(committed, config, context()).bottom.left.tokens
+  assert.equal(tokens[0].prefix, undefined, 'the working-tree diff carries no scope mark')
+  assert.equal(tokens[1].prefix, '⎇', 'the branch diff must be distinguishable from it')
+  assert.match(tokens[1].title ?? '', /origin\/main/, 'the tooltip names the actual base')
+})
+
+test('an unmeasured comparison renders nothing rather than an identical branch', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['compareDiff', 'compareFiles'])
+  // No base resolved: the fields are absent, not zero.
+  assert.deepEqual(bottomText(session(), config), [])
+  const measured = session({
+    git: {
+      branch: 'master', dirty: 0, ahead: 0, behind: 0,
+      compare_ref: 'origin/main', compare_added: 0, compare_removed: 0, compare_files: 0,
+    },
+  })
+  assert.deepEqual(bottomText(measured, config), ['+0 -0', '0'])
+})
+
+test('git quantities are marked shared when more than one live session reports them', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['diff', 'dirty', 'compareDiff', 'branch'])
+  const git = {
+    branch: 'master', dirty: 4, ahead: 0, behind: 0, added: 9, removed: 2,
+    root: 'D:/repo', compare_ref: 'origin/main',
+    compare_added: 9, compare_removed: 2, compare_files: 3,
+  }
+  const shared = deriveRowContext(
+    [session({ id: 'a', git }), session({ id: 'b', git }), session({ id: 'c', git })], {}, NOW,
+  )
+  const marked = buildSessionRowTokens(session({ id: 'a', git }), config, shared)
+  assert.deepEqual(
+    marked.bottom.left.tokens.map(token => [token.id, Boolean(token.shared)]),
+    [['diff', true], ['dirty', true], ['compareDiff', true], ['branch', false]],
+    'the quantities are marked; the branch name is not a quantity anyone misreads',
+  )
+  assert.match(marked.bottom.left.tokens[0].title ?? '', /3 live sessions/)
+
+  // One live session in the checkout is unambiguous, however many have exited.
+  const alone = deriveRowContext(
+    [session({ id: 'a', git }), session({ id: 'b', state: 'exited', git })], {}, NOW,
+  )
+  const plain = buildSessionRowTokens(session({ id: 'a', git }), config, alone)
+  assert.ok(plain.bottom.left.tokens.every(token => !token.shared))
+})
+
+test('sessions in different checkouts are never marked as sharing one', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['diff'])
+  const base = { branch: 'master', dirty: 1, ahead: 0, behind: 0, added: 5, removed: 1 }
+  const ctx = deriveRowContext(
+    [
+      session({ id: 'a', git: { ...base, root: 'D:/repo' } }),
+      session({ id: 'b', git: { ...base, root: 'D:/repo-wt/wt-audit' } }),
+    ], {}, NOW,
+  )
+  const tokens = buildSessionRowTokens(session({ id: 'a', git: { ...base, root: 'D:/repo' } }), config, ctx)
+  assert.equal(tokens.bottom.left.tokens[0].shared, false)
 })
 
 test('git glyphs are opt-in; branch names are bare by default', () => {
@@ -271,6 +344,35 @@ test('the shipped default is hexagon, arc, bare git, identity-only mobile', () =
   assert.equal(base.mobileFields, false)
   assert.equal(base.diffStyle, 'numbers')
   assert.ok(!base.bottom.left.some(slot => slot.id === 'state'), 'the state word is off by default')
+})
+
+test('the indicator is larger on mobile than on desktop by default', () => {
+  // A phone row is read at arm's length and never hovered, so the indicator is
+  // the one element that must not step down with the smaller type around it.
+  const base = defaultSessionRowConfig()
+  assert.equal(base.dotSizeDesktop, DEFAULT_DOT_SIZE_DESKTOP)
+  assert.equal(base.dotSizeMobile, DEFAULT_DOT_SIZE_MOBILE)
+  assert.ok(base.dotSizeMobile > base.dotSizeDesktop)
+})
+
+test('a stored indicator size is clamped rather than discarded', () => {
+  // Clamped, not rejected: a blob from a build with wider bounds should render at
+  // the nearest size this one can draw, not silently reset and look like a lost
+  // setting. Anything that is not a number at all does fall back.
+  assert.equal(normalizeDotSize(40, 15), DOT_SIZE_MAX)
+  assert.equal(normalizeDotSize(2, 15), DOT_SIZE_MIN)
+  assert.equal(normalizeDotSize(16.4, 15), 16)
+  assert.equal(normalizeDotSize('big', 15), 15)
+  assert.equal(normalizeDotSize(Number.NaN, 15), 15)
+  const config = normalizeSessionRowConfig({ dotSizeDesktop: 999, dotSizeMobile: 'x' })
+  assert.equal(config.dotSizeDesktop, DOT_SIZE_MAX)
+  assert.equal(config.dotSizeMobile, DEFAULT_DOT_SIZE_MOBILE)
+})
+
+test('the indicator size resolves per device class', () => {
+  const config = { ...defaultSessionRowConfig(), dotSizeDesktop: 14, dotSizeMobile: 20 }
+  assert.equal(sessionDotSize(config, 'desktop'), 14)
+  assert.equal(sessionDotSize(config, 'mobile'), 20)
 })
 
 test('placement moves a field rather than duplicating it', () => {

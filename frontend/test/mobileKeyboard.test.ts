@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   SOFT_KEYBOARD_MIN_INSET_PX,
+  clampPeekOffset,
   deepActiveElement,
-  nextPeekState,
+  nextPeekOffset,
   peekToggleVisible,
   raisesSoftKeyboard,
   softKeyboardInset,
@@ -144,17 +145,33 @@ test('a visual viewport larger than the layout never slides the workspace down',
 })
 
 test('peeking at the top of a grid survives output and ends on input', () => {
-  assert.equal(nextPeekState(false, 'toggle'), true)
-  assert.equal(nextPeekState(true, 'toggle'), false)
+  assert.equal(nextPeekOffset(0, 'toggle', 415), 415)
+  assert.equal(nextPeekOffset(415, 'toggle', 415), 0)
+  // A drag parks the window between the two ends, and the toggle from there is "put it back",
+  // not "go further up" — the reader can already see the top of what they were reading.
+  assert.equal(nextPeekOffset(200, 'toggle', 415), 0)
   // The one that matters, and the one easiest to get backwards: a streaming reply is exactly
   // when a reader is peeking, so writes must not drag them back to the composer.
-  assert.equal(nextPeekState(true, 'output'), true)
-  assert.equal(nextPeekState(false, 'output'), false)
+  assert.equal(nextPeekOffset(415, 'output', 415), 415)
+  assert.equal(nextPeekOffset(0, 'output', 415), 0)
+  // Unless the writes landed in the half the keyboard is covering, which on a fresh session
+  // is where a first reply paints — a pane that holds still there shows blank rows.
+  assert.equal(nextPeekOffset(0, 'hiddenOutput', 415), 415)
   // Typing means they have stopped reading, and the caret is at the composer.
-  assert.equal(nextPeekState(true, 'input'), false)
+  assert.equal(nextPeekOffset(415, 'input', 415), 0)
   // Without the keyboard the whole grid fits, so there is no slice left to move.
-  assert.equal(nextPeekState(true, 'keyboardClosed'), false)
-  assert.equal(nextPeekState(false, 'keyboardClosed'), false)
+  assert.equal(nextPeekOffset(415, 'keyboardClosed', 415), 0)
+  assert.equal(nextPeekOffset(0, 'keyboardClosed', 415), 0)
+})
+
+test('a dragged peek is held inside the travel the keyboard covers', () => {
+  assert.equal(clampPeekOffset(120, 415), 120)
+  // Both ends are positions a reader parks at, so they clamp rather than springing back.
+  assert.equal(clampPeekOffset(-40, 415), 0)
+  assert.equal(clampPeekOffset(900, 415), 415)
+  // No keyboard, no travel: the whole grid already fits.
+  assert.equal(clampPeekOffset(120, 0), 0)
+  assert.equal(clampPeekOffset(Number.NaN, 415), 0)
 })
 
 test('the peek toggle appears for a reader, not for every raised keyboard', () => {
