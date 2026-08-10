@@ -43,14 +43,37 @@ function safePayload(value: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(encoded) as Record<string, unknown>;
 }
 
+// Last identity read successfully, so an event fired against a stale ctx still
+// names the conversation it belongs to instead of arriving anonymous.
+let lastSessionId: string | undefined
+let lastTranscriptPath: string | undefined
+let lastCwd: string | undefined
+
 function sessionPayload(ctx: HookContextLike): Record<string, unknown> {
-  return {
-    session_id: ctx.sessionManager.getSessionId(),
+  // pi invalidates a ctx across session replacement (`/new`, `/fork`,
+  // `/resume`, `reload`) and *throws* on any later read of it. Compaction can
+  // replace the session too, so events fire against a dead ctx in ordinary use
+  // — measured against pi 0.74.2, where reading it unguarded took the whole
+  // extension down with "This extension ctx is stale after session replacement
+  // or reload". A lifecycle reporter must never be able to break the session it
+  // reports on, so every read is guarded and falls back to the last good value.
+  try {
+    lastSessionId = ctx.sessionManager.getSessionId() ?? lastSessionId
     // pi writes no terminal breadcrumb, so this is the only authoritative
     // pane-to-conversation link mux gets. It must be on every envelope: a
     // `/new` or `/resume` replaces the file underneath a live pane.
-    transcript_path: ctx.sessionManager.getSessionFile(),
-    cwd: ctx.cwd,
+    lastTranscriptPath = ctx.sessionManager.getSessionFile() ?? lastTranscriptPath
+    lastCwd = ctx.cwd ?? lastCwd
+  } catch {
+    // Stale ctx. The cached identity is the honest answer: it names the
+    // conversation this event belongs to, and the replacement announces itself
+    // through the `session_start` that follows.
+  }
+  return {
+    session_id: lastSessionId,
+    transcript_path: lastTranscriptPath,
+    cwd: lastCwd,
+    ...(lastSessionId === undefined ? { identity_unavailable: true } : {}),
   };
 }
 
