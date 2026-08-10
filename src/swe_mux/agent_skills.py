@@ -258,7 +258,14 @@ def _scan_skill_root(
     two names differ). Getting this backwards produces a button that types a
     command the agent does not have.
     """
-    prefix = "/" if vendor == "claude" else "/skill:" if vendor == "omp" else "$"
+    # pi prompt templates and opencode commands are both typed as `/<name>`.
+    # Codex keeps `$`; omp namespaces its skills under `/skill:`.
+    if vendor in {"claude", "pi", "opencode"}:
+        prefix = "/"
+    elif vendor == "omp":
+        prefix = "/skill:"
+    else:
+        prefix = "$"
     found: list[DiscoveredSkill] = []
     try:
         entries = sorted(directory.iterdir(), key=lambda item: item.name.lower())
@@ -552,6 +559,81 @@ def _omp_inventory(cwd: Path, omp_home: Path, now: float) -> SkillInventory:
     return inventory
 
 
+def _pi_inventory(cwd: Path, pi_home: Path, now: float) -> SkillInventory:
+    """pi's slash-invocable surface: prompt templates.
+
+    Paths from pi 0.84.1's own bundled docs, not the web.
+
+    pi's *skills* are deliberately excluded even though their roots are known
+    (`~/.pi/agent/skills/`, `~/.agents/skills/`, `.pi/skills/`, and
+    `.agents/skills/` walked to the git root). This inventory feeds a surface
+    that *types a command*, and a pi skill has no command to type: it implements
+    the Agent Skills standard, where the model decides to invoke a skill rather
+    than the user naming it. Listing them would produce exactly the broken button
+    `_scan_skill_root` already warns about. Prompt templates are the surface a pi
+    user actually types, so they are what appears here.
+
+    Claude and Codex roots are absent for a second reason: unlike oh-my-pi,
+    upstream pi does not import them automatically. A user opts in through the
+    `skills` array in pi's own settings, which mux does not read or infer.
+    """
+    inventory = SkillInventory(backend="pi", cwd=str(cwd), generated_at=now)
+    plan: list[tuple[Path, str, str]] = [
+        (pi_home / "prompts", "user", "pi prompt templates"),
+        (cwd / ".pi" / "prompts", "project", "pi project prompt templates"),
+    ]
+    return _collect_skill_roots(inventory, plan, "pi")
+
+
+def _opencode_inventory(cwd: Path, now: float) -> SkillInventory:
+    """opencode's slash-invocable surface: commands.
+
+    A command is a flat `.md` whose file name is the command, invoked as
+    `/<name>`.
+
+    Skills and agents are excluded for the same reason as pi's skills. opencode
+    does search six skill roots (its own, Claude's, and the shared `.agents`,
+    project and global), but a skill there is model-invoked, and an agent is
+    selected with `--agent` at launch rather than typed mid-session. Neither is a
+    command, and this inventory's consumer types what it lists.
+    """
+    inventory = SkillInventory(backend="opencode", cwd=str(cwd), generated_at=now)
+    user_config = Path.home() / ".config" / "opencode"
+    plan: list[tuple[Path, str, str]] = [
+        (cwd / ".opencode" / "commands", "project", "opencode project commands"),
+        (user_config / "commands", "user", "opencode user commands"),
+    ]
+    return _collect_skill_roots(inventory, plan, "opencode")
+
+
+def _collect_skill_roots(
+    inventory: SkillInventory, plan: list[tuple[Path, str, str]], vendor: str
+) -> SkillInventory:
+    """Scan each planned root once, recording it whether or not it exists.
+
+    Absent roots are still reported: "mux looked here and found nothing" is a
+    different statement from "mux never looked", and the Agent Environment
+    surface is the place that distinction has to survive.
+    """
+    seen: set[str] = set()
+    for directory, scope, origin in plan:
+        identity = str(directory.resolve(strict=False)).casefold()
+        if identity in seen:
+            continue
+        seen.add(identity)
+        exists = directory.is_dir()
+        found = (
+            _scan_skill_root(directory, scope, origin, vendor, inventory.errors)
+            if exists
+            else []
+        )
+        inventory.roots.append(
+            SkillRoot(str(directory), scope, "skill", origin, exists, len(found))
+        )
+        inventory.skills.extend(found)
+    return inventory
+
+
 def _resolve(inventory: SkillInventory) -> SkillInventory:
     """Order by scope, then mark name collisions and apply the ceiling."""
     inventory.skills.sort(key=lambda skill: (_SCOPE_RANK.get(skill.scope, 9), skill.name.lower()))
@@ -617,15 +699,10 @@ def discover_skills(
         inventory = _codex_inventory(root, home, moment)
     elif backend == "omp":
         inventory = _omp_inventory(root, home, moment)
-    elif backend == "pi" or backend == "opencode":
-        # Both have their own extensibility surfaces (pi: skills, prompt
-        # templates and themes via `--skill`/`--prompt-template`/`--theme` and
-        # its package manager; opencode: `.opencode/` agents and commands), but
-        # neither's discovery roots have been measured against an installed
-        # build the way Claude's, Codex's, and omp's were. An empty inventory
-        # reports "mux found none", which is true, rather than scanning
-        # directories guessed from documentation and mislabelling what it finds.
-        inventory = SkillInventory(backend=backend, cwd=str(root), generated_at=moment)
+    elif backend == "pi":
+        inventory = _pi_inventory(root, home, moment)
+    elif backend == "opencode":
+        inventory = _opencode_inventory(root, moment)
     elif backend == "shell":
         raise AssertionError("shell backend rejected before skill dispatch")
     else:
