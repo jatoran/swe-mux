@@ -1,9 +1,7 @@
 import {
   activateContainingStack,
-  activateStackChild,
   openTab,
   paneStacks,
-  replaceTerminal,
   splitTerminal,
   stackForView,
   stackTerminal,
@@ -13,11 +11,9 @@ import {
 } from './layout.ts'
 
 export type PendingSpawnPlacement = {
-  projectId: string
   split: false | SplitDirection | 'stack'
   targetId: string | null
   position: 'before' | 'after'
-  resolvedId?: string
 }
 
 export function placePendingTerminal(
@@ -45,15 +41,12 @@ export function placePendingTerminal(
   )
 }
 
-export function replacePendingTerminal(
-  layout: PaneLayout,
-  pendingId: string,
-  nextId: string,
-): PaneLayout {
-  const pane = stackForView(layout, pendingId)
-  const activeBefore = pane?.active_child_id
-  const replaced = replaceTerminal(layout, pendingId, nextId)
-  return pane && activeBefore && activeBefore !== pendingId
-    ? activateStackChild(replaced, pane.id, activeBefore)
-    : replaced
+/** Select a pending session without inventing pane membership for it.
+ *
+ * Ordinary spawns already own an optimistic leaf and should activate it. Worktree setup stays
+ * unpanned, so the App can render it as a temporary full-workspace surface without mutating the
+ * Project's durable split tree.
+ */
+export function selectPendingTerminal(layout: PaneLayout, id: string): PaneLayout {
+  return stackForView(layout, id) ? activateContainingStack(layout, id) : layout
 }

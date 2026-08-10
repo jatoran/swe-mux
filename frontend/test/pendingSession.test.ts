@@ -7,10 +7,9 @@ import {
   stackForView,
   terminalLeaf,
 } from '../src/layout.ts'
-import { placePendingTerminal, replacePendingTerminal } from '../src/pendingSession.ts'
+import { placePendingTerminal, selectPendingTerminal } from '../src/pendingSession.ts'
 
 const placement = {
-  projectId: 'project-1',
   split: false as const,
   targetId: 'first',
   position: 'after' as const,
@@ -31,12 +30,16 @@ test('fleet reconciliation restores a pending tab without stealing newer focus',
   assert.equal(stackForView(placed, 'pending-1')?.active_child_id, 'second')
 })
 
-test('resolution follows the pending tab only while the user is still on it', () => {
-  const focused = placePendingTerminal(twoTabs(), 'pending-1', placement)
-  const resolved = replacePendingTerminal(focused, 'pending-1', 'session-1')
-  assert.equal(stackForView(resolved, 'session-1')?.active_child_id, 'session-1')
+test('selecting an unpanned pending session leaves every split and tab unchanged', () => {
+  const layout = twoTabs()
+  assert.equal(selectPendingTerminal(layout, 'pending-1'), layout)
+})
 
-  const movedAway = activateContainingStack(focused, 'second')
-  const backgroundResolution = replacePendingTerminal(movedAway, 'pending-1', 'session-1')
-  assert.equal(stackForView(backgroundResolution, 'session-1')?.active_child_id, 'second')
+test('selecting an ordinary pending terminal activates its existing pane tab', () => {
+  const withPending = placePendingTerminal(twoTabs(), 'pending-1', placement)
+  const movedAway = activateContainingStack(withPending, 'second')
+  assert.equal(
+    stackForView(selectPendingTerminal(movedAway, 'pending-1'), 'pending-1')?.active_child_id,
+    'pending-1',
+  )
 })

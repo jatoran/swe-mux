@@ -170,8 +170,9 @@ Incorrect:
 void updateLayout(projectId, moveLeafToStack(activeLayout, kind, id, targetStackId))
 ```
 
-Never persist pending client terminal IDs. Insert them into optimistic state for launch feedback,
-then replace/remove them when the spawn request resolves.
+Never persist pending client terminal IDs.
+Ordinary terminal launches insert them into optimistic pane state, then replace/remove them when spawn resolves.
+Worktree setup keeps its pending identity unpanned, so active-session focus can show it as a temporary full-workspace surface without mutating the durable pane tree.
 
 ## Optimistic session removal
 
