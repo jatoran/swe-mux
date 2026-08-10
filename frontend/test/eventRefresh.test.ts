@@ -8,6 +8,7 @@ test('high-volume observation events do not refetch the whole fleet', () => {
   assert.equal(eventRequiresFleetRefresh('PreToolUse'), false)
   assert.equal(eventRequiresFleetRefresh('PostToolUse'), false)
   assert.equal(eventRequiresFleetRefresh('project_files_changed'), false)
+  assert.equal(eventRequiresFleetRefresh('project_used'), false)
 })
 
 test('state-changing and unknown events retain the refresh safety net', () => {

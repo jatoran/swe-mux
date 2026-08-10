@@ -3,7 +3,7 @@
 ## Ownership
 
 - `ProjectRecord`: stable ID, name, canonical root, optional Group, position, layout,
-  layout revision, nullable Project-local `git_compare_ref`, and default backend/profile. A deprecated resource-presentation field may
+  layout revision, registration time, shared explicit-use time, nullable Project-local `git_compare_ref`, and default backend/profile. A deprecated resource-presentation field may
   still be loaded from older records but has no browser behavior.
 - `ProjectGroupRecord`: stable ID, name, and position. It has no behavioral ownership.
 - `SessionRecord.project_id`: immutable canonical Project ownership. `cwd`/`spawn_cwd` default
@@ -43,7 +43,9 @@
   `position`; `projects.created_at` dates the registration, and `0` means unknown — databases
   written before the column are backfilled from the earliest session ever spawned in the
   Project, and one that never ran a session keeps `0` rather than being dated at upgrade time.
-  There is no stored "last active": it is derived per request from `history`.
+  `projects.last_used_at` is the shared explicit prompt-submit/session-start recency stamp used by Recently used sorting; `0` means unmeasured.
+  Existing databases seed it from the latest non-imported session start because older exact prompt-submit evidence does not exist.
+  General `last_activity` remains derived per request from `history` and is not a recency-sort input.
   `projects.git_compare_ref` is a nullable exact ref override for Git review display, migrated additively for existing databases and preserved by unrelated Project patches.
   It is intentionally outside `.swe-mux/config.toml`, so changing the display comparison does not dirty the repository.
 - `history`: durable agent-run lifecycle, canonical `project_id`, legacy terminal `note_id`

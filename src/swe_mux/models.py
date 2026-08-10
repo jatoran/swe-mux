@@ -341,6 +341,9 @@ class ProjectRecord:
     #: column keep it when nothing in history dates the Project, and the sidebar's
     #: date ordering sorts those last rather than inventing a day for them.
     created_at: float = 0.0
+    #: Latest explicit user use, epoch seconds. Shared by every client for the
+    #: sidebar's Recently used ordering; 0 means no recorded use.
+    last_used_at: float = 0.0
 
     def snapshot(self) -> dict[str, Any]:
         return asdict(self)

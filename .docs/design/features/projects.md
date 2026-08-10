@@ -49,7 +49,7 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   It was per section originally, on the argument that a hand-arranged shortlist and a long alphabetical pile are both legitimate; that put a `⇅` on every Group header for a preference set the same everywhere, so the modes collapsed into one and the control moved off the headers.
   A device upgrading from the per-section format keeps whichever mode it had actually set (see `loadSidebarOrder`), rather than being silently reset to Manual.
   Group sorting is necessarily one setting.
-  Both are device-local.
+  Both sort-mode selections are device-local presentation preferences.
 - The same header carries `⊟`/`⊞`, which folds or unfolds **every Project row and every Group**
   at once, so tidying a long sidebar is one click rather than one per row. It offers Expand only
   once nothing on screen is folded open; expanding clears the stored fold lists outright rather
@@ -84,13 +84,15 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   disappear behind the fold, which is the one thing collapsing must not hide.
 - A drag only ever permutes the rows on screen; hidden Projects and empty Groups keep the slots
   they already held rather than being reshuffled by a reorder the user could not see.
-- "Recently used" is a device-local most-recently-used list updated only after an explicit prompt submission or a successful user-initiated session start.
+- "Recently used" reads the daemon-persisted `ProjectRecord.last_used_at` timestamp, so mobile and desktop rank the same explicit Project use.
+  The sort-mode selection remains device-local; selecting Recently used on one browser does not change another browser's selected mode.
+  A successful explicit prompt submission or user-initiated session start advances the timestamp through `POST /api/projects/{project_id}/used`.
+  The daemon emits `project_used` with the resulting timestamp so every connected client updates without a fleet refetch.
   Opening or focusing a Project, session, note, file, preview, Queue, or other resource never changes it.
   Agent output, state transitions, session completion, session removal, history timestamps, and background automation never change it.
   A Project without a recorded action is unmeasured and retains manual-order tie-breaking.
-  The list survives a reload, a daemon restart, and a desktop redeploy, and is bounded at the 100 most recent entries.
-  It is never filtered against the registered Projects: an entry for a deleted Project is inert, because the rank lookup a sort consults simply never hits it and the relative order of the live Projects is unaffected.
-  That bound is the only thing that trims it, which is deliberate - the filter it replaced could not tell an empty registry from one that had not been fetched yet, so every page load emptied the list and persisted the result.
+  The timestamp survives browser storage loss, a daemon restart, and a desktop redeploy.
+  Existing databases seed the new field from the latest non-imported session start because no older exact prompt-submit record exists.
 - Device-local Group fold state is pruned against the registered Groups, so a Group id that is deleted and later reused cannot inherit a fold the user never applied.
   The prune is suppressed until the Group registry has actually loaded, for the same reason.
 - Creating a Project validates the root and initializes `.swe-mux/config.toml` plus
@@ -166,8 +168,7 @@ reordering takes the same contract, including the `expected_order` guard that an
 order_conflict` when a second device already moved something — two devices each writing a full
 permutation would otherwise let the loser silently win.
 
-Project payloads carry `created_at` (registration, epoch seconds; `0` when unknown) and derived
-`last_activity` (latest session activity from history; `0` when the Project has never run one).
+Project payloads carry `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), and derived `last_activity` (latest session activity from history), all as epoch seconds with `0` when unknown.
 `last_activity` is derived on read rather than stored, because history already dates every
 session and a second write path could only drift from it.
 

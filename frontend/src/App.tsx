@@ -145,10 +145,10 @@ import {
   PROJECT_SORT_OPTIONS, SECTION_SORT_OPTIONS, SIDEBAR_ORDER_KEY,
   isBucketCollapsed, loadSidebarOrder, mergeVisibleOrder,
   projectRecency, projectSortLabel, pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder,
-  setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects, touchProjectRecency,
+  setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects,
   toggleBucketCollapsed,
 } from './projectSort'
-import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail } from './projectRecency'
+import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseReason } from './projectRecency'
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
 import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
@@ -535,12 +535,16 @@ export function App() {
     setSidebarOrderState(next)
     localStorage.setItem(SIDEBAR_ORDER_KEY,serializeSidebarOrder(next))
   }
-  const markProjectRecent=(targetProject:string)=>{
-    setSidebarOrderState(current=>{
-      const next=touchProjectRecency(current,targetProject)
-      if(next!==current)localStorage.setItem(SIDEBAR_ORDER_KEY,serializeSidebarOrder(next))
-      return next
-    })
+  const applyProjectUse=(targetProject:string,lastUsedAt:number)=>{
+    if(!targetProject||!Number.isFinite(lastUsedAt)||lastUsedAt<=0)return
+    setProjects(items=>items.map(item=>item.id===targetProject
+      ?{...item,last_used_at:Math.max(item.last_used_at||0,lastUsedAt)}
+      :item))
+  }
+  const markProjectRecent=(targetProject:string,reason:ProjectUseReason='session_started')=>{
+    void api<{project_id:string;last_used_at:number}>('POST',`/api/projects/${encodeURIComponent(targetProject)}/used`,{reason})
+      .then(result=>applyProjectUse(result.project_id,result.last_used_at))
+      .catch(()=>{})
   }
   const [sortMenu,setSortMenu]=useState<{x:number;y:number}|null>(null)
   const [dragStackTab,setDragStackTabState]=useState<StackTabDrag|null>(null)
@@ -1054,7 +1058,7 @@ export function App() {
     const onProjectRecency=(event:Event)=>{
       const detail=(event as CustomEvent<ProjectRecencyEventDetail>).detail
       const session=sessionsRef.current.find(item=>item.id===detail?.sessionId)
-      if(session)markProjectRecent(session.project_id)
+      if(session)markProjectRecent(session.project_id,detail.reason)
     }
     window.addEventListener(PROJECT_RECENCY_EVENT,onProjectRecency)
     return()=>window.removeEventListener(PROJECT_RECENCY_EVENT,onProjectRecency)
@@ -1679,6 +1683,7 @@ export function App() {
             void loadConfig(false)
           }
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
+          if(event.type==='project_used')applyProjectUse(String(event.payload?.project_id||''),Number(event.payload?.last_used_at||0))
           if(event.type==='agent_context_changed')window.dispatchEvent(new CustomEvent('mux:agent-context-changed',{detail:{projectId:event.payload?.project_id}}))
           // Queue tabs and pane chips live-update off these; payloads carry ids/counts only.
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
@@ -1741,7 +1746,7 @@ export function App() {
   const orderedProjects = [...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
   const visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)
   const orderedGroups=[...projectGroups].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
-  const recentProjectRanks=projectRecency(sidebarOrder.recentProjects)
+  const recentProjectRanks=projectRecency(projects)
   const ungroupedProjects=sortProjects(
     visibleProjects.filter(project=>!project.group_id||!projectGroups.some(item=>item.id===project.group_id)),
     sidebarOrder.projectSort,

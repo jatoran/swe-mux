@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS projects (
   default_profile_id TEXT, resource_open_mode TEXT,
   git_compare_ref TEXT,
   sidebar_visible INTEGER NOT NULL DEFAULT 1,
-  created_at REAL NOT NULL DEFAULT 0
+  created_at REAL NOT NULL DEFAULT 0,
+  last_used_at REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS history (
   id TEXT PRIMARY KEY, native_id TEXT NOT NULL, backend TEXT NOT NULL,
@@ -360,6 +361,18 @@ class HistoryIndex:
                 "UPDATE projects SET created_at=COALESCE("
                 "(SELECT MIN(h.spawned_at) FROM history h WHERE h.project_id=projects.id),0)"
             )
+        if "last_used_at" not in project_columns:
+            self._db.execute(
+                "ALTER TABLE projects ADD COLUMN last_used_at REAL NOT NULL DEFAULT 0"
+            )
+            # Older databases have no exact prompt-submit record. A non-imported
+            # session start is the closest durable evidence of explicit prior use
+            # and avoids resetting every upgraded sidebar to manual tie order.
+            self._db.execute(
+                "UPDATE projects SET last_used_at=COALESCE("
+                "(SELECT MAX(h.spawned_at) FROM history h WHERE h.project_id=projects.id "
+                "AND h.external=0),0)"
+            )
         if "git_compare_ref" not in project_columns:
             self._db.execute("ALTER TABLE projects ADD COLUMN git_compare_ref TEXT")
         self._db.execute(
@@ -401,6 +414,7 @@ class HistoryIndex:
                     resource_open_mode=row["resource_open_mode"],
                     sidebar_visible=bool(row["sidebar_visible"]),
                     created_at=float(row["created_at"] or 0.0),
+                    last_used_at=float(row["last_used_at"] or 0.0),
                 )
                 for row in rows
             ]
@@ -433,7 +447,7 @@ class HistoryIndex:
             self._db.execute(
                 "INSERT INTO projects(id,name,root,position,group_id,layout_json,default_backend,"
                 "layout_revision,default_profile_id,resource_open_mode,sidebar_visible,"
-                "created_at,git_compare_ref) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "created_at,last_used_at,git_compare_ref) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,"
                 "position=excluded.position,group_id=excluded.group_id,"
                 "layout_json=excluded.layout_json,default_backend=excluded.default_backend,"
@@ -441,6 +455,7 @@ class HistoryIndex:
                 "default_profile_id=excluded.default_profile_id,"
                 "resource_open_mode=excluded.resource_open_mode,"
                 "sidebar_visible=excluded.sidebar_visible,created_at=excluded.created_at,"
+                "last_used_at=excluded.last_used_at,"
                 "git_compare_ref=excluded.git_compare_ref",
                 (
                     project.id,
@@ -455,9 +470,24 @@ class HistoryIndex:
                     project.resource_open_mode,
                     int(project.sidebar_visible),
                     project.created_at,
+                    project.last_used_at,
                     project.git_compare_ref,
                 ),
             )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def set_project_last_used(self, project_id: str, used_at: float) -> None:
+        """Advance one Project's explicit-use timestamp without touching other fields."""
+
+        def op() -> None:
+            cursor = self._db.execute(
+                "UPDATE projects SET last_used_at=MAX(last_used_at,?) WHERE id=?",
+                (used_at, project_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(project_id)
             self._db.commit()
 
         await self._run(op)

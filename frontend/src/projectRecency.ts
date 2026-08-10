@@ -1,8 +1,10 @@
 export const PROJECT_RECENCY_EVENT = 'mux:project-recency'
 
+export type ProjectUseReason = 'prompt_submitted' | 'session_started'
+
 export interface ProjectRecencyEventDetail {
   sessionId: string
-  reason: 'prompt_submitted'
+  reason: ProjectUseReason
 }
 
 /** Report a successful explicit prompt submission to the composition root. */

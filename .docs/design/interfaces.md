@@ -107,6 +107,7 @@ GET    /projects
 POST   /projects                    {name, root, group_id?, create_missing?}
 PATCH  /projects/{project_id}       mutable Project fields/layout revision
 PUT    /projects/order              {project_ids, expected_order}
+POST   /projects/{project_id}/used  {reason: prompt_submitted | session_started}
 DELETE /projects/{project_id}
 
 GET    /project-groups
@@ -116,8 +117,10 @@ PATCH  /project-groups/{group_id}   {name?, position?}
 DELETE /project-groups/{group_id}
 ```
 
-Project payloads add `created_at` (registration, epoch seconds) and derived `last_activity`
-(latest session activity from history); both are `0` when unknown. Both order endpoints demand a
+Project payloads add `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), and derived `last_activity`
+(latest session activity from history), all as epoch seconds with `0` when unknown.
+`POST /projects/{project_id}/used` advances `last_used_at` monotonically and emits `project_used {project_id, last_used_at, reason}` so connected clients converge without sharing browser storage.
+Both order endpoints demand a
 complete permutation plus the `expected_order` the client last saw, answering `409` with
 `{"code": "order_conflict"}` when another device already moved something.
 

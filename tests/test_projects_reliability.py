@@ -4,12 +4,16 @@ import time
 from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
+from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_layout
 from swe_mux.models import SessionRecord
 from swe_mux.project_files import read_note
 from swe_mux.projects import ProjectManager
+from swe_mux.server import error_middleware, record_project_use
 
 
 async def test_project_creation_initializes_resources_and_persists_layout(
@@ -233,6 +237,106 @@ async def test_projects_are_dated_at_registration_and_backfilled_from_history(
     await reopened.start()
     assert reopened.projects[project.id].created_at == project.created_at
     reopened_history.close()
+
+
+async def test_project_use_is_monotone_shared_and_survives_unrelated_updates(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+    assert project.last_used_at == 0.0
+
+    touched = await projects.touch_used(project.id, used_at=2_000.0)
+    assert touched.last_used_at == 2_000.0
+    assert (await projects.touch_used(project.id, used_at=1_000.0)).last_used_at == 2_000.0
+    assert (await projects.update(project.id, name="Renamed")).last_used_at == 2_000.0
+    history.close()
+
+    reopened_history = HistoryIndex(tmp_path / "mux.db")
+    reopened = ProjectManager(reopened_history)
+    await reopened.start()
+    assert reopened.projects[project.id].last_used_at == 2_000.0
+    reopened_history.close()
+
+
+async def test_last_used_migration_seeds_from_latest_non_imported_session_start(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mux.db"
+    history = HistoryIndex(path)
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "used"
+    root.mkdir()
+    used = await projects.create("Used", str(root))
+    quiet_root = tmp_path / "quiet"
+    quiet_root.mkdir()
+    quiet = await projects.create("Quiet", str(quiet_root))
+    await history.session_started(
+        SessionRecord(
+            "s1",
+            "agent",
+            used.id,
+            "claude",
+            "native-1",
+            str(root),
+            "claude.exe",
+            [],
+            created_at=1_700_000_000.0,
+        ),
+        None,
+    )
+    history._db.execute("ALTER TABLE projects DROP COLUMN last_used_at")
+    history._db.commit()
+    history.close()
+
+    migrated = HistoryIndex(path)
+    records = {item.id: item for item in await migrated.list_projects()}
+    assert records[used.id].last_used_at == 1_700_000_000.0
+    assert records[quiet.id].last_used_at == 0.0
+    migrated.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_project_use_api_persists_and_broadcasts_shared_recency(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+    events = EventBus(sink=history.append_event)
+    subscriber = events.subscribe(name="recency-test")
+    app = web.Application(middlewares=[error_middleware])
+    app["projects"] = projects
+    app["events"] = events
+    app.router.add_post("/projects/{project_id}/used", record_project_use)
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            f"/projects/{project.id}/used", json={"reason": "prompt_submitted"}
+        )
+        payload = await response.json()
+        invalid = await client.post(f"/projects/{project.id}/used", json={"reason": "focus"})
+
+    event = subscriber.get_nowait()
+    assert response.status == 200
+    assert payload["project_id"] == project.id
+    assert payload["last_used_at"] == project.last_used_at
+    assert project.last_used_at > 0
+    assert event.type == "project_used"
+    assert event.payload == {
+        "project_id": project.id,
+        "last_used_at": project.last_used_at,
+        "reason": "prompt_submitted",
+    }
+    assert invalid.status == 400
+    events.unsubscribe(subscriber)
+    history.close()
 
 
 async def test_created_at_migration_dates_older_projects_from_their_first_session(
