@@ -198,7 +198,7 @@ responsive controls.
 
 - Scope follows the menu that opened a surface, never a hidden mode. The app menu's unlabeled
   lead block opens History, Notes, Process fleet, prompt library, clipboard history,
-  usage, and notifications across every Project; right-clicking a Project row opens the same
+  usage, bandwidth metrics, and notifications across every Project; right-clicking a Project row opens the same
   surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
   the no-Project case and matches the app menu.
 - The app menu holds **nothing that acts on a single Project**. Per-Project actions — the
