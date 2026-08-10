@@ -151,8 +151,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                   -> Phase 5.5  Project card + scan timeline                [card done; timeline open: CP 4-5]
                     -> Phase 5.6  mux MCP v0.5: situational-awareness reads [open: CP step 2.6]
                       -> Phase 5.8  SSH boundary handling in terminals      [open; dependency-free]
-                        -> Phase 6  Agent Context, instructions, skills      [first wave done; rest open]
-                           (inspect + manual overwrite first; governed sync = return-path channel 2) [CP §7]
+                        -> Phase 6  Agent Context + instruction coverage     [coverage open; rest deferred/culled]
+                           (return-path channel 2: standing context, not pull) [CP §7]
                           -> Phase 6.5  Model narration + attention ranking [open: CP steps 6-7]
                             -> Phase 7  Windows maturity, CLI, doctor, soak [open]
                               -> Phase 7.5  mux MCP v1 + cross-session memory        [open: CP step 8]
@@ -1441,26 +1441,28 @@ paths.
 - [ ] No SSH credential is stored by mux in configuration, history, telemetry, diagnostics, or
   a diagnostic bundle.
 
-## Phase 6 — Agent Context, portable instructions, and skills
+## Phase 6 - Agent Context and instruction coverage
 
-Phase 6 starts with a deliberately small continuity feature: show the user the Project-root
-instructions and provider-owned learned memory that Claude and Codex can carry into work, then
-offer an explicit one-time whole-file copy between root `CLAUDE.md` and `AGENTS.md`. The
-viewer is read-only and the copy runs only when the user asks; there is no watcher-driven,
-startup, background, or automatic synchronization.
+Instructions are the *push* half of an agent's context: a harness reads its root instruction
+file at startup and it conditions every turn, with no invocation.
+That is the axis the prompt library does not cover, because a template is *pull* and affects
+the one turn a human invokes it for.
+The control-plane framing is the same distinction: instructions are **channel 2 of the return
+path** (`CONTROL_PLANE_ROADMAP.md` §7), the slow-moving standing context, while live facts stay
+behind the pull tools of Phases 4.5/5.6/7.5.
 
-This first wave depends only on existing Project resources, provider adapters, and the utility
-drawer; it does not need the Phase 5.5 model-cost substrate and may ship independently of that
-unfinished control-plane work. Canonical generated insight and semantic memory retrieval keep
-their Phase 5.5/7.5 dependencies.
+The first wave shipped 2026-08-02: a read-only Agent Context drawer over Project-root
+instructions and harness learned memory, plus an explicit, previewed, conflict-safe one-shot
+whole-file copy between root `CLAUDE.md` and `AGENTS.md`.
+That already solves the case people actually have, which is keeping root instruction files
+consistent.
 
-Canonical instruction rendering remains **channel 2 of the control-plane return path**
-(`CONTROL_PLANE_ROADMAP.md` §7) — the durable, slow-moving half that a coding agent sees as
-standing context without querying. It is the right home for stable distilled insight (a mined
-convention, a recurring failure mode) and the wrong home for live facts, which belong behind
-the pull tools of Phases 4.5/7.5. The first-wave whole-file copy is a direct user operation over
-two named root files; any later control-plane-generated output uses sentinel-delimited sections
-and never replaces a whole user-owned file.
+**Scope reduced 2026-08-10 to harness coverage alone.**
+What remains of the original phase was reshaped after two findings.
+The generated-content machinery (canonical body, sentinel sections, nested manifest) is
+deferred because it has no consumer yet, and skill portability is culled because the harnesses
+now solve it by convention.
+Both decisions are recorded so they are not re-proposed as scheduled work.
 
 ### First wave: Agent Context and manual instruction overwrite
 
@@ -1507,14 +1509,6 @@ and never replaces a whole user-owned file.
 - [x] Accommodate the ninth drawer icon on narrow touch layouts without a silent two-row wrap.
   Keep 44 px touch height and provide an explicit horizontal-scroll/edge-fade affordance with
   selected-tab auto-scroll, or prove an equivalent single-row layout across the mobile matrix.
-- [ ] **Gap opened by the harness registry.** `agent_context.py` still enumerates `claude` and
-  `codex` by name (`instruction:claude` → `CLAUDE.md`, `instruction:codex` → `AGENTS.md`, and
-  two hardcoded memory roots), so a focused `omp` session shows another harness's inventory or
-  none at all.
-  Agent *Environment* was generalized through the registry and `omp` is covered there, which is
-  what makes the omission in Agent Context a defect rather than a scope choice.
-  Resolve it as a descriptor question: which harnesses declare a root instruction file, and
-  which declare a memory inventory, with `unsupported` remaining an explicit typed result.
 
 ### First-wave exit criteria
 
@@ -1527,47 +1521,70 @@ and never replaces a whole user-owned file.
 - [x] Project switching, focused-session switching, worktrees, nested Projects, disabled memory,
   stale inventories, remote viewing, and the narrowest supported mobile drawer are covered.
 
-### Canonical instruction rendering
+### The open item: harness coverage
 
-- [ ] Add an optional canonical shared instruction body, preferably
-  `.swe-mux/instructions.md`, without replacing user ownership of `CLAUDE.md` or `AGENTS.md`.
-- [ ] Render only sentinel-delimited generated sections into provider files. Never overwrite
-  whole files or content outside owned sentinels.
-- [ ] Add deterministic preview/diff, atomic write, source hash, generated hash, conflict
-  detection, restore/backup, dry run, and manual sync. Do not add autosync: Phase 6 writes stay
-  explicit user actions, whether they copy a whole root file or render an owned section.
-- [ ] Add an explicit manifest mapping canonical sources to nested target paths/scopes.
-  Do not recursively discover and rewrite nested instruction files by default.
-- [ ] Model nested precedence and symlink/path escape safety; a mapping cannot write outside
-  the Project root or into an unapproved file.
-- [ ] Add watcher-loop suppression and multi-client conflict tests so external edits become a
-  visible conflict rather than a write loop or silent overwrite.
+This is a defect in shipped behavior rather than new scope, and it is the whole of Phase 6's
+remaining work.
 
-### Prompt and skill portability
+- [ ] Make Agent Context descriptor-driven instead of a two-harness special case.
+  `agent_context.py` enumerates `claude` and `codex` by name (`instruction:claude` →
+  `CLAUDE.md`, `instruction:codex` → `AGENTS.md`, plus two hardcoded memory roots), so a focused
+  `omp` session shows a neighbouring harness's inventory or nothing.
+  Agent *Environment* was generalized through the registry and covers `omp`, which is what makes
+  this an omission rather than a scope choice.
+  Resolve it on the descriptor: which harnesses declare a root instruction file, which declare a
+  memory inventory, and `unsupported` stays an explicit typed result.
+- [ ] Extend the shipped whole-file copy along the same axis, so the operation is "copy between
+  two declared instruction files" rather than "copy between `CLAUDE.md` and `AGENTS.md`".
+  Preview, hash-checked commit, conflict refusal, backup, and line-ending preservation are
+  unchanged; only target selection generalizes.
 
-- [ ] Reuse Phase 3 prompt templates as the universal portable primitive. Keep template
-  bodies separate from provider-specific invocation syntax.
-- [ ] Define a canonical skill content model that separates portable Markdown body/assets
-  from Claude/Codex-specific frontmatter, directory layout, capability declarations, and
-  installation scope.
-- [ ] Add provider adapters that validate and render metadata rather than copying entire
-  skill directories blindly.
-- [ ] Start and remain with preview/export/import and explicit sync. Require conflict detection
-  and provenance; do not add autosync.
-- [ ] Never sync secrets, executable trust decisions, provider caches, generated histories,
-  or unsupported metadata by content similarity.
+### Deferred: canonical instruction rendering
+
+Deferred, not cancelled, and gated on a consumer rather than on a queue position.
+
+The only thing a canonical `.swe-mux/instructions.md` plus sentinel-delimited rendering can do
+that the shipped whole-file copy cannot is write **generated** content into a file the user
+owns without clobbering the rest of it.
+No such generator exists: mined conventions and recurring failure modes are Phase 6.5 and 7.5
+output, and until one of those is committed to writing standing context, the sentinel format,
+the nested-target manifest, the nested-precedence and symlink-escape model, and the
+watcher-loop conflict tests are cost with nothing to carry.
+
+Precondition for scheduling it: a named consumer that produces durable distilled insight and
+needs it in standing context rather than behind a pull tool.
+Design constraints that survive whenever that happens, so they are not re-derived: the
+canonical body never replaces user ownership of a root file, only sentinel-delimited sections
+are written, nested targets come from an explicit manifest rather than recursive discovery, a
+mapping can never write outside the Project root, and every write stays an explicit user action
+with preview, diff, source and generated hashes, backup, and conflict refusal.
+Autosync remains out of scope in every version of this.
+
+### Culled: prompt and skill portability
+
+Culled 2026-08-10.
+The harnesses converge on shared skill directories by convention faster than mux could
+normalize them: OMP's capability providers already load skills from native `.omp`, imported
+`.claude` and `.codex`, shared `.agent` and `.agents`, and project `.github`
+(`design/features/backends.md`).
+A mux-owned canonical skill model with per-harness adapters would be a converter sitting in a
+path the ecosystem is retiring, and it would have to claim equivalences the roadmap elsewhere
+forbids claiming.
+
+The prompt library keeps its own job as the pull surface and needs nothing from this phase.
+One rule is retained as a standing boundary rather than a task: mux never syncs secrets,
+executable trust decisions, harness caches, generated histories, or metadata matched by content
+similarity.
 
 ### Phase 6 exit criteria
 
-- [x] Agent Context makes Project-root instructions and supported Claude/Codex learned memory
-  inspectable without making any body editable, and reports exact provider/scope/capability.
+- [x] Agent Context makes Project-root instructions and harness learned memory inspectable
+  without making any body editable, and reports exact harness/scope/capability.
 - [x] Manual `CLAUDE.md ↔ AGENTS.md` overwrite remains bidirectional, previewed, conflict-safe,
   recoverable, and user-triggered only.
-- [ ] Shared instructions render reproducibly without changing unrelated provider content,
-  including explicitly mapped nested files.
-- [ ] External edits create a visible conflict instead of an overwrite loop.
-- [ ] Skill portability preserves provider-specific validation and never claims unsupported
-  equivalence.
+- [ ] Every registered harness that declares an instruction file or a memory inventory is
+  covered by both surfaces, and one that declares neither reports `unsupported` rather than
+  showing a neighbour's sources.
 
 ## Phase 6.5 — Control-plane model narration and attention ranking
 
@@ -1664,7 +1681,7 @@ distinction, and `doctor` is an alias for `GET /api/remote/status`.
 - [ ] Expand Python coverage for configuration/migrations, adapters/state races, lifecycle,
   Host/Origin/WS boundaries, Projects/layouts, history/resume, events/rules/annotations,
   OpenRouter fixtures, Project resources/accounts, Git/worktrees, CLI, process ownership,
-  previews/reaping, telemetry, queues/mailboxes, and instruction rendering.
+  previews/reaping, telemetry, queues/mailboxes, and the instruction copy operation.
 - [ ] Add real-browser/Playwright coverage for Project creation/folder selection,
   default/custom session creation, resources/autosave, replacement/kill, Projects/panes,
   account switching, palette/input transparency, Settings, history, processes/previews,
@@ -2025,7 +2042,8 @@ Read it before scoping any item here rather than re-deriving it.
   non-repository cwd, symlinks, UNC, and WSL translation.
 - [ ] Guard platform imports so config, CLI, package import, and non-PTY tests work on all
   targets. Adapt data directories, executable/transcript discovery, hook `run`, reveal,
-  config migration, Web Speech documentation, and instruction rendering per platform.
+  config migration, voice-capability documentation, and instruction-file resolution per
+  platform.
 
 ### Native rollout
 
@@ -2117,9 +2135,11 @@ failure behavior:
   reach the daemon's HTTP surface directly, so remote-agent visibility may not need an SSH
   bridge at all.
 - Definitive identity attribution for shared-account quota usage.
-- Automatic/background bidirectional instruction sync or blind cross-provider skill-directory
-  sync. Phase 6's explicit, previewed, one-time root-file overwrite in either direction is the
-  approved boundary; widening it to continuous reconciliation requires a new product decision.
+- Automatic/background bidirectional instruction sync, or any mux-owned cross-harness skill
+  normalization. Phase 6's explicit, previewed, one-time instruction-file overwrite is the
+  approved boundary; widening it to continuous reconciliation requires a new product decision,
+  and the skill half was culled outright because harnesses now cross-import skill directories
+  by convention.
 - Native harness theme management, ANSI rewriting, provider-native Remote Control,
   concurrent provider homes, automatic quota failover, and public Funnel/LAN exposure.
 - A plugin system: third-party panes, contributed actions, link handlers, and packaging
