@@ -8,6 +8,7 @@ fail and be unable to tell that the worktree exists.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -145,3 +146,43 @@ def test_missing_parents_outside_the_configured_worktree_root_are_refused(
     with pytest.raises(ValueError, match="parent directory does not exist"):
         server._ensure_worktree_parent(config, target)
     assert not target.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_existing_worktree_session_endpoint_runs_setup_before_spawn(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    calls: list[str] = []
+    setup = WorktreeSetupResult("succeeded", "convention", ".worktree-setup", 0, 20)
+
+    async def prepare(app: Any, spawn_body: Any, path: str) -> WorktreeSetupResult:
+        del app
+        assert spawn_body == {"project_id": "p1", "backend": "claude"}
+        assert path == str(Path(worktree).resolve())
+        calls.append("setup")
+        return setup
+
+    async def spawn(
+        app: Any, spawn_body: Any, path: str, prepared: WorktreeSetupResult
+    ) -> dict[str, Any]:
+        del app, spawn_body, path
+        assert prepared is setup
+        calls.append("spawn")
+        return {"status": "spawned", "session_id": "sess-1"}
+
+    class Request:
+        app: Any = APP
+
+        async def json(self) -> dict[str, Any]:
+            return {
+                "path": worktree,
+                "spawn": {"project_id": "p1", "backend": "claude"},
+            }
+
+    monkeypatch.setattr(server, "_prepare_worktree_setup", prepare)
+    monkeypatch.setattr(server, "_spawn_into_worktree", spawn)
+
+    response = await server.spawn_worktree_session(Request())  # type: ignore[arg-type]
+
+    assert calls == ["setup", "spawn"]
+    assert json.loads(response.text)["session_id"] == "sess-1"

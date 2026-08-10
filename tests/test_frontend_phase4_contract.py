@@ -527,12 +527,17 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     run_menu = source("ProjectRunMenu.tsx")
     assert "New worktree session" in run_menu
     assert "'/api/git/worktrees'" in run_menu
-    assert "spawn:{project_id:project.id,backend:worktree.backend}" in run_menu
-    assert "onSessions([session])" in run_menu
+    assert "onWorktreeCreated(result.path,worktree.backend)" in run_menu
+    assert "'/api/git/worktrees/session'" in app
+    assert "pendingTerminal(pendingId,target,backend,{" in app
+    assert "label:'Setting up worktree…'" in app
+    assert "replacePendingTerminal(withPending,pendingId,next.id)" in app
+    assert "setActiveId(current=>current===pendingId?next.id:current)" in app
+    assert "normalizeWorktreeBranchInput(value)" in run_menu
     assert "api<{worktree_root?:string}>('GET','/api/config')" in run_menu
-    assert "timeoutMs:35*60*1000" in run_menu
+    assert "timeoutMs:35*60*1000" in app
     assert "worktree-my-change" in run_menu
-    assert "setup output is in the session scrollback" in run_menu
+    assert "setup output is in the session scrollback" in app
     settings = source("Settings.tsx")
     assert "<h3>Git and worktrees</h3>" in settings
     assert "change('worktree_root'" in settings

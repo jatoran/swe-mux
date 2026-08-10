@@ -137,7 +137,12 @@ and provider-managed worktrees may live outside that root.
   `spawn.project_id` is required, and the rest of the body is an ordinary spawn request.
 - The Project Run menu exposes this as `New worktree session…` with backend, new branch, optional start point, and absolute path fields.
   The suggested branch convention is `worktree-<name>`.
-  It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments and attaches the returned session to the active Project pane.
+  Branch-field whitespace is normalized to `-` before both branch creation and path derivation.
+  It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments.
+  The launcher waits only for worktree creation, closes once the durable tree exists, then calls `POST /api/git/worktrees/session` for setup and spawn in the background.
+  A client-only pending session appears and receives focus immediately, with the selected backend, worktree path, and explicit setup status.
+  The daemon session replaces that pending row and pane in place.
+  If the user moves elsewhere before completion, replacement preserves the newer focus.
   `worktree_root` is a global Settings value under Git and worktrees; its empty/default form resolves to `<data_dir>/worktrees`, normally `~/.mux/worktrees`.
   The daemon creates a missing parent hierarchy only when the target remains below that configured root.
   A manually entered target outside the configured root retains the existing rule that its parent must already exist.
@@ -145,7 +150,7 @@ and provider-managed worktrees may live outside that root.
 - **The worktree is the durable artefact, so spawn failures are reported, not raised.**
   The response always carries `spawn.status`: `not_requested`, `spawned` with `session_id` and the `session` snapshot, or `error` with `error`.
   A failed spawn never unwinds the worktree or fails the request.
-  The Run launcher retains the created path and retries the spawn alone, permitting a backend correction without repeating `git worktree add`.
+  `POST /api/git/worktrees/session` can retry setup and spawn against the durable path without repeating `git worktree add`.
 - Containment is widened by exactly one allow-list, `resolve_listed_cwd`, keyed on
   `git worktree list --porcelain` output. Git is the authority on which paths are worktrees
   of a given repository, so this admits parallel checkouts of the same codebase without
@@ -159,7 +164,7 @@ and provider-managed worktrees may live outside that root.
 - Project config (`.swe-mux/`) is still read from the **Project root**, not the worktree.
   The session's cwd is the worktree, which is what the agent and its `CLAUDE.md` discovery
   care about, while every worktree shares the committed Project configuration.
-- Worktree creation with `spawn` runs bootstrap before the session process starts.
+- Worktree creation with `spawn`, and the split `POST /api/git/worktrees/session` flow, run bootstrap before the session process starts.
   `[worktree].setup_command` in the primary checkout's `.swe-mux/config.toml` is the explicit override.
   When no override exists, an executable `.worktree-setup` in the new checkout is the convention.
   Windows treats a shebang script as executable when its interpreter can be resolved, including Git Bash for this repository's Bash convention.

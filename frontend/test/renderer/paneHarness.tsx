@@ -1,6 +1,7 @@
 import { render } from 'preact'
 import { ConversationSurface, type Conversation } from '../../src/ConversationControl'
 import { VoicePlayer } from '../../src/VoicePlayer'
+import { MobileTerminalDraft } from '../../src/TerminalDraftComposer'
 import type { Session, VoiceStatus } from '../../src/types'
 import '../../src/style.css'
 
@@ -14,6 +15,7 @@ import '../../src/style.css'
 const parameters = new URLSearchParams(location.search)
 const overlay = parameters.get('overlay') !== '0'
 const mobile = parameters.get('mobile') === '1'
+const draft = parameters.get('draft') === '1'
 
 const session = { id: 'pane-harness', name: 'harness', backend: 'claude', state: 'running', cwd: 'D:\\PROJECTS\\swe-mux' } as Session
 const status = {
@@ -54,6 +56,7 @@ const pane = <section class="terminal-pane focused">
   </div></div>}
   <div class="terminal-surface">
     <div class="terminal-host" />
+    {draft&&<MobileTerminalDraft sessionName="harness" text="A persistent message that has not reached the terminal." busy={false} error="" onInput={()=>{}} onSend={()=>{}} onClear={()=>{}} onClose={()=>{}}/>}
     <div class="terminal-action-rail"><div class="terminal-action-rows" /></div>
   </div>
 </section>

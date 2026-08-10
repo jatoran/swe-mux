@@ -52,6 +52,7 @@ const ACTION_LABELS: Record<string, string> = {
   branch: 'Branch',
   relaunch: 'Relaunch',
   toggleKeyboard: 'Keyboard',
+  toggleDraft: 'Draft',
   clipboardHistory: 'Clipboard',
   endSession: 'End session',
 }
@@ -124,7 +125,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
     else if (item.type === 'action') {
       // `clipboardHistory` is the drawer itself; running it from inside the drawer
       // would be a no-op, so it is filtered out of this grid entirely.
-      dispatch(session.id, item.action === 'toggleKeyboard' ? 'toggleKeyboard' : item.action || '', {})
+      dispatch(session.id, item.action || '', {})
       // End session only *arms* a confirm on the first click; closing the drawer here
       // would leave nowhere to make the second one before the window lapses.
       if (item.action === 'endSession' && !killArmed) return

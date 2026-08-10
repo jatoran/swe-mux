@@ -810,6 +810,7 @@ def create_app(
             web.get("/api/git/commits/{oid}/changes", git_commit_changes),
             web.get("/api/git/diff", git_diff),
             web.post("/api/git/worktrees", create_worktree),
+            web.post("/api/git/worktrees/session", spawn_worktree_session),
             web.delete("/api/git/worktrees", remove_worktree),
             web.post("/api/reveal", reveal_path),
             web.get("/pty/{sid}", pty_ws),
@@ -8271,6 +8272,40 @@ async def create_worktree(request: web.Request) -> web.Response:
         (time.perf_counter() - started_at) * 1000,
     )
     return json_response(result, 201)
+
+
+async def spawn_worktree_session(request: web.Request) -> web.Response:
+    """Bootstrap an existing Project worktree, then start its session.
+
+    This endpoint is separate from worktree creation so interactive clients can close
+    their creation UI as soon as the durable Git artifact exists. Validation remains
+    in the setup and ordinary spawn paths, both of which require an exact Git-listed
+    worktree owned by the selected Project.
+    """
+    started_at = time.perf_counter()
+    body = await request.json()
+    path = str(Path(body["path"]).resolve())
+    spawn_body = body.get("spawn")
+    log.info(
+        "worktree_session_start_requested path=%s project_id=%s backend=%s",
+        path,
+        spawn_body.get("project_id") if isinstance(spawn_body, dict) else None,
+        spawn_body.get("backend") if isinstance(spawn_body, dict) else None,
+    )
+    setup = await _prepare_worktree_setup(request.app, spawn_body, path)
+    result = await _spawn_into_worktree(request.app, spawn_body, path, setup)
+    log.info(
+        "worktree_session_start_completed path=%s project_id=%s backend=%s "
+        "spawn_status=%s session_id=%s setup_status=%s duration_ms=%.1f",
+        path,
+        spawn_body.get("project_id") if isinstance(spawn_body, dict) else None,
+        spawn_body.get("backend") if isinstance(spawn_body, dict) else None,
+        result["status"],
+        result.get("session_id"),
+        setup.status,
+        (time.perf_counter() - started_at) * 1000,
+    )
+    return json_response(result)
 
 
 async def remove_worktree(request: web.Request) -> web.Response:
