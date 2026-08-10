@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { WARM_TERMINAL_PANES, recordPaneVisits, warmPaneIds } from '../src/warmPanes.ts'
+import { WARM_TERMINAL_PANES, recordPaneVisits, warmPaneBudget, warmPaneIds } from '../src/warmPanes.ts'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 
@@ -61,6 +61,11 @@ test('a pane the layout no longer has cannot hold a slot', () => {
 test('a zero budget keeps nothing warm', () => {
   const history = recordPaneVisits([], ['a', 'b'])
   assert.deepEqual(warmPaneIds(history, ['c'], ['a', 'b', 'c'], 0), [])
+})
+
+test('mobile spends no bandwidth on hidden terminals', () => {
+  assert.equal(warmPaneBudget('mobile'), 0)
+  assert.equal(warmPaneBudget('desktop'), WARM_TERMINAL_PANES)
 })
 
 test('recency is capped so a long session cannot grow it without bound', () => {

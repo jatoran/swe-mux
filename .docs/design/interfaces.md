@@ -1145,11 +1145,16 @@ and `terminal_reserved`; application-reserved UI scale chords are rejected as co
 
 `GET /events[?after_seq=N][&session=<id>]` is the live event stream. `after_seq` is a resume
 cursor: the client tracks the highest `seq` it has applied and sends it on reconnect, and the
-server replays exactly the events above it (oldest first, each marked `replay: true`). With
-no cursor the server replays the **newest** retained page, not the oldest — an established
-install otherwise re-sent days-old history and delivered none of the gap. When more was
-missed than the page carries, a leading `{"type": "events_gap", "reason":
-"catchup_truncated"}` frame tells the client to full-refresh rather than assume it caught up.
+server replays up to 64 events above it, oldest first, with each replayed event marked
+`replay: true`.
+With no cursor the server sends `{"type":"events_ready","sequence":N}` and no history;
+the client's initial REST snapshot supplies state while the watermark closes the subscribe race.
+When more than 64 events were missed, `{"type":"events_gap","reason":"catchup_truncated",
+"sequence":N}` advances to the current watermark and tells the client to perform one full refresh.
+If catch-up contains only trailing browser-irrelevant audit events, an `events_cursor` control
+frame advances the sequence without transferring their payloads.
+`PreToolUse`, `PostToolUse`, `tool_use`, and `tool_result` remain durable but are omitted from
+browser delivery because user-visible state changes use separate event types.
 A malformed `after_seq` is rejected with 400.
 
 The stream is otherwise server-to-client, with one exception: clients may send

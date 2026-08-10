@@ -7,7 +7,7 @@ import {
 } from './harnessRegistry'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
-import { recordPaneVisits, warmPaneIds } from './warmPanes'
+import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
@@ -1038,8 +1038,8 @@ export function App() {
   const layoutRevisions = useRef<Record<string,number>>({})
   const layoutWriteChains = useRef<Record<string,Promise<boolean>>>({})
   const layoutWriteGeneration = useRef<Record<string,number>>({})
-  // Highest event sequence this tab has seen; sent as ?after_seq on reconnect so
-  // the daemon replays what was actually missed instead of the oldest retained page.
+  // Highest durable event sequence this tab has covered. Control frames can advance
+  // it without transferring audit-only payloads that browser state does not consume.
   const lastEventSeq = useRef(0)
   const requestedView = useRef(parseViewPreference(location.search))
   const focusMemory = useRef(parseFocusMemory(localStorage.getItem('mux.focus.v1')))
@@ -1573,10 +1573,10 @@ export function App() {
       let next: WebSocket
       // Constructing a socket can throw outright (no route, blocked scheme). That must feed
       // the retry path rather than escape into the caller's timer.
-      // Reconnects resume from the last event actually seen. Without the cursor the daemon
-      // cannot know what this client missed, so catch-up delivers history it already has
-      // and none of the gap.
-      const resume = lastEventSeq.current > 0 ? `?after_seq=${lastEventSeq.current}` : ''
+      // Reconnects resume from the last durable sequence covered. A new tab has no
+      // cursor and receives a watermark after its ordinary REST bootstrap.
+      const hadCursor = lastEventSeq.current > 0
+      const resume = hadCursor ? `?after_seq=${lastEventSeq.current}` : ''
       try { next = openWebSocket(`/events${resume}`) } catch { socket = null; scheduleRetry(); return }
       socket = next
       handshakeTimer = window.setTimeout(() => {
@@ -1595,16 +1595,29 @@ export function App() {
         // own. Until it has one this device looks absent, which is the safe direction
         // (a redundant push, never a missing one) but only briefly.
         presence.report()
-        window.dispatchEvent(new CustomEvent('mux:events-connected'))
+        window.dispatchEvent(new CustomEvent('mux:events-connected',{detail:{resumed:hadCursor}}))
+        if (hadCursor) {
+          // Catch-up events are bounded and may omit state-independent audit hooks.
+          // Refresh each global cache once instead of once per replayed event.
+          refreshSettings()
+          void loadConfig(false)
+          void loadNotifications(true)
+        }
       }
       next.onerror = () => { if (socket === next) next.close() }
       next.onmessage = message => {
         if (socket !== next) return
         try {
           const event = JSON.parse(String(message.data))
-          // The daemon says the gap was wider than the replay window: nothing in the
-          // stream can reconstruct it, so fall back to a full REST refresh.
-          if (event.type === 'events_gap') { queueRefresh(); return }
+          if (event.type === 'events_ready' || event.type === 'events_cursor' || event.type === 'events_gap') {
+            const sequence = Number(event.sequence)
+            if (Number.isSafeInteger(sequence) && sequence >= 0 && sequence > lastEventSeq.current) lastEventSeq.current = sequence
+            // A cold watermark closes the subscribe/snapshot race. A wide reconnect
+            // gap likewise needs one authoritative snapshot. Cursor-only frames mean
+            // the skipped records were audit hooks and require no state refresh.
+            if (event.type !== 'events_cursor') queueRefresh()
+            return
+          }
           if (eventRequiresFleetRefresh(event.type)) queueRefresh()
           if (typeof event.seq === 'number' && event.seq > lastEventSeq.current) lastEventSeq.current = event.seq
           // Catch-up events (marked replay by the daemon) are a historical resync sent on
@@ -1639,10 +1652,10 @@ export function App() {
               enqueueRequestedStreamClip(clipId,String(event.payload.stream_id),Number(event.payload.segment_index||0),Number(event.payload.segment_count||1))
             }
           }
-          if (event.type === 'settings_changed') refreshSettings()
+          if (!isReplay && event.type === 'settings_changed') refreshSettings()
           // Another device (or another tab) changed the ring; an open picker refetches.
           if (event.type === 'clipboard_changed') window.dispatchEvent(new CustomEvent(CLIPBOARD_CHANGED_EVENT))
-          if (event.type === 'configuration_changed') {
+          if (!isReplay && event.type === 'configuration_changed') {
             void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>{})
             // A change made from another device (or by editing the config file)
             // has to reach this tab's copy of *every* config-derived setting, not
@@ -1656,7 +1669,7 @@ export function App() {
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
-          if(event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
+          if(!isReplay&&event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
         } catch {
           // A malformed event cannot be classified safely. Keep the REST snapshot as
           // the recovery path, while well-formed telemetry events avoid that cost.
@@ -1880,11 +1893,12 @@ export function App() {
   },[visibleSessionKey])
   const layoutTerminalIds=terminalIds(activeLayout)
   const layoutTerminalKey=layoutTerminalIds.join('\u0000')
-  // Budgeted across the whole workspace, not per stack: three hidden terminals is
-  // three sockets and three scrollbacks however they are arranged on screen.
+  // Budgeted across the whole workspace, not per stack. Mobile keeps no hidden
+  // terminals because their live output is paid over the network while offscreen.
+  const warmTerminalBudget=warmPaneBudget(mobileWorkspace?'mobile':'desktop')
   const warmTerminalIds=useMemo(
-    ()=>warmPaneIds(warmHistory,visibleSessionIds,layoutTerminalIds),
-    [warmHistory,visibleSessionKey,layoutTerminalKey],
+    ()=>warmPaneIds(warmHistory,visibleSessionIds,layoutTerminalIds,warmTerminalBudget),
+    [warmHistory,visibleSessionKey,layoutTerminalKey,warmTerminalBudget],
   )
 
   useEffect(()=>{

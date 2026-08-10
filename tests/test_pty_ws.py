@@ -39,6 +39,36 @@ async def test_pty_output_flow_is_compatible_with_clients_without_ack_support() 
     assert flow.unacknowledged_bytes == 0
 
 
+async def test_pty_sender_batches_output_already_waiting_in_the_queue() -> None:
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    queue.put_nowait(b"one")
+    queue.put_nowait(b"two")
+    queue.put_nowait(b"three")
+    sent: list[bytes] = []
+
+    async def send_bytes(payload: bytes) -> None:
+        sent.append(payload)
+
+    task = asyncio.create_task(
+        server._pty_sender(
+            cast(Any, SimpleNamespace(send_bytes=send_bytes)),
+            cast(Any, SimpleNamespace()),
+            SimpleNamespace(queue=queue),
+            "generation",
+            PtyOutputFlow(),
+        )
+    )
+    try:
+        for _ in range(20):
+            if sent:
+                break
+            await asyncio.sleep(0)
+        assert sent == [b"onetwothree"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def next_json(ws: Any, skip: tuple[str, ...] = ("geometry",)) -> Any:
     """Next JSON frame, ignoring the shared-geometry frames.
 

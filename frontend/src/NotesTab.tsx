@@ -100,8 +100,15 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   useEffect(()=>{loadedScope.current=null;setItems(null);void load()},[scopeId])
   useEffect(()=>{
     const changed=()=>void load()
+    const reconnected=(event:Event)=>{
+      if((event as CustomEvent<{resumed?:boolean}>).detail?.resumed)void load()
+    }
     window.addEventListener('mux:note-changed',changed)
-    return()=>window.removeEventListener('mux:note-changed',changed)
+    window.addEventListener('mux:events-connected',reconnected)
+    return()=>{
+      window.removeEventListener('mux:note-changed',changed)
+      window.removeEventListener('mux:events-connected',reconnected)
+    }
   },[scopeId])
 
   useEffect(()=>()=>{if(longPress.current!==null)window.clearTimeout(longPress.current)},[])

@@ -504,6 +504,8 @@ responsive controls.
   Renderer recovery resumes pending fit debt, and the health sweep compares the current grid with a fresh FitAddon proposal so a faithfully rendered 20-row surface inside a host that now fits 40 rows cannot be mistaken for healthy.
 - A retained warm pane keeps parsing but not rendering.
   Its renderer is explicitly paused while hidden and resumed on reveal ahead of the reveal's redraw, because xterm's own pause is geometric and never triggers for a measurable `visibility:hidden` box (`terminalRenderPause.ts`, `technical/frontend/workspace-state.md`).
+- Warm retention is desktop-only and remains capped at three hidden terminals across the workspace.
+  Mobile mounts only visible terminals so offscreen PTY sockets cannot consume mobile bandwidth.
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
   Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
   The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Terminals; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.

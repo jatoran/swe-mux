@@ -1,10 +1,4 @@
-"""`/events` catch-up contract.
-
-Regression coverage for the audited defect: with no cursor the daemon replayed
-the 2000 *oldest* retained events on every connect, so an established install
-re-sent days-old history and never delivered the events the client actually
-missed. The reconnect mechanism did the opposite of its purpose.
-"""
+"""`/events` watermark, bounded recovery, and browser payload contract."""
 
 from __future__ import annotations
 
@@ -33,34 +27,28 @@ def _app(
     return app
 
 
-async def _seed(history: HistoryIndex, count: int, *, session_id: str = "s1") -> None:
+async def _seed(
+    history: HistoryIndex,
+    count: int,
+    *,
+    session_id: str = "s1",
+    event_type: str = "state_changed",
+) -> None:
     events = EventBus(sink=history.append_event)
     for index in range(count):
-        await events.emit("tool_use", session_id=session_id, source="daemon", tool=f"t{index}")
+        await events.emit(event_type, session_id=session_id, source="daemon", index=index)
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
-async def test_cold_open_serves_the_newest_events_not_the_oldest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(server, "EVENTS_CATCHUP_LIMIT", 5)
+async def test_cold_open_sends_only_the_latest_watermark(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     try:
         await _seed(history, 30)
         async with TestClient(TestServer(_app(history, EventBus()))) as client:
             ws = await client.ws_connect("/events")
             first = await ws.receive_json()
-            # More history exists than the window carries: the client is told to
-            # full-refresh rather than assume the replay covered the gap.
-            assert first == {"type": "events_gap", "reason": "catchup_truncated"}
-            seqs = []
-            for _ in range(5):
-                frame = await ws.receive_json()
-                assert frame["replay"] is True
-                seqs.append(frame["seq"])
             await ws.close()
-        # Newest window, still ascending so the client can apply it in order.
-        assert seqs == [26, 27, 28, 29, 30]
+        assert first == {"type": "events_ready", "sequence": 30}
     finally:
         history.close()
 
@@ -80,33 +68,70 @@ async def test_reconnect_with_a_cursor_delivers_exactly_the_gap(tmp_path: Path) 
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
-async def test_short_history_is_replayed_without_a_gap_marker(tmp_path: Path) -> None:
+async def test_large_reconnect_gap_skips_replay_and_advances_to_watermark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server, "EVENTS_CATCHUP_LIMIT", 5)
     history = HistoryIndex(tmp_path / "mux.db")
     try:
-        await _seed(history, 3)
+        await _seed(history, 30)
         async with TestClient(TestServer(_app(history, EventBus()))) as client:
-            ws = await client.ws_connect("/events")
-            frames = [await ws.receive_json() for _ in range(3)]
+            ws = await client.ws_connect("/events?after_seq=2")
+            frame = await ws.receive_json()
             await ws.close()
-        assert [frame["seq"] for frame in frames] == [1, 2, 3]
-        assert all(frame["type"] == "tool_use" for frame in frames)
+        assert frame == {
+            "type": "events_gap",
+            "reason": "catchup_truncated",
+            "sequence": 30,
+        }
     finally:
         history.close()
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
-async def test_live_events_follow_the_catch_up_without_duplication(tmp_path: Path) -> None:
+async def test_live_events_follow_the_cold_watermark_without_duplication(tmp_path: Path) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     try:
         bus = EventBus(sink=history.append_event)
         await _seed(history, 2)
         async with TestClient(TestServer(_app(history, bus))) as client:
             ws = await client.ws_connect("/events")
-            assert [(await ws.receive_json())["seq"] for _ in range(2)] == [1, 2]
-            await bus.emit("tool_use", session_id="s1", source="daemon", tool="live")
+            assert await ws.receive_json() == {"type": "events_ready", "sequence": 2}
+            await bus.emit("state_changed", session_id="s1", source="daemon", state="live")
             live = await ws.receive_json()
             assert live["seq"] == 3
             assert live.get("replay") is not True
+            await ws.close()
+    finally:
+        history.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_browser_omits_audit_hook_payloads_and_advances_the_cursor(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    try:
+        await _seed(history, 3, event_type="PostToolUse")
+        async with TestClient(TestServer(_app(history, EventBus()))) as client:
+            ws = await client.ws_connect("/events?after_seq=1")
+            assert await ws.receive_json() == {"type": "events_cursor", "sequence": 3}
+            await ws.close()
+    finally:
+        history.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_live_audit_hooks_are_omitted_but_later_state_is_delivered(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    bus = EventBus(sink=history.append_event)
+    try:
+        async with TestClient(TestServer(_app(history, bus))) as client:
+            ws = await client.ws_connect("/events")
+            assert await ws.receive_json() == {"type": "events_ready", "sequence": 0}
+            await bus.emit("tool_result", session_id="s1", source="daemon", content="large")
+            await bus.emit("state_changed", session_id="s1", source="daemon", state="live")
+            live = await ws.receive_json()
+            assert live["type"] == "state_changed"
+            assert live["seq"] == 2
             await ws.close()
     finally:
         history.close()

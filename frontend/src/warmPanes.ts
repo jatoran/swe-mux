@@ -26,6 +26,12 @@
  */
 export const WARM_TERMINAL_PANES = 3
 
+/** Mobile avoids hidden PTY sockets: their output consumes metered bandwidth even
+ * while another pane is visible. Desktop keeps the tab-switch latency benefit. */
+export function warmPaneBudget(profile: 'desktop' | 'mobile'): number {
+  return profile === 'mobile' ? 0 : WARM_TERMINAL_PANES
+}
+
 /** Cap on remembered recency, so a long session cannot grow this without bound. */
 const HISTORY_LIMIT = 64
 

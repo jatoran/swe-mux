@@ -61,6 +61,15 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Dynamic JSON and text responses of at least 1 KiB negotiate compression.
   Production frontend builds also create gzip siblings for eligible static assets, which
   aiohttp serves according to `Accept-Encoding`.
+- A cold `/events` socket receives only the current durable sequence watermark, because the
+  initial REST snapshot already supplies authoritative state.
+  Reconnect replay is capped at 64 records; a wider gap sends one watermark and triggers one
+  full refresh instead of transferring partial history.
+  Provider hook audit records remain durable but their `PreToolUse`, `PostToolUse`, `tool_use`,
+  and `tool_result` payloads are not sent to browsers because no browser state consumes them.
+- Mobile workspaces mount only visible terminal panes.
+  Desktop may keep up to three hidden panes warm for fast tab switching, but mobile avoids
+  paying for offscreen PTY output over a metered connection.
 - There is no swe-mux bearer/login path. Tailscale policy decides which devices/users may
   reach the direct listener or optional Serve endpoint; an admitted peer has terminal and
   code-execution authority.

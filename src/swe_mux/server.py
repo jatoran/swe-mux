@@ -271,10 +271,15 @@ RETENTION_LOOP = "store-retention"
 # budget is the shape of an incident, and it left no trace of its own until a
 # 36s start expired the tray's wait and looked like a daemon that never started.
 SLOW_STARTUP_SECONDS = 20.0
-# Retained events replayed to a reconnecting /events client when it supplies no
-# cursor: the NEWEST N, never the oldest — catch-up that replays ancient history
-# delivers exactly the events the client already has and none that it missed.
-EVENTS_CATCHUP_LIMIT = 2000
+# Browser reconnects use a small recovery window. Wider gaps fall back to one
+# authoritative REST refresh instead of replaying a large, stale event history.
+EVENTS_CATCHUP_LIMIT = 64
+# These hook lifecycle records remain durable for diagnostics, but browser state
+# does not consume their large payloads. User-visible state changes arrive as
+# separate, compact events.
+BROWSER_OMITTED_EVENT_TYPES = frozenset(
+    {"PreToolUse", "PostToolUse", "tool_use", "tool_result"}
+)
 _OSC_DEFAULT_COLOR_RESPONSE = re.compile(
     r"(?:\x1b\](?:10|11);"
     r"(?:rgb:[0-9a-f]{1,4}(?:/[0-9a-f]{1,4}){2}"
@@ -8154,6 +8159,7 @@ async def reveal_path(request: web.Request) -> web.Response:
 
 
 PTY_OUTPUT_HIGH_WATER_BYTES = 128 * 1024
+PTY_OUTPUT_BATCH_BYTES = 32 * 1024
 
 
 class PtyOutputFlow:
@@ -8373,16 +8379,37 @@ async def _pty_sender(
     generation: str,
     output_flow: PtyOutputFlow,
 ) -> None:
+    pending_message: Any | None = None
     # unsupervised-loop-ok: lives for one PTY websocket, not the daemon.
     while True:
-        message = await subscriber.queue.get()
+        if pending_message is None:
+            message = await subscriber.queue.get()
+        else:
+            message = pending_message
+            pending_message = None
         if isinstance(message, bytes):
+            chunks = [message]
+            byte_count = len(message)
+            # Drain only output that is already waiting. This reduces websocket
+            # frame overhead without delaying the first byte or crossing a control
+            # frame, whose ordering relative to output is significant.
+            while byte_count < PTY_OUTPUT_BATCH_BYTES:
+                try:
+                    queued = subscriber.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if not isinstance(queued, bytes):
+                    pending_message = queued
+                    break
+                chunks.append(queued)
+                byte_count += len(queued)
+            payload = message if len(chunks) == 1 else b"".join(chunks)
             await output_flow.wait_for_credit()
             # Reserve before the await. The receiver task can process a fast browser's
             # acknowledgement while send_bytes is yielding; counting afterward would
             # turn that valid ACK into phantom unacknowledged credit.
-            output_flow.sent(len(message))
-            await ws.send_bytes(message)
+            output_flow.sent(len(payload))
+            await ws.send_bytes(payload)
         elif message.get("type") == "resync":
             (
                 dropped_bytes,
@@ -8858,33 +8885,68 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
     queue = bus.subscribe(name="events-ws")
     try:
         if last_sequence > 0:
-            # Resume: everything the client missed, oldest first.
+            # Resume a small gap in order. Anything wider is cheaper and safer to
+            # recover with one authoritative REST refresh.
             catch_up = await request.app["history"].events(
                 session_id=session_filter,
-                limit=EVENTS_CATCHUP_LIMIT,
+                limit=EVENTS_CATCHUP_LIMIT + 1,
                 after_seq=last_sequence,
             )
-            truncated = len(catch_up) >= EVENTS_CATCHUP_LIMIT
+            truncated = len(catch_up) > EVENTS_CATCHUP_LIMIT
         else:
-            # Cold open: the NEWEST retained events. Serving the oldest is what
-            # the "after_seq absent" default used to do, which on any established
-            # install replayed days-old history and delivered none of the events
-            # the client actually missed.
-            catch_up, truncated = await request.app["history"].recent_events(
-                session_id=session_filter, limit=EVENTS_CATCHUP_LIMIT
+            # The initial REST load already supplies authoritative state. Start at
+            # the durable watermark instead of replaying historical side effects.
+            latest, _truncated = await request.app["history"].recent_events(
+                session_id=session_filter, limit=1
+            )
+            last_sequence = int(latest[-1]["seq"]) if latest else 0
+            catch_up = []
+            truncated = False
+            await ws.send_json({"type": "events_ready", "sequence": last_sequence})
+            log.debug(
+                "events websocket cold-started at sequence %d connection=%s session=%s",
+                last_sequence,
+                connection_id,
+                session_filter or "*",
             )
         if truncated:
-            # More was missed than the replay carries: the client must full-refresh
-            # rather than assume the gap is covered.
-            await ws.send_json({"type": "events_gap", "reason": "catchup_truncated"})
+            latest, _truncated = await request.app["history"].recent_events(
+                session_id=session_filter, limit=1
+            )
+            watermark = int(latest[-1]["seq"]) if latest else last_sequence
+            log.info(
+                "events websocket gap requires snapshot connection=%s session=%s "
+                "cursor=%d watermark=%d missed_at_least=%d",
+                connection_id,
+                session_filter or "*",
+                last_sequence,
+                watermark,
+                len(catch_up),
+            )
+            last_sequence = max(last_sequence, watermark)
+            catch_up = []
+            await ws.send_json(
+                {
+                    "type": "events_gap",
+                    "reason": "catchup_truncated",
+                    "sequence": last_sequence,
+                }
+            )
+        last_visible_sequence = last_sequence
         for event in catch_up:
+            event_sequence = int(event["seq"])
+            last_sequence = max(last_sequence, event_sequence)
+            if event.get("type") in BROWSER_OMITTED_EVENT_TYPES:
+                continue
             # Catch-up events are a historical replay for state reconstruction, not
             # live activity. Mark them so the browser suppresses live-only side effects
             # (voice autoplay, notification sounds) that would otherwise re-fire every
             # reconnect or reopen.
             event["replay"] = True
             await ws.send_json(event)
-            last_sequence = max(last_sequence, int(event["seq"]))
+            last_visible_sequence = event_sequence
+        if catch_up and last_visible_sequence < last_sequence:
+            await ws.send_json({"type": "events_cursor", "sequence": last_sequence})
 
         async def watch_client() -> None:
             """Read the socket to observe the client going away, and its presence.
@@ -8927,8 +8989,10 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
                 event = getter.result()
                 if event.seq <= last_sequence:
                     continue
-                await ws.send_json(event.snapshot())
                 last_sequence = event.seq
+                if event.type in BROWSER_OMITTED_EVENT_TYPES:
+                    continue
+                await ws.send_json(event.snapshot())
         finally:
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)

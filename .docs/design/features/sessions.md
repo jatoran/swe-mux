@@ -49,7 +49,9 @@ and reattachable browser viewports.
 - A flow-control-capable browser acknowledges terminal bytes only after xterm parses them.
   The daemon limits unparsed output per connection to 128 KiB, preventing old repaint traffic from placing typed echo seconds behind the parser queue.
   Attach and resync replay are included, while older browser bundles remain compatible because the capability is negotiated in `attach_ready`.
-  Hidden warm panes withhold credit after one bounded window and release it when revealed, so retained busy agents stop consuming the UI thread without disconnecting.
+  Consecutive output chunks already waiting in the sender queue are combined into binary frames up to a 32 KiB target without delaying the first chunk or crossing a control frame.
+  Desktop hidden warm panes withhold credit after one bounded window and release it when revealed, so retained busy agents stop consuming the UI thread without disconnecting.
+  Mobile mounts no hidden warm panes, preventing offscreen agents from consuming mobile data.
 - A session attached from several devices shares one keyboard and one size, and the daemon
   arbitrates both rather than letting the last client to speak decide. Attach, detach and
   reconnect never change process state, and neither does losing an ownership race: refused

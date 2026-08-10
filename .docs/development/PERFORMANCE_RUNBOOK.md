@@ -57,6 +57,12 @@ For a useful mobile comparison, measure the same scripted interval with one fore
 then with the browser backgrounded, and compare `http_routes` and `websocket_channels` rather
 than only the aggregate.
 Large one-time static and PTY replay transfers should be separated from steady-state idle use.
+On mobile, only visible terminals should appear in `websocket_channels.pty`; hidden desktop-style
+warm panes indicate a regression.
+Cold `/events` connections should send a small `events_ready` watermark rather than retained
+history, and reconnect replay should never exceed 64 events.
+The browser stream intentionally omits the durable `PreToolUse`, `PostToolUse`, `tool_use`, and
+`tool_result` audit payloads.
 
 ```
 uv run python tools/pty_latency_bench.py --samples 25 --idle-gap 6
@@ -137,7 +143,8 @@ synthetic `WheelEvent`s in-page when the notch rate is the variable under test.
 - Window-resize sweep and warm-tab switching: zero frames over 25 ms.
 
 For a terminal that accepts keystrokes but displays them several seconds later, check both queue boundaries.
-The events WebSocket must not refetch the full sessions/projects/previews/groups/harnesses snapshot for observation-only traffic such as `tool_use`, `tool_result`, `PreToolUse`, `PostToolUse`, or `project_files_changed`.
+The events WebSocket must not deliver audit-only `tool_use`, `tool_result`, `PreToolUse`, or `PostToolUse` payloads to browsers.
+Observation-only browser events such as `project_files_changed` must not refetch the full sessions/projects/previews/groups/harnesses snapshot.
 `GET /api/sessions` uses a one-second display-only PTY classification cache; authorization checks never use that cache.
 The PTY WebSocket should advertise `output_flow_control` and emit `output_ack` frames from xterm write callbacks.
 Durable `terminal_client_repair` events with phase `write_pipeline_backlog` mean live parsing exceeded 32 KiB for at least 750 ms, while `write_pipeline_dead` still means parse progress stopped entirely.
