@@ -53,6 +53,80 @@ def test_observed_and_hooked_harnesses_have_runtime_integrations() -> None:
             assert harness.adapter_family in HOOK_INSTALLER_FAMILIES
 
 
+_DIALECT_SAMPLE_RECORD: dict[str, dict[str, object]] = {
+    "claude": {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "hello"}]},
+    },
+    "codex": {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hello"}],
+        },
+    },
+    "pi": {
+        "type": "message",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    },
+}
+
+
+def test_every_dialect_has_a_reader_that_actually_reads(tmp_path: Path) -> None:
+    """A declared dialect must parse a representative record into a message.
+
+    This is the guard the harness abstraction was missing. `transcript_view`
+    dispatched on the harness *name* with a silent `else: return None`, so
+    adding pi produced an empty Transcript tab with nothing failing anywhere -
+    no test, no type error, no log line. Exhaustiveness in the code catches a
+    missing branch; this catches a branch that exists but does not work.
+
+    Keyed on the dialect rather than the harness so a harness that reuses an
+    existing reader costs nothing here, while a harness that introduces a new
+    dialect cannot ship until its reader parses something.
+    """
+    import json as _json
+
+    from swe_mux.transcript_view import parse_transcript
+
+    dialects = {
+        harness.transcript_dialect
+        for harness in HARNESSES.values()
+        if harness.transcript_dialect is not None
+    }
+    assert dialects, "no harness declares a transcript dialect"
+    for dialect in sorted(dialects):
+        assert dialect in _DIALECT_SAMPLE_RECORD, (
+            f"dialect {dialect!r} has no sample record in this test; a new dialect "
+            f"must add one so its reader is proven to work"
+        )
+        # Pick any harness declaring the dialect: the reader is chosen by
+        # dialect, so which harness carries it must not matter.
+        backend = next(
+            name
+            for name, harness in HARNESSES.items()
+            if harness.transcript_dialect == dialect
+        )
+        path = tmp_path / f"{dialect}.jsonl"
+        path.write_text(_json.dumps(_DIALECT_SAMPLE_RECORD[dialect]) + "\n", encoding="utf-8")
+        messages = parse_transcript(path, backend)
+        assert messages, f"{backend} ({dialect}) parsed no message from its own record shape"
+        assert messages[0]["role"] == "assistant"
+
+
+def test_harnesses_without_a_dialect_declare_no_transcript_evidence() -> None:
+    """`transcript_dialect=None` and transcript evidence are contradictory."""
+    for harness in HARNESSES.values():
+        if harness.transcript_dialect is None:
+            assert "transcript" not in harness.state_sources, harness.name
+            assert harness.measurement_source != "transcript", harness.name
+            assert harness.transcript is None, harness.name
+        else:
+            # A declared dialect is only meaningful if something reads it.
+            assert harness.transcript is not None, harness.name
+
+
 def test_delivery_etiquette_is_complete() -> None:
     expected = {"submission", "root_completion", "screen"}
     assert all(set(harness.delivery_etiquette()) == expected for harness in HARNESSES.values())
