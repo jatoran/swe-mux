@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { worktreePathForBranch } from '../src/worktreeLaunch.ts'
+import { normalizeWorktreeBranchInput, worktreePathForBranch } from '../src/worktreeLaunch.ts'
+
+test('branch input turns whitespace into git-safe separators', () => {
+  assert.equal(normalizeWorktreeBranchInput('haha hehe'), 'haha-hehe')
+  assert.equal(normalizeWorktreeBranchInput('worktree\tmy change'), 'worktree-my-change')
+})
 
 test('a new Windows worktree is grouped below the configured root', () => {
   assert.equal(

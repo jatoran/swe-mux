@@ -2435,10 +2435,18 @@ export function App() {
     openRunMenu(project,element)
   }
 
-  const attachActionSessions=async(targetProject:string,nextSessions:Session[])=>{
+  const attachActionSessions=async(targetProject:string,nextSessions:Session[],activate=true)=>{
     if(!nextSessions.length)return
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target)return
+    if(!activate){
+      setSessions(items=>[
+        ...items.filter(item=>!nextSessions.some(next=>next.id===item.id)),
+        ...nextSessions.map(next=>mergeSessionSnapshot(items.find(item=>item.id===next.id),next)),
+      ])
+      markProjectRecent(targetProject)
+      return
+    }
     let nextLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
     let targetId=openAnchorId(nextLayout,targetProject===projectId?(focusedViewId||activeId):null)
     for(const session of nextSessions){nextLayout=openTab(nextLayout,targetId,terminalLeaf(session.id));targetId=session.id}
@@ -4927,7 +4935,7 @@ export function App() {
       </form>
     </div>}
 
-    {runMenu&&<ProjectRunMenu project={runMenu.project} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={backend=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,undefined,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onError={setError}/>}
+    {runMenu&&<ProjectRunMenu project={runMenu.project} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={backend=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,undefined,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={(items,activate)=>void attachActionSessions(runMenu.project.id,items,activate)} onError={setError}/>}
 
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {

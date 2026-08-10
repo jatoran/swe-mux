@@ -527,8 +527,10 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     run_menu = source("ProjectRunMenu.tsx")
     assert "New worktree session" in run_menu
     assert "'/api/git/worktrees'" in run_menu
-    assert "spawn:{project_id:project.id,backend:worktree.backend}" in run_menu
-    assert "onSessions([session])" in run_menu
+    assert "'/api/git/worktrees/session'" in run_menu
+    assert "void startWorktreeSession(result.path,worktree.backend)" in run_menu
+    assert "onSessions([session],false)" in run_menu
+    assert "normalizeWorktreeBranchInput(value)" in run_menu
     assert "api<{worktree_root?:string}>('GET','/api/config')" in run_menu
     assert "timeoutMs:35*60*1000" in run_menu
     assert "worktree-my-change" in run_menu
