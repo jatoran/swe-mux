@@ -18,6 +18,12 @@
   `--git-common-dir`; `GitState.worktree` is then the checkout's leaf directory name.
   Comparing the two paths is the only check that stays correct for bare repositories and
   `.git`-file submodules, where comparing directory names does not.
+  Both paths must be resolved against the directory git was run in before they are compared.
+  `--absolute-git-dir` promises an absolute answer for the git dir alone; `--git-common-dir`
+  still replies relatively whenever it can (`.git` from a repository root, `../.git` from a
+  subdirectory), and relative to git's own working directory rather than the toplevel.
+  Resolving those against the daemon's process directory instead makes every primary checkout
+  compare unequal to itself and report as a worktree named after the repository folder.
 - Lines added and removed come from `git diff --numstat HEAD`, memoized per repository root on
   the working-tree fingerprint (`GitEvidence.dirty_hash`) the cheap poll already computes.
   The diff therefore runs when the change set actually moves, not once per session and not once

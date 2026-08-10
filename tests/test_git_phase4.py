@@ -19,8 +19,10 @@ def _fake_git_responses(porcelain: str) -> dict[tuple[str, ...], tuple[int, str]
         ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): (1, ""),
         ("rev-parse", "HEAD"): (0, _FULL_SHA),
         ("rev-parse", "--short", "HEAD"): (0, "a1b2c3d"),
-        # Same path twice: the primary checkout, not a linked worktree.
-        ("rev-parse", "--absolute-git-dir", "--git-common-dir"): (0, "C:/repo/.git\nC:/repo/.git"),
+        # Verbatim real output: `--absolute-git-dir` is absolute, `--git-common-dir`
+        # answers relative to the directory git ran in whenever it can. Writing both
+        # sides absolute here is what let the primary checkout regress unnoticed.
+        ("rev-parse", "--absolute-git-dir", "--git-common-dir"): (0, "C:/repo/.git\n.git"),
         ("diff", "--numstat", "HEAD"): (0, "3\t1\tfile.txt"),
     }
 
@@ -158,22 +160,42 @@ def test_numstat_parsing_survives_binary_files() -> None:
     assert git_monitor.parse_numstat(output) == (15, 1)
 
 
+@pytest.mark.parametrize(
+    ("cwd", "common_dir"),
+    [
+        # The exact replies real git gives, which are relative whenever it can be:
+        # `.git` from a repository root, `../.git` from a subdirectory. Resolving
+        # either against the daemon's own cwd rather than the directory git ran in
+        # made every primary checkout read as a worktree named after the repo.
+        ("C:/repo", ".git"),
+        ("C:/repo/frontend", "../.git"),
+        ("C:/repo", "C:/repo/.git"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_linked_worktree_is_named_and_primary_checkout_is_not(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_primary_checkout_is_never_a_worktree(
+    monkeypatch: pytest.MonkeyPatch, cwd: str, common_dir: str
 ) -> None:
+    async def primary(_cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
+        del _cwd, timeout_seconds
+        responses = _fake_git_responses("")
+        responses[("rev-parse", "--absolute-git-dir", "--git-common-dir")] = (
+            0,
+            f"C:/repo/.git\n{common_dir}",
+        )
+        return responses[args]
+
+    monkeypatch.setattr(git_monitor, "_git", primary)
+    assert (await read_git_state(cwd)).worktree is None
+
+
+@pytest.mark.asyncio
+async def test_linked_worktree_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
     """Comparing git-dir to git-common-dir is the check that stays correct.
 
     Comparing directory *names* would misreport bare repositories and `.git`-file
     submodules; the two paths only diverge for a genuinely linked worktree.
     """
-
-    async def primary(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
-        del cwd, timeout_seconds
-        return _fake_git_responses("")[args]
-
-    monkeypatch.setattr(git_monitor, "_git", primary)
-    assert (await read_git_state("C:/repo")).worktree is None
 
     async def linked(cwd: str, *args: str, timeout_seconds: float = 4.0) -> tuple[int, str]:
         del cwd, timeout_seconds

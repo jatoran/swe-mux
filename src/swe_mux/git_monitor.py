@@ -107,7 +107,7 @@ def _dirty_hash(porcelain: str) -> str | None:
     return hashlib.sha256("\n".join(lines).encode("utf-8", "replace")).hexdigest()[:16]
 
 
-def _worktree_name(root: str, git_dir: str, common_dir: str) -> str | None:
+def _worktree_name(cwd: str, root: str, git_dir: str, common_dir: str) -> str | None:
     """Leaf name of `root` when it is a linked worktree, else None.
 
     A linked worktree's `--git-dir` lives under the primary checkout's
@@ -115,11 +115,21 @@ def _worktree_name(root: str, git_dir: str, common_dir: str) -> str | None:
     checkout reports the same path for both. Comparing the two paths is the only
     check that stays correct for bare repositories and `.git`-file submodules,
     where comparing directory *names* does not.
+
+    Both paths are resolved against `cwd` first, and that is the whole
+    correctness of this function. `--absolute-git-dir` promises an absolute
+    answer for the git dir **only**: `--git-common-dir` still replies relatively
+    whenever it can — `.git` from a repository root, `../.git` from a
+    subdirectory — and relative to *the directory git ran in*, not to the
+    toplevel. Resolved against this process's cwd instead, those never matched
+    the git dir, so every primary checkout compared unequal to itself and was
+    reported as a linked worktree named after the repository folder.
     """
     if not git_dir or not common_dir:
         return None
     try:
-        if Path(git_dir).resolve() == Path(common_dir).resolve():
+        base = Path(cwd)
+        if (base / git_dir).resolve() == (base / common_dir).resolve():
             return None
     except OSError:
         return None
@@ -225,7 +235,7 @@ async def read_git_reading(cwd: str) -> GitReading:
     # An unborn branch (no commits yet) reports a non-zero code and no oid.
     commit = head.strip() if not head_code and head.strip() else None
     dir_lines = dirs.splitlines() if not dir_code else []
-    worktree = _worktree_name(root, *dir_lines[:2]) if len(dir_lines) >= 2 else None
+    worktree = _worktree_name(cwd, root, *dir_lines[:2]) if len(dir_lines) >= 2 else None
     dirty_hash = _dirty_hash(porcelain)
     added, removed = await _read_diffstat(cwd, root, dirty_hash, commit is not None)
     return GitReading(
