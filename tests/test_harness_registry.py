@@ -165,9 +165,9 @@ def test_registry_accessors_preserve_declaration_order() -> None:
     assert agent_harnesses() == tuple(HARNESSES)
     assert AGENT_BACKENDS == frozenset(HARNESSES)
     assert descriptor("claude") is HARNESSES["claude"]
-    # opencode is absent: hooks make it `observed`/`hooked`, but with no
-    # transcript and no measurement source it cannot reach `managed`.
-    assert harnesses_at_least("managed") == ("claude", "codex", "omp", "pi")
+    # opencode reaches `managed` on hooks plus database measurements: the tier is
+    # derived from the two capability axes, not from having a transcript.
+    assert harnesses_at_least("managed") == ("claude", "codex", "omp", "pi", "opencode")
 
 
 def test_capability_queries_fail_closed_for_non_harnesses() -> None:

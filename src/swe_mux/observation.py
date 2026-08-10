@@ -15,7 +15,7 @@ from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
-from .harness import Backend, native_id_matches, reports_lifecycle_hooks
+from .harness import Backend, descriptor, native_id_matches, reports_lifecycle_hooks
 from .models import SessionState
 from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
@@ -2741,6 +2741,50 @@ def _apply_subagent_hook(session: Session, event_type: str) -> None:
         _publish_update(session)
 
 
+async def _refresh_database_measurements(session: Session) -> None:
+    """Publish tokens, cost, and model for a harness that keeps them in a store.
+
+    The counterpart to the transcript measurement path, for a harness that writes
+    no transcript. Runs off the event loop because it opens SQLite, and publishes
+    nothing when the row is missing: absent measurements must read as absent, not
+    as zero, since a published zero is indistinguishable from a genuinely empty
+    conversation.
+
+    Context percentage is deliberately not derived. opencode's session row has no
+    context window and mux has no catalogue for its providers, so the window is
+    unknown — and the codebase already records that a zero window renders as 0%
+    used, which looks like a fresh conversation rather than a missing reading.
+    """
+    record = session.record
+    if descriptor(record.backend).measurement_source != "database":
+        return
+    if not _measurements_publishable(session):
+        return
+    native_id = record.native_session_id or ""
+    reader = getattr(getattr(session, "adapter", None), "session_measurements", None)
+    if not native_id or not callable(reader):
+        return
+    try:
+        figures = await asyncio.to_thread(reader, native_id)
+    except (OSError, ValueError):
+        return
+    if not figures:
+        return
+    record.tokens_in = int(figures.get("tokens_in") or 0)
+    record.tokens_out = int(figures.get("tokens_out") or 0)
+    record.tokens_cache_read = int(figures.get("tokens_cache_read") or 0)
+    record.tokens_cache_write = int(figures.get("tokens_cache_write") or 0)
+    record.cost_usd = float(figures.get("cost_usd") or 0.0)
+    model = figures.get("model")
+    if isinstance(model, str) and model:
+        record.model = model
+    provider = figures.get("provider")
+    if isinstance(provider, str) and provider:
+        record.provider = provider
+    record.measurement_source = f"{record.backend}-database"
+    _publish_update(session)
+
+
 async def apply_hook_observation(
     session: Session,
     event_type: str,
@@ -3012,6 +3056,9 @@ async def apply_hook_observation(
         # transcript can be exact-matched and catch-up replays the turn that just ran.
         await _bind_native_id_from_hook(session, payload, events)
         await _finish_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
+        # A harness whose measurements live in its own store has no transcript
+        # record to carry them, so the turn boundary is where they are read.
+        await _refresh_database_measurements(session)
     elif (
         event_type == "context_compacted"
         and not provisional_observation(session)

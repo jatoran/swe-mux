@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Literal, TypeGuard
 
 StateSource = Literal["hook", "transcript", "pty", "cli_state"]
-MeasurementSource = Literal["transcript", "none"]
+# Where tokens, cost, and model come from. `transcript` parses the harness's own
+# conversation file. `database` reads a harness-owned store instead: opencode
+# maintains running totals on its `session` row, so measurement is one indexed
+# read rather than a parse, with no byte offsets and no timestamp-derived
+# liveness. Both are exact and native; the difference is the reader, not the
+# confidence.
+MeasurementSource = Literal["transcript", "database", "none"]
 # The *shape* of a harness's conversation records, as distinct from the harness
 # itself. Two harnesses share a dialect when one reader can parse both: pi and
 # oh-my-pi forked from a common ancestor and still write the same
@@ -557,18 +563,14 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         repaints_scrollback=False,
         # opencode keeps conversations as rows in `opencode.db`, not as an
         # append-only file, so the byte-offset transcript tailer has nothing to
-        # attach to and `transcript`/`measurement` are deliberately absent here.
-        # Its `event(aggregate_id, seq, type, data)` table is an ordered
-        # per-session log that can carry both, but adopting it means teaching the
-        # observer a second evidence transport with its own liveness and
-        # staleness rules. Until that lands, the plugin's hooks are the state
-        # source and mux publishes no tokens, cost, or context for opencode
-        # rather than publishing a number it has not verified.
+        # attach to and `transcript` is absent from the state sources. Its
+        # `session` row carries running token and cost totals, which the adapter
+        # reads directly on turn boundaries — exact, native, and not a parse.
         # No `pty` for the same reason as pi: opencode's screens have not been
         # captured, and its TUI holds the alternate screen, where mux's tail
         # rules read a repainted frame rather than a transcript.
         state_sources=("hook",),
-        measurement_source="none",
+        measurement_source="database",
         # `/new` mints a fresh `ses_…` in the same pane and the plugin reports it
         # as `session.created`, which is a CLI-reported rollover exactly as
         # Claude's SessionStart is. There is also no filesystem transcript-switch

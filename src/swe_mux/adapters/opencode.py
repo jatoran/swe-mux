@@ -3,11 +3,42 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import sqlite3
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from ..harness import descriptor
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
+
+
+def _as_int(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _as_float(value: Any) -> float:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+
+def _model_json(value: Any) -> dict[str, Any]:
+    """opencode stores the model as a JSON blob: {id, providerID, variant}."""
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _model_id(value: Any) -> str | None:
+    model = _model_json(value).get("id")
+    return model if isinstance(model, str) and model else None
+
+
+def _provider_id(value: Any) -> str | None:
+    provider = _model_json(value).get("providerID")
+    return provider if isinstance(provider, str) and provider else None
 
 
 def opencode_plugin_path() -> Path:
@@ -109,13 +140,61 @@ class OpenCodeAdapter(BackendAdapter):
         return self._data_home or descriptor("opencode").data_home()
 
     def database_path(self) -> Path:
-        """Where opencode keeps sessions, messages, parts, and its event log.
-
-        Nothing reads this yet. It is the anchor for the event-log observer that
-        would lift opencode from `hooked` to `managed`; see
-        `.docs/design/features/backends.md`.
-        """
+        """Where opencode keeps sessions, messages, parts, and its event log."""
         return self.data_home / "opencode.db"
+
+    def session_measurements(self, native_id: str) -> dict[str, Any] | None:
+        """Exact token, cost, and model figures for one conversation.
+
+        opencode maintains these on the `session` row itself, so measurement is a
+        single indexed read rather than a parse — no tailer, no byte offsets, and
+        none of the Windows frozen-mtime hazard that dogs file-based liveness,
+        because nothing here infers freshness from a timestamp.
+
+        Opened read-only against the live database. opencode runs in WAL mode, so
+        a reader does not block its writer and cannot corrupt it; `immutable` is
+        deliberately NOT set, since that would pin the snapshot and hide every
+        update the session is still making.
+
+        Returns ``None`` when the row is absent or unreadable, which the caller
+        must treat as "no measurement available" rather than as zeroes: a
+        published zero is indistinguishable from a genuinely empty conversation.
+        """
+        if not native_id:
+            return None
+        path = self.database_path()
+        if not path.is_file():
+            return None
+        try:
+            connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        except sqlite3.Error:
+            return None
+        try:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT cost, tokens_input, tokens_output, tokens_reasoning,"
+                " tokens_cache_read, tokens_cache_write, model, agent, title,"
+                " time_updated FROM session WHERE id = ?",
+                (native_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return {
+            "tokens_in": _as_int(row["tokens_input"]),
+            "tokens_out": _as_int(row["tokens_output"]),
+            "tokens_cache_read": _as_int(row["tokens_cache_read"]),
+            "tokens_cache_write": _as_int(row["tokens_cache_write"]),
+            "tokens_reasoning": _as_int(row["tokens_reasoning"]),
+            "cost_usd": _as_float(row["cost"]),
+            "model": _model_id(row["model"]),
+            "provider": _provider_id(row["model"]),
+            "agent": row["agent"] or None,
+            "title": row["title"] or None,
+        }
 
     # ------------------------------------------------------------------ launch
 

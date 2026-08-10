@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "backend": "opencode",
+  "description": "A tool-using opencode turn. tool.execute.before/after carry the callID, so the tool name is correlated across the pair from the hook stream alone - opencode has no transcript for the observer to fall back on.",
+  "steps": [
+    {
+      "kind": "hook",
+      "event": "SessionStart",
+      "payload": {
+        "source": "startup",
+        "session_id": "ses_01dd88b2eeffYzU5NopqCTr0Mn",
+        "opencode_event": "session.created"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "UserPromptSubmit",
+      "payload": {
+        "agent": "build",
+        "opencode_event": "chat.message"
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "hook",
+      "event": "PreToolUse",
+      "payload": {
+        "tool_name": "bash",
+        "tool_use_id": "call-1"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "PostToolUse",
+      "payload": {
+        "tool_name": "bash",
+        "tool_use_id": "call-1",
+        "title": "echo hello"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "PreToolUse",
+      "payload": {
+        "tool_name": "read",
+        "tool_use_id": "call-2"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "PostToolUse",
+      "payload": {
+        "tool_name": "read",
+        "tool_use_id": "call-2",
+        "title": "README.md"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "turn_ended",
+      "payload": {
+        "root_completion": true,
+        "opencode_event": "session.idle"
+      },
+      "expect_state": "idle"
+    }
+  ],
+  "expected": {
+    "events": [
+      {
+        "type": "agent_native_id_bound",
+        "source": "hook",
+        "scope": "root"
+      },
+      {
+        "type": "turn_started",
+        "source": "hook",
+        "scope": "root"
+      },
+      {
+        "type": "tool_use",
+        "source": "hook",
+        "scope": "root",
+        "tool": "bash"
+      },
+      {
+        "type": "tool_use",
+        "source": "hook",
+        "scope": "root",
+        "tool": "read"
+      },
+      {
+        "type": "turn_ended",
+        "source": "hook",
+        "scope": "root",
+        "outcome": "completed"
+      }
+    ],
+    "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "hook",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "hook",
+        "proof": "proven"
+      }
+    ],
+    "parser": {
+      "status": "watching",
+      "recognized": 0,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}
