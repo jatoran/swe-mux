@@ -640,10 +640,11 @@ This is the endpoint for "which conversation am I actually looking at", and stal
 The three timestamps are reported together because the comparison is the diagnosis: a frozen `transcript_mtime` beside recent growth or a recent record timestamp is a filesystem that stopped dating a live file, routine for Codex rollouts on Windows, rather than a replaced conversation.
 It also carries
 `cli_state` - the CLI's own published per-process state for this conversation
-(`~/.claude/sessions/<pid>.json`; Claude `waiting` vetoes raw PTY evidence that would hide an approval but never initiates a transition) - beside
+(`~/.claude/sessions/<pid>.json`; Claude `waiting` vetoes raw PTY evidence that would hide an approval, and `busy` vetoes only a transient raw idle repaint, but neither initiates a transition) - beside
 the `standing_activity` list and `layer_readings`, the last observed reading per
 detection-ladder layer.
 Its `pty_explain` object exposes the effective `outcome`, raw `screen_outcome`, `outcome_source`, `cli_state_status`, and all evaluated screen rules.
+The timeline and `layer_readings` expose the raw value as `pty_tail_screen`, the effective value as `pty_tail`, and its source as `pty_tail_arbitration`.
 
 With `?from=&to=` (epoch seconds) the state-log adds `timeline`: the requested slice of the
 **durable** detection timeline (`status_timeline` table), flushed from the live ring first

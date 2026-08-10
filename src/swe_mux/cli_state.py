@@ -8,7 +8,8 @@ a permission dialog, flipping ``busy`` → ``waiting`` → ``busy`` around it).
 This is the `cli-state` layer of the detection ladder (status-detection.md):
 hook-free and CLI-authoritative. It feeds counters and the ledger, and its
 ``waiting`` value conservatively vetoes raw PTY evidence that would otherwise
-hide an approval. It does not initiate a SessionState transition by itself.
+hide an approval, while ``busy`` vetoes a transient idle repaint during parallel
+tool completion. It does not initiate a SessionState transition by itself.
 
 Two measured caveats shape what this module does *not* do:
 

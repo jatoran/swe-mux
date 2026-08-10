@@ -1118,7 +1118,9 @@ def pty_tail_explain(
     parallel tool use its spinner can repaint after a permission dialog while the
     dialog remains visibly active elsewhere on screen. Claude's own per-process
     state reports ``waiting`` for exactly that dialog lifetime, so it conservatively
-    corroborates approval and prevents append order from hiding the prompt.
+    corroborates approval and prevents append order from hiding the prompt. Its
+    ``busy`` state also vetoes a raw idle frame: one parallel tool can repaint the
+    input prompt after it finishes while a sibling tool is still running.
     """
     normalized = _normalize_tail_text(tail)
     # Most rules share one of only a few regions. Computing the region per rule
@@ -1156,12 +1158,25 @@ def pty_tail_explain(
     screen_outcome = outcome
     normalized_cli_status = str(cli_state_status or "").strip().lower() or None
     cli_waiting = backend in {None, "claude"} and normalized_cli_status == "waiting"
+    cli_busy_overrides_idle = (
+        backend in {None, "claude"}
+        and normalized_cli_status == "busy"
+        and screen_outcome == "idle"
+    )
     if cli_waiting:
         outcome = "approval"
+    elif cli_busy_overrides_idle:
+        outcome = "working"
+    if cli_waiting:
+        outcome_source = "cli_state_waiting"
+    elif cli_busy_overrides_idle:
+        outcome_source = "cli_state_busy"
+    else:
+        outcome_source = "screen"
     return {
         "outcome": outcome,
         "screen_outcome": screen_outcome,
-        "outcome_source": "cli_state_waiting" if cli_waiting else "screen",
+        "outcome_source": outcome_source,
         "cli_state_status": normalized_cli_status,
         "rules": evaluations,
     }
@@ -5105,8 +5120,9 @@ class SessionManager:
         # Inline rather than a method so the lightweight manager stand-ins in
         # tests exercise this rule through the same call they already make.
         if record.state in {"idle", "awaiting"}:
-            dialog_pty_state = self._pty_tail_state(session)
-            note_layer_reading(session, "pty_tail", dialog_pty_state, now=now)
+            dialog_pty_explanation = self._pty_tail_explanation(session)
+            dialog_pty_state = cast(PtyTailState, dialog_pty_explanation["outcome"])
+            self._note_pty_tail_readings(session, dialog_pty_explanation, now=now)
             no_turn, dialog_seconds = startup_dialog_observation(
                 session, dialog_pty_state, now
             )
@@ -5140,8 +5156,9 @@ class SessionManager:
             session.classifier_blind_counted = False
             return
         stalled = now - session.last_state_change_ts
-        pty_state = self._pty_tail_state(session)
-        note_layer_reading(session, "pty_tail", pty_state, now=now)
+        pty_explanation = self._pty_tail_explanation(session)
+        pty_state = cast(PtyTailState, pty_explanation["outcome"])
+        self._note_pty_tail_readings(session, pty_explanation, now=now)
         note_classifier_blindness(session, pty_state, now)
         # An answered permission prompt is resolved from the PTY alone and must
         # be checked before the transcript-quiet gate below: after approval the
@@ -5194,8 +5211,9 @@ class SessionManager:
         if record.state not in {"working", "awaiting"}:
             return
         stalled = time.time() - session.last_state_change_ts
-        pty_state = self._pty_tail_state(session)
-        note_layer_reading(session, "pty_tail", pty_state, now=now)
+        pty_explanation = self._pty_tail_explanation(session)
+        pty_state = cast(PtyTailState, pty_explanation["outcome"])
+        self._note_pty_tail_readings(session, pty_explanation, now=now)
         # PTY ground-truth backstop. The transcript may give no proof the turn
         # ended: "unknown" (schema drift) or "open" (the tail is a tool_use/
         # tool_result, so by the record the model still owes a response). Both
@@ -5398,25 +5416,69 @@ class SessionManager:
         return floor
 
     @staticmethod
-    def _pty_tail_state(session: Session) -> PtyTailState:
-        """Classify what this session's CLI is showing right now."""
+    def _pty_tail_explanation(session: Session) -> dict[str, Any]:
+        """Explain the raw screen and effective CLI-corroborated PTY state."""
         scrollback = getattr(session, "scrollback", None)
         if scrollback is None:
-            return "unknown"
+            return {
+                "outcome": "unknown",
+                "screen_outcome": "unknown",
+                "outcome_source": "screen",
+                "cli_state_status": session_cli_state_status(session),
+                "rules": [],
+            }
         try:
             tail = scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
         except (OSError, ValueError):
-            return "unknown"
+            return {
+                "outcome": "unknown",
+                "screen_outcome": "unknown",
+                "outcome_source": "screen",
+                "cli_state_status": session_cli_state_status(session),
+                "rules": [],
+            }
         osc_signals = getattr(session, "osc_signals", None)
+        return pty_tail_explain(
+            tail,
+            backend=session.record.backend,
+            cli_state_status=session_cli_state_status(session),
+            osc_title=getattr(osc_signals, "title", None),
+            osc_progress=getattr(osc_signals, "progress", None),
+        )
+
+    @staticmethod
+    def _note_pty_tail_readings(
+        session: Session,
+        explanation: dict[str, Any],
+        *,
+        now: float,
+    ) -> None:
+        """Ledger raw screen and effective PTY readings independently."""
+        note_layer_reading(
+            session,
+            "pty_tail_screen",
+            str(explanation["screen_outcome"]),
+            now=now,
+        )
+        note_layer_reading(
+            session,
+            "pty_tail",
+            str(explanation["outcome"]),
+            now=now,
+        )
+        note_layer_reading(
+            session,
+            "pty_tail_arbitration",
+            str(explanation["outcome_source"]),
+            now=now,
+        )
+
+    @staticmethod
+    def _pty_tail_state(session: Session) -> PtyTailState:
+        """Classify what this session's CLI is showing right now."""
         return cast(
             PtyTailState,
-            pty_tail_explain(
-                tail,
-                backend=session.record.backend,
-                cli_state_status=session_cli_state_status(session),
-                osc_title=getattr(osc_signals, "title", None),
-                osc_progress=getattr(osc_signals, "progress", None),
-            )["outcome"],
+            SessionManager._pty_tail_explanation(session)["outcome"],
         )
 
     def _pty_appears_idle(self, session: Session) -> bool:

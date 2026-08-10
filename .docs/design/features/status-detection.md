@@ -550,7 +550,10 @@ The verdict then degrades to `unknown`, which is conservative but blind.
 The raw ConPTY stream is a write log, not a snapshot of the terminal's rendered cells.
 A parallel tool can repaint its task list and spinner after Claude draws a permission dialog without removing that dialog from the visible screen.
 Raw prompt-marker ordering therefore remains useful evidence but is not authoritative proof that the dialog disappeared.
-For Claude, `pty_tail_state` combines that raw result with the CLI-published status: `waiting` yields an effective `approval`, and `busy` or `idle` lets the raw screen result stand.
+For Claude, `pty_tail_state` combines that raw result with the CLI-published status.
+`waiting` yields an effective `approval`.
+`busy` changes only a raw `idle` result to effective `working`, because one completed parallel tool can repaint the input prompt while a sibling tool remains active.
+`idle` lets the raw screen result stand.
 
 Before matching, the tail is normalized by `_normalize_tail_text`.
 OSC is removed from body text, cursor movement reads as a space, styling reads as nothing, and horizontal whitespace runs collapse.
@@ -585,6 +588,7 @@ No title or progress classification rule was added because the measured title is
 `pty_tail_explain` returns every evaluated rule, its match result, its region, and a bounded region preview.
 It exposes both `screen_outcome` and effective `outcome`, plus `outcome_source` and `cli_state_status`, so the exact arbitration is visible.
 The live state-log exposes this as `pty_explain`, so marker drift and corroboration overrides can be diagnosed without attaching a debugger.
+The durable timeline records the raw result as `pty_tail_screen`, the effective result as `pty_tail`, and the source as `pty_tail_arbitration`, so a transient disagreement remains reconstructable after the screen changes.
 
 ## Watchdog recovery (pinned behavior)
 
@@ -599,6 +603,8 @@ The live state-log exposes this as `pty_explain`, so marker drift and corroborat
   an idle marker while redraw history still holds "esc to interrupt" from before the block —
   resuming on that would hide a prompt the user must answer.
   Claude `waiting` changes the effective screen result to `approval`, so a parallel spinner repaint cannot trigger this exit while the permission dialog remains active.
+- Claude `busy` changes a raw idle prompt to effective `working`, so one completed parallel tool cannot force-idle the session while a sibling tool remains active.
+  This preserves the same root-turn lifetime and its `turn_started_at` timestamp; the sidebar working timer therefore cannot reset on that repaint.
 - `working`/`awaiting` stalled ≥ `STATE_WATCHDOG_ENDED_STUCK_SECONDS` (6s) with a quiet
   transcript whose tail **proves** the turn ended → force idle (`watchdog`).
 - **Unwitnessed** (no transcript bound and no hook ever received): `idle` + working

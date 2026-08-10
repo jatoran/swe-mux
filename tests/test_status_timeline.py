@@ -356,6 +356,8 @@ async def test_watchdog_pass_ledgers_pty_and_hook_recency_flips_once(tmp_path: P
         hook_spool_dir=None,
         events=SimpleNamespace(emit=lambda *_a, **_k: asyncio.sleep(0)),
         _drain_hook_spool=noop_drain,
+        _pty_tail_explanation=SessionManager._pty_tail_explanation,
+        _note_pty_tail_readings=SessionManager._note_pty_tail_readings,
         _pty_tail_state=SessionManager._pty_tail_state,
     )
     mgr._check_unwitnessed_pty_turn = lambda s, n: SessionManager._check_unwitnessed_pty_turn(
@@ -379,7 +381,9 @@ async def test_watchdog_pass_ledgers_pty_and_hook_recency_flips_once(tmp_path: P
     readings = entries_of(session, "layer_reading")
     assert [(e["layer"], e["reading"]) for e in readings] == [
         ("hook_recency", "fresh"),
+        ("pty_tail_screen", "working"),
         ("pty_tail", "working"),
+        ("pty_tail_arbitration", "screen"),
     ]
     # The threshold crossing is one more entry, not one per pass.
     later = now + TRANSCRIPT_STALE_SECONDS + 20

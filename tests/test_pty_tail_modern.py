@@ -123,6 +123,32 @@ def test_cli_waiting_preserves_dialog_across_parallel_tui_redraws() -> None:
     ) == "working"
 
 
+def test_cli_busy_vetoes_parallel_tool_idle_repaint() -> None:
+    value = tail("parallel-tool-completion-idle-repaint.txt")
+
+    raw = pty_tail_explain(value, backend="claude")
+    effective = pty_tail_explain(
+        value,
+        backend="claude",
+        cli_state_status="busy",
+    )
+
+    assert raw["outcome"] == "idle"
+    assert effective["screen_outcome"] == "idle"
+    assert effective["outcome"] == "working"
+    assert effective["outcome_source"] == "cli_state_busy"
+    assert pty_tail_state(
+        value,
+        backend="claude",
+        cli_state_status="idle",
+    ) == "idle"
+    assert pty_tail_state(
+        value,
+        backend="codex",
+        cli_state_status="busy",
+    ) == "idle"
+
+
 def test_window_titles_never_classify_a_frame() -> None:
     # The CLI rewrites the terminal title with the task description while
     # working; title text must not be read as screen content — neither an

@@ -1,0 +1,7 @@
+Running checks in parallel
+
+Ruff finished successfully.
+Pytest is still running in a sibling tool call.
+
+❯
+(shift+tab to cycle)

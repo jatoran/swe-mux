@@ -77,6 +77,11 @@
       "guard": "tests/test_status_contract.py::test_unanswered_approval_survives_everything_that_could_hide_it",
       "root_cause": "The inverse hazard of clearing a stale awaiting: the tool_use record that triggered the prompt can be observed after it, a parallel tool's result can land while the dialog is up, idle_prompt can arrive, and a parallel spinner repaint can appear later in raw PTY write order. None of these mean the user answered. Hiding a real prompt is worse than showing a stale one, so unrelated tool identities cannot cancel its candidate and Claude's own waiting state vetoes a raw spinner until the dialog is gone."
     },
+    "parallel_tool_idle_repaint": {
+      "fixture": "claude-parallel-tool-idle-repaint.json",
+      "guard": "tests/test_pty_tail_modern.py::test_cli_busy_vetoes_parallel_tool_idle_repaint",
+      "root_cause": "When parallel tools finish at different times, one completion can repaint Claude's idle prompt in raw ConPTY append order while a sibling tool is still running. Trusting that single frame force-ended the turn, showed ready, and reset turn_started_at; Claude's own busy state now vetoes only that destructive raw-idle inference."
+    },
     "notification_semantics": {
       "fixture": "claude-idle-vs-permission-vs-elicitation.json",
       "guard": "tests/test_observation.py::test_idle_prompt_never_clobbers_a_pending_approval",

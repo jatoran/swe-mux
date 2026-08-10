@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend": "claude",
+  "edge_case": "parallel_tool_idle_repaint",
+  "description": "One parallel tool finishes and repaints Claude's idle prompt while a sibling tool remains active. Claude's own busy state vetoes the transient raw idle frame, so the watchdog cannot end the turn or reset its timer.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "user", "isSidechain": false, "message": {"content": "run both checks in parallel"}}, "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "cli_state", "status": "busy"},
+    {"kind": "pty_tail", "data": "Ruff finished successfully.\nPytest is still running in a sibling tool call.\n\n❯\n(shift+tab to cycle)"},
+    {"kind": "timer", "seconds": 61},
+    {"kind": "watchdog", "expect_delivery": "blocked", "oracle_safe": false, "expect_state": "working"},
+    {"kind": "cli_state", "status": "idle"},
+    {"kind": "watchdog", "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "watchdog-pty", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "watchdog-pty", "proof": "inferred"}
+    ],
+    "parser": {"status": "ready", "recognized": 1, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}
