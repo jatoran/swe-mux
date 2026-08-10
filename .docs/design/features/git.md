@@ -41,6 +41,32 @@
   diff — which is deliberately distinct from a measured `0`. A display that conflates the two
   reports a clean tree for a repository it merely failed to read.
 
+- OSC-driven targets are existing local directories, debounced for 1.25 seconds, and limited
+  to 12 accepted switches per session per minute before Git polling follows them. Invalid,
+  remote, fragmented-spam, and over-limit telemetry cannot create subprocess churn.
+- Agent panes report their cwd through **hooks**, not OSC 7 (`note_hook_cwd`,
+  `runtime_cwd_source: "hook"`). OSC 7 comes from a shell drawing its prompt and a CLI holding
+  the terminal draws none, so before this an agent session had no live cwd at all and `git_cwd`
+  fell back to the spawn directory for its whole life. A Claude session working inside a native
+  worktree therefore had its Git chip, diff, and comparison reporting the primary checkout - a
+  different branch and a different set of changes than the one the agent was editing. Same
+  validation and the same 12-per-minute rate limit as OSC 7, but no debounce: a hook reports a
+  directory the CLI has already settled on. Only hooks that speak for the session's own
+  conversation are accepted, so a nested child CLI cannot move its parent's cwd.
+- A live cwd never re-homes the session's Project. `project_id`, `repository_id`, and
+  `project_scope_id` stay with the checkout the session was spawned in: a worktree is the same
+  Project as the tree it was cut from, and a session that steps into one must not disappear from
+  its sidebar group. `runtime_project_scope_id` records what the live cwd resolves to and is
+  reporting only.
+- Detached HEAD is shown as its short commit SHA.
+- Emit `git_changed`; mirror state into the session snapshot and attached pane-header chip.
+- Add/list/remove worktrees through argument-vector subprocesses; no shell interpolation.
+- Removal validates the exact requested path against Git's current porcelain worktree
+  list before mutation.
+- Worktrees have no first-class sidebar row or workspace tab. Their one surface is the
+  utility drawer's Git tab, below — plus one launcher: creation may start a session in the
+  new tree (see "Spawning a session into a worktree").
+
 ### Every field is a property of the checkout
 
 `GitState` describes the working tree a session is in, never the session.
@@ -84,31 +110,6 @@ uncommitted work together.
   serve one Project the other's number. The override is injected into `GitMonitor` as a
   `project_id -> ref` callable, so the monitor keeps knowing nothing about the Project registry,
   and a lookup that raises degrades to automatic inference rather than to no Git state.
-- OSC-driven targets are existing local directories, debounced for 1.25 seconds, and limited
-  to 12 accepted switches per session per minute before Git polling follows them. Invalid,
-  remote, fragmented-spam, and over-limit telemetry cannot create subprocess churn.
-- Agent panes report their cwd through **hooks**, not OSC 7 (`note_hook_cwd`,
-  `runtime_cwd_source: "hook"`). OSC 7 comes from a shell drawing its prompt and a CLI holding
-  the terminal draws none, so before this an agent session had no live cwd at all and `git_cwd`
-  fell back to the spawn directory for its whole life. A Claude session working inside a native
-  worktree therefore had its Git chip, diff, and comparison reporting the primary checkout - a
-  different branch and a different set of changes than the one the agent was editing. Same
-  validation and the same 12-per-minute rate limit as OSC 7, but no debounce: a hook reports a
-  directory the CLI has already settled on. Only hooks that speak for the session's own
-  conversation are accepted, so a nested child CLI cannot move its parent's cwd.
-- A live cwd never re-homes the session's Project. `project_id`, `repository_id`, and
-  `project_scope_id` stay with the checkout the session was spawned in: a worktree is the same
-  Project as the tree it was cut from, and a session that steps into one must not disappear from
-  its sidebar group. `runtime_project_scope_id` records what the live cwd resolves to and is
-  reporting only.
-- Detached HEAD is shown as its short commit SHA.
-- Emit `git_changed`; mirror state into the session snapshot and attached pane-header chip.
-- Add/list/remove worktrees through argument-vector subprocesses; no shell interpolation.
-- Removal validates the exact requested path against Git's current porcelain worktree
-  list before mutation.
-- Worktrees have no first-class sidebar row or workspace tab. Their one surface is the
-  utility drawer's Git tab, below — plus one launcher: creation may start a session in the
-  new tree (see "Spawning a session into a worktree").
 
 ## Git drawer tab
 
