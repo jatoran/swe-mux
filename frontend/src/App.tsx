@@ -33,6 +33,7 @@ import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { UsageDashboard } from './UsageDashboardView'
+import { NetworkUsageModal } from './NetworkUsageModal'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
@@ -503,6 +504,7 @@ export function App() {
   const [alertsEnabled, setAlertsEnabled] = useState(() => alertPreferences().enabled)
   const [railVoiceRevision,setRailVoiceRevision]=useState(0)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [networkUsageOpen,setNetworkUsageOpen]=useState(false)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
@@ -3657,6 +3659,7 @@ export function App() {
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
+    { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => {setNetworkUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
@@ -5103,6 +5106,7 @@ export function App() {
       <button onClick={()=>runNamedCommand('prompts.open')}>Prompt library…</button>
       <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
       <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
+      <button onClick={() => runNamedCommand('networkUsage.open')}>Bandwidth usage…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       <div class="context-subtitle">CONFIGURATION</div>
       {/* Adding a Project lives in the registry and the empty-sidebar menu; this
@@ -5188,6 +5192,7 @@ export function App() {
     {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
+    {networkUsageOpen&&<NetworkUsageModal onClose={()=>setNetworkUsageOpen(false)}/>}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 

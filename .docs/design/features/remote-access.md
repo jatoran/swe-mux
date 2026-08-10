@@ -48,6 +48,8 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   `DELETE /api/diagnostics/network` logs the previous totals and begins a fresh window without
   restarting the daemon or any session.
   Reads and resets of this endpoint are excluded from their own counters.
+  The app menu's `Bandwidth usage…` modal refreshes these counters while open, presents totals,
+  routes, WebSocket channels, and peers, and can reset the measurement window in place.
 - HTTP response counts are encoded body bytes after negotiated compression.
   They exclude headers, TLS, Tailscale, and packet overhead.
   WebSocket counts are text/binary frame payload bytes before per-message compression and
