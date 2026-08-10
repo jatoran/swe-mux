@@ -66,7 +66,7 @@ daemon restarts and app rebuilds. Use these flows instead of killing swe-mux:
   processes as part of an update — those reap every live session. They are only for
   intentionally stopping everything, or for the deliberate supervisor update above.
 
-Details, constraints, and the supervisor design: `.docs/development/SESSION_PRESERVING_RELOAD.md`
+Details, constraints, and the supervisor design: `.docs/development/archive/SESSION_PRESERVING_RELOAD.md`
 (§7.5+ addendum has the exact workflows), `.docs/design/features/desktop-shell.md` (packaging),
 `.docs/technical/backend/packages.md` (supervisor rules: hash-gated source closure, cwd-lock
 hazard, restart contract).
