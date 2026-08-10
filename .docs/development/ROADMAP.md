@@ -148,18 +148,18 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
               -> Phase 5  Gated auto-delivery + fleet queue + bounded agent communication
                  (incl. mux.notify / mux.requestSpawn over the queue)       [done: CP §7.2]
                 -> Phase 5.4  Agent conversation rollover                   [built; 4 live checks open]
-                  -> Phase 5.5  Project card + scan timeline                [card done; timeline open: CP 4-5]
-                    -> Phase 5.6  mux MCP v0.5: situational-awareness reads [open: CP step 2.6]
-                      -> Phase 5.8  SSH boundary handling in terminals      [open; dependency-free]
-                        -> Phase 6  Agent Context + instruction coverage     [coverage open; rest deferred/culled]
+                  -> Phase 5.6  mux MCP v0.5: situational-awareness reads   [open: CP step 2.6]
+                    -> Phase 5.5  Project card + scan timeline              [card done; timeline gated on 5.6]
+                      -> Phase 5.8  SSH boundary handling in terminals      [correctness open; profiles deferred]
+                        -> Phase 6  Agent Context + instruction coverage    [coverage open; rest deferred/culled]
                            (return-path channel 2: standing context, not pull) [CP §7]
-                          -> Phase 6.5  Model narration + attention ranking [open: CP steps 6-7]
-                            -> Phase 7  Windows maturity, CLI, doctor, soak [open]
-                              -> Phase 7.5  mux MCP v1 + cross-session memory        [open: CP step 8]
-                                -> Phase 7.6  mux MCP session control: interrupt/end [open: CP step 9]
-                                  -> Phase 8  Telegram control                       [open]
-                                    -> Phase 9  SSH/native attach                    [open]
-                                      -> Phase 10  WSL bridge + Linux/macOS          [open]
+                          -> Phase 6.5  Attention ranking + narration       [ranking open; narration gated]
+                            -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
+                              -> Phase 7.5  mux MCP v1 semantic memory      [open, gated on 5.5: CP step 8]
+                                -> Phase 7.6  mux MCP session control       [open: CP step 9]
+                                  -> Phase 8  Telegram control              [descoped to decision-gated]
+                                    -> Phase 9  SSH/native attach           [descoped to decision-gated]
+                                      -> Phase 10  WSL bridge + Linux/macOS [open]
                                         -> Phase 11  Public packaging and release    [open]
 ```
 
@@ -171,11 +171,17 @@ corrupts every downstream head-of-line, arming, and auto-delivery decision. Phas
 the same job one level down, for *identity* rather than state: `agent_run_id` is the key
 every queue binding, Tier 0 fact, annotation, detector, and MCP read is scoped by, and until
 5.4 that key survived an in-CLI conversation replacement it should not have survived.
+Phase 5.6 precedes Phase 5.5 deliberately: the free reads come before the first continuously
+costing feature, and their observed usage is the evidence for or against building the timeline
+at all.
 Phase 5.8 has no predecessor: it depends only on shipped shell profiles, status detection, and
 runtime-cwd machinery, and it is drawn at that position solely so it does not preempt
 control-plane substrate already in flight. Its status-detection item may be pulled forward at
 any time, and should be if an SSH auth prompt is ever observed reading as `idle` on a session
 that auto-delivery could arm against.
+The chain is a default order, not a dependency proof.
+Phases 3.7, 5.5, and 5.8 are explicitly parallelizable, and a phase marked descoped is not a
+predecessor of anything.
 Cross-cutting tests ship with each phase.
 
 ### Control-plane track interlock
@@ -193,11 +199,11 @@ document and are not duplicated here.
 | 1 · Tier 0 + raw store | shipped | write/read hashes are not equality-joinable; §6.1's edge is restated as `target` + time order (CP §9 step 1) |
 | 2 · Helps-today siblings | shipped (Implemented baseline) | observation inbox is where `requestSpawn` drafts land |
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
-| 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, so it does not need Phase 5.5 |
+| 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, and now runs **before** Phase 5.5 so its usage can justify or retire the timeline |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
-| 4–5 · Project card + scan timeline | **Phase 5.5** | first model-cost layer; no Phase 5 dependency, but **needs Phase 5.4's run boundary** — a timeline that spans a conversation replacement is describing two sessions as one |
-| 6–7 · Narration + attention ranking | **Phase 6.5** | needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one) |
-| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | needs CP 4–5 substrate, the Phase 6 Agent Context adapters, the Phase 7 typed daemon operations, and Phase 5.4 run-scoped retrieval |
+| 4–5 · Project card + scan timeline | **Phase 5.5** | card shipped; timeline is the first continuous model cost and is **gated on Phase 5.6 evidence**, plus **Phase 5.4's run boundary**, since a timeline spanning a conversation replacement describes two sessions as one |
+| 6–7 · Attention ranking + narration | **Phase 6.5** | ranking needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one); narration is separately gated on the annotation surface being read |
+| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | semantic half only; the memory-source reads moved to Phase 5.6. Needs the CP 5 timeline, the Phase 6 harness-coverage fix, the Phase 7 typed operations, and Phase 5.4 run-scoped retrieval |
 | 9 · Agent session control | **Phase 7.6** | the first agent-reachable actuation; needs the Phase 1/5 readiness predicate, a graceful-stop daemon op that does not exist yet (Phase 7), and the Phase 6.5 attention channels so a remote interrupt is never silent |
 | §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
 | §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
@@ -1241,6 +1247,13 @@ on top of it. No dependency on Phases 4–5, but it **does** depend on Phase 5.4
 a claim about one continuous piece of work, and without the run boundary it would describe
 two unrelated conversations as one session's history.
 
+**Resequenced 2026-08-10 to run after Phase 5.6, and now gated on its evidence.** This is the
+first feature whose cost is continuous rather than per-run, and Phase 5.6 delivers overlapping
+self-continuity for free.
+Start the timeline only once the free reads are in use and are observably insufficient; if they
+turn out to cover the need, this phase shrinks to whatever the deterministic detectors and
+transcript reads genuinely cannot answer.
+
 - [x] Project card (CP §5.4): distilled, cached architecture summary that feeds the scan
   timeline and later Tier 2 analysis. Per-project opt-in (`project_card`), one budgeted
   cheap-model call per documentation fingerprint, a deterministic file → area map the model
@@ -1288,8 +1301,14 @@ or ask the human. It adds no authority: every item is a read, Project-scoped, th
 same token, allowlist, redaction, and rate limit Phase 4.5 established.
 
 Depends on Phase 5.4 (a read that crosses a conversation rollover must name the run it came
-from) and on the shipped project card, observation inbox, queue, and Git status services. It
-does **not** depend on Phase 5.5.
+from) and on the shipped observation inbox and queue services. It does **not** depend on
+Phase 5.5.
+
+**Resequenced 2026-08-10 to run before Phase 5.5.** This phase costs no new substrate and no
+model tokens, while Phase 5.5 is the first continuously-costing feature.
+Its self-continuity read also overlaps part of what the scan timeline was meant to provide, so
+building the timeline first risks paying for substrate that free tools would have covered.
+Use this phase's observed usage as evidence for or against Phase 5.5.
 
 ### Transcript reads: both ends, and your own past
 
@@ -1317,13 +1336,34 @@ does **not** depend on Phase 5.5.
   (`builtin.session-titler-initial` already pins one per `agent_run_id`) beside the existing
   status, `agent_run_id`, and `agent_run_seq`. "What is that session actually working on"
   should cost one small call, not a paged transcript read.
-- [ ] Add `project_card()` as a caller over the shipped `card_for_project`/`prompt_prefix`
-  operation (CP step 4). It degrades to empty exactly as the internal API does (no card is
-  never a guess), and per-project opt-in already governs whether one exists.
-- [ ] Add a bounded ground-truth Git read (branch, status, changed-file list, diff stat) over
-  the existing Git service, never full patch bodies and never outside the Project's roots.
-  Design law 6: a session reviewing sibling work should condition on the diff, not on the
-  sibling's story about the diff.
+### Deliberately not included
+
+A tool earns its place here only by answering something the caller cannot answer itself.
+Every swe-mux agent session is a CLI with shell access, so anything reachable by running a
+command in a directory it already knows is not a daemon capability, it is a wrapper.
+
+- **Bounded Git read (branch, status, changed files, diff stat): dropped.** The caller can run
+  `git status` and `git diff --stat` itself, and a sibling's worktree path comes from
+  `get_session`, so the cross-session case resolves through the shell too.
+  Design law 6 still holds (condition on the diff, not on the sibling's story about it); it
+  simply does not need an MCP tool to hold.
+- **`project_card()`: dropped unless the card demonstrably beats reading the repository.**
+  A distilled architecture summary competes with the agent reading root instructions and the
+  tree directly, which costs it nothing and is always current.
+  Reopen only with evidence that the card answers something the repository does not.
+
+### Memory-source reads pulled forward from Phase 7.5
+
+These are thin callers over shipped Agent Context reads, so they belong with the cheap tools
+rather than hostage to the Phase 7.5 semantic layer.
+Both are blocked on the Phase 6 harness-coverage fix, because a bridge over a two-harness
+inventory would be harness-general in name only.
+
+- [ ] `memory_sources()` - Project-scoped inventory of the same root-instruction and
+  learned-memory sources the Agent Context drawer reads, with harness, scope, capability,
+  content hash, modified time, and entrypoint kind.
+- [ ] `read_memory(source_id)` - exact bounded read of one inventoried source, resolved through
+  the typed daemon operation, never a caller-supplied filesystem path.
 
 ### Closing the loops that Phase 5 left open
 
@@ -1357,6 +1397,11 @@ Scope misses and true misses stay indistinguishable, and empty beats a weak matc
   interrupt, end a session, or write to a PTY. Pinned by the tool-set allowlist test.
 - [ ] Adding these tools costs no new substrate: each one is traceable to a service that
   shipped in an earlier phase.
+- [ ] A session on one harness can read an available memory source produced by another through
+  the same Project-scoped inventory, with exact attribution and no prompt-time bulk injection or
+  store mutation.
+- [ ] No tool here duplicates something the calling session could answer with a shell command in
+  a directory it already knows.
 
 ## Phase 5.8 - SSH boundary handling in terminals
 
@@ -1367,32 +1412,26 @@ What does not survive the SSH boundary is every mux *integration*, and it fails 
 secret, transcript tailing reads local files, `local_directory_from_osc7` discards any OSC 7
 URI that is not an existing local directory so runtime cwd freezes at its last local value,
 and status detection has no model for an `ssh` password or host-key prompt. This phase makes
-that degradation explicit, makes the prompts safe, and makes "SSH into a host" a named profile
-instead of something the user retypes.
+that degradation explicit and makes the prompts safe.
 
 This phase is deliberately not remote execution. A remote host does not become an execution
 host here: no remote filesystem provider, no host-scoped Git, no deployed agent bridge. Those
-belong to Phase 9's boundaries and the decision-gated list.
+belong to the decision-gated list.
 
-### SSH shell profiles
+**Split 2026-08-10 into a correctness half and a convenience half.** The correctness half is
+the whole reason this phase exists: today a crossed session reports stale values as current and
+an auth prompt can read as `idle`, which is the only open work in the roadmap with a
+delivery-safety consequence.
+The convenience half (named SSH profiles) makes retyping `ssh box` unnecessary and can be
+dropped without losing anything.
+Ship the correctness half on its own.
 
-- [ ] Ship an SSH shell-profile pattern over the existing profile machinery: executable `ssh`,
-  argv naming a destination, resolved through the same raw/request/Project/project-local/global
-  precedence every other profile uses. No new spawn path and no new session kind.
-- [ ] Treat `~/.ssh/config` as the source of truth for aliases, identity files, users, ports,
-  and proxy settings. A profile names a destination; mux never re-models SSH host fields into
-  its own config, because a stored copy that disagrees with what OpenSSH resolves is the entire
-  bug class this avoids.
-- [ ] Inject `-o ServerAliveInterval=20 -o ServerAliveCountMax=2` into a generated profile only
-  when the user's own argv and resolved config do not already set them, so a dropped link fails
-  fast instead of hanging the pane. A user-authored SSH argv is authoritative and is never
-  rewritten, the same exemption the PowerShell bootstrap already grants `-Command`/`-File`.
-Standing boundary rather than a task: mux never persists an SSH password or key passphrase and
+Standing boundary across both halves: mux never persists an SSH password or key passphrase and
 never prompts for one outside the PTY.
 Authentication happens where the user can see it, and key and agent auth are the supported
 paths.
 
-### Remote-boundary detection and honest degradation
+### Correctness: remote-boundary detection and honest degradation
 
 - [ ] Detect that a session has crossed an SSH boundary. An OSC 7 URI with a non-local
   authority is already parsed and discarded by `runtime_cwd.py`; it becomes the signal instead
@@ -1407,7 +1446,7 @@ paths.
   auto-delivery or queue target by promotion, and remains a manual send target exactly as any
   shell is.
 
-### Status detection for SSH prompts
+### Correctness: status detection for SSH prompts
 
 - [ ] Classify `ssh` authentication prompts as blocked on a human rather than `idle`: password,
   key passphrase, host-key `yes/no` confirmation, and keyboard-interactive/MFA challenges.
@@ -1419,6 +1458,19 @@ paths.
   and verify SSH sessions against the standing-activity axis: a quiet remote shell is idle, a
   remote long-running command is not.
 
+### Deferred: SSH shell profiles (convenience)
+
+Nothing here fixes a wrong answer; it saves the user from retyping a destination.
+Schedule it only if the correctness half ships and the retyping actually annoys you.
+Design constraints, kept so they are not re-derived: a profile is executable `ssh` plus argv
+naming a destination through the existing profile precedence with no new spawn path;
+`~/.ssh/config` stays the only source of truth because a mux-stored copy that disagrees with
+what OpenSSH resolves is the entire bug class to avoid; and
+`-o ServerAliveInterval=20 -o ServerAliveCountMax=2` is injected only when the user's own argv
+and resolved config do not already set them, since a user-authored SSH argv is authoritative.
+
+The matching `mux doctor` SSH check in Phase 7 is deferred with it.
+
 ### Documentation
 
 - [ ] Document reaching mux over `ssh -L` in `design/features/remote-access.md`. This carries
@@ -1429,7 +1481,8 @@ paths.
   same document rejects, and state that an SSH-forwarded peer inherits the same terminal and
   code-execution authority an admitted tailnet peer has.
 - [ ] Document SSH profiles and their compatibility limits in
-  `design/features/shell-profiles.md` beside the existing WSL and CMD entries.
+  `design/features/shell-profiles.md` beside the existing WSL and CMD entries, if and when the
+  deferred profile half ships.
 - [ ] Document the prompt classes and the remote-boundary unavailability vocabulary in
   `design/features/status-detection.md`.
 
@@ -1593,9 +1646,17 @@ cheap-model "why" on top of the deterministic detectors from Phase 3.7; attentio
 last in the control-plane order because it needs every other signal. Depends on Phase 5.5
 substrate, Phase 2 telemetry, and the Phase 3 notification channels.
 
+Split by cost and by evidence: attention ranking answers "which of 17 sessions needs me", which
+nothing else does, while narration is a model-cost "why" layered over annotations the
+deterministic detectors already write with their evidence attached.
+Build the ranking half first, and gate narration on the annotation surface actually being read.
+If the annotations are not being looked at today, narration is polish on an unused feature and
+the honest fix is to make annotations worth reading, not to describe them more fluently.
+
 - [ ] Model narration (CP §14): the `llm` action kind over normalized slices, stateless,
   read-only, budgeted. A narration failure degrades to the deterministic detector's output,
   never to silence and never to a fabricated cause.
+  Gated on evidence that the deterministic annotations are being read.
 - [ ] Attention ranking / inbox (CP §6.7): fan-out estimate, a daily interrupt budget, the
   four delivery channels, and breakpoint delivery.
 - [ ] Honor the interrupt budget as a hard bound. A usually-wrong signal is worse than no
@@ -1632,47 +1693,62 @@ Starting point: `mux` is a thin JSON wrapper over a dozen endpoints
 `history-duplicates`, `resume`, `doctor`), it prints raw API JSON with no table or `--json`
 distinction, and `doctor` is an alias for `GET /api/remote/status`.
 
-- [ ] Expand `mux` into a practical daemon controller: filtered session listing;
-  Project-bound profile/custom-argv spawn; rename/pin/kill; Project/Group management;
-  repository-group inspection; broadcast membership/send; history filters/resume; profile
-  inspection; queue/mailbox inspection; and safe Settings/config reads/updates.
-- [ ] Keep browser presentation actions out of the CLI. CLI parity covers useful daemon
-  control, not pane/modal presentation, visual focus, drag gestures, or theme preview.
+**Scope cut 2026-08-10 from CLI parity to CLI usefulness.** The original item chased feature
+parity with the browser across eleven inspection surfaces.
+Two things retired most of that: the browser and mobile surfaces are the interactive client and
+do not need a text twin, and MCP now serves the structured-read consumer that would otherwise
+have been scripts shelling out to `mux`.
+What is left is the part with no substitute: things you run when the UI is not the right tool,
+and things a script needs.
+
+- [ ] Give the CLI stable ids, conflicts for ambiguous names, actionable exit codes, structured
+  errors, human-readable tables by default, and an explicit `--json`; scripts never parse UI
+  prose.
 - [ ] Resolve localhost, direct-tailnet, or optional Serve URLs from config while preserving
   explicit `MUX_URL` precedence.
-- [ ] Use stable ids, conflicts for ambiguous names, actionable exit codes, structured
-  errors, human-readable tables, and `--json`; scripts never parse UI prose.
 - [ ] Take every backend/harness list, choice, and label from the harness registry.
   A CLI that hardcodes `claude`/`codex` reintroduces exactly what
   `archive/HARNESS_ABSTRACTION_AND_OMP.md` removed, one layer out.
-- [ ] Route browser, CLI, mailbox, mux MCP, and future Telegram actions through shared typed
-  daemon operations. The MCP surface (Phases 4.5/7.5) is one more consumer of these ops, never
-  a parallel implementation: authorization, readiness, bounds, and audit live in the op.
-- [ ] Add read-only CLI inspection for automation status, normalized capabilities, rules,
-  firings, annotations, observer spend/budgets, provider health, delivery readiness,
-  process anomalies, quota/reset evidence, Agent Context/provider-memory capabilities, and
-  message delivery status.
-- [ ] Permit explicit enable/disable/shadow/dry-run operations through typed APIs. Never
-  accept or print an OpenRouter/provider secret through ordinary output or JSON diagnostics.
+- [ ] Add only the operations that are genuinely better without a browser: scriptable spawn with
+  Project-bound profile and argv, session listing with filters, kill, and history resume.
+  Anything else waits for a concrete need rather than a parity list.
+- [ ] Keep browser presentation actions out of the CLI, and keep every action routed through the
+  shared typed daemon operations so authorization, readiness, bounds, and audit live in the op
+  rather than in any one client.
+- [ ] Never accept or print a provider secret through ordinary output or JSON diagnostics.
+
+Dropped: broad read-only inspection commands for automation status, capabilities, rules,
+firings, annotations, budgets, readiness, process anomalies, quota evidence, memory
+capabilities, and message delivery status.
+The browser shows these to humans and MCP serves them to agents, so a third rendering is
+maintenance with no distinct consumer.
 
 ### Consolidated diagnostics
 
-- [ ] Expand `mux doctor` into a read-only diagnostic covering daemon/frontend version,
-  ConPTY and Job Object health, shell/profile executables, Claude/Codex promotion,
-  writable global/Project paths, Project config, artifact/migration conflicts, `ccusage`,
-  process inspection/orphan evidence, previews/listeners, Tailscale/Serve, normalized
-  observer/delivery capabilities, rule queue/last-known-good state, OpenRouter catalog,
-  budgets, account quota sampling, queue/mailbox health, and instruction-sync conflicts.
-- [ ] Include an **observation-freshness check** (Phase 5.4): agent sessions whose followed
-  transcript is stale, whose bound conversation id no longer matches the CLI's, or whose
-  rollover was blocked by an unresolvable sibling. This is the one class of fault that
-  presents as a perfectly healthy session, so a silent daemon is not evidence of health.
-- [ ] Include an SSH-profile check (Phase 5.8): each configured destination resolves through
-  `ssh -G` without connecting, keepalive options are present, and any session currently past a
-  remote boundary is listed with the integrations that boundary disabled. Report destinations
-  and options only; never a key path's contents, a passphrase, or a credential.
+This is aggregation, not new capability.
+The daemon already serves 230 routes including `/api/health`, `/api/remote/status`,
+`/api/diagnostics/{background,network,status-health}`, and per-session `state-log` and
+`diagnostic-bundle`, so `mux doctor` is a formatter over what exists plus the few checks below
+that nothing currently answers.
+
+- [ ] Turn `mux doctor` from its `GET /api/remote/status` alias into one read-only report over
+  the existing diagnostic endpoints: daemon/frontend version, ConPTY and Job Object health,
+  shell/profile executables, harness promotion, writable global/Project paths, Project config,
+  artifact/migration conflicts, `ccusage`, process/orphan evidence, previews/listeners,
+  Tailscale/Serve, observer/delivery capabilities, rule state, OpenRouter catalog, budgets,
+  quota sampling, queue health, and instruction-copy conflicts.
+- [ ] Add the **observation-freshness check** (Phase 5.4), which nothing exposes today: agent
+  sessions whose followed transcript is stale, whose bound conversation id no longer matches the
+  CLI's, or whose rollover was blocked by an unresolvable sibling. This is the one class of
+  fault that presents as a perfectly healthy session, so a silent daemon is not evidence of
+  health.
 - [ ] Publish machine-readable capability/version information through health diagnostics;
   redact secrets, terminal bytes, prompt/message content, media, and credentials.
+
+Deferred with the Phase 5.8 convenience half: the SSH-profile check that resolves each
+configured destination through `ssh -G` without connecting.
+The remote-boundary listing it also carried belongs to the correctness half and lands with the
+observation-freshness reporting instead.
 - [ ] Give every failed check a concrete remedy and distinguish unavailable optional
   features from failures compromising terminal ownership, cleanup, or delivery safety.
 
@@ -1682,11 +1758,11 @@ distinction, and `doctor` is an alias for `GET /api/remote/status`.
   Host/Origin/WS boundaries, Projects/layouts, history/resume, events/rules/annotations,
   OpenRouter fixtures, Project resources/accounts, Git/worktrees, CLI, process ownership,
   previews/reaping, telemetry, queues/mailboxes, and the instruction copy operation.
-- [ ] Add real-browser/Playwright coverage for Project creation/folder selection,
-  default/custom session creation, resources/autosave, replacement/kill, Projects/panes,
-  account switching, palette/input transparency, Settings, history, processes/previews,
-  quota/reset UI, prompt library/queue, clipboard media, tailnet, responsive/touch,
-  orientation, focus management, drag ordering, and accessibility.
+- [ ] Add real-browser/Playwright coverage where a defect would be invisible to the existing
+  suites and expensive to catch by hand: the mobile keyboard viewport, pane drag and split,
+  terminal input ownership across two clients, and focus management.
+  Prefer a small suite that is trusted and kept green over a broad matrix that rots; add a case
+  when a real defect escapes, rather than enumerating every screen up front.
 - [ ] Add real Windows ConPTY integration tests for paths with spaces/Unicode, large output,
   resize, Ctrl+C, bracketed paste, input-owner handoff, browser reconnect, process
   attribution, forced daemon death, manual queue send, and safe auto-delivery races.
@@ -1712,13 +1788,15 @@ all-sessions record queryable by a first-person agent mid-task. It sits here bec
 Phase 5.5 substrate underneath and the Phase 7 typed daemon operations to call through, and
 because it inherits the transport, identity, and restart contract already proven in Phase 4.5.
 
+**Split 2026-08-10.** The memory-source reads (`memory_sources`, `read_memory`) were thin
+wrappers over shipped Agent Context and are pulled forward into Phase 5.6, so they are no longer
+hostage to substrate that may never be built.
+What remains here is the genuinely semantic half, and all of it is gated on the Phase 5.5 scan
+timeline actually shipping.
+If Phase 5.6's free reads cover the need and Phase 5.5 shrinks, this phase shrinks with it.
+
 ### v1 tool surface
 
-- [ ] `mux.memorySources()` — Project-scoped inventory of the same root-instruction and
-  provider-memory sources the Agent Context drawer can read, including provider, scope,
-  capability, content hash, modified time, and entrypoint/topic kind.
-- [ ] `mux.readMemory(source_id)` — exact, bounded read of one inventoried source. The opaque id
-  resolves through the typed daemon operation; callers never submit a filesystem path.
 - [ ] `mux.provenance(file)` — who touched this, at what hash, and what tests ran on it
   (CP §6.1).
 - [ ] `mux.priorResolutions(error)` — normalized error signature to a previously verified fix
@@ -1728,23 +1806,21 @@ because it inherits the transport, identity, and restart contract already proven
 - [ ] Cross-session interlocks (CP §6.6) and digests (CP §6.8) as the human-facing half of the
   same substrate.
 
-### Provider-memory bridge
+### Harness-memory bridge
 
-- [ ] Let any authenticated agent session read every available Agent Context memory source in
-  its own Project, whichever harness produced it. Cross-Project sources are
-  indistinguishable from missing; disabled, unsupported, unreadable, and stale sources remain
-  explicit results rather than empty success.
-  This inherits the Phase 6 registry gap: a bridge built over a claude/codex-only inventory
-  would be harness-general in name only.
-- [ ] Keep access pull-only. Vendor memory is never injected into every prompt, copied into the
-  other vendor's private store, or written by MCP. The Phase 6 browser overwrite remains a human
-  operation limited to root `CLAUDE.md`/`AGENTS.md`; it is not an agent tool.
-- [ ] Attribute raw provider memory with provider, repository/Project scope, source id/hash, and
-  modification time. Raw memory is inspectable context, not a verified fact: it enters
+The tools moved to Phase 5.6; these are the rules that govern them wherever they ship.
+
+- Access stays pull-only. Harness memory is never injected into every prompt, copied into
+  another harness's private store, or written by MCP. The Phase 6 instruction overwrite remains
+  a human operation over declared root files; it is not an agent tool.
+- Cross-Project sources are indistinguishable from missing, and disabled, unsupported,
+  unreadable, and stale sources stay explicit results rather than empty success.
+- Raw memory is attributed with harness, repository/Project scope, source id and hash, and
+  modification time. It is inspectable context, not a verified fact: it enters
   `priorResolutions`, `deadEnds`, `provenance`, or standing instructions only through the
-  existing evidence/confidence gates and keeps its origin.
-- [ ] Reuse the Phase 6 adapters and typed daemon reads. Do not couple MCP to a provider's
-  undocumented database or silently downgrade an adapter's unsupported status to no memories.
+  evidence and confidence gates, keeping its origin.
+- Reads reuse the Phase 6 adapters and typed daemon operations. MCP never couples to a harness's
+  undocumented database and never downgrades an `unsupported` status to "no memories".
 
 ### Retrieval precision gate
 
@@ -1769,11 +1845,8 @@ because it inherits the transport, identity, and restart contract already proven
   records, and returns empty in preference to a low-confidence match.
 - [ ] v1 adds no authority: the surface remains read-only, with writes still confined to the
   Phase 5 queue callers.
-- [ ] A Claude agent can read an available Codex memory source and a Codex agent can read an
-  available Claude source through the same Project-scoped inventory, with exact attribution and
-  no prompt-time bulk injection or provider-store mutation.
 - [ ] Enabling v1 is per-project opt-in through the existing enablement DAG, and disabling it
-  leaves the Phase 4.5 v0 surface working.
+  leaves the Phase 4.5 and 5.6 read surfaces working.
 - [ ] No tool result silently merges two agent runs, and a caller can always tell which run a
   result came from.
 
@@ -1865,117 +1938,60 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
 - [ ] Disabling the grant leaves every earlier MCP phase working unchanged, and the browser's
   own stop/interrupt controls are unaffected by any setting here.
 
-## Phase 8 — Telegram multi-session control
+## Phase 8 - Telegram multi-session control (descoped)
 
-This phase carries forward original Roadmap Phase 9. Telegram consumes typed Phase 5/7
-mailbox and daemon operations; it does not create a second session, observer, account, or
-conversation model.
+**Descoped 2026-08-10 to a decision-gated capability.** The phase number is kept so later
+phases are not renumbered; nothing here is scheduled work.
 
-Scope narrowed by what shipped: outbound alerting to a phone is already covered by web push
-with device-presence routing, so the remaining value here is the **inbound** half - selecting a
-session, replying into its queue, and answering an approval from a chat client - plus labelled
-outbound messages that a reply can be threaded to.
-Re-evaluate whether that half is worth a Telegram adapter before starting it: a phone already
-reaches the full browser UI over the tailnet, and the mobile surfaces are first-class.
+What retired it is what shipped around it.
+Outbound alerting to a phone is web push with device-presence routing.
+Inbound control is the mobile browser UI over the tailnet, which is first-class and reaches
+every operation rather than a chat-shaped subset.
+What Telegram would still add is replying and approving from a chat app without opening the UI,
+which is a convenience with a real cost: a bot token to store, a poller or webhook to own,
+chat/message/thread/callback mappings to persist, and a second confirmation surface to keep
+prompt-injection-safe.
 
-### Provider and routing
-
-- [ ] Implement one daemon-owned Telegram adapter per configured bot token. Never start a
-  competing poller per Claude/Codex session or depend on backend-native channel plugins.
-- [ ] Persist opaque Telegram chat/message/thread/callback mappings to mux session/run and
-  Project ids. Replies target their originating run; unthreaded messages require explicit
-  active-session selection or a picker. A reply whose originating run has been superseded
-  (agent exit, demotion, or a Phase 5.4 conversation rollover) is refused with a re-pick, never
-  delivered into the successor conversation — the remote channel makes the gap between
-  notification and reply hours long, so this is where a stale run binding is most likely.
-- [ ] Label outbound prompts, approvals, completions, reset alerts, and responses with
-  backend, session, and Project identity.
-- [ ] Support Select session, Open, Approve, Reject, Queue/Reply, and Clear selection only
-  when the normalized typed operation authorizes it. Telegram never writes directly to a
-  PTY, guesses display-name targets, or invents provider state.
-
-### Configuration, safety, and reliability
-
-- [ ] Keep Telegram optional/disabled by default. Store bot secrets outside public config,
-  exports, and logs; expose enablement, allowlists, pairing, revocation, delivery status,
-  and test notification in Settings.
-- [ ] Enforce sender allowlists, pairing/revocation, polling/webhook exclusivity, update
-  offsets, deduplication, body/media limits, retry/backoff, rate limits, expiry, and
-  prompt-injection-safe confirmations.
-- [ ] Preserve one-user history semantics. Telegram may report selected provider account
-  but never captures/removes provider OAuth credentials or creates another archive.
-- [ ] Persist correlation/delivery metadata without bot secrets, terminal bytes, message
-  bodies, uploaded media, or backend credentials in general event/audit records.
-- [ ] Route incoming prompts through the Phase 5 mailbox/readiness policy; remote origin
-  never bypasses an unsafe/unknown delivery state.
+Preconditions for reopening it, so the decision is evidence-driven: a repeated, recorded case of
+wanting to answer a session from a phone where opening the UI was genuinely not workable.
+Should it ever be built, the constraints are unchanged: one daemon-owned adapter per bot token
+and never a poller per session, replies bound to their originating run and refused with a
+re-pick when that run was superseded, every incoming prompt through the Phase 5 queue and
+readiness policy, and bot secrets kept out of config exports, logs, and audit records.
 
 ### Phase 8 exit criteria
 
-- [ ] One bot routes concurrent Claude/Codex notifications, queued replies, and supported
-  approvals without ambiguous delivery.
-- [ ] Selection, mappings, retries, deduplication, restart recovery, revocation, expiry, and
-  delivery readiness pass provider-adapter and integration tests.
+## Phase 9 - SSH and native terminal attach (descoped)
 
-## Phase 9 — SSH and native terminal attach
+**Descoped 2026-08-10 to a decision-gated capability.** The phase number is kept so later
+phases are not renumbered; nothing here is scheduled work.
 
-This phase carries forward original Roadmap Phase 10. Direct Tailscale browser access
-remains the supported remote product path.
+"SSH" named two unrelated things and only one of them was ever this phase.
+SSH *outbound*, what a user does by typing `ssh` in a pane, is owned by Phase 5.8.
+SSH *inbound* as a transport to reach mux is shipped behavior whose documentation is also in
+Phase 5.8.
+What was left here is `mux attach`, a native-terminal client for driving a session without a
+browser.
 
-### Scope: two axes that share only a name
+Why it is not scheduled: the browser reaches every session from anywhere on the tailnet, the
+mobile surfaces are first-class, and voice control covers the hands-free case, so `mux attach`
+serves the narrow case of an SSH login with no browser available.
+Against that, it is expensive and structurally risky: it must be a second consumer of the
+supervisor contract and its input arbitration, it must survive a daemon restart the way a
+browser client does, and it must route every action through the Phase 7 typed operations or it
+becomes exactly the parallel ownership implementation those operations exist to prevent.
 
-"SSH" names two unrelated pieces of work, and conflating them is why the original phase read
-as one item:
+Constraints that hold if it is ever built: no dependency on any SSH multiplexing primitive,
+since Win32 OpenSSH provides no `ControlMaster`/`ControlPath` and there is no native Windows
+mosh client, so a shared master socket or roaming UDP transport does not port to the proving
+platform; SSH-adjacent runtime state owned at daemon or supervisor lifetime and never at a
+browser client's; destinations resolved through `ssh -G` with a mux-stored field treated as an
+override only when explicitly non-default; and SSH transport authentication, Tailscale
+admission, and mux session lifetime kept as three separate concepts, since an SSH-admitted peer
+has the same terminal and code-execution authority as a tailnet peer and mux still has no login
+of its own.
 
-- **SSH inbound, as a transport to reach mux.** Its documentation half is shipped behavior and
-  is scheduled in Phase 5.8; what remains here is `mux attach`, a native-terminal client that
-  makes an SSH login a usable way to drive a session.
-- **SSH outbound, from inside a session.** Everything a user does by typing `ssh` in a
-  terminal. Owned by Phase 5.8, complete there, and out of scope in this phase.
-
-Neither axis makes a remote host an execution host. That is a third thing, recorded in the
-decision-gated list.
-
-### Forwarding and attach
-
-- [ ] Add `mux attach SESSION` over the existing PTY contract: raw input/output, resize,
-  input ownership, exit status, reconnect, and a detach chord that never kills the
-  daemon-owned session.
-- [ ] Make browser and native attachments use the same explicit input-owner handoff.
-  Read-only observers and queued delivery never duplicate terminal input/device responses.
-- [ ] Add SSH-driven attach tests for disconnect/reconnect, Unicode, resize, Ctrl+C,
-  bracketed paste, ownership handoff, queued-delivery exclusion, and daemon/session exit.
-
-### Attach transport constraints
-
-- [ ] Build `mux attach` as a client of the **supervisor**, not of a daemon-owned ConPTY. The
-  session-preserving reload split moved PTY ownership out of process, so a native client is a
-  second consumer of the supervisor contract and its input arbitration, and must survive a
-  daemon restart the way a browser client does.
-- [ ] Route every attach action through the Phase 7 typed daemon operations. A native client
-  that reimplements ownership, readiness, or bounds beside the browser is the parallel
-  implementation Phase 7 exists to prevent, and this phase must not ship before those
-  operations exist.
-- [ ] Depend on no SSH multiplexing primitive. Win32 OpenSSH provides no
-  `ControlMaster`/`ControlPath`, and there is no native Windows mosh client, so designs built
-  on a shared authenticated master socket or a roaming UDP transport do not port to the
-  proving platform. Verify the current Win32 OpenSSH position before relying on this either
-  way; treat multiplexing as absent until proven present.
-- [ ] Own any SSH-adjacent runtime state at daemon or supervisor lifetime, never at a browser
-  client's lifetime. Connection state, listeners, and forwards outlive the window that created
-  them, and re-registering a client handler must not replace the manager that live sessions
-  still hold.
-
-### Boundaries
-
-- [ ] Never store an SSH password or key passphrase, in this phase or any later one. Key and
-  agent authentication only; a passphrase is entered where the user can see the prompt.
-- [ ] Resolve destinations through `ssh -G` and treat any mux-stored field as an override only
-  when it is explicitly non-default. A persisted host that silently beats the resolved
-  hostname, or a stored port `22` mistaken for an explicit choice, is the recurring defect
-  class in mature SSH clients.
-- [ ] Keep SSH transport authentication, Tailscale admission, and mux session lifetime as three
-  separate concepts in both code and documentation. An SSH-admitted peer has the same terminal
-  and code-execution authority as a tailnet peer, and mux still has no login of its own.
+Neither axis makes a remote host an execution host. That remains separately decision-gated.
 
 ### Prior art considered
 
@@ -1992,14 +2008,10 @@ rule that no change may assume local-only execution. The keepalive defaults, the
 `~/.ssh/config`-as-truth rule, and the lifetime-ownership constraint are taken from these; the
 relay, the multiplexed transport, and the remote provider stack are not.
 
-### Phase 9 exit criteria
-
-- [ ] SSH disconnect leaves the mux session live; later attach restores interaction without
-  changing browser replay/attach semantics.
-- [ ] Documentation distinguishes session lifetime, SSH transport authentication, Tailscale
-  access, input ownership, detach, and kill.
-- [ ] `mux attach` shares one input-ownership implementation with the browser, proven by a test
-  that drives both clients against one session.
+Acceptance, if it is ever reopened: an SSH disconnect leaves the mux session live and a later
+attach restores interaction without changing browser replay semantics, and `mux attach` shares
+one input-ownership implementation with the browser, proven by a test that drives both clients
+against one session.
 
 ## Phase 10 — WSL agent bridge and native Linux/macOS
 
@@ -2125,6 +2137,14 @@ failure behavior:
 - Automatic termination of suspected orphan processes. Agent-initiated termination of a
   *session* is a different question and is scheduled in Phase 7.6; this entry remains about
   the daemon acting on processes it merely suspects are orphaned.
+- **Telegram control (descoped from Phase 8, 2026-08-10).** Web push covers outbound alerting
+  and the mobile browser covers inbound control, so a chat adapter would add a bot token, a
+  poller or webhook, persistent chat-to-run mappings, and a second injection-safe confirmation
+  surface to buy "reply without opening the UI". Reopen on a recorded pattern of needing it.
+- **`mux attach`, a native terminal client (descoped from Phase 9, 2026-08-10).** The browser
+  reaches every session over the tailnet and voice covers hands-free, leaving the narrow case of
+  an SSH login with no browser; against that it must become a second consumer of the supervisor
+  contract and its input arbitration. Full constraints are retained in the Phase 9 section.
 - swe-mux as a multi-host control plane: SSH hosts as execution hosts, a remote filesystem
   provider, host-scoped Git with per-host capability caching, remote port-forward management,
   or a deployed remote relay or agent bridge. Phases 5.8 and 9 deliberately stop at the
@@ -2164,8 +2184,8 @@ Resolved out of this list, recorded so neither is re-proposed as gated:
 | Phase 8 practical CLI | Phase 7 Practical CLI control |
 | Phase 8 `mux doctor` | Phase 7 Consolidated diagnostics |
 | Phase 8 Windows tests/CI/soak | Phases 1 and 7 |
-| Phase 9 Telegram | Phase 8 |
-| Phase 10 SSH/native attach | Phase 9 |
+| Phase 9 Telegram | Phase 8, descoped 2026-08-10 to decision-gated |
+| Phase 10 SSH/native attach | Phase 5.8 (outbound + inbound docs); `mux attach` descoped 2026-08-10 to decision-gated |
 | Phase 10 OpenSSH forwarding documentation | Phase 5.8 |
 | Phase 11 WSL bridge and Linux/macOS | Phase 10 |
 | Phase 12 packaging/release | Phase 11 |
