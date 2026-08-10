@@ -227,10 +227,21 @@ Approval detection has an internal and a user-visible boundary.
 `approval_detected` blocks delivery readiness immediately but does not change `SessionState`, run automation attention, play a sound, or route web push.
 If the approval remains unresolved for `APPROVAL_STABILIZATION_SECONDS` (5 s), the daemon transitions to `awaiting(approval)` and emits one stabilized `approval_needed` event.
 Positive resumed-work evidence or terminal input cancels the pending approval before the boundary.
+Cancellation is its own step (`note_activity_evidence`) rather than a side effect of `_transition`, because the evidence that matters most often changes no state: a `PostToolUse` hook on a session the transcript is driving, and a resume record arriving while the session still reads `working`, both used to return before reaching the cancel and left the timer to expire on its own.
+`PreToolUse` is deliberately not counted - Codex fires it *before* the permission decision, so it proves an attempt, not an answer.
 The PTY approval screen vetoes cancellation from a stale working record.
 The candidate timestamp and evidence are mirrored into supervisor-owned metadata, so a session-preserving daemon reload resumes the remaining delay instead of losing or restarting it.
 Questions, elicitation prompts, and rate limits remain immediate because they are not routinely auto-approved.
-The transition ledger records `approval_stabilization_started`, `approval_stabilization_coalesced`, `approval_stabilization_cancelled`, and `approval_stabilization_committed` so a missing or late alert is reconstructable.
+
+**Delegated approvals.**
+Codex can hand every approval to an automated reviewer instead of the user (`approvals_reviewer: auto_review`, the CLI's "Automatic approval").
+It still fires `permission_request`, there is no resolution hook, and the decision is written nowhere: across every August 2026 rollout, approval records appear exactly zero times.
+The only evidence the reviewer said yes is the tool *finishing*, so any auto-approved tool that outran the 5 s window became sidebar attention, a turn-completion badge, and a push notification for a question nobody was ever asked - measured live on 2026-08-09, an 11 s `exec` committed at 5.0 s and was resumed 5.3 s later.
+So a delegated approval is held past the stabilization window until this session's own screen actually shows the dialog, which is what an escalation to the human looks like and what an auto-approval never produces.
+`APPROVAL_AUTO_REVIEW_CEILING_SECONDS` (60 s) is the backstop for a screen the classifier cannot read: a late approval is a nuisance, a hidden one strands the session.
+The setting is read per thread from the rollout's `turn_context` and `thread_settings_applied` rather than from `config.toml`, because the CLI's own picker changes it live and the file would then describe a session that no longer matches it; a session whose setting is unknown keeps the plain window.
+
+The transition ledger records `approval_stabilization_started` (carrying `delegated`), `approval_stabilization_coalesced`, `approval_stabilization_cancelled`, and `approval_stabilization_committed` (carrying `gate`: `stabilized`, `screen`, or `ceiling`) so a missing or late alert is reconstructable.
 
 ### Idle sub-reason
 

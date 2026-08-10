@@ -1351,6 +1351,10 @@ async def _resume_from_awaiting(
     screen still shows a permission dialog, a parallel tool's record must not
     hide a prompt the user has yet to answer.
     """
+    # Ordered proof of progress retires an approval that has not yet surfaced,
+    # whatever the displayed state is: a delegated approval is answered while the
+    # session still reads `working`, so waiting for `awaiting` would never see it.
+    note_activity_evidence(session, f"activity:{evidence}")
     if session.record.state != "awaiting":
         return
     state = _observation_state(session)
@@ -1630,6 +1634,27 @@ def conversation_unbound(session: Session) -> bool:
 
 MAX_REMEMBERED_PROMPT_CHARS = 4000
 APPROVAL_STABILIZATION_SECONDS = 5.0
+# Codex can hand each approval to an automated reviewer instead of the user (the
+# CLI's "Automatic approval": `approvals_reviewer: auto_review`). It still fires
+# `permission_request`, and there is no resolution hook and no rollout record of
+# the decision - measured across every August 2026 rollout, approvals appear in
+# the transcript exactly zero times. The only evidence that the reviewer said yes
+# is the tool *finishing*, which for anything slower than the stabilization window
+# lands after the approval has already become sidebar attention and a push
+# notification for a question nobody was ever asked.
+#
+# So a delegated approval is held until the CLI actually draws the dialog, which
+# is what an escalation to the human looks like and what an auto-approval never
+# does. The ceiling is the backstop for a screen the classifier cannot read: a
+# late approval is a nuisance, a hidden one strands the session.
+APPROVAL_AUTO_REVIEW_CEILING_SECONDS = 60.0
+APPROVAL_SCREEN_POLL_SECONDS = 1.0
+# Values of Codex's `approvals_reviewer` that mean "something other than the user
+# answers this". The sibling `approval_policy` is checked too because `never` and
+# `on_request_auto_review` say the same thing on CLIs that do not write the
+# reviewer field, and both are written kebab-cased in the rollout.
+CODEX_AUTOMATIC_APPROVAL_REVIEWERS = frozenset({"auto_review"})
+CODEX_AUTOMATIC_APPROVAL_POLICIES = frozenset({"never", "on_request_auto_review"})
 
 
 def _persist_approval_candidate(
@@ -1679,6 +1704,82 @@ def cancel_pending_approval(session: Session, reason: str) -> bool:
             }
         )
     return True
+
+
+def _note_approval_delegation(session: Session, payload: dict[str, Any]) -> None:
+    """Record whether this Codex thread answers its own approval requests.
+
+    Read per thread rather than out of `config.toml`, because the CLI's own picker
+    changes it live and the file would then describe a session that no longer
+    matches it. `turn_context` restates it at the head of every turn and
+    `thread_settings_applied` on every change, so both the opening setting and a
+    mid-session switch are seen, and a catch-up replay re-derives it for a session
+    the daemon adopted rather than started.
+    """
+    settings = payload.get("thread_settings")
+    source = settings if isinstance(settings, dict) else payload
+    reviewer = str(source.get("approvals_reviewer") or "").strip().lower().replace("-", "_")
+    policy = str(source.get("approval_policy") or "").strip().lower().replace("-", "_")
+    if not reviewer and not policy:
+        return
+    _observation_state(session)["approval_delegated"] = (
+        reviewer in CODEX_AUTOMATIC_APPROVAL_REVIEWERS
+        or policy in CODEX_AUTOMATIC_APPROVAL_POLICIES
+    )
+
+
+def note_activity_evidence(session: Session, reason: str) -> bool:
+    """Retire an unstabilized approval when the agent is provably still moving.
+
+    Cancellation used to be a side effect of `_transition`, which meant every
+    piece of evidence that proves an approval was answered *without* changing the
+    displayed state left the timer armed: a `PostToolUse` hook on a session the
+    transcript is driving returns before it transitions, and a resume record
+    arriving while the session still reads `working` returns before it too. Both
+    are exactly what an auto-approved tool produces.
+
+    The PTY veto is the same one `_resume_from_awaiting` applies, and for the same
+    reason: a parallel tool's record must not retire a prompt the user can see.
+    """
+    if not isinstance(_observation_state(session).get("pending_approval"), dict):
+        return False
+    if session_pty_state(session) == "approval":
+        return False
+    return cancel_pending_approval(session, reason)
+
+
+async def _await_approval_escalation(
+    session: Session, state: dict[str, Any], pending: dict[str, Any]
+) -> str:
+    """Watch a delegated approval until the CLI shows it, or the ceiling passes.
+
+    Returns the reason the wait ended, which is ledgered on the commit so
+    `/api/sessions/{sid}/state-log` can say whether an approval was surfaced
+    because the screen proved it or because the classifier went quiet.
+    """
+    ceiling_seconds = float(
+        getattr(
+            session,
+            "approval_escalation_ceiling_seconds",
+            APPROVAL_AUTO_REVIEW_CEILING_SECONDS,
+        )
+    )
+    poll_seconds = max(
+        0.0,
+        float(getattr(session, "approval_screen_poll_seconds", APPROVAL_SCREEN_POLL_SECONDS)),
+    )
+    deadline = float(pending["started"]) + ceiling_seconds
+    # unsupervised-loop-ok: one escalation watch for one approval, bounded by
+    # `APPROVAL_AUTO_REVIEW_CEILING_SECONDS` and cancelled with its settle task.
+    while True:
+        if state.get("pending_approval") is not pending:
+            return "cancelled"
+        if session_pty_state(session) == "approval":
+            return "screen"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return "ceiling"
+        await asyncio.sleep(min(poll_seconds, remaining))
 
 
 async def _request_stabilized_approval(
@@ -1758,6 +1859,7 @@ async def _request_stabilized_approval(
         getattr(session, "approval_stabilization_seconds", APPROVAL_STABILIZATION_SECONDS)
     )
     delay_seconds = max(0.0, stabilization_seconds - elapsed_before_start)
+    delegated = bool(state.get("approval_delegated"))
     transitions = getattr(session, "state_transitions", None)
     if transitions is not None:
         transitions.append(
@@ -1768,6 +1870,7 @@ async def _request_stabilized_approval(
                 "evidence": evidence,
                 "delay_seconds": delay_seconds,
                 "restored": restored,
+                "delegated": delegated,
             }
         )
     # Delivery readiness consumes this internal event. Sounds, UI attention,
@@ -1785,6 +1888,11 @@ async def _request_stabilized_approval(
         await asyncio.sleep(max(0.0, delay_seconds))
         if state.get("pending_approval") is not pending:
             return
+        gate = "stabilized"
+        if delegated:
+            gate = await _await_approval_escalation(session, state, pending)
+            if gate == "cancelled":
+                return
         state.pop("pending_approval", None)
         _persist_approval_candidate(session, None)
         if session.record.state in {"exited", "crashed"}:
@@ -1796,6 +1904,7 @@ async def _request_stabilized_approval(
                     "kind": "approval_stabilization_committed",
                     "source": source,
                     "evidence": evidence,
+                    "gate": gate,
                     "elapsed_seconds": round(
                         max(0.0, time.monotonic() - float(pending["started"])), 3
                     ),
@@ -1835,7 +1944,11 @@ async def _request_stabilized_approval(
             stabilized=True,
         )
 
-    if delay_seconds <= 0:
+    # The inline fast path is only safe while `settle()` cannot block: a delegated
+    # approval waits on the screen for up to the escalation ceiling, and awaiting
+    # that here would stall the caller - the observation loop, or the adoption
+    # path `restore_pending_approval` runs on during daemon startup.
+    if delay_seconds <= 0 and not delegated:
         await settle()
         return
 
@@ -2680,6 +2793,13 @@ async def apply_hook_observation(
             tool=tool,
         )
     elif event_type in {"PostToolUse", "PostToolUseFailure"}:
+        # Before the authority check, not after. A tool that ran to completion is
+        # proof its approval was answered, and that is true of a session whose
+        # displayed state the transcript owns as much as any other - returning
+        # first left the timer to expire on a question nobody was asked.
+        # `PreToolUse` is deliberately not evidence here: Codex fires it *before*
+        # the permission decision, so it proves an attempt, not an answer.
+        note_activity_evidence(session, f"activity:hook:{event_type}")
         if _transcript_authoritative(session):
             return
         await _transition(
@@ -3206,6 +3326,8 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             if model and model != session.record.model:
                 session.record.model = model
                 _publish_update(session)
+    if outer_type == "turn_context" or payload_type == "thread_settings_applied":
+        _note_approval_delegation(session, payload)
     if payload_type in CODEX_RESUME_PAYLOADS:
         # Tooling or the model is running again, so any approval was answered.
         await _resume_from_awaiting(session, events, event, evidence=str(payload_type))

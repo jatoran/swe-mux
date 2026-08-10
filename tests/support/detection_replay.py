@@ -185,6 +185,11 @@ class ReplaySession:
         self.observation_replay = False
         # Golden fixtures test stabilized semantics without wall-clock sleeps.
         self.approval_stabilization_seconds = 0.0
+        # The delegated-approval escalation watch, likewise. A fixture that says
+        # nothing about the screen must not hold an approval for the production
+        # ceiling; tests that care set these two explicitly.
+        self.approval_escalation_ceiling_seconds = 0.0
+        self.approval_screen_poll_seconds = 0.0
 
     def publish_update(self) -> None:
         return

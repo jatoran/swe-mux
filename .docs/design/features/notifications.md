@@ -58,6 +58,7 @@ semantic-dedup window caught none of them, because the flaps run 11-50 s. Catego
 are true the instant they are raised (`failure`, `reset`, questions, and elicitation) are never held.
 Approval attention has its own 5 s stabilization before `approval_needed` exists.
 The same stabilized event drives sidebar state, foreground sound, automation attention, and web push, so an auto-approved review produces none of them.
+An approval a Codex auto reviewer is answering is held further, until the CLI actually draws the dialog or a 60 s ceiling passes, because nothing else distinguishes it from an approval the user is being asked (see `status-detection.md` → Approval stabilization).
 This is separate from the 120 s waiting settle and from device deferral.
 
 A settle and a deferral are different questions and compose: the settle asks "did the agent

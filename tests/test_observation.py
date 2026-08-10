@@ -19,6 +19,7 @@ from swe_mux.observation import (
     _omp,
     _record_parser_observation,
     _remember_user_prompt,
+    _transcript_authoritative,
     apply_hook_observation,
     classify_transcript_event,
     observe_transcript,
@@ -865,6 +866,146 @@ async def test_immediate_question_replaces_a_pending_approval_candidate() -> Non
     emitted = [item for item in drain(queue) if item.type == "approval_needed"]
     assert len(emitted) == 1
     assert emitted[0].payload["kind"] == "input"
+
+
+def _delegated_codex_session() -> Any:
+    """A Codex session whose approvals are answered by the CLI's auto reviewer."""
+    session = cast(Any, ReplaySession("codex"))
+    session.approval_stabilization_seconds = 0.01
+    session.approval_escalation_ceiling_seconds = 0.2
+    session.approval_screen_poll_seconds = 0.01
+    return session
+
+
+async def _apply_turn_context(session: Any, events: EventBus, reviewer: str) -> None:
+    await _codex(
+        session,
+        {
+            "type": "turn_context",
+            "payload": {"approval_policy": "on-request", "approvals_reviewer": reviewer},
+        },
+        events,
+    )
+
+
+async def test_auto_reviewed_approval_stays_invisible_while_the_tool_runs() -> None:
+    """The reported flicker: a tool the auto reviewer approved but that outran the
+    stabilization window used to surface as attention before its own completion
+    could cancel it."""
+    session = _delegated_codex_session()
+    events = EventBus()
+    queue = events.subscribe()
+    await _apply_turn_context(session, events, "auto_review")
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    drain(queue)
+
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    assert [item.type for item in drain(queue)] == ["approval_detected"]
+    # Longer than the stabilization window, shorter than the escalation ceiling:
+    # the window alone would already have committed by now.
+    await asyncio.sleep(0.05)
+    assert session.record.state == "working"
+
+    await apply_hook_observation(session, "PostToolUse", {}, events)
+    await asyncio.sleep(0.25)
+
+    assert session.record.state == "working"
+    assert "approval_needed" not in [item.type for item in drain(queue)]
+    assert any(
+        item.get("kind") == "approval_stabilization_cancelled"
+        for item in session.state_transitions
+    )
+
+
+async def test_auto_reviewed_approval_surfaces_once_the_dialog_is_on_screen() -> None:
+    session = _delegated_codex_session()
+    events = EventBus()
+    queue = events.subscribe()
+    await _apply_turn_context(session, events, "auto_review")
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    drain(queue)
+
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    session.scrollback.data = b"> \nAllow Codex to run npm test?\n  Yes  No\n"
+    await asyncio.sleep(0.05)
+
+    assert session.record.state == "awaiting"
+    assert session.record.awaiting_reason == "approval"
+    assert "approval_needed" in [item.type for item in drain(queue)]
+    assert any(
+        item.get("kind") == "approval_stabilization_committed" and item.get("gate") == "screen"
+        for item in session.state_transitions
+    )
+
+
+async def test_auto_reviewed_approval_surfaces_when_the_screen_never_speaks() -> None:
+    """A classifier that cannot read the screen must not hide a block forever."""
+    session = _delegated_codex_session()
+    events = EventBus()
+    queue = events.subscribe()
+    await _apply_turn_context(session, events, "auto_review")
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    drain(queue)
+
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    await asyncio.sleep(0.3)
+
+    assert session.record.state == "awaiting"
+    assert "approval_needed" in [item.type for item in drain(queue)]
+    assert any(
+        item.get("kind") == "approval_stabilization_committed" and item.get("gate") == "ceiling"
+        for item in session.state_transitions
+    )
+
+
+async def test_a_user_reviewed_approval_keeps_the_plain_stabilization_window() -> None:
+    session = _delegated_codex_session()
+    events = EventBus()
+    queue = events.subscribe()
+    await _apply_turn_context(session, events, "user")
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    drain(queue)
+
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    await asyncio.sleep(0.05)
+
+    assert session.record.state == "awaiting"
+    assert any(
+        item.get("kind") == "approval_stabilization_committed" and item.get("gate") == "stabilized"
+        for item in session.state_transitions
+    )
+
+
+async def test_tool_completion_retires_an_approval_the_transcript_is_driving() -> None:
+    """`PostToolUse` cancels even when transcript authority makes it a no-op."""
+    session = _delegated_codex_session()
+    session.transcript_path = Path("rollout.jsonl")
+    events = EventBus()
+    await _apply_turn_context(session, events, "auto_review")
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    assert isinstance(session.observation_state.get("pending_approval"), dict)
+    # A transcript that has grown since the last turn hook owns this session's
+    # state, which is what used to make `PostToolUse` return before cancelling.
+    session.transcript_growth_ts = time.time() + 60.0
+    assert _transcript_authoritative(session)
+
+    await apply_hook_observation(session, "PostToolUse", {}, events)
+
+    assert session.observation_state.get("pending_approval") is None
+
+
+async def test_an_approval_on_screen_survives_a_parallel_tool_completing() -> None:
+    session = _delegated_codex_session()
+    events = EventBus()
+    await _apply_turn_context(session, events, "auto_review")
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(session, "PermissionRequest", {"tool_name": "shell"}, events)
+    session.scrollback.data = b"> \nAllow Codex to run rm -rf build?\n  Yes  No\n"
+
+    await apply_hook_observation(session, "PostToolUse", {}, events)
+
+    assert isinstance(session.observation_state.get("pending_approval"), dict)
 
 
 async def test_session_start_during_an_active_codex_turn_is_not_a_boundary() -> None:
