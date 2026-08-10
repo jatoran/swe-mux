@@ -40,7 +40,6 @@
 - `added`/`removed` are `None` when the measurement could not be made — no HEAD yet, or a failed
   diff — which is deliberately distinct from a measured `0`. A display that conflates the two
   reports a clean tree for a repository it merely failed to read.
-
 - OSC-driven targets are existing local directories, debounced for 1.25 seconds, and limited
   to 12 accepted switches per session per minute before Git polling follows them. Invalid,
   remote, fragmented-spam, and over-limit telemetry cannot create subprocess churn.
