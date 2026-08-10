@@ -185,8 +185,9 @@ and provider-managed worktrees may live outside that root.
   Branch-field whitespace is normalized to `-` before both branch creation and path derivation.
   It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments.
   The launcher waits only for worktree creation, closes once the durable tree exists, then calls `POST /api/git/worktrees/session` for setup and spawn in the background.
-  A client-only pending session appears and receives focus immediately, with the selected backend, worktree path, and explicit setup status.
-  The daemon session replaces that pending row and pane in place.
+  A client-only unpanned pending session appears and receives focus immediately, with the selected backend, worktree path, and explicit setup status.
+  While selected it occupies the full workspace without changing the existing pane tree; selecting another session restores that tree with no setup placeholder left visible.
+  The daemon session replaces that pending row in place.
   If the user moves elsewhere before completion, replacement preserves the newer focus.
   `worktree_root` is a global Settings value under Git and worktrees; its empty/default form resolves to `<data_dir>/worktrees`, normally `~/.mux/worktrees`.
   The daemon creates a missing parent hierarchy only when the target remains below that configured root.

@@ -20,13 +20,13 @@ assert.deepEqual(events,[`append:hello`,`wait:${TERMINAL_SUBMIT_SETTLE_MS}`,'sub
 
 const appendOnly:string[]=[]
 await settleTerminalInsertion(
-  'draft',
+  '  first line\nsecond line  ',
   false,
   value=>appendOnly.push(`append:${value}`),
   ()=>appendOnly.push('submit'),
   async delay=>{appendOnly.push(`wait:${delay}`)},
 )
-assert.deepEqual(appendOnly,['append:draft'])
+assert.deepEqual(appendOnly,['append:  first line\nsecond line  '])
 
 const previousWindow=(globalThis as {window?:unknown}).window
 const actionBus=Object.assign(new EventTarget(),{

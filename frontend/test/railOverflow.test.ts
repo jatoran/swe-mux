@@ -56,7 +56,7 @@ test('command rail owns the first touch drag without dropping the soft keyboard'
 
 test('jump-to-latest does not request terminal input focus', () => {
   const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
-  const handler = source.slice(source.indexOf('const jumpToLatest='), source.indexOf('const toggleKeyboard='))
+  const handler = source.slice(source.indexOf('const jumpToLatest='), source.indexOf('const setMobileInputMode='))
   assert.ok(handler.length > 0)
   assert.doesNotMatch(handler, /focusTerminalInputRef/)
 

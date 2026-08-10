@@ -125,6 +125,58 @@ test('live follow is allowed only for a different remote revision while locally 
   assert.equal(queue.canFollowRemote(key, 'rev2'), true)
 })
 
+test('a revision this browser replaced is recognisable as a stale read afterwards', async () => {
+  const { transport, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p', 'r')
+  queue.reset(key, noteTarget, 'rev0')
+  queue.submit(key, 'hello world')
+  queue.flush(key)
+  assert.equal(queue.hasSuperseded(key, 'rev0'), false) // not yet: the write has not landed
+  deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
+  await tick()
+  // A GET answered from the pre-write file returns rev0, after our PUT has already acked.
+  assert.equal(queue.hasSuperseded(key, 'rev0'), true)
+  assert.equal(queue.hasSuperseded(key, 'rev1'), false) // the current revision is not stale
+  assert.equal(queue.hasSuperseded(key, 'rev7'), false) // a remote edit is not ours to reject
+  assert.equal(queue.hasSuperseded(key, ''), false)
+  assert.equal(queue.hasSuperseded(noteQueueKey('p', 'other'), 'rev0'), false)
+})
+
+test('a save that restores earlier content makes that revision current again', async () => {
+  const { transport, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p', 'r')
+  queue.reset(key, noteTarget, 'rev0')
+  queue.submit(key, 'edited')
+  queue.flush(key)
+  deferreds[0].resolve({ revision: 'rev1', status: 'ready' })
+  await tick()
+  assert.equal(queue.hasSuperseded(key, 'rev0'), true)
+  // Undo the edit: the content hashes back to rev0, which is now what is on disk.
+  queue.submit(key, 'original')
+  queue.flush(key)
+  deferreds[1].resolve({ revision: 'rev0', status: 'ready' })
+  await tick()
+  assert.equal(queue.hasSuperseded(key, 'rev0'), false)
+  assert.equal(queue.hasSuperseded(key, 'rev1'), true)
+})
+
+test('superseded revisions stay bounded across a long editing session', async () => {
+  const { transport, deferreds } = makeTransport()
+  const queue = new NoteSaveQueue(transport)
+  const key = noteQueueKey('p', 'r')
+  queue.reset(key, noteTarget, 'rev0')
+  for (let step = 0; step < 20; step++) {
+    queue.submit(key, `text ${step}`)
+    queue.flush(key)
+    deferreds[step].resolve({ revision: `rev${step + 1}`, status: 'ready' })
+    await tick()
+  }
+  assert.equal(queue.hasSuperseded(key, 'rev19'), true) // the most recent predecessor
+  assert.equal(queue.hasSuperseded(key, 'rev0'), false) // evicted long ago
+})
+
 test('project notes retain their storage identity through queued saves', () => {
   const { transport, calls } = makeTransport()
   const queue = new NoteSaveQueue(transport)

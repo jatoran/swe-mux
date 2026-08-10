@@ -52,7 +52,6 @@ const ACTION_LABELS: Record<string, string> = {
   branch: 'Branch',
   relaunch: 'Relaunch',
   toggleKeyboard: 'Keyboard',
-  toggleDraft: 'Draft',
   clipboardHistory: 'Clipboard',
   endSession: 'End session',
 }

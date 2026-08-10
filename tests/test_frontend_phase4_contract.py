@@ -531,7 +531,9 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     assert "'/api/git/worktrees/session'" in app
     assert "pendingTerminal(pendingId,target,backend,{" in app
     assert "label:'Setting up worktree…'" in app
-    assert "replacePendingTerminal(withPending,pendingId,next.id)" in app
+    assert "placement:null" in app
+    assert "if(pending.projectId!==project.id||!pending.placement)continue" in app
+    assert "selectPendingTerminal(current,session.id)" in app
     assert "setActiveId(current=>current===pendingId?next.id:current)" in app
     assert "normalizeWorktreeBranchInput(value)" in run_menu
     assert "api<{worktree_root?:string}>('GET','/api/config')" in run_menu

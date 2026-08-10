@@ -49,6 +49,14 @@ packaging/swe-mux.ico
 src/swe_mux/static/assets/
 src/swe_mux/static/index.html
 
+# Precompressed siblings written by frontend/scripts/compress-static.mjs after every build.
+# The two rules above already cover most of them, which is why the exceptions went unnoticed:
+# `index.html.gz` sits beside an ignored file, and `sw.js.gz` beside a tracked one. They churn
+# for the same reason the bundle does and nothing needs them in git — aiohttp's FileResponse
+# picks a `.gz` sibling up off disk when the client accepts gzip, so a tree that has not been
+# built simply serves the uncompressed file.
+src/swe_mux/static/**/*.gz
+
 # The REST of src/swe_mux/static stays tracked on purpose, even though vite also
 # generates it by copying frontend/public/ (and wipes it each build via emptyOutDir).
 # Those copies are byte-stable, so they never churn, and `create_app` registers

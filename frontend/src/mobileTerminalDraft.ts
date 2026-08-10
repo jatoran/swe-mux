@@ -7,6 +7,28 @@ export const MOBILE_TERMINAL_DRAFT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 export type MobileTerminalDraftEntry = { text: string; updatedAt: number }
 export type MobileTerminalDrafts = Record<string, MobileTerminalDraftEntry>
 export type MobileTerminalDraftEvent = { sessionId: string; hasDraft: boolean }
+export type MobileTerminalInputMode = 'live' | 'read' | 'draft'
+
+export function mobileTerminalInputMode(keyboardOff: boolean, draftOpen: boolean): MobileTerminalInputMode {
+  if (draftOpen) return 'draft'
+  return keyboardOff ? 'read' : 'live'
+}
+
+/** Agent terminals cycle through all three mobile input modes; shells keep the original two. */
+export function nextMobileTerminalInputMode(mode: MobileTerminalInputMode, agentSession: boolean): MobileTerminalInputMode {
+  if (mode === 'live') return 'read'
+  if (mode === 'read') return agentSession ? 'draft' : 'live'
+  return 'live'
+}
+
+/** Preserve the no-submit Draft contract at the boundary to TerminalPane. */
+export async function insertMobileTerminalDraft(
+  text: string,
+  insert: (value: string, submit: boolean) => Promise<void>,
+): Promise<void> {
+  if (!text) return
+  await insert(text, false)
+}
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem'>
 type DraftBlob = { version: 1; drafts: MobileTerminalDrafts }

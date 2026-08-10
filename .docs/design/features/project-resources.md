@@ -66,7 +66,13 @@ The file tree and notes collection are utility-drawer tabs.
   save queue outlives both. The unmount flushes, and the arriving editor adopts any text the
   daemon has not acknowledged yet (`noteSaveQueue.pendingText`, which covers both debounced typing
   and the snapshot a running PUT is carrying) rather than the copy its own GET returned — that GET
-  can be answered from the pre-flush file. Cursor and undo history do not survive a move; they do
+  can be answered from the pre-flush file. That answer can also arrive *after* the flush's PUT has
+  been acknowledged, leaving nothing pending to prefer it over; the queue therefore remembers the
+  revisions its own saves replaced (`noteSaveQueue.hasSuperseded`) and a load that is handed one
+  re-reads instead of adopting it. Revisions are content hashes and carry no order, so a revision
+  this browser provably replaced is the only recognisable signature of a stale read. Adopting one
+  would revert the editor and leave the queue holding a revision the daemon has moved past, so the
+  next keystroke would overwrite the good text or conflict. Cursor and undo history do not survive a move; they do
   survive drawer tab switches, because the Notes body is kept mounted and hidden rather than
   unmounted (see `ui.md` — the other half of that is `insertTarget`, which refuses a detached
   editor and would otherwise route a Clipboard paste into a terminal).
@@ -108,6 +114,18 @@ The file tree and notes collection are utility-drawer tabs.
   With a selected range and the keyboard down, the first tap inside that range raises the keyboard
   without collapsing the range or removing its action bar; a later tap may collapse it normally.
   swe-mux does not inspect the editor's shadow DOM or duplicate caret hit-testing for this behavior.
+- Text held by an open IME composition has not reached the engine, so it has not reached the
+  autosave queue either. Because Android keyboards hold one composition open across ordinary
+  typing, that run is simply the word being typed: closing the drawer mid-sentence dropped it,
+  and flushing on unmount could not help because the editor never handed it over. Unmount now
+  calls the editor's `commitComposition()` before flushing, which folds the run in and emits its
+  `continuity-change` synchronously, so the queue has the text before the flush sends it.
+- Continuity 0.2.35 also commits an open composition inside `destroy()`, but this host cannot
+  rely on that: the React adapter unbinds its listeners when the ref detaches, and `destroy()`
+  runs a microtask after the DOM removal that follows, so the change it emits reaches nobody
+  here. The explicit call lands while the listeners are still bound, because Preact runs a
+  component's effect cleanups before unmounting that component's children. Hosts that bind
+  directly to the element and never detach need nothing.
 - The SDK also owns two further touch behaviors we cannot reach: Enter continues a list
   marker even while an IME composition is open (Android keyboards hold one across ordinary
   typing, and the editor's `beforeinput` router used to skip its line-break entries for
@@ -238,7 +256,7 @@ The file tree and notes collection are utility-drawer tabs.
   trail does not cover it, and the section's own content fills the screen below it.
 - The editor's `revealRange` is not how heading jumps get there because revealing a range also
   makes it the primary selection.
-  Continuity 0.2.25 accurately reveals find results against projected geometry on desktop and
+  Continuity 0.2.35 accurately reveals find results against projected geometry on desktop and
   coarse pointers, but a heading jump must remain viewport-only and retain one source row for
   the heading trail.
 - No exported geometry converts pixels to lines outside the editor, so the jump is a feedback

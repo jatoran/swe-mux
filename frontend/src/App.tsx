@@ -149,7 +149,7 @@ import {
   toggleBucketCollapsed,
 } from './projectSort'
 import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail } from './projectRecency'
-import { placePendingTerminal, replacePendingTerminal, type PendingSpawnPlacement } from './pendingSession'
+import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
 import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { activityBadges, sessionStatus } from './sessionStatus'
@@ -273,6 +273,7 @@ type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, num
 type RunMenuState={project:Project;x:number;y:number}
 type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
 type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
+type PendingSpawn={projectId:string;placement:PendingSpawnPlacement|null;resolvedId?:string}
 
 function pendingTerminal(id:string,project:Project,backend:string='shell',options?:{cwd?:string;name?:string;label?:string;detail?:string}):Session {
   const now=Date.now()/1000
@@ -1016,7 +1017,7 @@ export function App() {
     if(activation.mode==='hold')activationTimer=window.setTimeout(()=>activate(latestX,latestY),activation.delayMs)
   }
   const startupOrigins=useRef<Record<string,number>>({})
-  const pendingSpawns=useRef<Record<string,PendingSpawnPlacement>>({})
+  const pendingSpawns=useRef<Record<string,PendingSpawn>>({})
   // Sessions this client has already taken off screen while their DELETE finishes.
   // See sessionKills.ts for why the fleet and layout reconcilers both have to honour it.
   const pendingKills=useRef<KillTombstones>({})
@@ -1206,9 +1207,9 @@ export function App() {
           let base=parseLayout(project.layout)
           for(const leaf of leaves(base,'history'))base=removeLeaf(base,'history',leaf.id)
           next[project.id] = reconcilePreviews(reconcileTerminals(base, live), livePreviews)
-          for(const [pendingId,placement] of Object.entries(pendingSpawns.current)){
-            if(placement.projectId!==project.id)continue
-            next[project.id]=placePendingTerminal(next[project.id],placement.resolvedId||pendingId,placement,false)
+          for(const [pendingId,pending] of Object.entries(pendingSpawns.current)){
+            if(pending.projectId!==project.id||!pending.placement)continue
+            next[project.id]=placePendingTerminal(next[project.id],pending.resolvedId||pendingId,pending.placement,false)
           }
         }
         layoutValues.current=next
@@ -2350,8 +2351,8 @@ export function App() {
     const pendingId=`pending-${browserUuid()}`
     const currentLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
     const focused=targetSessionId??(targetProject===projectId?openAnchorId(currentLayout,focusedViewId||activeId):spawnAnchorId(currentLayout))
-    const placement:PendingSpawnPlacement={projectId:targetProject,split,targetId:focused,position}
-    pendingSpawns.current[pendingId]=placement
+    const placement:PendingSpawnPlacement={split,targetId:focused,position}
+    pendingSpawns.current[pendingId]={projectId:targetProject,placement}
     const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)
     layoutValues.current[targetProject]=optimisticLayout
     setSessions(items=>[...items,pendingTerminal(pendingId,target,backend)])
@@ -2385,7 +2386,7 @@ export function App() {
       if (profileId) { localStorage.setItem('mux.lastProfile',profileId); setLauncherProfile(profileId) }
       // Remembered so holding mobile Run repeats the last launch without the menu.
       localStorage.setItem('mux.lastBackend',backend)
-      placement.resolvedId=next.id
+      pendingSpawns.current[pendingId].resolvedId=next.id
       setSessions(items => [...items.filter(item=>item.id!==pendingId&&item.id!==next.id),mergeSessionSnapshot(items.find(item=>item.id===next.id),next)])
       setActiveId(next.id)
       setFocusedViewId(next.id)
@@ -2456,18 +2457,13 @@ export function App() {
     const startupOrigin=performance.now()
     const pendingId=`pending-${browserUuid()}`
     const currentLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
-    const focused=targetProject===projectId?openAnchorId(currentLayout,focusedViewId||activeId):spawnAnchorId(currentLayout)
-    const placement:PendingSpawnPlacement={projectId:targetProject,split:false,targetId:focused,position:'after'}
-    pendingSpawns.current[pendingId]=placement
-    const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)
-    layoutValues.current[targetProject]=optimisticLayout
+    pendingSpawns.current[pendingId]={projectId:targetProject,placement:null}
     setSessions(items=>[...items,pendingTerminal(pendingId,target,backend,{
       cwd:path,
       name:`setting up ${backend==='shell'?'shell':backend}…`,
       label:'Setting up worktree…',
       detail:`Running the repository setup before starting ${backend==='shell'?'the shell':backend}…`,
     })])
-    setLayoutMap(current=>({...current,[targetProject]:optimisticLayout}))
     setProjectId(targetProject)
     setActiveId(pendingId)
     setFocusedViewId(pendingId)
@@ -2488,17 +2484,13 @@ export function App() {
       clientStartupTimingValues.current[next.id]=browserTiming
       setClientStartupTimings(current=>({...current,[next.id]:browserTiming}))
       localStorage.setItem('mux.lastBackend',backend)
-      placement.resolvedId=next.id
+      pendingSpawns.current[pendingId].resolvedId=next.id
       setSessions(items=>[
         ...items.filter(item=>item.id!==pendingId&&item.id!==next.id),
         mergeSessionSnapshot(items.find(item=>item.id===next.id),next),
       ])
       setActiveId(current=>current===pendingId?next.id:current)
       setFocusedViewId(current=>current===pendingId?next.id:current)
-      const latestLayout=layoutValues.current[targetProject]||optimisticLayout
-      const withPending=terminalIds(latestLayout).includes(pendingId)?latestLayout:placePendingTerminal(latestLayout,pendingId,placement,false)
-      const nextLayout=replacePendingTerminal(withPending,pendingId,next.id)
-      await updateLayout(targetProject,nextLayout)
       emitTutorialAction({action:'session-launched',backend})
       if(result.setup&&['failed','timed_out','error'].includes(result.setup.status)){
         const detail=result.setup.error||(result.setup.exit_code!=null?`exit code ${result.setup.exit_code}`:result.setup.status)
@@ -2508,10 +2500,7 @@ export function App() {
     }catch(cause){
       delete pendingSpawns.current[pendingId]
       setSessions(items=>items.filter(item=>item.id!==pendingId))
-      const failedLayout=removeLeaf(layoutValues.current[targetProject]||optimisticLayout,'terminal',pendingId)
-      layoutValues.current[targetProject]=failedLayout
-      setLayoutMap(current=>({...current,[targetProject]:failedLayout}))
-      const fallback=terminalIds(failedLayout)[0]||null
+      const fallback=visibleTerminalIds(layoutValues.current[targetProject]||currentLayout)[0]||terminalIds(currentLayout)[0]||null
       setActiveId(current=>current===pendingId?fallback:current)
       setFocusedViewId(current=>current===pendingId?fallback:current)
       setError(`Worktree created at ${path}, but ${cause instanceof Error?cause.message:String(cause)}`)
@@ -3041,9 +3030,11 @@ export function App() {
     setFocusedViewId(session.id)
     setSidebarOpen(false)
     if(session.pending){
-      const next=isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id))
-      layoutValues.current[session.project_id]=next
-      setLayoutMap(layouts=>({...layouts,[session.project_id]:next}))
+      const next=selectPendingTerminal(current,session.id)
+      if(next!==current){
+        layoutValues.current[session.project_id]=next
+        setLayoutMap(layouts=>({...layouts,[session.project_id]:next}))
+      }
       return
     }
     await updateLayout(session.project_id,isPaned?activateContainingStack(current,session.id):openTab(current,focusedViewId,terminalLeaf(session.id)))

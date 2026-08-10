@@ -2,9 +2,12 @@
 
 **Delivered in SDK 0.2.21 and corrected in SDK 0.2.35.**
 swe-mux currently vendors SDK 0.2.35 as `frontend/vendor/continuity-editor-0.2.35.tgz`
-(sha256 `a45856c95898204d09530f8b02ff0e90e31b7f783c82e52911ecb60f13584f91`).
+(sha256 `af0ceb46f9ffd78c16b0e61bee9280202027970c075cc6d3773ed15c01068fc1`, 475128 bytes).
+That is the **rebuilt** 0.2.35 tarball; an earlier build of the same version shipped as
+`a45856c9…` and is superseded, so verify the digest rather than the version string alone.
 SDK 0.2.21 introduced the `inputmode="none"` gate that keeps a dismissed keyboard down during selection, but applying the gate during every selection gesture also dismissed an already-visible keyboard.
 SDK 0.2.35 tracks typing intent and visual-viewport keyboard occlusion per editor, so long-press selection and selection-handle adjustment preserve the keyboard state they found.
+Where there is no evidence either way the answer is "keyboard down", which preserves 0.2.21 exactly: a keyboard dismissed with the system back gesture still cannot be re-raised by a selection gesture.
 When a selection exists with the keyboard down, the first tap inside that selection raises the keyboard without collapsing the range or removing its action bar; a later tap may collapse or reposition it normally.
 Desktop remains untouched and no host change is required.
 

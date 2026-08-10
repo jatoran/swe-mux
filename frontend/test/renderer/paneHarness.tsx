@@ -56,7 +56,7 @@ const pane = <section class="terminal-pane focused">
   </div></div>}
   <div class="terminal-surface">
     <div class="terminal-host" />
-    {draft&&<MobileTerminalDraft sessionName="harness" text="A persistent message that has not reached the terminal." busy={false} error="" onInput={()=>{}} onSend={()=>{}} onClear={()=>{}} onClose={()=>{}}/>}
+    {draft&&<MobileTerminalDraft sessionName="harness" text="A persistent message that has not reached the terminal." busy={false} error="" onInput={()=>{}} onInsert={()=>{}} onClear={()=>{}} onClose={()=>{}}/>}
     <div class="terminal-action-rail"><div class="terminal-action-rows" /></div>
   </div>
 </section>

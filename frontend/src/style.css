@@ -1402,12 +1402,11 @@ body {
 .terminal-action-rail .rail-icon{min-width:30px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;color:var(--text)}
 .terminal-action-rail .rail-icon svg{width:15px;height:15px;display:block}
 .terminal-action-rail .rail-icon:disabled{color:var(--muted)}
-.terminal-action-rail .kbd-toggle{display:none}
-.terminal-action-rail .draft-toggle{display:none;position:relative}
-@media(pointer:coarse){.terminal-action-rail .kbd-toggle,.terminal-action-rail .draft-toggle{display:inline-flex;align-items:center;justify-content:center}}
-.terminal-action-rail .kbd-toggle.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
-.terminal-action-rail .draft-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green,#8bd450)}
-.terminal-action-rail .draft-toggle.has-draft::after{content:'';position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--green,#8bd450);box-shadow:0 0 0 2px var(--panel2)}
+.terminal-action-rail .kbd-toggle{display:none;position:relative;font-size:13px}
+@media(pointer:coarse){.terminal-action-rail .kbd-toggle{display:inline-flex;align-items:center;justify-content:center}}
+.terminal-action-rail .kbd-toggle.mode-read{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 10%,var(--panel2));color:var(--blue)}
+.terminal-action-rail .kbd-toggle.mode-draft{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green,#8bd450)}
+.terminal-action-rail .kbd-toggle.has-draft::after{content:'';position:absolute;top:4px;right:4px;width:5px;height:5px;border-radius:50%;background:var(--green,#8bd450);box-shadow:0 0 0 2px var(--panel2)}
 .mobile-terminal-draft{z-index:15;grid-row:1;grid-column:1;align-self:end;justify-self:center;width:min(720px,calc(100% - 16px));max-height:min(48dvh,360px);margin:8px;display:grid;grid-template-rows:auto minmax(76px,auto) auto auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--panel) 96%,transparent);box-shadow:0 8px 28px #000b}
 .mobile-terminal-draft>header{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid var(--line);font:10px 'Cascadia Mono',Consolas,monospace}
 .mobile-terminal-draft>header strong{color:var(--green);letter-spacing:.06em;text-transform:uppercase}.mobile-terminal-draft>header span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
