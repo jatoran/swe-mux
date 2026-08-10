@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "backend": "opencode",
-  "description": "KNOWN GAP, pinned deliberately. `/new` in a live opencode pane mints a fresh ses_ id and the plugin now reports it with source `new` (reporting `startup` for a replacement is refused by contract, since startup means a fresh process). The rollover is still NOT applied: the second SessionStart lands as foreign_conversation_hook_ignored, so the pane keeps reporting the retired conversation. State still tracks correctly because the hooks carry it, but identity and any future measurement would belong to the wrong conversation. This fixture pins the current behaviour so the fix is visible as a diff here; it is not an endorsement of it.",
+  "description": "Two conversations in one opencode pane, exercising the post-rollover filter rather than the rollover itself. The replay runner calls apply_hook_observation directly and never runs the rollover decision that production runs first, so a second SessionStart necessarily reads as a foreign conversation here. That is a property of the runner, not of opencode: verified live 2026-08-10 that /new in a real pane rolls correctly, minting a new ses_ id and a new agent run with no refusal. What this fixture does pin is that a hook naming a conversation this session is not bound to cannot move its state - the guard that stops a foreign PermissionRequest raising an unanswerable approval. The plugin reports source `new` for a replacement because `startup` means a fresh process and is refused as a rollover by contract.",
   "steps": [
     {
       "kind": "hook",
