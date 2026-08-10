@@ -8,14 +8,14 @@ type Props = {
   busy: boolean
   error: string
   onInput: (text: string) => void
-  onSend: () => void
+  onInsert: () => void
   onClear: () => void
   onClose: () => void
 }
 
 /** Visible mobile composition buffer. Terminal ownership remains with TerminalPane. */
 export function MobileTerminalDraft({
-  sessionName, text, busy, error, onInput, onSend, onClear, onClose,
+  sessionName, text, busy, error, onInput, onInsert, onClear, onClose,
 }: Props) {
   const input = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
@@ -33,7 +33,7 @@ export function MobileTerminalDraft({
     element.style.height = 'auto'
     element.style.height = `${element.scrollHeight + element.offsetHeight - element.clientHeight}px`
   }, [text])
-  const send = () => { if (!busy && text.trim()) onSend() }
+  const insert = () => { if (!busy && text) onInsert() }
   return <section class="mobile-terminal-draft" aria-label={`Draft message for ${sessionName}`}>
     <header>
       <strong>Draft</strong>
@@ -51,7 +51,7 @@ export function MobileTerminalDraft({
       onKeyDown={event => {
         if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           event.preventDefault()
-          send()
+          insert()
         }
       }}
     />
@@ -59,7 +59,7 @@ export function MobileTerminalDraft({
     <footer>
       <span>{text.length.toLocaleString()} · device-local</span>
       <button type="button" disabled={busy || !text} onMouseDown={holdSoftKeyboard} onClick={onClear}>Clear</button>
-      <button type="button" class="primary" disabled={busy || !text.trim()} onMouseDown={holdSoftKeyboard} onClick={send}>{busy ? 'Sending...' : 'Send'}</button>
+      <button type="button" class="primary" disabled={busy || !text} title="Insert into the agent composer without submitting" onMouseDown={holdSoftKeyboard} onClick={insert}>{busy ? 'Inserting...' : 'Insert'}</button>
     </footer>
   </section>
 }

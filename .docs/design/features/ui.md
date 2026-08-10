@@ -1080,19 +1080,19 @@ responsive controls.
   the mobile workspace is not even showing. With nothing holding the keyboard up it is still a
   plain toggle, which is what turns read mode back off. `keyboard.dismiss` is the same dismissal
   with no terminal mode behind it, for binding a slot that should only ever hide the keyboard.
-- The keyboard toggle is a touch-only read/select mode: while on, tapping the terminal selects,
-  scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
-  Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
-  rail in this mode never raises the keyboard.
-- Agent terminals also expose a touch-only **Draft** rail action beside the keyboard toggle.
-  It opens a native multiline composer as a floating surface in the terminal cell, so its appearance does not resize the terminal or reflow the running TUI.
-  Live input, read/select, and Draft are exclusive modes: opening Draft suppresses terminal focus, hiding it restores the prior live or read/select mode, and pressing the keyboard toggle from Draft closes it into read/select mode.
+- The touch-only keyboard control cycles agent terminals through three exclusive modes: live input (`⌨`), read/select (`↕`), and Draft (`✎`).
+  Shell terminals retain the original live/read two-state cycle because they have no agent composer.
+  Read/select keeps taps, selection auto-copy, scrolling, and Paste keyboard-down, and sending a rail key in this mode never raises the keyboard.
+  Draft opens a native multiline composer as a floating surface in the terminal cell, so its appearance does not resize the terminal or reflow the running TUI.
+  There is no separate Draft rail action; the single keyboard control owns the whole mode cycle.
 - Draft text is device-local and keyed by session rather than pane, so hiding the composer, changing workspace tabs, remounting the pane, reloading, or browser suspension does not discard it.
   The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
-  A green dot on the Draft action and every tab for that terminal discloses unsent text without exposing its content.
-- Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Send** button uses the existing session-targeted terminal insertion and submission path.
-  A successful send clears the saved draft, while a rejected send leaves the text editable and reports the error in the composer.
-  The send appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
+  A green dot on the keyboard control and every tab for that terminal discloses saved text without exposing its content.
+- Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Insert** button appends the exact draft text to the live agent composer without submitting it.
+  Agent multiline insertion uses bracketed paste, including the stale-mode fallback, so newlines and leading or trailing spaces remain composer text rather than becoming Enter key submissions.
+  The Draft path never emits a trailing carriage return.
+  A successful insertion clears the saved draft and returns to live input for review; a rejected insertion leaves the text editable and reports the error in the composer.
+  Insertion appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
   Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target. Claude and Codex

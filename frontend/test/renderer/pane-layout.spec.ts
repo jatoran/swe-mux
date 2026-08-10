@@ -35,6 +35,7 @@ test('the mobile Draft composer overlays the host without resizing the terminal'
   const off = await page.evaluate(bounds)
   await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=1')
   await expect(page.locator('.mobile-terminal-draft')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Insert' })).toHaveAttribute('title', 'Insert into the agent composer without submitting')
   const on = await page.evaluate(bounds)
   expect(on.surface).toEqual(off.surface)
   expect(on.host).toEqual(off.host)

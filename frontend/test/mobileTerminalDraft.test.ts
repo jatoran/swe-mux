@@ -6,6 +6,9 @@ import {
   MOBILE_TERMINAL_DRAFT_RETENTION_MS,
   MOBILE_TERMINAL_DRAFT_STORAGE_KEY,
   MobileTerminalDraftStore,
+  insertMobileTerminalDraft,
+  mobileTerminalInputMode,
+  nextMobileTerminalInputMode,
   parseMobileTerminalDrafts,
 } from '../src/mobileTerminalDraft.ts'
 
@@ -14,6 +17,26 @@ class MemoryStorage {
   getItem(key: string) { return this.values.get(key) ?? null }
   setItem(key: string, value: string) { this.values.set(key, value) }
 }
+
+test('agent mobile input cycles live, read/select, Draft, then live', () => {
+  assert.equal(nextMobileTerminalInputMode('live', true), 'read')
+  assert.equal(nextMobileTerminalInputMode('read', true), 'draft')
+  assert.equal(nextMobileTerminalInputMode('draft', true), 'live')
+  assert.equal(mobileTerminalInputMode(false, false), 'live')
+  assert.equal(mobileTerminalInputMode(true, false), 'read')
+  assert.equal(mobileTerminalInputMode(false, true), 'draft')
+})
+
+test('shell mobile input retains its original two-state cycle', () => {
+  assert.equal(nextMobileTerminalInputMode('live', false), 'read')
+  assert.equal(nextMobileTerminalInputMode('read', false), 'live')
+})
+
+test('Draft insertion preserves whitespace and can never request submission', async () => {
+  const calls: Array<{ text: string; submit: boolean }> = []
+  await insertMobileTerminalDraft('  first line\nsecond line  ', async (text, submit) => { calls.push({ text, submit }) })
+  assert.deepEqual(calls, [{ text: '  first line\nsecond line  ', submit: false }])
+})
 
 test('drafts persist independently by session and clear explicitly', () => {
   const storage = new MemoryStorage()
