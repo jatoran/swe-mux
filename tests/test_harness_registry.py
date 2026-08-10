@@ -115,6 +115,35 @@ def test_every_dialect_has_a_reader_that_actually_reads(tmp_path: Path) -> None:
         assert messages[0]["role"] == "assistant"
 
 
+def test_native_id_shape_is_declared_per_harness_and_anchored() -> None:
+    """Conversation-id shape is a harness deviation, not a global constant.
+
+    A single hardcoded UUID pattern refused every opencode id (`ses_<base62>`)
+    and returned without a word, so those sessions stayed on their placeholder
+    id forever: no conversation identity, no history row, no resume. Nothing
+    logged it, because a validation filter that rejects is indistinguishable
+    from one that was never reached.
+    """
+    from swe_mux.harness import native_id_matches
+
+    uuid = "019fedd9-76cf-7196-a2f4-a84d9eaadf27"
+    assert native_id_matches("opencode", "ses_012e2258bffeDxM8MvkzWOVEOx")
+    assert not native_id_matches("opencode", uuid)
+    for name, harness in HARNESSES.items():
+        if harness.name == "opencode":
+            continue
+        assert native_id_matches(name, uuid), name
+        assert not native_id_matches(name, "ses_abc"), name
+
+    # Anchored, because the value reaches file paths and database keys.
+    assert not native_id_matches("opencode", "ses_../../evil")
+    assert not native_id_matches("opencode", f"prefix ses_{'a' * 12} suffix")
+    assert not native_id_matches("claude", f"junk{uuid}junk")
+    # An unregistered backend never validates.
+    assert not native_id_matches("shell", uuid)
+    assert not native_id_matches(None, uuid)
+
+
 def test_harnesses_without_a_dialect_declare_no_transcript_evidence() -> None:
     """`transcript_dialect=None` and transcript evidence are contradictory."""
     for harness in HARNESSES.values():

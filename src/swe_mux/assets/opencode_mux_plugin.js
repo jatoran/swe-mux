@@ -96,11 +96,22 @@ export const MuxHook = async ({ serverUrl, directory, worktree }) => {
       const sessionID = props.sessionID ?? props.info?.id ?? props.id
 
       switch (type) {
-        case "session.created":
+        case "session.created": {
+          // `startup` means "a fresh process announcing itself" and is
+          // deliberately refused as a conversation replacement; an in-place
+          // replacement must report `new`. One opencode process is one pane, so
+          // the first session.created is the pane starting and any later one is
+          // /new replacing the conversation underneath it. Reporting `startup`
+          // for both made every rollover land as
+          // `foreign_conversation_hook_ignored`: the pane kept reporting the
+          // retired conversation and its measurements as live.
+          const replacing = currentSession !== null && currentSession !== sessionID
           return emit("SessionStart", sessionID, {
-            source: "startup",
+            source: replacing ? "new" : "startup",
+            previous_session_id: replacing ? currentSession : undefined,
             opencode_event: type,
           })
+        }
         case "session.status": {
           // {type:"idle"} | {type:"busy"} | {type:"retry",attempt,message,next}
           const status = props.status?.type

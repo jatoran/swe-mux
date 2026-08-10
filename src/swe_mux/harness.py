@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
@@ -32,6 +33,9 @@ AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 DataHomeResolver = Callable[[], Path]
 ToolCatalog = tuple[tuple[str, str], ...]
 
+# Claude, Codex, omp, and pi all mint UUID conversation ids.
+_UUID_NATIVE_ID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
 
 class HarnessLevel(IntEnum):
     """Derived product surface available for a harness."""
@@ -56,6 +60,16 @@ class HarnessDescriptor:
     # Which record reader parses this harness's conversation. `None` for a
     # harness that writes no parseable transcript.
     transcript_dialect: TranscriptDialect | None
+    # The shape a conversation id takes for this harness, as an anchored regex.
+    #
+    # A sanity filter on hook input, not identity logic: the ingress is
+    # authenticated, but the id it carries still ends up in file paths and
+    # database keys, so an unbounded value is not accepted. Declared per harness
+    # because the shape is a genuine deviation — four harnesses mint UUIDs and
+    # opencode mints `ses_<base62>`. It was previously a single hardcoded UUID
+    # pattern, which silently refused every opencode id and left those sessions
+    # permanently unbound with no error anywhere.
+    native_id_pattern: str
     config_dir_name: str
     script_base_name: str
     rollout_file_prefix: str | None
@@ -382,6 +396,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         data_home=_claude_data_home,
         adapter_family="claude",
         transcript_dialect="claude",
+        native_id_pattern=_UUID_NATIVE_ID,
         config_dir_name=".claude",
         script_base_name="claude",
         rollout_file_prefix=None,
@@ -414,6 +429,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         data_home=_codex_data_home,
         adapter_family="codex",
         transcript_dialect="codex",
+        native_id_pattern=_UUID_NATIVE_ID,
         config_dir_name=".codex",
         script_base_name="codex",
         rollout_file_prefix="rollout-",
@@ -446,6 +462,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         data_home=_omp_data_home,
         adapter_family="omp",
         transcript_dialect="pi",
+        native_id_pattern=_UUID_NATIVE_ID,
         config_dir_name=".omp",
         script_base_name="omp",
         rollout_file_prefix=None,
@@ -478,6 +495,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         data_home=_pi_data_home,
         adapter_family="pi",
         transcript_dialect="pi",
+        native_id_pattern=_UUID_NATIVE_ID,
         config_dir_name=".pi",
         script_base_name="pi",
         rollout_file_prefix=None,
@@ -522,6 +540,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         data_home=_opencode_data_home,
         adapter_family="opencode",
         transcript_dialect=None,
+        native_id_pattern=r"ses_[A-Za-z0-9]{8,64}",
         config_dir_name=".opencode",
         script_base_name="opencode",
         rollout_file_prefix=None,
@@ -577,6 +596,17 @@ AGENT_BACKENDS = frozenset(HARNESSES)
 
 def descriptor(name: str) -> HarnessDescriptor:
     return HARNESSES[name]
+
+
+def native_id_matches(name: object, native_id: str) -> bool:
+    """Whether ``native_id`` has the shape this harness's conversation ids take.
+
+    Anchored: a substring match would accept an id with arbitrary text around it,
+    and the value reaches file paths and database keys.
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return False
+    return re.fullmatch(HARNESSES[name].native_id_pattern, native_id) is not None
 
 
 def transcript_dialect(name: object) -> TranscriptDialect | None:

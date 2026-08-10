@@ -1,29 +1,132 @@
 {
   "schema_version": 1,
   "backend": "opencode",
-  "description": "`/new` in a live opencode pane mints a fresh ses_ id and the plugin reports it as session.created. That is a CLI-reported rollover in the same sense as Claude's SessionStart, which is why the descriptor sets reports_conversation_rollover. There is no filesystem transcript-switch heuristic here for that flag to suppress - opencode keeps conversations as rows in opencode.db.",
+  "description": "KNOWN GAP, pinned deliberately. `/new` in a live opencode pane mints a fresh ses_ id and the plugin now reports it with source `new` (reporting `startup` for a replacement is refused by contract, since startup means a fresh process). The rollover is still NOT applied: the second SessionStart lands as foreign_conversation_hook_ignored, so the pane keeps reporting the retired conversation. State still tracks correctly because the hooks carry it, but identity and any future measurement would belong to the wrong conversation. This fixture pins the current behaviour so the fix is visible as a diff here; it is not an endorsement of it.",
   "steps": [
-    {"kind": "hook", "event": "SessionStart", "payload": {"source": "startup", "session_id": "ses_first", "opencode_event": "session.created"}},
-    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"agent": "build", "opencode_event": "chat.message"}, "expect_state": "working"},
-    {"kind": "hook", "event": "turn_ended", "payload": {"root_completion": true, "opencode_event": "session.idle"}, "expect_state": "idle"},
-    {"kind": "hook", "event": "SessionStart", "payload": {"source": "startup", "session_id": "ses_second", "opencode_event": "session.created"}},
-    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"agent": "build", "opencode_event": "chat.message"}, "expect_state": "working"},
-    {"kind": "hook", "event": "turn_ended", "payload": {"root_completion": true, "opencode_event": "session.idle"}, "expect_state": "idle"}
+    {
+      "kind": "hook",
+      "event": "SessionStart",
+      "payload": {
+        "source": "startup",
+        "session_id": "ses_01aa2258bffeDxM8MvkzWOVEOx",
+        "opencode_event": "session.created"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "UserPromptSubmit",
+      "payload": {
+        "agent": "build",
+        "opencode_event": "chat.message"
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "hook",
+      "event": "turn_ended",
+      "payload": {
+        "root_completion": true,
+        "opencode_event": "session.idle"
+      },
+      "expect_state": "idle"
+    },
+    {
+      "kind": "hook",
+      "event": "SessionStart",
+      "payload": {
+        "source": "new",
+        "session_id": "ses_01bb9f13ccadRfN2QqrtZLKPUy",
+        "opencode_event": "session.created",
+        "previous_session_id": "ses_01aa2258bffeDxM8MvkzWOVEOx"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "UserPromptSubmit",
+      "payload": {
+        "agent": "build",
+        "opencode_event": "chat.message"
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "hook",
+      "event": "turn_ended",
+      "payload": {
+        "root_completion": true,
+        "opencode_event": "session.idle"
+      },
+      "expect_state": "idle"
+    }
   ],
   "expected": {
     "events": [
-      {"type": "turn_started", "source": "hook", "scope": "root"},
-      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
-      {"type": "turn_started", "source": "hook", "scope": "root"},
-      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+      {
+        "type": "agent_native_id_bound",
+        "source": "hook",
+        "scope": "root"
+      },
+      {
+        "type": "turn_started",
+        "source": "hook",
+        "scope": "root"
+      },
+      {
+        "type": "turn_ended",
+        "source": "hook",
+        "scope": "root",
+        "outcome": "completed"
+      },
+      {
+        "type": "foreign_conversation_hook_ignored",
+        "source": "hook",
+        "scope": "root",
+        "kind": "SessionStart"
+      },
+      {
+        "type": "turn_started",
+        "source": "hook",
+        "scope": "root"
+      },
+      {
+        "type": "turn_ended",
+        "source": "hook",
+        "scope": "root",
+        "outcome": "completed"
+      }
     ],
     "states": [
-      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
-      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"},
-      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
-      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "hook",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "hook",
+        "proof": "proven"
+      },
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "hook",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "hook",
+        "proof": "proven"
+      }
     ],
-    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "parser": {
+      "status": "watching",
+      "recognized": 0,
+      "unknown": 0,
+      "unknown_signatures": {}
+    },
     "delivery_state": "unknown",
     "delivery_reason": "readiness_debounce_pending"
   }

@@ -11,7 +11,7 @@ from typing import Any
 
 from swe_mux.delivery_readiness import DeliveryReadinessTracker
 from swe_mux.event_bus import EventBus
-from swe_mux.harness import is_agent_harness
+from swe_mux.harness import HARNESSES, is_agent_harness
 from swe_mux.models import MuxEvent, SessionRecord, SessionState
 from swe_mux.observation import (
     IncrementalJsonlDecoder,
@@ -112,7 +112,14 @@ class ReplaySession:
             parser_status="watching",
             parser_schema_version="2",
         )
-        if backend == "codex":
+        harness = HARNESSES.get(backend)
+        # A backend that mints its own conversation id carries the mux session id
+        # as a placeholder until discovery. Read that from the registry rather
+        # than naming codex: hardcoding the one backend that happened to need it
+        # meant every later self-minting harness started with a `native-replay`
+        # id its own declared shape rejects, which is a state production never
+        # reaches and which quietly diverted fixtures down the foreign-hook path.
+        if harness is not None and not harness.assigns_conversation_id:
             self.record.native_session_id = self.record.id
         self.agent_lifecycle_id: str | None = None
         # The observer asks the adapter which conversation-identity rules apply
@@ -120,9 +127,11 @@ class ReplaySession:
         # per-backend values so the corpus cannot drift from production.
         self.adapter = SimpleNamespace(
             name=backend,
-            reports_conversation_rollover=backend == "claude",
-            assigns_conversation_id=backend == "claude",
-            resolves_transcript_by_cwd=backend == "claude",
+            reports_conversation_rollover=(
+                harness.reports_conversation_rollover if harness else False
+            ),
+            assigns_conversation_id=harness.assigns_conversation_id if harness else False,
+            resolves_transcript_by_cwd=harness.resolves_transcript_by_cwd if harness else False,
             transcript_native_id=lambda path: Path(path).stem,
         )
         self.state_source_priority = -1

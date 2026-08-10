@@ -57,12 +57,42 @@ Direct `claude` and `codex` branches remain only where provider data shapes, par
 Adapter construction, shim generation, and launcher dispatch derive from the registry and each descriptor's adapter family.
 Executable and argument overrides live in the per-harness `harness_exe` and `harness_args` configuration maps.
 
+## Where a harness deviation lives
+
+A harness differs from its neighbours along independent axes, and each axis has exactly one declared home.
+Keeping them separate is what lets a new harness reuse most of the system: pi needed its own adapter and none of its own reader, which is only expressible because launch and parsing are different questions.
+
+| Axis | Declared as | Answers | Adding a harness that matches an existing one costs |
+|---|---|---|---|
+| How to launch, resume, and locate it | `adapter_family` + an adapter class | argv, session-file discovery, per-session materialization, graceful exit | a constructor call |
+| How to read its conversation | `transcript_dialect` | which record reader parses it | nothing |
+| What evidence it can produce | `state_sources`, `measurement_source`, `normalized_events` | which layers may move state, where measurements come from | nothing |
+| What its TUI does to the screen | `screen`, `repaints_scrollback` | renderer choice, resize repaint, replay handling | nothing |
+| What it exposes | `tool_catalog`, `hook_events`, `config_dir_name` | Agent Environment and Commands surfaces | a descriptor field |
+
+`adapter_family` and `transcript_dialect` are deliberately not one field.
+oh-my-pi and upstream pi share a dialect and not a family: the same reader parses both, while their launch paths diverge on session-directory encoding, resume flag, breadcrumb availability, and environment.
+Collapsing them would force pi to either duplicate a reader it does not need or inherit a discovery path that silently finds nothing.
+
+Every consumer that parses records dispatches on `transcript_dialect` and terminates in `assert_never`.
+Consumers that branch on the harness *name* do so only for behaviour that is genuinely unique to that harness, and those branches also terminate in `assert_never` so a new harness is a type error rather than a silent fall-through.
+
+Two failure modes are specifically guarded, because both produce a plausible wrong answer rather than an error:
+
+- **A missing branch.** `assert_never` in every dispatch makes it a type error.
+- **A branch that exists and returns nothing.** `tests/test_harness_registry.py` requires every declared dialect to parse a representative record of its own shape into a message, and requires a harness declaring no dialect to declare no transcript evidence either.
+  The empty Transcript tab pi shipped with was exactly this shape: the reader was reached, produced nothing, and no test, type error, or log line reported it.
+
 ## Supporting a new harness
 
 Add one descriptor before adding provider-specific consumers.
 The descriptor is the source of truth for all generic surfaces.
 
 - Every harness declares identity and launch fields: `name`, `display_name`, `executable`, `default_args`, `data_home`, `adapter_family`, `config_dir_name`, and `script_base_name`.
+- Every harness declares `transcript_dialect`: the reader that parses its records, or `None` when it writes none.
+  Reuse an existing dialect whenever the records are the same shape; a new dialect obliges a new reader branch and a sample record in the registry test.
+- An npm-distributed harness needs no launch special-casing on Windows: `resolve_npm_shim_pty_command` reads the `.cmd` shim and resolves it to the package's own executable or to Node plus its entrypoint, because ConPTY cannot execute a batch shim.
+  Resolve executables with `shim_paths.which_real`, never `shutil.which`, which answers with mux's own generated shim.
 - Every harness declares both capability axes: `state_sources` and `measurement_source`.
 - Every harness declares conversation behavior: `reports_conversation_rollover`, `assigns_conversation_id`, `resolves_transcript_by_cwd`, `reports_transcript_path`, and any rollout-file prefix.
 - Every harness declares PTY delivery etiquette: `submission`, `root_completion`, and `screen`.

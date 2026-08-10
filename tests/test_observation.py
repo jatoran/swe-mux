@@ -218,7 +218,13 @@ async def test_omp_parser_follows_active_branch_and_clear_is_not_rollover() -> N
         events,
     )
     assert session.record.state == "idle"
-    assert session.record.native_session_id == "native-replay"
+    # The point of the assertion is that `/clear` does NOT roll the conversation:
+    # omp appends `reset_boundary` in the same file under the same id. Compared
+    # against the session's starting id rather than a literal, because omp mints
+    # its own conversation id and therefore starts on the mux placeholder - the
+    # replay harness now models that from the registry instead of special-casing
+    # codex as the only self-minting backend.
+    assert session.record.native_session_id == session.record.id
 
 
 async def test_omp_parser_tracks_hub_background_jobs_until_explicit_stop() -> None:
@@ -1402,6 +1408,8 @@ def _fake_manager() -> Any:
         _drain_hook_spool=noop_drain,
     )
     # Reuse the real PTY screen classifier so the test exercises it end to end.
+    mgr._pty_tail_explanation = SessionManager._pty_tail_explanation
+    mgr._note_pty_tail_readings = SessionManager._note_pty_tail_readings
     mgr._pty_tail_state = SessionManager._pty_tail_state
     mgr._pty_appears_idle = lambda s: SessionManager._pty_appears_idle(cast(Any, mgr), s)
     mgr._check_unwitnessed_pty_turn = lambda s, n: SessionManager._check_unwitnessed_pty_turn(
@@ -1464,6 +1472,42 @@ async def test_watchdog_pty_backstop_spares_open_tail_while_cli_busy(
 
     assert calls == []
     assert session.record.state == "working"
+
+
+async def test_parallel_tool_idle_repaint_preserves_turn_and_timer(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    from swe_mux.session import SessionManager
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_finish(_session: Any, _events: Any, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr("swe_mux.observation._finish_root_turn", fake_finish)
+
+    path = tmp_path / "native.jsonl"
+    _open_tail_transcript(path)
+    now = time.time() + 10.0
+    session = _watchdog_session(
+        path,
+        now,
+        b"Ruff finished\nPytest still running\n>\n(shift+tab to cycle)\n",
+    )
+    started_at = now - 100.0
+    session.cli_state = {"status": "busy"}
+    session.record.turn_started_at = started_at
+    session.observation_state["turn_started_at"] = started_at
+
+    await SessionManager._watchdog_check_session(_fake_manager(), session, now)
+
+    assert calls == []
+    assert session.record.state == "working"
+    assert session.record.turn_started_at == started_at
+    assert session.observation_state["turn_started_at"] == started_at
+    assert session.layer_readings["pty_tail_screen"] == "idle"
+    assert session.layer_readings["pty_tail"] == "working"
+    assert session.layer_readings["pty_tail_arbitration"] == "cli_state_busy"
 
 
 async def test_watchdog_pty_backstop_covers_a_missing_transcript(

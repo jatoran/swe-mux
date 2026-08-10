@@ -15,7 +15,7 @@ from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
-from .harness import Backend, reports_lifecycle_hooks
+from .harness import Backend, native_id_matches, reports_lifecycle_hooks
 from .models import SessionState
 from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
@@ -1648,11 +1648,6 @@ def hook_event_scope(event_type: str, payload: dict[str, Any]) -> str:
     return "root"
 
 
-_HOOK_NATIVE_ID = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
-
-
 def conversation_unbound(session: Session) -> bool:
     """True while this session's conversation id is still a placeholder.
 
@@ -1670,7 +1665,7 @@ def conversation_unbound(session: Session) -> bool:
     # left alone rather than re-bound from a hook.
     adapter = getattr(session, "adapter", None)
     if getattr(adapter, "assigns_conversation_id", True):
-        return not _HOOK_NATIVE_ID.fullmatch(native)
+        return not native_id_matches(record.backend, native)
     return native == record.id
 
 
@@ -2106,7 +2101,7 @@ async def _bind_native_id_from_hook(
         or payload.get("thread_id")
         or ""
     )
-    if not _HOOK_NATIVE_ID.fullmatch(native_id):
+    if not native_id_matches(session.record.backend, native_id):
         return
     if native_id == session.record.id:
         # The placeholder echoed back is not evidence of anything.
@@ -2194,11 +2189,11 @@ def conversation_rollover_decision(
     if not reports_lifecycle_hooks(session.record.backend):
         return nothing
     current = session.record.native_session_id or ""
-    if not _HOOK_NATIVE_ID.fullmatch(current):
+    if not native_id_matches(session.record.backend, current):
         # Nothing bound yet: that is the bind path's job, not a rollover.
         return nothing
     native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
-    if not _HOOK_NATIVE_ID.fullmatch(native_id) or native_id == current:
+    if not native_id_matches(session.record.backend, native_id) or native_id == current:
         return nothing
     if session.agent_lifecycle_id == native_id:
         return nothing
@@ -2245,7 +2240,7 @@ def foreign_conversation_hook_id(session: Session, payload: dict[str, Any]) -> s
         or payload.get("thread_id")
         or ""
     )
-    if not _HOOK_NATIVE_ID.fullmatch(native_id):
+    if not native_id_matches(session.record.backend, native_id):
         return None
     if native_id == (session.record.native_session_id or ""):
         return None
