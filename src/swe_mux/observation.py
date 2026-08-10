@@ -779,7 +779,7 @@ async def _dispatch_transcript_event(
         # title_change, mode_change, ttsr_injection, service_tier_change), so
         # the omp reader is not "close enough" here, it is the same reader over
         # a subset. The omp-only branches are simply unreachable for pi, and
-        # `_omp_context_window` already resolves the window off the session's own
+        # `_adapter_context_window` already resolves the window off the session's own
         # adapter rather than assuming omp's models.db.
         await _omp(session, event, events)
     elif backend == "opencode":
@@ -2781,6 +2781,14 @@ async def _refresh_database_measurements(session: Session) -> None:
     provider = figures.get("provider")
     if isinstance(provider, str) and provider:
         record.provider = provider
+    # Context is published only when the harness's own catalogue knows the
+    # window. A zero window renders as 0% used, which reads as a fresh
+    # conversation rather than a missing measurement.
+    window = _adapter_context_window(session, provider or "", model or "")
+    if window > 0:
+        record.context_window = window
+        record.context_pct = min(1.0, record.tokens_in / window)
+        record.context_peak_pct = max(record.context_peak_pct, record.context_pct)
     record.measurement_source = f"{record.backend}-database"
     _publish_update(session)
 
@@ -3758,7 +3766,7 @@ def _omp_int(value: Any) -> int:
         return 0
 
 
-def _omp_context_window(session: Session, provider: str, model: str) -> int:
+def _adapter_context_window(session: Session, provider: str, model: str) -> int:
     resolver = getattr(getattr(session, "adapter", None), "model_context_window", None)
     if callable(resolver):
         try:
@@ -3834,7 +3842,7 @@ def _omp_update_measurements(session: Session, active_chain: list[dict[str, Any]
             + _omp_int(usage.get("cacheRead"))
             + _omp_int(usage.get("cacheWrite"))
         )
-        window = _omp_context_window(session, provider, model)
+        window = _adapter_context_window(session, provider, model)
         if window:
             peak = max(peak, min(1.0, used / window))
         last_model = model or last_model

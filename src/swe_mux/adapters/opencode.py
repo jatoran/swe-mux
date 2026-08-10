@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sqlite3
 from collections.abc import Callable, Mapping
@@ -128,6 +129,7 @@ class OpenCodeAdapter(BackendAdapter):
         self.default_args = default_args or []
         self._data_home = data_home
         self._config_root = data_dir / "opencode-configs" if data_dir else None
+        self._context_windows: dict[tuple[str, str], int] | None = None
         # npm installs opencode as a `.cmd` batch shim wrapping the real
         # platform binary, and ConPTY cannot execute a batch shim.
         self.command_resolver = command_resolver
@@ -286,12 +288,53 @@ class OpenCodeAdapter(BackendAdapter):
         del native_id, cwd, created_at, stop
         return None
 
+    def catalog_path(self) -> Path:
+        """opencode's own cached model catalogue (models.dev data).
+
+        Read from opencode's cache rather than shared with another harness's
+        catalogue on purpose. The two genuinely disagree: for `openai/gpt-5.6-sol`
+        opencode records a 1,050,000-token context where pi's catalogue records
+        272,000. Each harness routes through its own provider stack, so its own
+        view of the window is the correct one for its sessions, and borrowing a
+        neighbour's would render a context percentage wrong by ~4x.
+        """
+        cache = os.environ.get("XDG_CACHE_HOME")
+        root = Path(cache).expanduser() if cache else Path.home() / ".cache"
+        return root / "opencode" / "models.json"
+
     def model_context_window(self, provider: str, model: str) -> int:
-        # Reported as unknown while the descriptor declares no measurement
-        # source. The session row already holds exact token counts and the model
-        # id, so this becomes a database read when the event-log observer lands.
-        del provider, model
-        return 0
+        if self._context_windows is None:
+            self._context_windows = self._load_context_windows()
+        return self._context_windows.get((provider, model), 0)
+
+    def _load_context_windows(self) -> dict[tuple[str, str], int]:
+        """Parse `{provider: {models: {id: {limit: {context: N}}}}}`.
+
+        An unreadable or unknown entry yields no window, and the caller leaves
+        context unreported rather than publishing 0% — which the codebase records
+        as indistinguishable from a fresh conversation.
+        """
+        try:
+            catalog = json.loads(self.catalog_path().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(catalog, dict):
+            return {}
+        windows: dict[tuple[str, str], int] = {}
+        for provider_id, provider in catalog.items():
+            if not isinstance(provider_id, str) or not isinstance(provider, dict):
+                continue
+            models = provider.get("models")
+            if not isinstance(models, dict):
+                continue
+            for model_id, model in models.items():
+                if not isinstance(model_id, str) or not isinstance(model, dict):
+                    continue
+                limit = model.get("limit")
+                context = limit.get("context") if isinstance(limit, dict) else None
+                if isinstance(context, int) and not isinstance(context, bool) and context > 0:
+                    windows[(provider_id, model_id)] = context
+        return windows
 
 
 __all__ = [

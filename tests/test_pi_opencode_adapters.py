@@ -224,6 +224,94 @@ def test_opencode_reports_no_transcript_because_it_has_none(tmp_path: Path) -> N
     assert adapter.database_path() == tmp_path / "opencode.db"
 
 
+def test_opencode_measurements_come_from_its_own_session_row(tmp_path: Path) -> None:
+    """One indexed read, not a parse: opencode keeps running totals on the row."""
+    import sqlite3
+
+    db = tmp_path / "opencode.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, cost REAL, tokens_input INT,"
+        " tokens_output INT, tokens_reasoning INT, tokens_cache_read INT,"
+        " tokens_cache_write INT, model TEXT, agent TEXT, title TEXT, time_updated INT)"
+    )
+    con.execute(
+        "INSERT INTO session VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "ses_01aa2258bffeDxM8MvkzWOVEOx",
+            0.25,
+            703,
+            5,
+            11,
+            2,
+            3,
+            '{"id":"gpt-5.6-sol","providerID":"openai","variant":"high"}',
+            "build",
+            "Exact OK reply",
+            1,
+        ),
+    )
+    con.commit()
+    con.close()
+
+    adapter = OpenCodeAdapter(data_home=tmp_path)
+    figures = adapter.session_measurements("ses_01aa2258bffeDxM8MvkzWOVEOx")
+    assert figures == {
+        "tokens_in": 703,
+        "tokens_out": 5,
+        "tokens_cache_read": 2,
+        "tokens_cache_write": 3,
+        "tokens_reasoning": 11,
+        "cost_usd": 0.25,
+        "model": "gpt-5.6-sol",
+        "provider": "openai",
+        "agent": "build",
+        "title": "Exact OK reply",
+    }
+    # An absent row must read as absent, never as zeroes: a published zero is
+    # indistinguishable from a genuinely empty conversation.
+    assert adapter.session_measurements("ses_01bb9f13ccadRfN2QqrtZLKPUy") is None
+    assert adapter.session_measurements("") is None
+    assert OpenCodeAdapter(data_home=tmp_path / "nope").session_measurements("ses_x") is None
+
+
+def test_opencode_reads_its_own_context_window_not_a_neighbours(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    """Each harness's catalogue is authoritative for its own sessions.
+
+    opencode and pi genuinely disagree: for openai/gpt-5.6-sol opencode records a
+    1,050,000-token context where pi records 272,000. Borrowing the neighbour's
+    number would render a context percentage wrong by roughly 4x.
+    """
+    cache = tmp_path / "cache"
+    (cache / "opencode").mkdir(parents=True)
+    (cache / "opencode" / "models.json").write_text(
+        json.dumps(
+            {
+                "openai": {
+                    "id": "openai",
+                    "models": {
+                        "gpt-5.6-sol": {"id": "gpt-5.6-sol", "limit": {"context": 1050000}},
+                        "no-limit": {"id": "no-limit"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    import os as _os
+
+    _os.environ["XDG_CACHE_HOME"] = str(cache)
+    try:
+        adapter = OpenCodeAdapter(data_home=tmp_path)
+        assert adapter.model_context_window("openai", "gpt-5.6-sol") == 1050000
+        assert adapter.model_context_window("openai", "no-limit") == 0
+        assert adapter.model_context_window("nope", "gpt-5.6-sol") == 0
+    finally:
+        _os.environ.pop("XDG_CACHE_HOME", None)
+
+
 def test_opencode_resume_addresses_the_session_by_id(tmp_path: Path) -> None:
     adapter = OpenCodeAdapter(data_home=tmp_path, data_dir=tmp_path)
     spec = adapter.resume_spec("ses_abc", SpawnOptions(cwd=tmp_path))
