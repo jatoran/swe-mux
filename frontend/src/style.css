@@ -320,6 +320,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .activity-badge { display:inline-flex;align-items:baseline;gap:1px }
 .activity-count { font:600 7px 'JetBrains Mono',monospace;color:#8a94a1 }
 .tab-main .activity-badges { margin-left:2px;margin-right:3px }
+.terminal-draft-indicator{display:inline-block;flex:0 0 auto;width:6px;height:6px;margin:0 3px;border-radius:50%;background:var(--green);box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 28%,transparent)}
 /* The provider mark on a session tab, beside the state dot. Sized against the tab's own 9px
    text rather than the sidebar's 12px, and the strip's 7px flex gap is pulled back in so the
    dot, the mark, and the title read as one group instead of three evenly spaced things. */
@@ -1370,8 +1371,21 @@ body {
 .terminal-action-rail .rail-icon svg{width:15px;height:15px;display:block}
 .terminal-action-rail .rail-icon:disabled{color:var(--muted)}
 .terminal-action-rail .kbd-toggle{display:none}
-@media(pointer:coarse){.terminal-action-rail .kbd-toggle{display:inline-flex;align-items:center;justify-content:center}}
+.terminal-action-rail .draft-toggle{display:none;position:relative}
+@media(pointer:coarse){.terminal-action-rail .kbd-toggle,.terminal-action-rail .draft-toggle{display:inline-flex;align-items:center;justify-content:center}}
 .terminal-action-rail .kbd-toggle.active{border-color:var(--green,#8bd450);color:var(--green,#8bd450)}
+.terminal-action-rail .draft-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green) 12%,var(--panel2));color:var(--green,#8bd450)}
+.terminal-action-rail .draft-toggle.has-draft::after{content:'';position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--green,#8bd450);box-shadow:0 0 0 2px var(--panel2)}
+.mobile-terminal-draft{z-index:15;grid-row:1;grid-column:1;align-self:end;justify-self:center;width:min(720px,calc(100% - 16px));max-height:min(48dvh,360px);margin:8px;display:grid;grid-template-rows:auto minmax(76px,auto) auto auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--green) 55%,var(--line));background:color-mix(in srgb,var(--panel) 96%,transparent);box-shadow:0 8px 28px #000b}
+.mobile-terminal-draft>header{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid var(--line);font:10px 'Cascadia Mono',Consolas,monospace}
+.mobile-terminal-draft>header strong{color:var(--green);letter-spacing:.06em;text-transform:uppercase}.mobile-terminal-draft>header span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.mobile-terminal-draft>header button{width:30px;height:30px;border:0;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+.mobile-terminal-draft>textarea{box-sizing:border-box;width:100%;min-height:76px;max-height:min(30dvh,220px);padding:10px;border:0;outline:0;resize:none;overflow:auto;background:var(--bg);color:var(--text);font:13px/1.45 'Cascadia Mono',Consolas,monospace;caret-color:var(--green)}
+.mobile-terminal-draft>textarea:focus{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--green) 38%,transparent)}
+.mobile-terminal-draft-error{margin:0;padding:5px 8px;border-top:1px solid color-mix(in srgb,var(--red) 45%,var(--line));color:var(--red);font-size:9px}
+.mobile-terminal-draft>footer{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:6px 7px;border-top:1px solid var(--line)}
+.mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
+.mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
 .commandrail-settings .rail-intro{margin:0 0 8px}
 .commandrail-settings .rail-intro b{color:var(--text);font-weight:600}
@@ -1690,6 +1704,9 @@ body {
   .mobile-terminal-live-input{position:absolute;z-index:1;left:8px;bottom:54px;display:block;width:1px;height:1px;min-width:1px;min-height:1px;margin:0;padding:0;border:0;outline:0;opacity:.01;overflow:hidden;resize:none;background:transparent;color:transparent;caret-color:transparent;font-size:16px;pointer-events:none}
   .terminal-surface .xterm .composition-view{display:none!important}
   .terminal-action-rail .terminal-mobile-send{min-height:44px}
+  .mobile-terminal-draft{width:calc(100% - 14px);max-height:min(46dvh,320px);margin:7px}
+  .mobile-terminal-draft>textarea{min-height:92px;max-height:28dvh;font-size:16px}
+  .mobile-terminal-draft>header button,.mobile-terminal-draft>footer button{min-height:44px}
 }
 
 /* Every visible Project resource lives in the same recursive pane tree. */

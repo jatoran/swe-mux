@@ -1084,6 +1084,16 @@ responsive controls.
   scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
   Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
   rail in this mode never raises the keyboard.
+- Agent terminals also expose a touch-only **Draft** rail action beside the keyboard toggle.
+  It opens a native multiline composer as a floating surface in the terminal cell, so its appearance does not resize the terminal or reflow the running TUI.
+  Live input, read/select, and Draft are exclusive modes: opening Draft suppresses terminal focus, hiding it restores the prior live or read/select mode, and pressing the keyboard toggle from Draft closes it into read/select mode.
+- Draft text is device-local and keyed by session rather than pane, so hiding the composer, changing workspace tabs, remounting the pane, reloading, or browser suspension does not discard it.
+  The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
+  A green dot on the Draft action and every tab for that terminal discloses unsent text without exposing its content.
+- Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Send** button uses the existing session-targeted terminal insertion and submission path.
+  A successful send clears the saved draft, while a rejected send leaves the text editable and reports the error in the composer.
+  The send appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
+  Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target. Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
@@ -1729,6 +1739,8 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/src/ResourceUsage.tsx`
 - `frontend/src/TerminalPane.tsx`
+- `frontend/src/TerminalDraftComposer.tsx`
+- `frontend/src/mobileTerminalDraft.ts`
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/DirectoryPicker.tsx`
 - `frontend/src/terminalRenderDiagnostics.ts`
