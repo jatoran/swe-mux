@@ -6,7 +6,9 @@ import threading
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
+
+from .harness import transcript_dialect
 
 TRANSCRIPT_PARSER_VERSION = 3
 _SOURCE_OFFSET_KEY = "__swe_mux_source_offset"
@@ -31,7 +33,15 @@ def _codex_blocks(content: Any) -> list[dict[str, Any]]:
 
 def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[str, Any] | None:
     timestamp = event.get("timestamp")
-    if backend == "claude":
+    # Dispatch on the record dialect, not the harness name. This function used to
+    # key on the name with a silent `else: return None`, so adding pi produced an
+    # empty Transcript tab with nothing failing anywhere — the reader simply had
+    # no branch for it. `assert_never` below makes the next harness a compile
+    # error instead of an empty tab.
+    dialect = transcript_dialect(backend)
+    if dialect is None:
+        return None
+    if dialect == "claude":
         role = event.get("type")
         if role not in {"user", "assistant"}:
             return None
@@ -44,7 +54,8 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         if event.get("isSidechain") is True:
             return None
         blocks = _blocks((event.get("message") or {}).get("content"))
-    elif backend == "omp":
+    elif dialect == "pi":
+        # oh-my-pi and upstream pi write the same message record.
         if event.get("type") != "message":
             return None
         native_message = event.get("message") or {}
@@ -52,7 +63,7 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         if role not in {"user", "assistant"}:
             return None
         blocks = _blocks(native_message.get("content"))
-    elif backend == "codex":
+    elif dialect == "codex":  # noqa: SIM114 - distinct dialects, distinct shapes
         payload = event.get("payload") or {}
         payload_type = payload.get("type")
         if event.get("type") == "response_item" and payload_type == "message":
@@ -70,7 +81,7 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         else:
             return None
     else:
-        return None
+        assert_never(dialect)
     if not any(block.get("type") == "text" and block.get("text") for block in blocks):
         return None
     return {"role": role, "ts": timestamp, "content": blocks}
@@ -182,11 +193,14 @@ def parse_transcript(
         and (event.get("payload") or {}).get("role") in {"user", "assistant"}
         for event in events
     )
+    dialect = transcript_dialect(backend)
     for event in events:
-        if backend == "claude":
+        if dialect == "claude" or dialect == "pi":
+            # Both dialects put the whole message in one record, so the shared
+            # extractor is the entire parse. Only codex splits tool calls out.
             if message := _native_conversation_message(event, backend):
                 messages.append(message)
-        elif backend == "codex":
+        elif dialect == "codex":
             payload = event.get("payload") or {}
             payload_type = payload.get("type")
             if event.get("type") == "response_item" and payload_type == "message":
@@ -209,9 +223,12 @@ def parse_transcript(
                         ],
                     }
                 )
-        elif backend == "omp":
-            if message := _native_conversation_message(event, backend):
-                messages.append(message)
+        elif dialect is None:
+            # No parseable records exist for this backend (shell, or a harness
+            # whose conversation lives outside the filesystem).
+            break
+        else:
+            assert_never(dialect)
     return messages
 
 
@@ -354,23 +371,26 @@ def _tool_calls(event: dict[str, Any], backend: str) -> int:
     counts zero, which merges a turn exactly as it does today rather than cutting
     a reply at a boundary that is not there.
     """
-    if backend == "claude":
+    dialect = transcript_dialect(backend)
+    if dialect == "claude":
         if event.get("type") != "assistant" or event.get("isSidechain") is True:
             return 0
         blocks = _blocks((event.get("message") or {}).get("content"))
         return sum(1 for block in blocks if block.get("type") == "tool_use")
-    if backend == "omp":
+    if dialect == "pi":
         if event.get("type") != "message":
             return 0
         native = event.get("message") or {}
         if native.get("role") != "assistant":
             return 0
         return sum(1 for block in _blocks(native.get("content")) if block.get("type") == "toolCall")
-    if backend == "codex":
+    if dialect == "codex":
         if event.get("type") != "response_item":
             return 0
         return 1 if (event.get("payload") or {}).get("type") in _CODEX_TOOL_CALL_TYPES else 0
-    return 0
+    if dialect is None:
+        return 0
+    assert_never(dialect)
 
 
 def _message_text(blocks: Any) -> str:
@@ -416,6 +436,7 @@ def _conversation_records(
     kept: list[dict[str, Any]] = []
     hidden = 0
     pending_tools = 0
+    dialect = transcript_dialect(backend)
     # Same precedence rule the indexing parse uses: when a Codex rollout carries
     # current `response_item/message` records, its legacy `event_msg` copies are
     # duplicates of them.
@@ -440,11 +461,18 @@ def _conversation_records(
             pending_tools += tools
             continue
         if message["role"] == "user":
-            machinery = (
-                _claude_user_is_machinery(event, text)
-                if backend == "claude"
-                else text.startswith(_CODEX_MACHINERY_PREFIXES)
-            )
+            # Each dialect hides a different kind of non-user record. Codex's
+            # prefix test used to be the `else` for everything that was not
+            # Claude, so it was silently applied to the pi dialect too — a pi or
+            # omp user message that happened to start with a Codex machinery
+            # prefix would vanish from the transcript. The pi dialect wraps no
+            # machinery into user records at all, so it tests nothing.
+            if dialect == "claude":
+                machinery = _claude_user_is_machinery(event, text)
+            elif dialect == "codex":
+                machinery = text.startswith(_CODEX_MACHINERY_PREFIXES)
+            else:
+                machinery = False
             if machinery:
                 hidden += 1
                 pending_tools += tools

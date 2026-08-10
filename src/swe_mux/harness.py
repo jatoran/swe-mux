@@ -9,6 +9,22 @@ from typing import Literal, TypeGuard
 
 StateSource = Literal["hook", "transcript", "pty", "cli_state"]
 MeasurementSource = Literal["transcript", "none"]
+# The *shape* of a harness's conversation records, as distinct from the harness
+# itself. Two harnesses share a dialect when one reader can parse both: pi and
+# oh-my-pi forked from a common ancestor and still write the same
+# `{"type":"session"}` header, `id`/`parentId` entry tree, and `usage`/`cost`
+# block, so both declare `pi`.
+#
+# Every consumer that parses records dispatches on this rather than on the
+# harness name. That is deliberate: a name-keyed `if/elif` chain has no
+# exhaustiveness guard unless someone remembers to add `assert_never`, and the
+# one place that forgot (`transcript_view`) silently rendered an empty
+# Transcript tab for a newly added harness rather than failing. Dispatching on a
+# closed dialect makes the compiler ask the question instead.
+#
+# `None` means the harness writes no parseable conversation records at all
+# (opencode keeps its conversations as rows in `opencode.db`).
+TranscriptDialect = Literal["claude", "codex", "pi"]
 ToolCatalogSource = Literal["documented_catalog", "runtime_dependent"]
 Backend = Literal["shell", "claude", "codex", "omp", "pi", "opencode"]
 AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
@@ -37,6 +53,9 @@ class HarnessDescriptor:
     default_args: tuple[str, ...]
     data_home: DataHomeResolver
     adapter_family: AdapterFamily
+    # Which record reader parses this harness's conversation. `None` for a
+    # harness that writes no parseable transcript.
+    transcript_dialect: TranscriptDialect | None
     config_dir_name: str
     script_base_name: str
     rollout_file_prefix: str | None
@@ -362,6 +381,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         default_args=(),
         data_home=_claude_data_home,
         adapter_family="claude",
+        transcript_dialect="claude",
         config_dir_name=".claude",
         script_base_name="claude",
         rollout_file_prefix=None,
@@ -393,6 +413,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         default_args=(),
         data_home=_codex_data_home,
         adapter_family="codex",
+        transcript_dialect="codex",
         config_dir_name=".codex",
         script_base_name="codex",
         rollout_file_prefix="rollout-",
@@ -424,6 +445,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         default_args=(),
         data_home=_omp_data_home,
         adapter_family="omp",
+        transcript_dialect="pi",
         config_dir_name=".omp",
         script_base_name="omp",
         rollout_file_prefix=None,
@@ -455,6 +477,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         default_args=(),
         data_home=_pi_data_home,
         adapter_family="pi",
+        transcript_dialect="pi",
         config_dir_name=".pi",
         script_base_name="pi",
         rollout_file_prefix=None,
@@ -498,6 +521,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         default_args=(),
         data_home=_opencode_data_home,
         adapter_family="opencode",
+        transcript_dialect=None,
         config_dir_name=".opencode",
         script_base_name="opencode",
         rollout_file_prefix=None,
@@ -553,6 +577,18 @@ AGENT_BACKENDS = frozenset(HARNESSES)
 
 def descriptor(name: str) -> HarnessDescriptor:
     return HARNESSES[name]
+
+
+def transcript_dialect(name: object) -> TranscriptDialect | None:
+    """Which record reader parses this backend's conversation, if any.
+
+    The single question every transcript-parsing consumer asks. `shell` and any
+    harness without parseable records answer ``None``, which callers must handle
+    as "there is nothing to read" rather than "read it as the default".
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return None
+    return HARNESSES[name].transcript_dialect
 
 
 def agent_harnesses() -> tuple[str, ...]:
