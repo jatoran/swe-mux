@@ -1122,12 +1122,22 @@ another agent can pick up mid-plan. Section links point to the design detail.
     rather than blended into the present: §7's attribution rule applied where it matters most.
   - [ ] Run brief on `get_session`: the run's pinned title and opening request, so "what is
     that session working on" costs one small call instead of a paged transcript read.
-  - [ ] `project_card()` over the shipped step 4 operation, degrading to empty exactly as the
-    internal API does; a bounded ground-truth Git read (branch, status, changed files, diff
-    stat, never patch bodies) so a reviewer conditions on the diff rather than the sibling's
-    story about it (design law 6).
   - [ ] `message_status(id)` closes the `notify` loop for the sender, and the observation inbox
     becomes readable, which is the human-to-agent channel with no new trust boundary.
+  - [ ] `memory_sources()` and `read_memory(source_id)` over the Phase 6 Agent Context
+    inventory, pulled forward from step 8 (2026-08-10) because they are thin callers over a
+    shipped read and do not need this step's semantic substrate. Blocked on Agent Context
+    becoming harness-declared rather than a claude/codex special case. Raw memory stays
+    unverified, pull-only, Project-scoped, and attributed; never bulk-injected, written by MCP,
+    or copied into another harness's private store.
+  - **Dropped 2026-08-10: `project_card()` and the bounded ground-truth Git read.** A tool earns
+    its place only by answering something the caller cannot answer itself, and every agent
+    session is a CLI with shell access: `git status` and `git diff --stat` are one command away,
+    and a sibling's worktree path already comes from `get_session`. Design law 6 still holds
+    (condition on the diff, not on the sibling's story about it); it does not need a tool to
+    hold. The project card remains an internal operation with its own consumers. Reopen
+    `project_card()` only with evidence that a distilled card answers something the repository
+    itself does not.
   - [ ] Decide the cross-Project read question (§18) explicitly. Default stays own-Project;
     "what else am I working on right now" is inherently cross-Project and needs a named grant
     if it is ever answered, not a quiet scope widening.
@@ -1192,9 +1202,13 @@ another agent can pick up mid-plan. Section links point to the design detail.
     itself. No route and no UI; build health is under `project_cards` in
     `GET /api/diagnostics/background`.
 - [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
-  timeline + dead-end memory (§6.2) + continuous title (§6.11). Instrument the rehydration
-  rate from commit one. Records carry `agent_run_id`; delta window, continuity context, and
-  `novelty` all reset at a rollover.
+  timeline + dead-end memory (§6.2). Instrument the rehydration rate from commit one. Records
+  carry `agent_run_id`; delta window, continuity context, and `novelty` all reset at a rollover.
+  The continuous title is **not** part of this step: §6.11 abandoned it, and titling is one call
+  per run off the opening request.
+  **Gated 2026-08-10 on step 2.6 evidence.** This is the first continuously costing feature and
+  step 2.6's free reads overlap part of what the timeline was meant to provide, so ship the
+  reads first and let their observed usage justify or retire this step.
 - [ ] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
   A narration slice never spans two agent runs.
 - [ ] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
@@ -1203,11 +1217,11 @@ another agent can pick up mid-plan. Section links point to the design detail.
 - [ ] **8 · Cross-session + novel + mux MCP v1** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
   second opinions, experience DB, and the memory half of the return path
   (`provenance`, `priorResolutions`, `deadEnds`, `verifiedStatus`) layered onto the v0
-  transport from step 2.5, plus exact `memorySources` / `readMemory` access to the
-  attributed provider sources inventoried by Phase 6 Agent Context. Raw provider memory
-  remains unverified, pull-only, and Project-scoped; it is never bulk-injected, written by
-  MCP, or copied into another provider's private store. Every derived record names its
-  `agent_run_id`. Delivered as `ROADMAP.md` Phase 7.5.
+  transport from step 2.5. Every derived record names its `agent_run_id`. Delivered as
+  `ROADMAP.md` Phase 7.5.
+  The `memorySources` / `readMemory` reads moved to step 2.6 on 2026-08-10, so the harness-memory
+  bridge is no longer hostage to this step's substrate; the rules governing it are unchanged and
+  are restated in `ROADMAP.md` Phase 7.5.
   - [ ] Split the shipping order by dependency rather than by tool family: `provenance` and
     `verifiedStatus` read Tier 0 and the step 3 detectors, both shipped, so they are buildable
     ahead of the rest; only `priorResolutions` and `deadEnds` genuinely need the step 5 scan

@@ -201,6 +201,7 @@ document and are not duplicated here.
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
 | 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, and now runs **before** Phase 5.5 so its usage can justify or retire the timeline |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
+| 3.5 · Run boundary contract | **Phase 5.4** | not a control-plane step of its own, but a hard prerequisite for steps 4–8, which inherit their boundary from it and must never implement conversation-change detection themselves |
 | 4–5 · Project card + scan timeline | **Phase 5.5** | card shipped; timeline is the first continuous model cost and is **gated on Phase 5.6 evidence**, plus **Phase 5.4's run boundary**, since a timeline spanning a conversation replacement describes two sessions as one |
 | 6–7 · Attention ranking + narration | **Phase 6.5** | ranking needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one); narration is separately gated on the annotation surface being read |
 | 8 · Cross-session + mux MCP v1 | **Phase 7.5** | semantic half only; the memory-source reads moved to Phase 5.6. Needs the CP 5 timeline, the Phase 6 harness-coverage fix, the Phase 7 typed operations, and Phase 5.4 run-scoped retrieval |
@@ -1791,9 +1792,12 @@ because it inherits the transport, identity, and restart contract already proven
 **Split 2026-08-10.** The memory-source reads (`memory_sources`, `read_memory`) were thin
 wrappers over shipped Agent Context and are pulled forward into Phase 5.6, so they are no longer
 hostage to substrate that may never be built.
-What remains here is the genuinely semantic half, and all of it is gated on the Phase 5.5 scan
-timeline actually shipping.
-If Phase 5.6's free reads cover the need and Phase 5.5 shrinks, this phase shrinks with it.
+
+What remains splits again by dependency rather than by tool family, per `CONTROL_PLANE_ROADMAP.md`
+§9 step 8: `provenance` and `verifiedStatus` read Tier 0 and the shipped step 3 detectors and are
+buildable now, while only `priorResolutions` and `deadEnds` genuinely need the Phase 5.5 scan
+timeline.
+Do not hold the deterministic half behind the semantic half.
 
 ### v1 tool surface
 
@@ -2095,6 +2099,9 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
   upgrade, uninstall, logging, diagnosis, recovery, and backup.
 - [ ] Add service/autostart recipes only after daemon-death child cleanup is proven for each
   supported target.
+- [ ] Resolve the preview-capture Chromium assumption (`CONTROL_PLANE_ROADMAP.md` §9 known
+  gaps): a clean-machine build needs Chromium bundled or a first-run `playwright install`,
+  otherwise screenshot capture is silently unavailable on a fresh install.
 
 ### Release automation
 
