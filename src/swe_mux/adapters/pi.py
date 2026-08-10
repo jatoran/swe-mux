@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..harness import descriptor
+from ..shim_paths import which_real
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
 from .omp import session_header
 
@@ -266,7 +268,22 @@ class PiAdapter(BackendAdapter):
     def model_context_window(self, provider: str, model: str) -> int:
         if self._model_context_windows is None:
             self._model_context_windows = self._load_model_context_windows()
-        return self._model_context_windows.get((provider, model), 0)
+        exact = self._model_context_windows.get((provider, model))
+        if exact:
+            return exact
+        # A model reached through a custom or subscription-backed provider keeps
+        # its catalogued id while carrying a provider id the catalog has never
+        # heard of, so an exact (provider, model) miss is routine rather than
+        # exceptional. Fall back to the id alone, and only when every provider
+        # that offers it agrees on the window — a disagreement means the number
+        # is genuinely provider-dependent and guessing one would render a
+        # confident, wrong context percentage.
+        windows = {
+            window
+            for (_provider, catalogued), window in self._model_context_windows.items()
+            if catalogued == model
+        }
+        return windows.pop() if len(windows) == 1 else 0
 
     def _catalog_candidates(self) -> list[Path]:
         """Places the bundled pi-ai model catalog can sit for an installed pi.
@@ -277,7 +294,20 @@ class PiAdapter(BackendAdapter):
         network or runs pi.
         """
         roots: list[Path] = []
-        exe = Path(self.default_exe)
+        # `default_exe` is normally the bare name `pi` (that is what the config
+        # default and the descriptor both carry), so resolving it as a path would
+        # anchor every candidate at the daemon's cwd and find nothing — measured:
+        # the catalog loaded zero entries in the daemon while loading fine from a
+        # shell that happened to sit in the right directory. Resolve on PATH
+        # first, and keep the literal value for an explicitly configured path.
+        # `which_real`, never `shutil.which`: the daemon's PATH begins with its
+        # own generated agent shims, so a plain lookup answers
+        # `~/.mux/bin/pi.cmd` and anchors every candidate inside mux's shim
+        # directory. Measured: the catalog loaded zero entries for exactly this
+        # reason. `which_real` is the codebase's existing guard against
+        # resolving back into a mux shim.
+        located = which_real(self.default_exe) if not os.path.isabs(self.default_exe) else None
+        exe = Path(located or self.default_exe)
         try:
             exe_dir = exe.resolve(strict=False).parent
         except OSError:
@@ -287,13 +317,56 @@ class PiAdapter(BackendAdapter):
             roots.append(base / "lib" / "node_modules" / "@earendil-works" / "pi-coding-agent")
         return [root / "node_modules" / _MODEL_CATALOG_RELATIVE for root in roots]
 
+    @staticmethod
+    def _harvest(node: Any, into: dict[tuple[str, str], int]) -> None:
+        """Collect every ``{id, provider, contextWindow}`` object in a JSON tree.
+
+        Walked generically rather than at a fixed depth. pi 0.84.1 nests
+        provider file -> api group -> model, but the nesting has already changed
+        once (0.74.2 kept the whole catalog in one JS object literal), so a
+        structural walk survives the next reshuffle where an indexed path would
+        silently start returning nothing.
+        """
+        if isinstance(node, dict):
+            model = node.get("id")
+            provider = node.get("provider")
+            window = node.get("contextWindow")
+            if (
+                isinstance(model, str)
+                and isinstance(provider, str)
+                and isinstance(window, int)
+                and not isinstance(window, bool)
+                and window > 0
+            ):
+                into[(provider, model)] = window
+            for value in node.values():
+                PiAdapter._harvest(value, into)
+        elif isinstance(node, list):
+            for value in node:
+                PiAdapter._harvest(value, into)
+
     def _load_model_context_windows(self) -> dict[tuple[str, str], int]:
+        result: dict[tuple[str, str], int] = {}
         for candidate in self._catalog_candidates():
+            if not candidate.is_file():
+                continue
+            # pi >= 0.75 ships the catalog as JSON under `providers/data/`, and
+            # `models.generated.js` is reduced to a list of imports. Reading the
+            # JSON is both more robust than parsing JS and how the newer layout
+            # actually stores the data.
+            data_dir = candidate.parent / "providers" / "data"
+            for path in sorted(data_dir.glob("*.json")) if data_dir.is_dir() else ():
+                try:
+                    self._harvest(json.loads(path.read_text(encoding="utf-8")), result)
+                except (OSError, json.JSONDecodeError):
+                    continue
+            if result:
+                return result
+            # pi <= 0.74 kept every model in one generated JS object literal.
             try:
                 source = candidate.read_text(encoding="utf-8")
             except OSError:
                 continue
-            result: dict[tuple[str, str], int] = {}
             for match in _MODEL_ENTRY.finditer(source):
                 window = int(match.group("window"))
                 if window > 0:

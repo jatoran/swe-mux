@@ -3812,7 +3812,12 @@ def _omp_update_measurements(session: Session, active_chain: list[dict[str, Any]
     record.provider = last_provider or record.provider
     record.provider_account_hashes = provider_account_hashes
     record.model = last_model or record.model
-    record.measurement_source = "omp-transcript"
+    # Named for the harness that produced the numbers, not for the reader that
+    # parsed them. pi and omp share this reader, so a hardcoded "omp-transcript"
+    # labelled every pi session's measurements as omp's — and that label is
+    # persisted into the history row, so it was cross-attribution in stored data,
+    # not just a cosmetic string.
+    record.measurement_source = f"{record.backend}-transcript"
     state["omp_last_provider"] = last_provider
     _publish_update(session)
 

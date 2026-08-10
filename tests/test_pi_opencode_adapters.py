@@ -94,6 +94,95 @@ def test_pi_unknown_model_window_is_zero_not_a_guess(tmp_path: Path) -> None:
     assert adapter.model_context_window("openrouter", "who/knows") == 0
 
 
+def _pi_catalog(root: Path) -> Path:
+    """Lay out an installed pi's bundled pi-ai catalog under a fake npm prefix."""
+    pkg = root / "node_modules" / "@earendil-works" / "pi-coding-agent"
+    dist = pkg / "node_modules" / "@earendil-works" / "pi-ai" / "dist"
+    dist.mkdir(parents=True)
+    return dist
+
+
+def test_pi_reads_the_json_catalog_layout(tmp_path: Path) -> None:
+    """pi >= 0.75 ships per-provider JSON; models.generated.js is only imports.
+
+    The layout changed between 0.74.2 and 0.84.1 and the old JS-regex reader
+    silently produced an empty catalog, which renders as 0% context used - which
+    the codebase already documents as indistinguishable from a fresh
+    conversation rather than obviously broken.
+    """
+    dist = _pi_catalog(tmp_path)
+    (dist / "models.generated.js").write_text(
+        'import { OPENAI_MODELS } from "./providers/openai.models.js";\n', encoding="utf-8"
+    )
+    data = dist / "providers" / "data"
+    data.mkdir(parents=True)
+    (data / "openai.json").write_text(
+        json.dumps(
+            {
+                "openai-responses": {
+                    "gpt-x": {
+                        "id": "gpt-x",
+                        "provider": "openai",
+                        "contextWindow": 272000,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = PiAdapter(str(tmp_path / "pi.cmd"), data_home=tmp_path)
+    assert adapter.model_context_window("openai", "gpt-x") == 272000
+
+
+def test_pi_reads_the_legacy_js_catalog_layout(tmp_path: Path) -> None:
+    """pi <= 0.74 kept the whole catalog in one generated JS object literal."""
+    dist = _pi_catalog(tmp_path)
+    (dist / "models.generated.js").write_text(
+        'export const MODELS = {\n'
+        '  "openai": {\n'
+        '    "gpt-old": {\n'
+        '      id: "gpt-old",\n'
+        '      provider: "openai",\n'
+        "      cost: { input: 1 },\n"
+        "      contextWindow: 128000,\n"
+        "    },\n"
+        "  },\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    adapter = PiAdapter(str(tmp_path / "pi.cmd"), data_home=tmp_path)
+    assert adapter.model_context_window("openai", "gpt-old") == 128000
+
+
+def test_pi_model_window_falls_back_to_the_id_when_providers_agree(tmp_path: Path) -> None:
+    """A subscription-backed provider id the catalog never heard of still resolves."""
+    dist = _pi_catalog(tmp_path)
+    (dist / "models.generated.js").write_text("", encoding="utf-8")
+    data = dist / "providers" / "data"
+    data.mkdir(parents=True)
+    (data / "a.json").write_text(
+        json.dumps(
+            {
+                "g": {
+                    "solo": {"id": "solo", "provider": "one", "contextWindow": 100},
+                    "split": {"id": "split", "provider": "one", "contextWindow": 100},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (data / "b.json").write_text(
+        json.dumps({"g": {"split": {"id": "split", "provider": "two", "contextWindow": 900}}}),
+        encoding="utf-8",
+    )
+    adapter = PiAdapter(str(tmp_path / "pi.cmd"), data_home=tmp_path)
+    # One provider offers it, so the id alone identifies the window.
+    assert adapter.model_context_window("never-heard-of-it", "solo") == 100
+    # Providers disagree, so refuse rather than render a confidently wrong
+    # percentage - the live catalog really does disagree by 4x on gpt-5.6-sol.
+    assert adapter.model_context_window("never-heard-of-it", "split") == 0
+
+
 def test_opencode_config_adds_a_layer_and_never_replaces_the_config_dir(
     tmp_path: Path,
 ) -> None:
