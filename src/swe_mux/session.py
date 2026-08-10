@@ -1600,7 +1600,7 @@ class Session:
         # persisted to the durable event log, so neither may be driven at frame rate
         # by a misbehaving or malicious page.
         self.last_client_repaint_ts = 0.0
-        self.last_client_diagnostic_ts = 0.0
+        self.client_diagnostic_timestamps: dict[str, float] = {}
         # A drag emits geometry changes continuously, and an alternate-screen child
         # cannot repair its own screen after one (`needs_resize_repaint`). These carry
         # the trailing-edge debounce that pulses it once the size stops moving: the

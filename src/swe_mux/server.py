@@ -8590,6 +8590,14 @@ async def _handle_terminal_input(
     frame: dict[str, Any],
 ) -> None:
     data = str(frame.get("data", ""))
+    raw_input_seq = frame.get("input_seq")
+    input_seq = (
+        raw_input_seq
+        if isinstance(raw_input_seq, int)
+        and not isinstance(raw_input_seq, bool)
+        and 0 < raw_input_seq <= 2_147_483_647
+        else None
+    )
     if _is_codex_default_color_response(session.record.backend, data):
         return
     is_terminal_response = frame.get("kind") == "terminal_response"
@@ -8608,9 +8616,11 @@ async def _handle_terminal_input(
                     "data": data,
                     "broadcast": bool(frame.get("broadcast")),
                     "retry": bool(frame.get("retry")),
+                    **({"input_seq": input_seq} if input_seq is not None else {}),
                 }
             )
         return
+    server_received_at_ms = int(time.time() * 1000)
     session.pty.write(data)
     now = time.monotonic()
     pointer = pointer_report_kind(data)
@@ -8649,13 +8659,42 @@ async def _handle_terminal_input(
         session.note_owner_input(now)
     if not is_terminal_response and pointer is None and now - session.last_input_report_ts >= 2:
         session.last_input_report_ts = now
+        input_diagnostic: dict[str, Any] = {}
+        if input_seq is not None:
+            input_diagnostic["input_seq"] = input_seq
+            for key, maximum in (
+                ("client_sent_at_ms", 10**15),
+                ("client_event_delay_ms", 10 * 60 * 1000),
+                ("client_queue_delay_ms", 10 * 60 * 1000),
+                ("ws_buffered_bytes", 2**31 - 1),
+            ):
+                value = frame.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum:
+                    input_diagnostic[key] = value
+            input_source = frame.get("input_source")
+            if input_source in {"beforeinput", "input", "keydown", "paste"}:
+                input_diagnostic["input_source"] = input_source
+            input_diagnostic["server_received_at_ms"] = server_received_at_ms
         request.app["events"].emit_background(
             "terminal_input",
             session_id=session.record.id,
             source="daemon",
             input_owner=True,
             bytes=len(data.encode("utf-8")),
+            **input_diagnostic,
         )
+    if input_seq is not None and not is_terminal_response and pointer is None:
+        # The acknowledgement marks daemon receipt, not terminal echo. It carries no
+        # input content and is optional telemetry, so a disconnect after the PTY write
+        # must not turn an accepted keystroke into a handler failure.
+        with suppress(ConnectionResetError, RuntimeError):
+            await ws.send_json(
+                {
+                    "type": "input_ack",
+                    "input_seq": input_seq,
+                    "server_received_at_ms": server_received_at_ms,
+                }
+            )
     if frame.get("broadcast") and not is_terminal_response:
         await deliver_broadcast(
             request.app["sessions"],
@@ -8688,6 +8727,15 @@ CLIENT_REPAIR_PHASES = frozenset(
         "surface_repair_resumed",
         "scrollback_repaint_requested",
         "webgl_render_error",
+    }
+)
+CLIENT_INPUT_DIAGNOSTIC_PHASES = frozenset(
+    {
+        "input_ack_latency",
+        "input_echo_latency",
+        "input_event_delay",
+        "input_main_thread_stall",
+        "input_socket_backlog",
     }
 )
 CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS = 1.0
@@ -8776,9 +8824,12 @@ async def _handle_client_repaint(request: web.Request, session: Session) -> None
 
 
 def _handle_client_diagnostic(
-    request: web.Request, session: Session, frame: dict[str, Any]
+    request: web.Request,
+    session: Session,
+    connection_id: str,
+    frame: dict[str, Any],
 ) -> None:
-    """Persist a client-side terminal repair to the durable event log.
+    """Persist a bounded client-side terminal diagnostic to the durable event log.
 
     The repair layers (terminalHealth.ts and TerminalPane's fit/surface debt) fire in
     production browsers, where the opt-in in-page ring buffer is invisible and lost on
@@ -8789,20 +8840,30 @@ def _handle_client_diagnostic(
     an exact count.
     """
     phase = frame.get("phase")
-    if not isinstance(phase, str) or phase not in CLIENT_REPAIR_PHASES:
+    if not isinstance(phase, str) or phase not in (
+        CLIENT_REPAIR_PHASES | CLIENT_INPUT_DIAGNOSTIC_PHASES
+    ):
         return
     now = time.monotonic()
-    if now - session.last_client_diagnostic_ts < CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS:
+    last_report = session.client_diagnostic_timestamps.get(phase, 0.0)
+    if now - last_report < CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS:
         return
-    session.last_client_diagnostic_ts = now
+    session.client_diagnostic_timestamps[phase] = now
     detail = frame.get("detail")
     payload = json.dumps(detail) if isinstance(detail, dict) else ""
+    event_type = (
+        "terminal_client_repair"
+        if phase in CLIENT_REPAIR_PHASES
+        else "terminal_input_diagnostic"
+    )
     request.app["events"].emit_background(
-        "terminal_client_repair",
+        event_type,
         session_id=session.record.id,
         source="browser",
         phase=phase,
         detail=payload[:CLIENT_DIAGNOSTIC_DETAIL_LIMIT],
+        input_owner=session.input_owner == connection_id,
+        owner_device=session.input_owner_device,
     )
 
 
@@ -8860,7 +8921,7 @@ async def _handle_pty_client_message(
         elif frame.get("type") == "repaint":
             await _handle_client_repaint(request, session)
         elif frame.get("type") == "client_diagnostic":
-            _handle_client_diagnostic(request, session, frame)
+            _handle_client_diagnostic(request, session, connection_id, frame)
         elif frame.get("type") == "output_ack":
             byte_count = frame.get("bytes")
             if isinstance(byte_count, int) and not isinstance(byte_count, bool):

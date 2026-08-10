@@ -84,6 +84,14 @@ import {
   terminalRenderDiagnosticsEnabled,
 } from './terminalRenderDiagnostics'
 import { remountDecision, scrollbackRepaintNeeded, surfaceDrifted, terminalFitDrifted, TERMINAL_HEALTH_SWEEP_MS, writePipelineBacklogged, writePipelineStalled } from './terminalHealth'
+import {
+  INPUT_LATENCY_REPORT_MS,
+  TerminalInputLatencyTracker,
+  inputEventPerformanceTime,
+  watchMainThreadStalls,
+  type TerminalInputCapture,
+  type TerminalInputSource,
+} from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
 import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import {
@@ -868,8 +876,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // (and a long absence reconnects), so the tap-and-type right after coming back lands
     // mid-replay; sending it then would race the replayed bytes, and dropping it loses
     // characters the mobile IME baseline has already advanced past. Hold and flush in order.
-    const pendingUserInput: { data: string; broadcast: boolean }[] = []
+    const pendingUserInput: { data: string; broadcast: boolean; capture: TerminalInputCapture | null }[] = []
     let pendingUserInputLength = 0
+    const inputLatency = new TerminalInputLatencyTracker()
+    const inputTextEncoder = new TextEncoder()
+    let pendingInputCapture: { eventAt: number; source: TerminalInputSource } | null = null
+    let lastHumanInputAt: number | null = null
     let currentGeneration = session._snapshot_generation || ''
     let currentRevision = session._snapshot_generation ? Number(session._snapshot_revision ?? -1) : -1
     let lastReplyTriggerState=session.state
@@ -900,6 +912,38 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       lastRepairReportAt = now
       socket.send(JSON.stringify({ type: 'client_diagnostic', phase, detail }))
     }
+    const lastInputDiagnosticReportAt = new Map<string, number>()
+    const reportInputDiagnostic = (phase: string, detail?: Record<string, unknown>) => {
+      diagnoseRender?.(phase, detail)
+      if (socket?.readyState !== WebSocket.OPEN) return
+      const now = performance.now()
+      if (now - (lastInputDiagnosticReportAt.get(phase) ?? 0) < 1000) return
+      lastInputDiagnosticReportAt.set(phase, now)
+      socket.send(JSON.stringify({
+        type: 'client_diagnostic',
+        phase,
+        detail: {
+          ...detail,
+          device,
+          owner: ownsInput,
+          paneHidden: paneIsHidden(),
+          online: navigator.onLine,
+          replaying,
+          socketBufferedBytes: socket.bufferedAmount,
+          pendingOutputBytes: pendingLiveWriteBytes,
+          renderer: activeRenderer,
+        },
+      }))
+    }
+    const stopInputStallWatch = watchMainThreadStalls(stall => {
+      if (lastHumanInputAt === null || paneIsHidden()) return
+      const inputAgeAtStart = stall.startedAt - lastHumanInputAt
+      if (inputAgeAtStart < 0 || inputAgeAtStart > 10_000) return
+      reportInputDiagnostic('input_main_thread_stall', {
+        durationMs: stall.durationMs,
+        inputAgeAtStartMs: Math.round(inputAgeAtStart),
+      })
+    })
     const flushOutputAck = (source = outputAckSocket) => {
       if (!source || socket !== source || source.readyState !== WebSocket.OPEN) return
       // A retained warm pane is not interactive. Withhold credit after its first
@@ -1620,7 +1664,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       nextAttemptAt=Date.now()+delay
       reconnectTimer=window.setTimeout(()=>{reconnectTimer=undefined;nextAttemptAt=null;connect(true)},delay)
     }
-    const sendInput = (data: string, protocolResponse: boolean, broadcast: boolean, retry = false) => {
+    const sendInput = (
+      data: string,
+      protocolResponse: boolean,
+      broadcast: boolean,
+      retry = false,
+      capture: TerminalInputCapture | null = null,
+    ) => {
       if (socket?.readyState !== WebSocket.OPEN) return
       // Typing is itself evidence this pane should own input. Without it a pane
       // displaced by another device stays silently muted until the user happens
@@ -1630,13 +1680,39 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         reportPromptSubmitted(session.id)
       }
       if (!ownsInput && !protocolResponse && !retry) claimInput('gesture')
+      const diagnostic = !protocolResponse && capture
+        ? inputLatency.begin(
+          capture,
+          inputTextEncoder.encode(data).byteLength,
+          performance.now(),
+          Date.now(),
+          socket.bufferedAmount,
+        )
+        : null
       socket.send(JSON.stringify({
         type: 'input',
         data,
         kind: protocolResponse ? 'terminal_response' : 'user',
         broadcast: protocolResponse ? false : broadcast,
         retry,
+        ...diagnostic?.frame,
       }))
+      if (diagnostic && diagnostic.frame.client_event_delay_ms >= INPUT_LATENCY_REPORT_MS) {
+        reportInputDiagnostic('input_event_delay', {
+          inputSeq: diagnostic.probe.seq,
+          source: diagnostic.probe.source,
+          eventToSendMs: diagnostic.frame.client_event_delay_ms,
+          queueMs: diagnostic.frame.client_queue_delay_ms,
+          bufferedBefore: diagnostic.frame.ws_buffered_bytes,
+        })
+      }
+      if (diagnostic && diagnostic.frame.ws_buffered_bytes >= 64 * 1024) {
+        reportInputDiagnostic('input_socket_backlog', {
+          inputSeq: diagnostic.probe.seq,
+          source: diagnostic.probe.source,
+          bufferedBefore: diagnostic.frame.ws_buffered_bytes,
+        })
+      }
     }
     const wheelPacer = createWheelPacer(
       (data, broadcast) => sendInput(data, false, broadcast),
@@ -1678,7 +1754,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       setAttachmentReady(true)
       const queued = pendingUserInput.splice(0, pendingUserInput.length)
       pendingUserInputLength = 0
-      for (const item of queued) sendInput(item.data, false, item.broadcast)
+      for (const item of queued) sendInput(item.data, false, item.broadcast, false, item.capture)
       scheduleFullRedraw()
       maybeRequestScrollbackRepaint()
     }
@@ -1698,14 +1774,28 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           // Output arriving is the ack the wheel pacer's clock runs on: the repaint
           // answering the last scroll report means the CLI is ready for the next one.
           wheelPacer.noteOutput()
-          const pending = { bytes: byteCount, at: performance.now() }
+          const outputAt = performance.now()
+          const echoBatch = inputLatency.takeEchoBatch(outputAt)
+          const pending = { bytes: byteCount, at: outputAt }
           pendingLiveWrites.push(pending)
           pendingLiveWriteBytes += byteCount
           term.write(new Uint8Array(event.data), () => {
+            const parsedAt = performance.now()
             const index = pendingLiveWrites.indexOf(pending)
             if (index >= 0) pendingLiveWrites.splice(index, 1)
             pendingLiveWriteBytes = Math.max(0, pendingLiveWriteBytes - byteCount)
             acknowledgeParsedOutput(source, byteCount)
+            if (echoBatch) {
+              window.requestAnimationFrame(() => {
+                if (disposed) return
+                const diagnostic = inputLatency.completeEchoBatch(
+                  echoBatch,
+                  parsedAt,
+                  performance.now(),
+                )
+                if (diagnostic) reportInputDiagnostic('input_echo_latency', diagnostic)
+              })
+            }
           })
         }
       }
@@ -1764,7 +1854,20 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           }
         }
         if (frame.type === 'input_owner_released') noteOwnership(applyOwnerReleased(ownership, frame.epoch))
-        if (frame.type === 'input_rejected') replayRejectedInput(frame)
+        if (frame.type === 'input_ack') {
+          const inputSeq = Number(frame.input_seq)
+          const serverReceivedAtMs = Number(frame.server_received_at_ms)
+          const diagnostic = inputLatency.acknowledge(
+            inputSeq,
+            performance.now(),
+            Number.isFinite(serverReceivedAtMs) ? serverReceivedAtMs : null,
+          )
+          if (diagnostic) reportInputDiagnostic('input_ack_latency', diagnostic)
+        }
+        if (frame.type === 'input_rejected') {
+          inputLatency.reject(Number(frame.input_seq))
+          replayRejectedInput(frame)
+        }
         if (frame.type === 'geometry') {
           cancelCaretPlacement()
           const cols = Number(frame.cols)
@@ -1898,6 +2001,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         if (!replaying || replayAllowsTerminalResponses) sendInput(data, true, false)
         return
       }
+      const onDataAt = performance.now()
+      const capture = pendingInputCapture
+        ? { ...pendingInputCapture, onDataAt }
+        : null
+      pendingInputCapture = null
       if(caretPlacementInputDepth===0)cancelCaretPlacement()
       // Typing is the reader saying they have stopped reading, so a pane peeking at the top
       // of its grid returns to the composer. Deliberately on input rather than on writes:
@@ -1915,7 +2023,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           return
         }
         pendingUserInputLength += data.length
-        pendingUserInput.push({ data, broadcast: shouldBroadcast })
+        pendingUserInput.push({ data, broadcast: shouldBroadcast, capture })
         return
       }
       // Wheel scrolls to an application that holds the mouse go through the pacer:
@@ -1928,7 +2036,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       wheelPacer.flush()
-      sendInput(data, false, shouldBroadcast)
+      sendInput(data, false, shouldBroadcast, false, capture)
     })
     // View keys skip xterm's `input()` so they are never broadcast, and are dropped rather
     // than queued while replaying: the buffer is still being written, and a viewport gesture
@@ -1942,6 +2050,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       sendInput(sequence, false, false)
     }
     let mobileInputValue=''
+    const notePhysicalInput = (event: Event, source: TerminalInputSource) => {
+      const now = performance.now()
+      lastHumanInputAt = now
+      pendingInputCapture = {
+        eventAt: inputEventPerformanceTime(event.timeStamp, now, Date.now()),
+        source,
+      }
+    }
+    const terminalKeyCapture = (event: KeyboardEvent) => notePhysicalInput(event, 'keydown')
+    const terminalBeforeInputCapture = (event: InputEvent) => notePhysicalInput(event, 'beforeinput')
     // A shell can promote into an agent harness without replacing the pane, so read
     // the live backend at the event rather than capturing the effect's first one.
     const mobileLineBreak=()=>mobileEnterPayload(backendRef.current)
@@ -2088,14 +2206,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       mobileLiveInput.setSelectionRange(end,end)
     }
     const mobileBeforeInput=(event:InputEvent)=>{
+      notePhysicalInput(event, 'beforeinput')
       if(event.inputType!=='insertLineBreak'&&event.inputType!=='insertParagraph')return
       event.preventDefault()
       if(!lineBreakSent)term.input(mobileLineBreak(),true)
       markLineBreakSent()
       resetMobileInput()
     }
-    const mobileTextInput=()=>{
+    const mobileTextInput=(event:Event)=>{
       if(!mobileLiveInput)return
+      if (!pendingInputCapture) notePhysicalInput(event, 'input')
       const next=mobileLiveInput.value
       if(lineBreakSent&&/^[\r\n]*$/.test(next)){
         resetMobileInput();return
@@ -2103,10 +2223,12 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const data=mobileImeDelta(mobileInputValue,next,mobileLineBreak())
       mobileInputValue=next
       if(data)term.input(data,true)
+      else pendingInputCapture=null
       if(/[\r\n]/.test(next))resetMobileInput()
       else requestAnimationFrame(keepMobileCaretAtEnd)
     }
     const mobileKeyDown=(event:KeyboardEvent)=>{
+      notePhysicalInput(event, 'keydown')
       const sequence:Record<string,string>={
         ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',
         Home:'\x1b[H',End:'\x1b[F',PageUp:'\x1b[5~',PageDown:'\x1b[6~',Delete:'\x1b[3~',
@@ -2132,6 +2254,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       const text=event.clipboardData.getData('text/plain')
       if(!text)return
+      notePhysicalInput(event, 'paste')
       event.preventDefault();resetMobileInput();pasteIntoTerminal(term,session,text);focusTerminalInput()
     }
     mobileLiveInput?.addEventListener('beforeinput',mobileBeforeInput)
@@ -2440,6 +2563,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       event.preventDefault()
     }
     const pasteEvent = (event: ClipboardEvent) => {
+      if (event.clipboardData?.getData('text/plain')) notePhysicalInput(event, 'paste')
       if (!isAgentBackend(backendRef.current) || !event.clipboardData) return
       const transferred=Array.from(event.clipboardData.files)
       const image = clipboardImage(Array.from(event.clipboardData.items))
@@ -2485,6 +2609,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     host.current.addEventListener('pointerdown', pointerClaim)
     host.current.addEventListener('mousedown',mobileMouseClaim,true)
+    host.current.addEventListener('keydown', terminalKeyCapture, true)
+    host.current.addEventListener('beforeinput', terminalBeforeInputCapture, true)
     window.addEventListener('pointermove', pointerMove)
     window.addEventListener('pointerup', pointerEnd)
     window.addEventListener('pointercancel', pointerCancel)
@@ -2533,7 +2659,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so

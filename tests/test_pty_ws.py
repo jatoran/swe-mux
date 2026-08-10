@@ -123,6 +123,7 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
     app = web.Application()
     app["sessions"] = manager
     app["events"] = EventBus()
+    events = app["events"].subscribe(name="input-diagnostic-test")
     app.router.add_get("/pty/{sid}", pty_ws)
 
     async with TestClient(TestServer(app)) as client:
@@ -165,10 +166,32 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         assert session.terminal_mode == "normal"
         assert session.input_revision == 0
 
-        await ws.send_json({"type": "input", "data": "\x1b[200~fixture\x1b[201~"})
+        await ws.send_json(
+            {
+                "type": "input",
+                "data": "\x1b[200~fixture\x1b[201~",
+                "input_seq": 7,
+                "client_sent_at_ms": 1_800_000_000_000,
+                "client_event_delay_ms": 8123,
+                "client_queue_delay_ms": 8000,
+                "input_source": "paste",
+                "ws_buffered_bytes": 4096,
+            }
+        )
+        ack = await next_json(ws)
+        assert ack["type"] == "input_ack"
+        assert ack["input_seq"] == 7
+        assert isinstance(ack["server_received_at_ms"], int)
         await asyncio.sleep(0.01)
         assert session.input_revision == 1
         assert writes[-1] == "\x1b[200~fixture\x1b[201~"
+        input_event = await _next_event_of(events, "terminal_input")
+        assert input_event.payload["input_seq"] == 7
+        assert input_event.payload["client_event_delay_ms"] == 8123
+        assert input_event.payload["client_queue_delay_ms"] == 8000
+        assert input_event.payload["input_source"] == "paste"
+        assert input_event.payload["ws_buffered_bytes"] == 4096
+        assert "data" not in input_event.payload
 
         session.publish_output(b"live")
         assert await next_bytes(ws) == b"live"
@@ -391,10 +414,26 @@ async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> 
         # A phase outside the allowlist is dropped, and an allowed phase inside the
         # rate window is absorbed; neither reaches the durable log.
         await ws.send_json({"type": "client_diagnostic", "phase": "made_up_phase"})
-        await ws.send_json({"type": "client_diagnostic", "phase": "viewport_fit_resumed"})
+        await ws.send_json(
+            {"type": "client_diagnostic", "phase": "surface_drift_repair"}
+        )
         await asyncio.sleep(0.1)
         while not events.empty():
             assert events.get_nowait().type != "terminal_client_repair"
+
+        # Input latency has its own durable event class and per-phase rate window,
+        # so a repair report cannot hide the evidence that explains a typing stall.
+        await ws.send_json(
+            {
+                "type": "client_diagnostic",
+                "phase": "input_main_thread_stall",
+                "detail": {"durationMs": 8500},
+            }
+        )
+        input_event = await _next_event_of(events, "terminal_input_diagnostic")
+        assert input_event.payload["phase"] == "input_main_thread_stall"
+        assert json.loads(input_event.payload["detail"]) == {"durationMs": 8500}
+        assert input_event.payload["input_owner"] is False
         await ws.close()
 
 

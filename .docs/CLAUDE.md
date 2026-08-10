@@ -30,7 +30,8 @@
 - Changing terminal input ownership across devices, the PTY WebSocket frames, or how a
   shared PTY is sized: `design/features/terminal-input.md`, `design/interfaces.md`,
   `design/features/sessions.md`, `design/features/ui.md`,
-  `technical/backend/packages.md`, `technical/frontend/packages.md`
+  `technical/backend/packages.md`, `technical/frontend/packages.md`; investigating delayed
+  terminal input: `development/TERMINAL_INPUT_INCIDENT_RUNBOOK.md`
 - Changing device presence (what counts as "in use", the heartbeat, the leading device):
   `design/features/device-presence.md`, `design/interfaces.md`,
   `design/features/notifications.md`, `design/features/terminal-input.md`

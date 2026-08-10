@@ -23,6 +23,7 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'terminal_client_repair',
   'terminal_detached',
   'terminal_input',
+  'terminal_input_diagnostic',
   'terminal_mode_changed',
   'terminal_repaint_requested',
   'tool_result',

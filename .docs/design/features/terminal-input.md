@@ -185,6 +185,16 @@ The health sweep records `write_pipeline_backlog` when at least 32 KiB has remai
 A hidden warm pane withholds parsed-byte credit after its first bounded window and returns the accumulated credit when revealed.
 This keeps hidden busy agents from continuously consuming the browser UI thread while preserving their subscriber and session.
 
+**Physical input carries content-free latency correlation.**
+The client timestamps the native keyboard, IME, or paste event, xterm `onData`, and WebSocket send on the browser performance clock.
+It attaches a bounded sequence number, client wall time, stage durations, input source, and WebSocket backlog to the input frame without duplicating the typed payload into telemetry.
+The daemon acknowledges accepted traced input with `input_ack` and adds the timing fields to the existing sampled `terminal_input` event.
+The client correlates the next live output batch through xterm parse completion and the next animation frame.
+Only a stage reaching 400 ms becomes a durable `terminal_input_diagnostic` event.
+A single 250 ms page clock also reports an input-adjacent main-thread stall at 500 ms or longer, but only for a visible pane whose physical input predates the stall by at most 10 seconds.
+Pending correlations expire after 30 seconds and are capped at 128, diagnostic detail is clamped by the daemon, each phase is rate-limited independently, and no diagnostic contains terminal input text.
+The phase breakdown and incident procedure live in `../../development/TERMINAL_INPUT_INCIDENT_RUNBOOK.md`.
+
 A client registers a viewport only when it fitted itself *while on screen*
 (`attachRegistersViewport`). Both halves are load-bearing, and getting either wrong pins a
 session to a size nobody chose: a pane's own visibility is not `document.hidden` (a warm
