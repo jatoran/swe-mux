@@ -1546,18 +1546,18 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.20 separately owns note-touch
-  arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
-  scroll/cancel/long-press paths call no `focus()`. swe-mux adds no shadow-DOM or caret
+  text entry, so the early blur is safe. Continuity 0.2.35 separately owns single-finger note-touch
+  arbitration and the editor's Android soft-keyboard gate. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
-- That arbitration is about focus, and focus is not the whole of what raises an Android
-  keyboard. A note whose keyboard was dismissed with the back gesture keeps its editor
-  `<textarea>` focused, so a long-press-and-drag selection over it can re-raise the keyboard
-  without any `focus()` being called and with nothing for the host to intercept — the surface
-  is inside Continuity's shadow root, and `readOnly` is the only keyboard-adjacent property the
-  host can reach. Closing this needs an `inputmode` gate in the editor, not a host workaround;
-  the ask is `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the
-  terminal side is covered by that pane's own gesture rules.
+- Continuity tracks explicit typing intent and visual-viewport keyboard occlusion per editor.
+  A long-press selection or selection-handle adjustment leaves an already-visible keyboard up and
+  leaves a dismissed keyboard down. When a selection exists with the keyboard down, the first tap
+  inside the selected range raises the keyboard without collapsing the range or removing its
+  action bar; a later tap may collapse or reposition it normally. This policy must stay inside
+  Continuity because Android can hide the IME without blurring its focused shadow-root textarea.
+  The original gate rationale and device verification sequence remain in
+  `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the terminal side
+  is covered by that pane's own gesture rules.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This

@@ -1,12 +1,12 @@
 # Continuity ask: raise the Android keyboard only on typing intent
 
-**Delivered in SDK 0.2.21.**
-swe-mux currently vendors SDK 0.2.25 as `frontend/vendor/continuity-editor-0.2.25.tgz`
-(sha256 `47495fb53c50f115933b7623631ddb75b7a68c63999544b6f3153b7e1b84c2b4`).
-The gate ships as `src/soft_keyboard.js`: the internal textarea is held
-at `inputmode="none"` on coarse pointers and lifted only on a resolved tap or an explicit insert,
-with a long-press claim and an adjust-handle grab restoring it. `focus()` stays a pure focus move
-and does not lift the gate, and desktop is untouched. No host change was required.
+**Delivered in SDK 0.2.21 and corrected in SDK 0.2.35.**
+swe-mux currently vendors SDK 0.2.35 as `frontend/vendor/continuity-editor-0.2.35.tgz`
+(sha256 `a45856c95898204d09530f8b02ff0e90e31b7f783c82e52911ecb60f13584f91`).
+SDK 0.2.21 introduced the `inputmode="none"` gate that keeps a dismissed keyboard down during selection, but applying the gate during every selection gesture also dismissed an already-visible keyboard.
+SDK 0.2.35 tracks typing intent and visual-viewport keyboard occlusion per editor, so long-press selection and selection-handle adjustment preserve the keyboard state they found.
+When a selection exists with the keyboard down, the first tap inside that selection raises the keyboard without collapsing the range or removing its action bar; a later tap may collapse or reposition it normally.
+Desktop remains untouched and no host change is required.
 
 The platform half is still unverified — headless Chrome has no IME to raise, so the device steps
 below remain the only proof. The rest of this document is the original ask, kept because it
