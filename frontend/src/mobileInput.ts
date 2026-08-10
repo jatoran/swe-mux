@@ -41,53 +41,6 @@ export function touchWheelDelta(previousY: number, currentY: number, settings: M
   return fingerDelta * direction * settings.scrollSensitivity
 }
 
-/**
- * Touch-scroll acceleration.
- *
- * A deliberate reading drag starts slightly below 1:1 so a small correction does not overshoot,
- * then gains up to `maxGain` as the flick gets faster, which is how a native scroller crosses a
- * long document without a dozen swipes. The user's own `scrollSensitivity` multiplies on top and is
- * deliberately left out of the velocity measurement: the ramp reads the finger, not the setting,
- * so raising sensitivity scales the whole curve rather than shifting where acceleration starts.
- *
- * The ramp is on velocity rather than on per-event distance because velocity is what the user
- * controls. A 120 Hz phone reports half the movement per event at twice the rate; measuring
- * distance would read that as a slow drag, while velocity reads both as the same gesture.
- */
-export const TOUCH_SCROLL_ACCELERATION = {
-  /** Gain at deliberate reading speed. Slightly below 1:1 keeps small corrections controlled. */
-  baseGain: 0.85,
-  /** px/ms at or below which the drag stays at `baseGain`. */
-  slowVelocity: 0.4,
-  /** px/ms at which the gain saturates. A flick clears it easily; a drag never reaches it. */
-  fastVelocity: 2.4,
-  maxGain: 3,
-  /**
-   * Weight of the newest sample in the running velocity. Enough smoothing that the gain does
-   * not flicker between two events of one gesture, little enough that a flick is at full gain
-   * within a few of them: an acceleration that arrives late reads as the scroll ignoring you.
-   */
-  smoothing: 0.4,
-}
-
-/** The running finger speed in px/ms, smoothed against per-event jitter. */
-export function smoothTouchVelocity(previous: number, deltaPixels: number, elapsedMs: number): number {
-  // Two events at the same timestamp (coalesced, or a clock with no resolution left) carry no
-  // velocity information at all. Keeping the previous value is the honest reading; dividing by
-  // zero would report an infinitely fast flick for a finger that had barely moved.
-  if (!(elapsedMs > 0)) return previous
-  const sample = Math.abs(deltaPixels) / elapsedMs
-  const { smoothing } = TOUCH_SCROLL_ACCELERATION
-  return previous * (1 - smoothing) + sample * smoothing
-}
-
-/** The multiplier a drag at `velocity` px/ms earns: `baseGain` while reading, `maxGain` at a flick. */
-export function touchScrollGain(velocity: number): number {
-  const { baseGain, slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
-  const ramp = (velocity - slowVelocity) / (fastVelocity - slowVelocity)
-  return baseGain + (maxGain - baseGain) * Math.max(0, Math.min(1, ramp))
-}
-
 export type TerminalScrollSteps = {
   /** Whole rows to scroll now. */
   steps: number

@@ -18,12 +18,10 @@ import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } fr
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
   mobileDragTarget,
-  smoothTouchVelocity,
   terminalCellAtPoint,
   terminalScrollSteps,
   terminalSelectionSpan,
   terminalWordRange,
-  touchScrollGain,
   touchWheelDelta,
   type MobileInputSettings,
   type TerminalCell,
@@ -2299,10 +2297,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       px:number
       py:number
       moved:boolean
-      /** Event timestamp of the last move, for the velocity the acceleration curve reads. */
-      lastMoveAt:number
-      /** Running finger speed in px/ms. */
-      velocity:number
       /** Sub-row scroll travel carried between move events. */
       pixels:number
       selecting:{start:TerminalCell;length:number}|null
@@ -2412,7 +2406,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         lastTouchAt = Date.now()
         softKeyboardBeforeGesture=softKeyboardHolder()
         softKeyboardDismissalsBeforeGesture=softKeyboardDismissals()
-        touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,lastMoveAt:event.timeStamp,velocity:0,pixels:0,selecting:null}
+        touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,pixels:0,selecting:null}
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
           const cell = cellAt(event.clientX,event.clientY)
@@ -2453,11 +2447,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if(Math.abs(event.clientY-touch.startY)>8)cancelLongPress()
-      // Velocity is measured on the raw finger, before direction and sensitivity, so the
-      // acceleration curve reads the gesture rather than the settings (see mobileInput).
-      touch.velocity=smoothTouchVelocity(touch.velocity,event.clientY-touch.lastY,event.timeStamp-touch.lastMoveAt)
-      touch.lastMoveAt=event.timeStamp
-      const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)*touchScrollGain(touch.velocity)
+      const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)
       touch.lastY=event.clientY
       if(!delta)return
       const mouseActive=term.modes.mouseTrackingMode!=='none'

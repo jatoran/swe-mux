@@ -4,13 +4,10 @@ import {
   defaultMobileInputSettings,
   mobileDragTarget,
   mobileInputSettings,
-  smoothTouchVelocity,
   terminalCellAtPoint,
   terminalScrollSteps,
   terminalSelectionSpan,
   terminalWordRange,
-  TOUCH_SCROLL_ACCELERATION,
-  touchScrollGain,
   touchWheelDelta,
 } from '../src/mobileInput.ts'
 
@@ -34,26 +31,25 @@ test('sub-row drag travel is carried rather than truncated or rounded up', () =>
   assert.deepEqual(terminalScrollSteps(400, 0), { steps: 0, remainder: 0 })
 })
 
-test('touch scroll starts controlled and still accelerates to the full flick gain', () => {
-  const { baseGain, slowVelocity, fastVelocity, maxGain } = TOUCH_SCROLL_ACCELERATION
-  assert.equal(touchScrollGain(0), baseGain)
-  assert.equal(touchScrollGain(slowVelocity), baseGain)
-  assert.equal(touchScrollGain(fastVelocity), maxGain)
-  assert.equal(touchScrollGain(fastVelocity * 10), maxGain)
-  const middle = touchScrollGain((slowVelocity + fastVelocity) / 2)
-  assert.ok(Math.abs(middle - (baseGain + maxGain) / 2) < 1e-9)
-  // Velocity is px/ms and frame-rate independent: the same gesture sampled twice as often,
-  // at half the distance per sample, converges on the same reading.
-  let slow = 0
-  let fast = 0
-  for (let sample = 0; sample < 12; sample++) {
-    slow = smoothTouchVelocity(slow, 32, 16)
-    fast = smoothTouchVelocity(fast, 16, 8)
+test('touch scroll distance stays linear across pointer event rates', () => {
+  const scrollGesture = (moves: number, fingerPixelsPerMove: number, rowHeight: number) => {
+    let previousY = 200
+    let remainder = 0
+    let rows = 0
+    for (let move = 0; move < moves; move++) {
+      const currentY = previousY - fingerPixelsPerMove
+      const delta = touchWheelDelta(previousY, currentY, defaultMobileInputSettings)
+      const budget = terminalScrollSteps(remainder + delta, rowHeight)
+      rows += budget.steps
+      remainder = budget.remainder
+      previousY = currentY
+    }
+    return { rows, remainder }
   }
-  assert.ok(Math.abs(slow - fast) < 1e-9)
-  assert.ok(Math.abs(slow - 2) < 0.05)
-  // A move with no elapsed time carries no velocity and must not read as an infinite flick.
-  assert.equal(smoothTouchVelocity(1.5, 40, 0), 1.5)
+
+  // The same 192px gesture produces the same 16 rows whether the phone reports 12 or 24 moves.
+  assert.deepEqual(scrollGesture(12, 16, 12), { rows: 16, remainder: 0 })
+  assert.deepEqual(scrollGesture(24, 8, 12), { rows: 16, remainder: 0 })
 })
 
 test('mobile input settings normalize configured direction and sensitivity', () => {

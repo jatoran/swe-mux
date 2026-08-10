@@ -731,9 +731,7 @@ responsive controls.
   application, and the chip is `appOffTailByDistance` reading the total as at least one rendered
   row.
   Both directions count.
-  Vertical touch scrolling uses a velocity ramp with a 0.85 reading-speed gain and the existing
-  3x fast-flick ceiling, so small corrections are controlled without making long transcript
-  traversal slow.
+  Vertical touch scrolling tracks finger travel linearly, scaled only by the explicit sensitivity setting; the default `1.0` keeps content under the finger instead of accelerating during a drag.
   A drag back through the history raises the chip, and a drag toward the newest output spends
   the same total back down to zero and takes it away, so a reader who scrolls their own way
   back is not left with a chip that only its own tap can dismiss, sitting over a viewport

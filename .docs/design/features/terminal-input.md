@@ -82,9 +82,8 @@ A one-finger vertical drag scrolls whichever viewport owns the session: xterm's 
 `mobile_vertical_drag` picks the target through `mobileDragTarget`, whose `smart` default follows mouse tracking.
 Both targets convert one pixel budget with `terminalScrollSteps`, which carries the sub-row remainder into the next move event.
 Truncating each event on its own discards up to a row of travel per event, which at a 120 Hz pointer rate is most of the gesture; the fallback it replaces ("any movement scrolls at least one row") corrected for that by over-scrolling every slow drag instead.
-Travel is scaled by the user's `mobile_scroll_sensitivity`, then by `touchScrollGain`: 1:1 at or below `slowVelocity`, rising linearly to `maxGain` at `fastVelocity` (`TOUCH_SCROLL_ACCELERATION`).
-Velocity is measured on the raw finger by `smoothTouchVelocity`, an exponential average in pixels per millisecond taken before direction and sensitivity are applied.
-Reading velocity rather than per-event distance makes the ramp independent of the device's pointer-event rate, and reading the finger rather than the scaled result means sensitivity scales the whole curve instead of moving where acceleration begins.
+Travel is scaled only by the user's `mobile_scroll_sensitivity`; the default `1.0` tracks the finger 1:1 with no velocity-dependent acceleration.
+The carried pixel budget makes the total independent of the device's pointer-event rate without decoupling content from the finger during a drag.
 
 ### Geometry
 
