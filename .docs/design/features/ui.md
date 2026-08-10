@@ -1695,6 +1695,8 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
   A ready session's number is static, so a settled fleet re-renders on no clock at all.
 - **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, or off.
+- **The working pulse animates the indicator's core alone.**
+  The arc is a measurement that only moves when the conversation grows, so blinking it alongside the core made a static reading look like live activity.
 
 Mobile shares the one layout rather than keeping a second one.
 `mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title.

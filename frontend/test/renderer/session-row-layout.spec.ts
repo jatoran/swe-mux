@@ -150,6 +150,35 @@ test('narrowing slides the sections together and clips, never squeezes the left 
   expect(lineStyle).toBe('hidden')
 })
 
+/**
+ * The working pulse marks the *state*. The context gauge only moves when the
+ * conversation grows, so blinking it alongside the core makes a static
+ * measurement read as live activity.
+ */
+test('the pulse animates the core alone, never the context gauge', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html')
+
+  const animations = await page.evaluate(() => {
+    // The first harness row is `working` with a context arc.
+    const indicator = document.querySelectorAll('.session-row')[0].querySelector('.state-indicator')!
+    const name = (el: Element | null) => (el ? getComputedStyle(el).animationName : 'missing')
+    return {
+      indicator: name(indicator),
+      core: name(indicator.querySelector('.ind-core')),
+      fill: name(indicator.querySelector('.ind-fill')),
+      track: name(indicator.querySelector('.ind-track')),
+      working: indicator.classList.contains('working'),
+    }
+  })
+
+  expect(animations.working).toBe(true)
+  expect(animations.core).not.toBe('none')
+  expect(animations.indicator).toBe('none')
+  expect(animations.fill).toBe('none')
+  expect(animations.track).toBe('none')
+})
+
 for (const shape of ['hexagon', 'circle', 'square'] as const) {
   test(`the ${shape} indicator stays concentric with its gauge`, async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 600 })

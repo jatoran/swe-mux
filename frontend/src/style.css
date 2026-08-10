@@ -2851,6 +2851,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Only one element in a row may go red, and the indicator owns that vocabulary. */
 .ind-fill.crit{stroke:var(--red)}
 .ind-peak{fill:none;stroke:#9fb3a8;stroke-width:2.6;opacity:.55}
+/* The pulse belongs to the state, so it animates the core alone. Animating the
+   whole indicator blinked the context gauge with it, which made a measurement
+   that only moves when the conversation grows read as live activity. The plain
+   `.state-dot` spans on other surfaces keep the element-level animation — they
+   have no inner geometry to separate. */
+.state-dot.state-indicator{animation:none!important}
+.state-dot.state-indicator.working .ind-core{animation:agent-pulse 1.4s steps(2,end) infinite}
+.state-dot.state-indicator.awaiting .ind-core{animation:attention-pulse 1.2s ease-in-out infinite}
 /* The gutter column is exactly the indicator, and the indicator is top-aligned
    against the title line rather than centred in the row. Centring put the dot
    between the two lines, which reads as belonging to neither, and left the stack
@@ -2916,7 +2924,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    narrowed row as `· apply_patch`. The token engine sheds instead, so the
    separator invariant — only between tokens that drew — survives resizing.
    See `shedForWidth` in sessionRowFields.ts. */
-@media(prefers-reduced-motion:reduce){.state-dot.state-indicator{animation:none!important}}
+@media(prefers-reduced-motion:reduce){.state-dot.state-indicator,.ind-core{animation:none!important}}
 
 /* Settings → Appearance → Session rows. */
 .session-row-settings h4{margin:14px 0 4px;font-size:11px}
