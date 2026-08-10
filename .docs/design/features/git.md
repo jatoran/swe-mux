@@ -12,8 +12,14 @@
 - Canonical Project identity probes for worktree root, common Git directory, and origin run
   concurrently behind one timeout window. Results are cached briefly per canonical cwd so a burst
   of terminal launches does not repeatedly cross the Git process boundary.
-- Poll only cwd values with at least one attached terminal pane; deduplicate by cwd and
+- Poll cwd values with at least one attached terminal pane every cadence tick; sweep **every**
+  session once a minute, and always on the first tick after daemon start. Deduplicate by cwd and
   cap concurrency. Branch/status/upstream/git-dir calls run in parallel with bounded timeouts.
+- The sweep exists because `GitState` is a cache of a derived observation on a record that
+  outlives the daemon that wrote it. Polling only attached sessions froze that cache for as long
+  as a pane stayed closed, so a value produced by code that was later corrected survived the
+  correction. It is affordable because deduplication is by cwd: a fleet of thirty sessions in one
+  checkout costs one read, so cost scales with distinct working directories rather than sessions.
 - A checkout is a **linked worktree** when its `--absolute-git-dir` differs from its
   `--git-common-dir`; `GitState.worktree` is then the checkout's leaf directory name.
   Comparing the two paths is the only check that stays correct for bare repositories and
