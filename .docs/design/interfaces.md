@@ -943,8 +943,9 @@ This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
 visible instead of merely absent.
 
-`diagnostics/network` reports a daemon-local measurement window with totals, per-peer HTTP and
-WebSocket counters, normalized HTTP route templates, and named WebSocket channels.
+`diagnostics/network` reports a daemon-local measurement window with totals, per-peer HTTP and WebSocket counters, normalized HTTP route templates, named WebSocket channels, and `websocket_sent_payloads[]` rows keyed by `peer`, `channel`, and `kind`.
+Each classified row contains `frames` and `bytes`; PTY kinds are `attach_replay`, `resync_replay`, and `live_output`.
+These rows are a non-additive breakdown of already-counted sent WebSocket binary frames.
 HTTP byte counts are encoded response and request bodies, excluding headers and transport
 overhead.
 WebSocket byte counts are application text/binary frame payloads before per-message compression.

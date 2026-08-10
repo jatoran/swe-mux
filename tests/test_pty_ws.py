@@ -46,12 +46,13 @@ async def test_pty_sender_batches_output_already_waiting_in_the_queue() -> None:
     queue.put_nowait(b"three")
     sent: list[bytes] = []
 
-    async def send_bytes(payload: bytes) -> None:
+    async def send_bytes_classified(payload: bytes, kind: str) -> None:
+        assert kind == "live_output"
         sent.append(payload)
 
     task = asyncio.create_task(
         server._pty_sender(
-            cast(Any, SimpleNamespace(send_bytes=send_bytes)),
+            cast(Any, SimpleNamespace(send_bytes_classified=send_bytes_classified)),
             cast(Any, SimpleNamespace()),
             SimpleNamespace(queue=queue),
             "generation",

@@ -28,6 +28,13 @@ async def _echo(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def _classified_output(request: web.Request) -> web.WebSocketResponse:
+    ws = metered_websocket(request, "pty")
+    await ws.prepare(request)
+    await ws.send_bytes_classified(b"retained terminal", "attach_replay")
+    return ws
+
+
 async def _network_snapshot(request: web.Request) -> web.Response:
     return compact_json_response(request.app["network_usage"].snapshot())
 
@@ -39,6 +46,7 @@ def _app() -> web.Application:
     app.router.add_get("/api/items/{item_id}", _payload)
     app.router.add_get("/api/diagnostics/network", _network_snapshot)
     app.router.add_get("/socket", _echo)
+    app.router.add_get("/classified", _classified_output)
     return app
 
 
@@ -88,6 +96,28 @@ async def test_websocket_usage_counts_application_frames_and_connections() -> No
     }
 
 
+async def test_websocket_payload_classification_is_peer_aware_and_not_double_counted() -> None:
+    app = _app()
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect(
+            "/classified", headers={"X-Forwarded-For": "100.64.1.2"}
+        )
+        assert await ws.receive_bytes() == b"retained terminal"
+        await ws.close()
+
+    snapshot = app["network_usage"].snapshot()
+    assert snapshot["totals"]["websocket"]["sent_bytes"] == len(b"retained terminal")
+    assert snapshot["websocket_sent_payloads"] == [
+        {
+            "peer": "100.64.1.2",
+            "channel": "pty",
+            "kind": "attach_replay",
+            "frames": 1,
+            "bytes": len(b"retained terminal"),
+        }
+    ]
+
+
 def test_reset_starts_a_new_measurement_window() -> None:
     meter = NetworkUsage()
     meter.websocket_opened("100.64.0.2", "events")
@@ -98,6 +128,7 @@ def test_reset_starts_a_new_measurement_window() -> None:
 
     assert meter.snapshot()["totals"]["websocket"]["sent_bytes"] == 0
     assert meter.snapshot()["peers"] == []
+    assert meter.snapshot()["websocket_sent_payloads"] == []
 
 
 async def test_snapshot_request_does_not_measure_itself() -> None:

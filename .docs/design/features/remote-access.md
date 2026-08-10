@@ -42,18 +42,16 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Expensive/upload/bridge routes use targeted body, response, concurrency, idle, and
   duration limits. No blanket per-user limiter or enterprise audit subsystem exists;
   privileged user actions enter the existing metadata-only EventBus.
-- `GET /api/diagnostics/network` reports in-memory HTTP body and WebSocket application-frame
-  counters for the current daemon boot or explicit measurement window, grouped by bounded
-  route template, socket channel, and peer address.
+- `GET /api/diagnostics/network` reports in-memory HTTP body and WebSocket application-frame counters for the current daemon boot or explicit measurement window, grouped by bounded route template, socket channel, and peer address.
+  Sent PTY binary frames also have a peer-aware payload-phase breakdown: initial attach replay, resynchronization replay, and live output.
   `DELETE /api/diagnostics/network` logs the previous totals and begins a fresh window without
   restarting the daemon or any session.
   Reads and resets of this endpoint are excluded from their own counters.
-  The app menu's `Bandwidth usage…` modal refreshes these counters while open, presents totals,
-  routes, WebSocket channels, and peers, and can reset the measurement window in place.
+  The app menu's `Bandwidth usage…` modal refreshes these counters while open, presents totals, routes, WebSocket channels, PTY download phases, and peers, and can reset the measurement window in place.
 - HTTP response counts are encoded body bytes after negotiated compression.
   They exclude headers, TLS, Tailscale, and packet overhead.
-  WebSocket counts are text/binary frame payload bytes before per-message compression and
-  exclude control frames.
+  WebSocket counts are text/binary frame payload bytes before per-message compression and exclude control frames.
+  PTY phase rows are a classified subset of the WebSocket download total and must not be added to it.
   Use an OS or browser wire capture when transport-exact totals are required.
 - Forwarded peer identity is accepted only from a valid `X-Forwarded-For` address received
   through a loopback peer, which covers the local Tailscale Serve proxy without trusting a

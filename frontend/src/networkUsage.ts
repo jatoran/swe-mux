@@ -24,6 +24,7 @@ export type NetworkUsageSnapshot = {
   peers:Array<{peer:string;http:HttpTraffic;websocket:WebSocketTraffic}>
   http_routes:Array<{method:string;route:string} & HttpTraffic>
   websocket_channels:Array<{channel:string} & WebSocketTraffic>
+  websocket_sent_payloads:Array<{peer:string;channel:string;kind:string;frames:number;bytes:number}>
 }
 
 export type TrafficDirections = {
@@ -62,4 +63,8 @@ export function formatElapsed(seconds:number):string {
   if(whole<3600)return`${Math.floor(whole/60)}m ${whole%60}s`
   if(whole<86400)return`${Math.floor(whole/3600)}h ${Math.floor((whole%3600)/60)}m`
   return`${Math.floor(whole/86400)}d ${Math.floor((whole%86400)/3600)}h`
+}
+
+export function payloadKindLabel(kind:string):string {
+  return kind.replaceAll('_',' ')
 }

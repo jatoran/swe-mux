@@ -56,6 +56,12 @@ class WebSocketCounter:
             setattr(self, name, getattr(self, name) + getattr(other, name))
 
 
+@dataclass
+class WebSocketPayloadCounter:
+    frames: int = 0
+    bytes: int = 0
+
+
 def request_peer(request: web.Request) -> str:
     """Return a bounded peer identity, honoring a local reverse proxy's forwarded peer."""
 
@@ -102,6 +108,9 @@ class NetworkUsage:
         self._http_peers: dict[str, HttpCounter] = defaultdict(HttpCounter)
         self._ws_channels: dict[str, WebSocketCounter] = defaultdict(WebSocketCounter)
         self._ws_peers: dict[str, WebSocketCounter] = defaultdict(WebSocketCounter)
+        self._ws_sent_payloads: dict[
+            tuple[str, str, str], WebSocketPayloadCounter
+        ] = defaultdict(WebSocketPayloadCounter)
 
     def record_http(self, request: web.Request, response: web.StreamResponse) -> None:
         request_length = request.content_length
@@ -142,6 +151,15 @@ class NetworkUsage:
                 counter.sent_frames += 1
                 counter.sent_bytes += max(0, size)
 
+    def websocket_sent_payload(
+        self, peer: str, channel: str, kind: str, size: int
+    ) -> None:
+        """Classify a sent frame without adding it to aggregate traffic twice."""
+
+        counter = self._ws_sent_payloads[(peer, channel, kind)]
+        counter.frames += 1
+        counter.bytes += max(0, size)
+
     def snapshot(self) -> dict[str, Any]:
         http_total = HttpCounter()
         for http_counter in self._http_routes.values():
@@ -176,6 +194,17 @@ class NetworkUsage:
             "websocket_channels": [
                 {"channel": channel, **asdict(counter)}
                 for channel, counter in sorted(self._ws_channels.items())
+            ],
+            "websocket_sent_payloads": [
+                {
+                    "peer": peer,
+                    "channel": channel,
+                    "kind": kind,
+                    **asdict(counter),
+                }
+                for (peer, channel, kind), counter in sorted(
+                    self._ws_sent_payloads.items()
+                )
             ],
         }
 
@@ -216,6 +245,21 @@ class MeteredWebSocketResponse(web.WebSocketResponse):
         if self._network_meter is not None:
             self._network_meter.websocket_frame(
                 self._network_peer, self._network_channel, "sent", len(data)
+            )
+        await super().send_bytes(data, compress=compress)
+
+    async def send_bytes_classified(
+        self, data: bytes, kind: str, compress: int | None = None
+    ) -> None:
+        """Send and meter one binary frame with a bounded caller-owned payload kind."""
+
+        if self._network_meter is not None:
+            size = len(data)
+            self._network_meter.websocket_frame(
+                self._network_peer, self._network_channel, "sent", size
+            )
+            self._network_meter.websocket_sent_payload(
+                self._network_peer, self._network_channel, kind, size
             )
         await super().send_bytes(data, compress=compress)
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { useModalFocus } from './modalFocus'
 import {
-  formatByteRate, formatBytes, formatElapsed, snapshotTraffic, trafficDirections,
+  formatByteRate, formatBytes, formatElapsed, payloadKindLabel, snapshotTraffic, trafficDirections,
   type NetworkUsageSnapshot,
 } from './networkUsage'
 
@@ -60,6 +60,7 @@ export function NetworkUsageModal({onClose}:{onClose:()=>void}) {
   const totals=snapshot?snapshotTraffic(snapshot):null
   const routes=[...(snapshot?.http_routes||[])].sort((left,right)=>(right.request_bytes+right.response_bytes)-(left.request_bytes+left.response_bytes))
   const channels=[...(snapshot?.websocket_channels||[])].sort((left,right)=>(right.received_bytes+right.sent_bytes)-(left.received_bytes+left.sent_bytes))
+  const sentPayloads=[...(snapshot?.websocket_sent_payloads||[])].sort((left,right)=>right.bytes-left.bytes)
   const peers=[...(snapshot?.peers||[])].sort((left,right)=>trafficDirections(right.http,right.websocket).total-trafficDirections(left.http,left.websocket).total)
 
   return <div class="usage-layer network-usage-layer" role="dialog" aria-modal="true" aria-label="Bandwidth usage" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
@@ -91,12 +92,17 @@ export function NetworkUsageModal({onClose}:{onClose:()=>void}) {
           </section>
 
           <section class="network-usage-table">
+            <h3>WebSocket download detail</h3>
+            {sentPayloads.length?<div class="usage-table-scroll"><table><thead><tr><th>peer</th><th>channel</th><th>payload phase</th><th>frames</th><th>downloaded</th><th>average frame</th></tr></thead><tbody>{sentPayloads.map(row=><tr key={`${row.peer}:${row.channel}:${row.kind}`}><td>{row.peer}</td><td>{row.channel}</td><td>{payloadKindLabel(row.kind)}</td><td>{integer.format(row.frames)}</td><td>{formatBytes(row.bytes)}</td><td>{formatBytes(row.frames?row.bytes/row.frames:0)}</td></tr>)}</tbody></table></div>:<p>No classified WebSocket downloads recorded in this window.</p>}
+          </section>
+
+          <section class="network-usage-table">
             <h3>Peers</h3>
             {peers.length?<div class="usage-table-scroll"><table><thead><tr><th>peer</th><th>HTTP requests</th><th>uploaded</th><th>downloaded</th><th>active sockets</th></tr></thead><tbody>{peers.map(row=>{const traffic=trafficDirections(row.http,row.websocket);return <tr key={row.peer}><td>{row.peer}</td><td>{integer.format(row.http.requests)}</td><td>{formatBytes(traffic.uploaded)}</td><td>{formatBytes(traffic.downloaded)}</td><td>{integer.format(row.websocket.active_connections)}</td></tr>})}</tbody></table></div>:<p>No peer traffic recorded in this window.</p>}
           </section>
         </>}
       </main>
-      <footer><span>Application payload only. HTTP is counted after compression; WebSocket data is counted before per-message compression. Headers, TLS, Tailscale, TCP/IP, retransmits, and radio overhead are excluded.</span></footer>
+      <footer><span>Application payload only. HTTP is counted after compression; WebSocket data is counted before per-message compression. Download detail classifies PTY binary frames; channel totals also include control frames. Headers, TLS, Tailscale, TCP/IP, retransmits, and radio overhead are excluded.</span></footer>
     </section>
   </div>
 }

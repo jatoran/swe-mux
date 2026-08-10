@@ -41,8 +41,7 @@ DELETE /api/diagnostics/network
 GET /api/diagnostics/network
 ```
 
-The snapshot groups HTTP counts by normalized route and peer, and WebSocket counts by channel
-and peer.
+The snapshot groups HTTP counts by normalized route and peer, WebSocket counts by channel and peer, and sent PTY frames by peer and payload phase in `websocket_sent_payloads`.
 HTTP response bytes are the encoded body after negotiated compression.
 WebSocket bytes are application text/binary frame payloads before per-message compression.
 Neither figure includes HTTP or WebSocket headers, TLS, Tailscale, TCP/IP, retransmits, or radio
@@ -53,9 +52,9 @@ daemon log, and resets only the counters.
 It does not restart the daemon or affect sessions.
 Both diagnostics requests are excluded from the measurement window.
 
-For a useful mobile comparison, measure the same scripted interval with one foreground client,
-then with the browser backgrounded, and compare `http_routes` and `websocket_channels` rather
-than only the aggregate.
+For a useful mobile comparison, measure the same scripted interval with one foreground client, then with the browser backgrounded, and compare `http_routes`, `websocket_channels`, and `websocket_sent_payloads` rather than only the aggregate.
+Use the mobile peer's `attach_replay` and `resync_replay` rows to separate session switching and recovery cost from `live_output` steady-state traffic.
+The classified rows are part of the WebSocket download count, not extra bytes to add to it.
 Large one-time static and PTY replay transfers should be separated from steady-state idle use.
 On mobile, only visible terminals should appear in `websocket_channels.pty`; hidden desktop-style
 warm panes indicate a regression.

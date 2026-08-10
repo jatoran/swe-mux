@@ -96,6 +96,7 @@ from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
 from .models import MuxEvent, StandingActivityKind
 from .network_usage import (
+    MeteredWebSocketResponse,
     NetworkUsage,
     compact_json_response,
     compressible_response_middleware,
@@ -8286,7 +8287,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             # live sending starts; leaving it uncounted would let that acknowledgement
             # erase credit belonging to newer live output.
             output_flow.sent(len(replay))
-            await ws.send_bytes(replay)
+            await ws.send_bytes_classified(replay, "attach_replay")
         await ws.send_json({"type": "replay_end", "reason": "attach"})
         # The arbitrated size can differ from this client's own fit (another device owns
         # input), so tell it up front rather than letting it render at the wrong width
@@ -8373,7 +8374,7 @@ def _versioned_pty_frame(frame: dict[str, Any], generation: str) -> dict[str, An
 
 
 async def _pty_sender(
-    ws: web.WebSocketResponse,
+    ws: MeteredWebSocketResponse,
     session: Session,
     subscriber: Any,
     generation: str,
@@ -8409,7 +8410,7 @@ async def _pty_sender(
             # acknowledgement while send_bytes is yielding; counting afterward would
             # turn that valid ACK into phantom unacknowledged credit.
             output_flow.sent(len(payload))
-            await ws.send_bytes(payload)
+            await ws.send_bytes_classified(payload, "live_output")
         elif message.get("type") == "resync":
             (
                 dropped_bytes,
@@ -8430,7 +8431,7 @@ async def _pty_sender(
             if replay_bytes:
                 await output_flow.wait_for_credit()
                 output_flow.sent(len(replay_bytes))
-                await ws.send_bytes(replay_bytes)
+                await ws.send_bytes_classified(replay_bytes, "resync_replay")
             await ws.send_json({"type": "replay_end", "reason": "resync"})
             await ws.send_json(
                 _versioned_pty_frame(

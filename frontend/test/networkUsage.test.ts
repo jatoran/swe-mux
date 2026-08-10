@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  formatByteRate, formatBytes, formatElapsed, snapshotTraffic, trafficDirections,
+  formatByteRate, formatBytes, formatElapsed, payloadKindLabel, snapshotTraffic, trafficDirections,
   type HttpTraffic, type NetworkUsageSnapshot, type WebSocketTraffic,
 } from '../src/networkUsage.ts'
 
@@ -35,4 +35,5 @@ test('bandwidth labels remain compact across byte scales and time windows',()=>{
   assert.equal(formatElapsed(59),'59s')
   assert.equal(formatElapsed(125),'2m 5s')
   assert.equal(formatElapsed(7380),'2h 3m')
+  assert.equal(payloadKindLabel('attach_replay'),'attach replay')
 })
