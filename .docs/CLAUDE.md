@@ -4,8 +4,8 @@
   `design/features/sessions.md`, `design/features/backends.md`,
   `design/features/delivery-readiness.md`
 - Changing the harness registry, descriptors, capability levels, adapter families, or adding a
-  harness: `design/features/backends.md`,
-  `development/HARNESS_ABSTRACTION_AND_OMP.md`
+  harness: `design/features/backends.md`; completed abstraction record:
+  `development/archive/HARNESS_ABSTRACTION_AND_OMP.md`
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project notes, the global Scratchpad, files, ignores, or watches:

@@ -14,15 +14,26 @@ Phases 7–11. Current behavior and invariants remain authoritative in `../desig
 Control-plane work is planned in `CONTROL_PLANE_ROADMAP.md`, which is authoritative for its
 own scope and design. The decimal phases here (3.7, 4.5, 5.5, 6.5, 7.5) pin that document's
 build-order steps into this delivery order so the two tracks progress in one sequence rather
-than two; see "Control-plane track interlock" below.
+than two; see "Control-plane track interlock".
+
+This roadmap is not the whole plan inventory.
+Work planned in a sibling `development/` document is listed under "Plans not sequenced here"
+with its status, so that this file's silence on a subject is never read as evidence that
+nothing is planned.
 
 Checkboxes are completion records. A phase is complete only when implementation,
 acceptance coverage, migrations, diagnostics, and relevant design/interface docs agree.
 
 ## Product direction
 
-- swe-mux is a provider-neutral, out-of-band control plane over interactive Claude Code,
-  Codex, and shell sessions; it is not a hidden orchestration framework.
+- swe-mux is a harness-neutral, out-of-band control plane over interactive agent CLIs and
+  shell sessions; it is not a hidden orchestration framework.
+  Harnesses are declared in a registry (`harness.py`) rather than named in code: `claude`,
+  `codex`, and `omp` (oh-my-pi) ship today, capability is two independent axes
+  (`state_sources`, `measurement_source`) with the display tier derived from them, and adding
+  a fourth is a descriptor plus its adapter rather than a new branch in every consumer.
+  Phase text that still names Claude and Codex specifically means those two harnesses, not
+  the shape of the surface.
 - Durable evidence and explicit user intent precede autonomous action.
 - Provider-native data is normalized at adapter boundaries. Unknown or degraded evidence
   fails closed wherever an action could enter a PTY, approve a request, or target another
@@ -31,6 +42,8 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   as proof by itself.
 - Projects remain the only session, layout, note, file-resource, and project-configuration
   containers. Groups organize Project rows only.
+  The global Scratchpad is the one deliberate exception: it is explicitly not Project-owned,
+  because its job is to survive Project switching.
 - Browser, CLI, future mailbox clients, and integrations use the same typed daemon
   operations and authorization boundaries.
 - Windows remains the proving platform through Phase 7. Platform expansion and public
@@ -40,24 +53,52 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
 
 - Windows ConPTY ownership, nested/global Job Objects, bounded scrollback/replay, resize,
   browser reconnect, multi-client input ownership, and daemon/session cleanup.
-- Shell profiles, Claude/Codex adapters, in-place promotion, normalized lifecycle events,
-  transcript reconciliation, agent history/resume, and current context usage in the
-  session sidebar.
-- Durable Project registry/Groups/sidebar visibility/layouts, Project and terminal-owned session
-  notes, lazy Project file tree, global/project ignores, bounded leased file watches,
-  revision-checked editors, Git status/worktrees, process inspector, listeners, and previews.
-- Manual "send to agent" from every Continuity-backed Markdown view (project note, session note,
-  Markdown file): the selection, or the whole document, seeds a new Claude/Codex session through
+- Shell profiles, the harness registry with its `claude`/`codex`/`omp` descriptors and
+  adapters, in-place promotion, normalized lifecycle events, transcript reconciliation,
+  agent history/resume, and current context usage in the session sidebar.
+  Transcript resolution is the adapter's answer rather than one shared filesystem heuristic:
+  Claude resolves by working directory and is followed when the CLI relocates the file into a
+  worktree slug, Codex resolves by thread id so a resume continues its conversation instead of
+  forking a second history row.
+  Completion record: `archive/HARNESS_ABSTRACTION_AND_OMP.md`.
+- Durable Project registry/Groups/sidebar visibility/layouts, per-Project note collections and
+  the non-Project global Scratchpad, lazy Project file tree, global/project ignores, bounded
+  leased file watches, revision-checked editors, Git status/worktrees/diff review, process
+  inspector, listeners, and previews.
+- Sessions launched directly into a configured Git worktree, bootstrapped per harness, with the
+  pending setup visible as a session rather than as a silent gap.
+- Manual "send to agent" from every Continuity-backed Markdown view (Project note, Scratchpad,
+  Markdown file): the selection, or the whole document, seeds a new agent session through
   the agent CLI's argv or is written into a live agent session over the input endpoint, targeted
   by a Project/session picker that excludes shells and dead sessions. Delivery is per-message and
   user-initiated; the durable queue behind it is Phase 4 (see that phase's sender items).
 - Settings draft/save/discard flow, terminal/profile configuration, themes, commands,
-  per-pane mixed-view tab stacks, non-native pointer drag/drop, projection-only mobile controls,
-  and browser-native Web Speech STT.
-- Optional cached `ccusage` analytics plus Claude/Codex saved-account quota polling and
-  system-wide provider-account selection.
+  per-pane mixed-view tab stacks, non-native pointer drag/drop, a configurable sidebar session
+  row, per-device command-rail layouts, UI scale controls, and mobile surfaces with their own
+  keyboard viewport, persistent terminal drafts, and drawer projection.
+- Hands-free voice: browser capture through Silero VAD into daemon-owned faster-whisper with
+  two decode profiles, wake words over the command registry, spoken navigation and fleet
+  queries, TTS read-aloud with barge-in, and Voice Comms.
+  Decisions: `archive/VOICE_INTERACTION_ROADMAP.md`.
+- Optional cached `ccusage` analytics plus saved-account quota polling and system-wide
+  provider-account selection for the harnesses that declare account management.
 - Universal rules, normalized events, read-only OpenRouter observers, annotations,
   budgets, composite attention, fleet intelligence, and compatibility hooks.
+- Status detection v2 and its durable diagnostics: the standing-activity axis, the `cli_state`
+  layer, the persisted `status_timeline` ledger with on-change layer readings, and the
+  time-ranged state-log and diagnostic-bundle endpoints behind `STATUS_INCIDENT_RUNBOOK.md`.
+- Agent Environment (bounded passive configuration inventory per session) and Agent Context
+  (Project-root instructions plus provider learned memory, read-only, with the manual
+  `CLAUDE.md` ↔ `AGENTS.md` overwrite).
+- Web push with server-persisted preferences, device presence and leading-device routing, the
+  settle-gated `waiting` alert, and per-session mute.
+- Trusted task imports and the Project Run menu, clipboard capture with a history ring,
+  headless-browser ghost-window sweeping, preview screenshot capture, and background-task
+  annotations bounded to the work they name.
+- Performance and traffic substrate: per-loop cost accounting, event-loop lag sampling,
+  Windows timer-resolution handling, HTTP/WebSocket traffic accounting with response and static
+  precompression, PTY replay and input-latency instrumentation, and the bandwidth metrics
+  surface behind `PERFORMANCE_RUNBOOK.md`.
 - Control-plane build-order steps 0–2 (`CONTROL_PLANE_ROADMAP.md` §9): the per-project
   enablement framework with its cycle-checked dependency DAG (`automation_registry.py`),
   Tier 0 deterministic fact capture with source pointers (`tier0_store.py`), and the
@@ -92,33 +133,34 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   UI menu/palette (`daemon.reload`/`ui.reload` via `POST /api/daemon/restart`),
   `mux reload-daemon`, and the frozen redeploy script `packaging/redeploy_desktop.py`, backed
   by the dedicated `dist/swe-mux-supervisor` bundle so app rebuilds never collide with a
-  running supervisor. Design and completion checklist: `SESSION_PRESERVING_RELOAD.md`.
+  running supervisor. Design and completion checklist: `archive/SESSION_PRESERVING_RELOAD.md`.
 
 ## Delivery order
 
 ```text
-Phase 1  Evidence replay + delivery-readiness contract
-  -> Phase 2  Durable process/quota/session telemetry
-    -> Phase 3  Daily-workflow UX, prompts, config, and notifications
-      -> Phase 3.5  Agent status-detection hardening and regression defense
-        -> Phase 3.7  Control-plane deterministic consumers  [done: CP step 3]
-          -> Phase 4  Persistent manual prompt queue
-            -> Phase 4.5  mux MCP v0: read + discovery surface        [CP step 2.5, §7.5]
+Phase 1  Evidence replay + delivery-readiness contract                      [done]
+  -> Phase 2  Durable process/quota/session telemetry                       [done]
+    -> Phase 3  Daily-workflow UX, prompts, config, and notifications       [2 notification items open]
+      -> Phase 3.5  Agent status-detection hardening + regression defense   [done]
+        -> Phase 3.7  Control-plane deterministic consumers                 [done: CP step 3]
+          -> Phase 4  Persistent manual prompt queue                        [done]
+            -> Phase 4.5  mux MCP v0: read + discovery surface              [done: CP step 2.5, §7.5]
               -> Phase 5  Gated auto-delivery + fleet queue + bounded agent communication
-                 (incl. mux.notify / mux.requestSpawn over the queue) [CP §7.2]  [done]
-                -> Phase 5.4  Agent conversation rollover (the run boundary contract)
-                  -> Phase 5.5  Control-plane project card + scan timeline  [CP steps 4-5]
-                    -> Phase 5.6  mux MCP v0.5: situational-awareness reads  [CP step 2.6]
-                      -> Phase 6  Agent Context, portable instructions, and skills
-                         (inspect + manual overwrite first; governed sync = return-path channel 2) [CP §7]
-                        -> Phase 6.5  Model narration + attention ranking [CP steps 6-7]
-                          -> Phase 7  Windows maturity, CLI, doctor, and soak
-                            -> Phase 7.5  mux MCP v1 + cross-session memory  [CP step 8]
-                              -> Phase 7.6  mux MCP session control: interrupt + end  [CP step 9]
-                                -> Phase 8  Telegram control
-                                  -> Phase 9  SSH/native attach
-                                    -> Phase 10  WSL bridge + Linux/macOS
-                                      -> Phase 11  Public packaging and release
+                 (incl. mux.notify / mux.requestSpawn over the queue)       [done: CP §7.2]
+                -> Phase 5.4  Agent conversation rollover                   [built; 4 live checks open]
+                  -> Phase 5.5  Project card + scan timeline                [card done; timeline open: CP 4-5]
+                    -> Phase 5.6  mux MCP v0.5: situational-awareness reads [open: CP step 2.6]
+                      -> Phase 5.8  SSH boundary handling in terminals      [open; dependency-free]
+                        -> Phase 6  Agent Context, instructions, skills      [first wave done; rest open]
+                           (inspect + manual overwrite first; governed sync = return-path channel 2) [CP §7]
+                          -> Phase 6.5  Model narration + attention ranking [open: CP steps 6-7]
+                            -> Phase 7  Windows maturity, CLI, doctor, soak [open]
+                              -> Phase 7.5  mux MCP v1 + cross-session memory        [open: CP step 8]
+                                -> Phase 7.6  mux MCP session control: interrupt/end [open: CP step 9]
+                                  -> Phase 8  Telegram control                       [open]
+                                    -> Phase 9  SSH/native attach                    [open]
+                                      -> Phase 10  WSL bridge + Linux/macOS          [open]
+                                        -> Phase 11  Public packaging and release    [open]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -129,6 +171,11 @@ corrupts every downstream head-of-line, arming, and auto-delivery decision. Phas
 the same job one level down, for *identity* rather than state: `agent_run_id` is the key
 every queue binding, Tier 0 fact, annotation, detector, and MCP read is scoped by, and until
 5.4 that key survived an in-CLI conversation replacement it should not have survived.
+Phase 5.8 has no predecessor: it depends only on shipped shell profiles, status detection, and
+runtime-cwd machinery, and it is drawn at that position solely so it does not preempt
+control-plane substrate already in flight. Its status-detection item may be pulled forward at
+any time, and should be if an SSH auth prompt is ever observed reading as `idle` on a session
+that auto-delivery could arm against.
 Cross-cutting tests ship with each phase.
 
 ### Control-plane track interlock
@@ -172,6 +219,21 @@ Ordering rules across the two tracks:
   own conversation-change detection — but no later phase may key on `session_id` alone
   either. A consumer that spans a rollover silently merges two conversations, which is the
   one failure mode the substrate is supposed to make impossible.
+
+### Plans not sequenced here
+
+These `development/` documents own scope this roadmap does not restate.
+A phase here may depend on one, but none of them is a phase.
+
+| Document | Status | Relationship to this roadmap |
+|---|---|---|
+| `CONTROL_PLANE_ROADMAP.md` | active | Interlocked through the decimal phases; authoritative for control-plane scope and design. |
+| `archive/HARNESS_ABSTRACTION_AND_OMP.md` | complete and archived: 138 items, 0 open, close-out signed off | Delivered the harness registry and `omp`; its result is the "harness-neutral" line in Product direction. Current harness behaviour lives in `design/features/backends.md`; the archived plan is the record of how it was built. |
+| `AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md` | active plan, nothing committed | Would replace the passive Agent Environment scan with evidence-tagged runtime inventory. Deliberately unscheduled: it needs a product decision on probe cost before it earns a phase. |
+| `CROSS_PLATFORM_FINDINGS.md` | research | Feeds Phases 10 and 11; holds the platform-interface inventory and verification matrix those phases would otherwise duplicate. |
+| `PLUGIN_SYSTEM_FINDINGS.md` | research | Decision-gated. Records what a plugin system would add over the shipped meta-hooks/automation/project-actions substrate, and the constraints any design must accept. |
+| `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
+| `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
 
 ## Phase 1 — Evidence replay and delivery readiness
 
@@ -379,12 +441,20 @@ attribution.
 - [x] Suppress the ready/complete alerts while running work (subagents, background tasks)
   or a startup settle means the agent is not actually waiting on the human, and hold the
   ready alert 120 s so a turn the agent walks back never reaches a lock screen.
-- [ ] Decide the residual `waiting` volume question — 62 true alerts per 10 hours on a
-  17-session fleet. Recency scoping and rate limiting are both measured and **rejected**;
-  see `NOTIFICATION_SCOPING_PROPOSAL.md` before proposing either again.
+- [x] Deliver alerts off-device: web push with server-persisted per-device preferences,
+  device presence and a leading-device rule so one alert reaches the device the user is
+  actually at, and a per-session mute.
+  `design/features/notifications.md`, `design/features/device-presence.md`.
+- [ ] Re-measure the residual `waiting` volume, then decide it.
+  The last measurement (62 true alerts per 10 hours on a 17-session fleet) predates the
+  2026-08-02 fix to the dead suppression guards and the `WAITING_SETTLE_SECONDS` gate, so the
+  number that motivated the question is no longer the number the system produces.
+  Recency scoping and rate limiting were both measured and **rejected** against the old
+  volume; read `archive/NOTIFICATION_SCOPING_PROPOSAL.md` before proposing either again.
 - [ ] Persist one row per notification decision (session, category, plan verdict, outcome).
-  Today the sender logs only failures, so its behavior is reconstructable only by
-  simulation over `status_timeline`.
+  The sender logs only failures, so its behavior is reconstructable only by simulation over
+  `status_timeline`, and the re-measurement above needs this to be anything better than a
+  hand count.
 
 ### Voice boundary
 
@@ -413,6 +483,9 @@ attribution.
   deduplication, and explicitly unavailable native timestamps.
 - [x] Restore lazily initialized terminal-owned session notes for shell and agent sessions,
   expose them from terminal context menus and History, and persist note identity across exit.
+  Superseded in place: the note surface is now per-Project note collections plus the global
+  Scratchpad (`design/features/project-resources.md`), and `history.note_id` is what remains of
+  the per-terminal identity.
 
 ### Phase 3 exit criteria
 
@@ -681,10 +754,11 @@ caller of the queue rather than a second delivery path to maintain.
   listens: terminal-selection-into-notes is a half-wired stub, and shipping the note→terminal
   direction without resolving it leaves two incomplete halves of one idea. (Deleted — dead in
   both directions.)
-- [ ] Only if demand appears: make the note surface's actions configurable. They are two fixed
-  buttons today. The terminal's `RailItem` model (server-persisted, per-project overrides,
-  platform/backend filters) and Continuity's own rail (localStorage, enable/reorder only) do not
-  share a model, so unifying them is a real design task, not a settings row.
+Dropped from this phase: making the note surface's two send buttons configurable.
+No demand appeared, the command rail meanwhile gained per-device layouts and rows of its own,
+and unifying the rail's server-persisted `RailItem` model with Continuity's localStorage rail
+is a design task rather than a settings row.
+Reopen it as its own item if the need returns; it is not queue work.
 
 ### Phase 4 exit criteria
 
@@ -880,9 +954,16 @@ before Phase 5.
 ### Agent-to-agent communication
 
 - [x] Start with explicit user-authored or user-approved “send output from A to B.” Session A
-  does not gain unrestricted knowledge of or authority over session B. An `mux.notify`
-  message lands as an inert draft unless the *receiving* session opted in
-  (`accept_agent_messages`), so the default really is user-approved.
+  does not gain unrestricted knowledge of or authority over session B. Receiver-side policy
+  (`accept_agent_messages`, part of the per-run grant) decides how much an arriving message is
+  worth.
+  **Default changed 2026-08-09**: a live agent conversation now accepts agent-authored messages
+  `armed` rather than as an inert draft, so the shipped default is no longer "a human approves
+  each one".
+  What still holds is the envelope: an armed item waits for head-of-line order and the same
+  delivery-readiness gate as any other queue item, so it never interrupts an active turn and
+  never bypasses an approval or question prompt, and the receiving operator can turn acceptance
+  off for the run.
 - [x] Preserve source session/run, exact selected output span or annotation, requesting
   user/rule, target, transformations, and delivery result as provenance. `origin_json`
   carries the relay path, source session/run/backend, and the stated reason; the delivery
@@ -1054,6 +1135,15 @@ delivery path, no model cost, and no new user surface beyond diagnostics.
 - [x] **Codex and hookless launches: the transcript-switch watcher**, routed through the same
   rollover primitive instead of rekeying in place. Codex now has stable lifecycle hooks, but
   the filesystem watcher remains the fallback when they are disabled, untrusted, or unavailable.
+- [x] Narrowed 2026-08-06: whether a transcript belongs to this conversation is the *adapter's*
+  answer, because it is the CLI's own resolution rule.
+  Claude resolves by working directory, so a relocation into a worktree slug is followed from
+  the `transcript_path` every hook payload already carries rather than read as a new
+  conversation.
+  Codex resolves by thread id, so a resume continues its rollout instead of forking a second
+  history row, and a pane never starts out tailing a file a live pane holds.
+  The mtime-recency scan is no longer load-bearing for either, which removes the class of
+  false rollovers and false staleness that Windows' frozen mtime on an open file produced.
 - [x] Tighten the sibling gate instead of accepting it: it currently blocks on the mere
   *existence* of a live same-backend session in the cwd. Narrow it to siblings that are
   genuinely unaccounted for — a sibling whose own transcript was written after the candidate
@@ -1129,15 +1219,18 @@ model of the world.
   `exit_reason='conversation_rolled'`, `final_state='idle'`, keeping its own `native_id`,
   transcript path, and final tokens; the successor row opened under the new run id and native
   id with its own transcript path. Both `agent_visible=1`, sharing the terminal `note_id`.
-- [ ] A queue item armed before a `/clear` is stranded, not delivered. An auto-delivery grant
-  does not survive the rollover.
+Each remaining criterion is a live check on the frozen desktop app, not a fixture.
+
+- [ ] A queue item armed before a `/clear` is stranded, not delivered, and an auto-delivery
+  grant does not survive the rollover.
 - [ ] Branch after a `/clear` reopens the conversation the user was in, not its predecessor.
-- [ ] Codex `/new` either rolls the run (when the candidate is corroborated) or marks
-  observation stale and blocks delivery. It never continues reporting the replaced
-  conversation as live.
+- [ ] Codex `/new` either rolls the run or marks observation stale and blocks delivery, and
+  never continues reporting the replaced conversation as live.
+  Re-check this against the 2026-08-06 thread-id binding rather than the sibling-corroboration
+  path the criterion was written for: a Codex resume now continues its rollout, so `/new` is
+  the only Codex event that should produce a new run at all.
 - [ ] Every rolled run survives `POST /api/daemon/restart` with its identity intact and no
   misattribution quarantine.
-- [ ] Live-verified on the frozen desktop app, not only in fixtures.
 
 ## Phase 5.5 — Control-plane project card and scan timeline
 
@@ -1245,15 +1338,14 @@ does **not** depend on Phase 5.5.
   else am I working on right now" is inherently cross-Project; the default stays own-Project
   only, and any widening is a named grant with its own surface, not a quiet scope change.
 
-### Construction rules (unchanged from Phase 4.5, restated because they are load-bearing)
+### Construction rules
 
-- [ ] Every tool is a thin caller over the same typed daemon operation the browser uses
-  (CP §7.1). Nothing is implemented inside the MCP layer, so the browser, CLI, and later
-  clients inherit every bound.
-- [ ] Tools are listed even when disabled and answer with a typed refusal, because clients
-  cache `tools/list` at session start and a vanished tool is indistinguishable from a broken
-  server.
-- [ ] Scope misses and true misses stay indistinguishable; empty beats a weak match.
+These are Phase 4.5 constraints that every tool here inherits, not separate deliverables.
+Every tool is a thin caller over the same typed daemon operation the browser uses (CP §7.1),
+so nothing is implemented inside the MCP layer and later clients inherit every bound.
+Tools are listed even when disabled and answer with a typed refusal, because clients cache
+`tools/list` at session start and a vanished tool is indistinguishable from a broken server.
+Scope misses and true misses stay indistinguishable, and empty beats a weak match.
 
 ### Phase 5.6 exit criteria
 
@@ -1265,6 +1357,89 @@ does **not** depend on Phase 5.5.
   interrupt, end a session, or write to a PTY. Pinned by the tool-set allowlist test.
 - [ ] Adding these tools costs no new substrate: each one is traceable to a service that
   shipped in an earlier phase.
+
+## Phase 5.8 - SSH boundary handling in terminals
+
+A user who types `ssh box` in a mux terminal already gets a working session: bytes, resize,
+Ctrl+C, bracketed paste, scrollback, and replay are transport-agnostic and need nothing added.
+What does not survive the SSH boundary is every mux *integration*, and it fails silently: the
+`MUX_SHIM_DIR` PATH repair does not reach the remote shell, hook ingress is a loopback-only
+secret, transcript tailing reads local files, `local_directory_from_osc7` discards any OSC 7
+URI that is not an existing local directory so runtime cwd freezes at its last local value,
+and status detection has no model for an `ssh` password or host-key prompt. This phase makes
+that degradation explicit, makes the prompts safe, and makes "SSH into a host" a named profile
+instead of something the user retypes.
+
+This phase is deliberately not remote execution. A remote host does not become an execution
+host here: no remote filesystem provider, no host-scoped Git, no deployed agent bridge. Those
+belong to Phase 9's boundaries and the decision-gated list.
+
+### SSH shell profiles
+
+- [ ] Ship an SSH shell-profile pattern over the existing profile machinery: executable `ssh`,
+  argv naming a destination, resolved through the same raw/request/Project/project-local/global
+  precedence every other profile uses. No new spawn path and no new session kind.
+- [ ] Treat `~/.ssh/config` as the source of truth for aliases, identity files, users, ports,
+  and proxy settings. A profile names a destination; mux never re-models SSH host fields into
+  its own config, because a stored copy that disagrees with what OpenSSH resolves is the entire
+  bug class this avoids.
+- [ ] Inject `-o ServerAliveInterval=20 -o ServerAliveCountMax=2` into a generated profile only
+  when the user's own argv and resolved config do not already set them, so a dropped link fails
+  fast instead of hanging the pane. A user-authored SSH argv is authoritative and is never
+  rewritten, the same exemption the PowerShell bootstrap already grants `-Command`/`-File`.
+Standing boundary rather than a task: mux never persists an SSH password or key passphrase and
+never prompts for one outside the PTY.
+Authentication happens where the user can see it, and key and agent auth are the supported
+paths.
+
+### Remote-boundary detection and honest degradation
+
+- [ ] Detect that a session has crossed an SSH boundary. An OSC 7 URI with a non-local
+  authority is already parsed and discarded by `runtime_cwd.py`; it becomes the signal instead
+  of being dropped. Detection is best-effort and its absence never asserts a local boundary.
+- [ ] Report cwd, agent promotion, transcript following, hook ingress, and shim PATH repair as
+  **unavailable** for a crossed session rather than stale, reusing the existing
+  `agent-bridge-unavailable` vocabulary rather than inventing a second one.
+- [ ] Freeze runtime cwd with an explicit reason and surface "remote" in the UI instead of a
+  stale local path. A frozen value presented as current is the failure mode this phase exists
+  to remove.
+- [ ] Keep a crossed session out of any inference-driven target set: it never becomes an
+  auto-delivery or queue target by promotion, and remains a manual send target exactly as any
+  shell is.
+
+### Status detection for SSH prompts
+
+- [ ] Classify `ssh` authentication prompts as blocked on a human rather than `idle`: password,
+  key passphrase, host-key `yes/no` confirmation, and keyboard-interactive/MFA challenges.
+  `idle` is the state delivery arms against, so a blocked prompt read as idle is the one
+  failure here with a safety consequence.
+- [ ] Classify disconnect output (`Connection closed`, `Connection reset`, `Broken pipe`,
+  `Timeout, server not responding`) as a terminated transport, not a quiet session.
+- [ ] Add captured screens for each prompt and disconnect class to the detection golden corpus,
+  and verify SSH sessions against the standing-activity axis: a quiet remote shell is idle, a
+  remote long-running command is not.
+
+### Documentation
+
+- [ ] Document reaching mux over `ssh -L` in `design/features/remote-access.md`. This carries
+  forward the documentation half of original Roadmap Phase 10 and describes shipped behavior:
+  a loopback-addressed forward on any local port passes `allowed_browser_host` and the
+  Origin/Host authority check, while a forward addressed by a LAN name returns
+  `unsupported Host`. Distinguish it from the router port-forwarding and Funnel exposure the
+  same document rejects, and state that an SSH-forwarded peer inherits the same terminal and
+  code-execution authority an admitted tailnet peer has.
+- [ ] Document SSH profiles and their compatibility limits in
+  `design/features/shell-profiles.md` beside the existing WSL and CMD entries.
+- [ ] Document the prompt classes and the remote-boundary unavailability vocabulary in
+  `design/features/status-detection.md`.
+
+### Phase 5.8 exit criteria
+
+- [ ] `ssh` from a mux terminal survives, resizes, pastes, and scrolls exactly as a local
+  shell, and every integration it disables is visibly unavailable rather than silently stale.
+- [ ] No SSH authentication prompt is ever reported as `idle`, proven by golden-corpus cases.
+- [ ] No SSH credential is stored by mux in configuration, history, telemetry, diagnostics, or
+  a diagnostic bundle.
 
 ## Phase 6 — Agent Context, portable instructions, and skills
 
@@ -1332,6 +1507,14 @@ and never replaces a whole user-owned file.
 - [x] Accommodate the ninth drawer icon on narrow touch layouts without a silent two-row wrap.
   Keep 44 px touch height and provide an explicit horizontal-scroll/edge-fade affordance with
   selected-tab auto-scroll, or prove an equivalent single-row layout across the mobile matrix.
+- [ ] **Gap opened by the harness registry.** `agent_context.py` still enumerates `claude` and
+  `codex` by name (`instruction:claude` → `CLAUDE.md`, `instruction:codex` → `AGENTS.md`, and
+  two hardcoded memory roots), so a focused `omp` session shows another harness's inventory or
+  none at all.
+  Agent *Environment* was generalized through the registry and `omp` is covered there, which is
+  what makes the omission in Agent Context a defect rather than a scope choice.
+  Resolve it as a descriptor question: which harnesses declare a root instruction file, and
+  which declare a memory inventory, with `unsupported` remaining an explicit typed result.
 
 ### First-wave exit criteria
 
@@ -1427,6 +1610,11 @@ its quality matrix with the Phase 1–6 contracts.
 
 ### Practical CLI control
 
+Starting point: `mux` is a thin JSON wrapper over a dozen endpoints
+(`ls`, `spawn`, `send`, `kill`, `reload-daemon`, `history`, `projects`, `profiles`, `accounts`,
+`history-duplicates`, `resume`, `doctor`), it prints raw API JSON with no table or `--json`
+distinction, and `doctor` is an alias for `GET /api/remote/status`.
+
 - [ ] Expand `mux` into a practical daemon controller: filtered session listing;
   Project-bound profile/custom-argv spawn; rename/pin/kill; Project/Group management;
   repository-group inspection; broadcast membership/send; history filters/resume; profile
@@ -1437,6 +1625,9 @@ its quality matrix with the Phase 1–6 contracts.
   explicit `MUX_URL` precedence.
 - [ ] Use stable ids, conflicts for ambiguous names, actionable exit codes, structured
   errors, human-readable tables, and `--json`; scripts never parse UI prose.
+- [ ] Take every backend/harness list, choice, and label from the harness registry.
+  A CLI that hardcodes `claude`/`codex` reintroduces exactly what
+  `archive/HARNESS_ABSTRACTION_AND_OMP.md` removed, one layer out.
 - [ ] Route browser, CLI, mailbox, mux MCP, and future Telegram actions through shared typed
   daemon operations. The MCP surface (Phases 4.5/7.5) is one more consumer of these ops, never
   a parallel implementation: authorization, readiness, bounds, and audit live in the op.
@@ -1459,6 +1650,10 @@ its quality matrix with the Phase 1–6 contracts.
   transcript is stale, whose bound conversation id no longer matches the CLI's, or whose
   rollover was blocked by an unresolvable sibling. This is the one class of fault that
   presents as a perfectly healthy session, so a silent daemon is not evidence of health.
+- [ ] Include an SSH-profile check (Phase 5.8): each configured destination resolves through
+  `ssh -G` without connecting, keepalive options are present, and any session currently past a
+  remote boundary is listed with the integrations that boundary disabled. Report destinations
+  and options only; never a key path's contents, a passphrase, or a credential.
 - [ ] Publish machine-readable capability/version information through health diagnostics;
   redact secrets, terminal bytes, prompt/message content, media, and credentials.
 - [ ] Give every failed check a concrete remedy and distinguish unavailable optional
@@ -1518,10 +1713,12 @@ because it inherits the transport, identity, and restart contract already proven
 
 ### Provider-memory bridge
 
-- [ ] Let any authenticated Claude or Codex session read every available Agent Context memory
-  source in its own Project, regardless of which provider produced it. Cross-Project sources are
+- [ ] Let any authenticated agent session read every available Agent Context memory source in
+  its own Project, whichever harness produced it. Cross-Project sources are
   indistinguishable from missing; disabled, unsupported, unreadable, and stale sources remain
   explicit results rather than empty success.
+  This inherits the Phase 6 registry gap: a bridge built over a claude/codex-only inventory
+  would be harness-general in name only.
 - [ ] Keep access pull-only. Vendor memory is never injected into every prompt, copied into the
   other vendor's private store, or written by MCP. The Phase 6 browser overwrite remains a human
   operation limited to root `CLAUDE.md`/`AGENTS.md`; it is not an agent tool.
@@ -1657,6 +1854,13 @@ This phase carries forward original Roadmap Phase 9. Telegram consumes typed Pha
 mailbox and daemon operations; it does not create a second session, observer, account, or
 conversation model.
 
+Scope narrowed by what shipped: outbound alerting to a phone is already covered by web push
+with device-presence routing, so the remaining value here is the **inbound** half - selecting a
+session, replying into its queue, and answering an approval from a chat client - plus labelled
+outbound messages that a reply can be threaded to.
+Re-evaluate whether that half is worth a Telegram adapter before starting it: a phone already
+reaches the full browser UI over the tailnet, and the mobile surfaces are first-class.
+
 ### Provider and routing
 
 - [ ] Implement one daemon-owned Telegram adapter per configured bot token. Never start a
@@ -1700,10 +1904,22 @@ conversation model.
 This phase carries forward original Roadmap Phase 10. Direct Tailscale browser access
 remains the supported remote product path.
 
+### Scope: two axes that share only a name
+
+"SSH" names two unrelated pieces of work, and conflating them is why the original phase read
+as one item:
+
+- **SSH inbound, as a transport to reach mux.** Its documentation half is shipped behavior and
+  is scheduled in Phase 5.8; what remains here is `mux attach`, a native-terminal client that
+  makes an SSH login a usable way to drive a session.
+- **SSH outbound, from inside a session.** Everything a user does by typing `ssh` in a
+  terminal. Owned by Phase 5.8, complete there, and out of scope in this phase.
+
+Neither axis makes a remote host an execution host. That is a third thing, recorded in the
+decision-gated list.
+
 ### Forwarding and attach
 
-- [ ] Document OpenSSH browser forwarding, WebSocket behavior, key authentication, daemon
-  service lifetime, and differences from the supported direct Tailscale listener.
 - [ ] Add `mux attach SESSION` over the existing PTY contract: raw input/output, resize,
   input ownership, exit status, reconnect, and a detach chord that never kills the
   daemon-owned session.
@@ -1712,18 +1928,74 @@ remains the supported remote product path.
 - [ ] Add SSH-driven attach tests for disconnect/reconnect, Unicode, resize, Ctrl+C,
   bracketed paste, ownership handoff, queued-delivery exclusion, and daemon/session exit.
 
+### Attach transport constraints
+
+- [ ] Build `mux attach` as a client of the **supervisor**, not of a daemon-owned ConPTY. The
+  session-preserving reload split moved PTY ownership out of process, so a native client is a
+  second consumer of the supervisor contract and its input arbitration, and must survive a
+  daemon restart the way a browser client does.
+- [ ] Route every attach action through the Phase 7 typed daemon operations. A native client
+  that reimplements ownership, readiness, or bounds beside the browser is the parallel
+  implementation Phase 7 exists to prevent, and this phase must not ship before those
+  operations exist.
+- [ ] Depend on no SSH multiplexing primitive. Win32 OpenSSH provides no
+  `ControlMaster`/`ControlPath`, and there is no native Windows mosh client, so designs built
+  on a shared authenticated master socket or a roaming UDP transport do not port to the
+  proving platform. Verify the current Win32 OpenSSH position before relying on this either
+  way; treat multiplexing as absent until proven present.
+- [ ] Own any SSH-adjacent runtime state at daemon or supervisor lifetime, never at a browser
+  client's lifetime. Connection state, listeners, and forwards outlive the window that created
+  them, and re-registering a client handler must not replace the manager that live sessions
+  still hold.
+
+### Boundaries
+
+- [ ] Never store an SSH password or key passphrase, in this phase or any later one. Key and
+  agent authentication only; a passphrase is entered where the user can see the prompt.
+- [ ] Resolve destinations through `ssh -G` and treat any mux-stored field as an override only
+  when it is explicitly non-default. A persisted host that silently beats the resolved
+  hostname, or a stored port `22` mistaken for an explicit choice, is the recurring defect
+  class in mature SSH clients.
+- [ ] Keep SSH transport authentication, Tailscale admission, and mux session lifetime as three
+  separate concepts in both code and documentation. An SSH-admitted peer has the same terminal
+  and code-execution authority as a tailnet peer, and mux still has no login of its own.
+
+### Prior art considered
+
+Two reference implementations were reviewed before scoping this phase and neither is adopted
+wholesale. cmux exposes SSH as a first-class workspace command that reads `~/.ssh/config`,
+multiplexes through one ControlMaster socket, injects keepalives by default, delegates remote
+persistence to tmux on the remote host, and lets remote processes call back to raise local
+notifications; its rejection of a deployed remote-server model on trust and maintenance
+grounds is the reasoning this roadmap follows. orca takes the opposite path, treating SSH
+hosts as execution hosts behind a deployed relay, and its incident record is the cost
+estimate: head-of-line blocking between bulk transfers and keystroke echo on a shared channel,
+orphaned port forwards from mixing window and process lifetimes, and a standing project-wide
+rule that no change may assume local-only execution. The keepalive defaults, the
+`~/.ssh/config`-as-truth rule, and the lifetime-ownership constraint are taken from these; the
+relay, the multiplexed transport, and the remote provider stack are not.
+
 ### Phase 9 exit criteria
 
 - [ ] SSH disconnect leaves the mux session live; later attach restores interaction without
   changing browser replay/attach semantics.
 - [ ] Documentation distinguishes session lifetime, SSH transport authentication, Tailscale
   access, input ownership, detach, and kill.
+- [ ] `mux attach` shares one input-ownership implementation with the browser, proven by a test
+  that drives both clients against one session.
 
 ## Phase 10 — WSL agent bridge and native Linux/macOS
 
 This phase carries forward original Roadmap Phase 11. Platform expansion preserves the
 same API, browser behavior, session identity, attach/detach, evidence, and daemon-owned
 child-lifecycle contracts.
+
+`CROSS_PLATFORM_FINDINGS.md` holds the inventory this phase sequences: where native code is
+concentrated versus where platform behavior is merely distributed, the current non-Windows
+import and startup blockers, the Windows-host shell compatibility matrix (PowerShell 7, 5.1,
+profile interference, CMD, WSL, Git Bash), the required platform interfaces, and the target
+order.
+Read it before scoping any item here rather than re-deriving it.
 
 ### WSL agent bridge
 
@@ -1778,6 +2050,8 @@ child-lifecycle contracts.
 
 This phase carries forward original Roadmap Phase 12. Source-checkout development remains
 acceptable until Windows proving and the supported platform matrix are complete.
+The packaging and external-trial readiness gaps, and the CI matrices, are inventoried in
+`CROSS_PLATFORM_FINDINGS.md`.
 
 ### Artifacts and installation
 
@@ -1833,14 +2107,35 @@ failure behavior:
 - Automatic termination of suspected orphan processes. Agent-initiated termination of a
   *session* is a different question and is scheduled in Phase 7.6; this entry remains about
   the daemon acting on processes it merely suspects are orphaned.
+- swe-mux as a multi-host control plane: SSH hosts as execution hosts, a remote filesystem
+  provider, host-scoped Git with per-host capability caching, remote port-forward management,
+  or a deployed remote relay or agent bridge. Phases 5.8 and 9 deliberately stop at the
+  terminal and the attach client. A reviewed reference implementation of this scope runs to
+  roughly a hundred modules with its own relay deployment, versioning, and flow control, and
+  it forces a standing "assume no local-only execution" rule on every unrelated change. Note
+  the cheaper alternative before scheduling this one: a remote host already on the tailnet can
+  reach the daemon's HTTP surface directly, so remote-agent visibility may not need an SSH
+  bridge at all.
 - Definitive identity attribution for shared-account quota usage.
 - Automatic/background bidirectional instruction sync or blind cross-provider skill-directory
   sync. Phase 6's explicit, previewed, one-time root-file overwrite in either direction is the
   approved boundary; widening it to continuous reconciliation requires a new product decision.
-- A daemon-hosted STT service absent demonstrated browser STT product limitations.
-- Native Claude/Codex theme management, ANSI rewriting, provider-native Remote Control,
-  concurrent provider homes, automatic quota failover, public Funnel/LAN exposure, live
-  session restore after daemon restart, and a skill/plugin marketplace.
+- Native harness theme management, ANSI rewriting, provider-native Remote Control,
+  concurrent provider homes, automatic quota failover, and public Funnel/LAN exposure.
+- A plugin system: third-party panes, contributed actions, link handlers, and packaging
+  identity layered over the shipped meta-hooks, automation, and project-actions substrate.
+  `PLUGIN_SYSTEM_FINDINGS.md` records what is genuinely missing, the constraints any design
+  must accept (subprocess only, plugin panes over the existing supervisor `spawn` message so no
+  `PROTOCOL_VERSION` bump reaps every session, no second event-to-action path), and the value
+  ranking if it is ever picked up.
+
+Resolved out of this list, recorded so neither is re-proposed as gated:
+
+- **Daemon-hosted STT.** The browser-STT limitation was demonstrated and the daemon-owned
+  faster-whisper path shipped with the voice work.
+- **Live session restore after daemon restart.** Shipped as the PTY supervisor split, which
+  is stronger than the gated idea: sessions stay alive across the restart rather than being
+  reconstructed after it.
 
 ## Original-roadmap carry-forward map
 
@@ -1851,6 +2146,7 @@ failure behavior:
 | Phase 8 Windows tests/CI/soak | Phases 1 and 7 |
 | Phase 9 Telegram | Phase 8 |
 | Phase 10 SSH/native attach | Phase 9 |
+| Phase 10 OpenSSH forwarding documentation | Phase 5.8 |
 | Phase 11 WSL bridge and Linux/macOS | Phase 10 |
 | Phase 12 packaging/release | Phase 11 |
 | Reserved safe-to-inject predicate | Phases 1, 4, and 5 |

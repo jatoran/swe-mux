@@ -1008,6 +1008,98 @@ async def test_an_approval_on_screen_survives_a_parallel_tool_completing() -> No
     assert isinstance(session.observation_state.get("pending_approval"), dict)
 
 
+async def test_parallel_tool_completion_cannot_cancel_another_approval_candidate() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    session.approval_stabilization_seconds = 0.05
+    events = EventBus()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(
+        session,
+        "PermissionRequest",
+        {"tool_name": "Read", "tool_use_id": "read-pending"},
+        events,
+    )
+    assert isinstance(session.observation_state.get("pending_approval"), dict)
+
+    # The screen cache can still read working in the narrow race before Claude's
+    # cli-state poll observes `waiting`. Tool identity must independently keep an
+    # unrelated Bash completion from retiring the Read prompt.
+    session.scrollback.data = b"working spinner..."
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {"tool_name": "Bash", "tool_use_id": "bash-finished"},
+        events,
+    )
+
+    assert isinstance(session.observation_state.get("pending_approval"), dict)
+    await asyncio.sleep(0.07)
+    assert session.record.state == "awaiting"
+    assert session.record.awaiting_reason == "approval"
+
+
+async def test_matching_tool_completion_retires_its_approval_candidate() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    session.approval_stabilization_seconds = 0.05
+    events = EventBus()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(
+        session,
+        "PermissionRequest",
+        {"tool_name": "Read", "tool_use_id": "read-pending"},
+        events,
+    )
+    session.cli_state = {"status": "waiting"}
+
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {"tool_name": "Read", "tool_use_id": "read-pending"},
+        events,
+    )
+    await asyncio.sleep(0.07)
+
+    assert session.observation_state.get("pending_approval") is None
+    assert session.record.state == "working"
+
+
+async def test_parallel_tool_completion_cannot_clear_a_visible_approval_by_identity() -> None:
+    session = cast(Any, ReplaySession("claude"))
+    session.approval_stabilization_seconds = 0.01
+    events = EventBus()
+    await apply_hook_observation(session, "UserPromptSubmit", {}, events)
+    await apply_hook_observation(
+        session,
+        "PermissionRequest",
+        {"tool_name": "Read", "tool_use_id": "read-pending"},
+        events,
+    )
+    await asyncio.sleep(0.03)
+    assert session.record.state == "awaiting"
+
+    # Exercise the identity guard independently of both dialog text and the
+    # cli-state poll. The unrelated completion cannot retire this Read approval.
+    session.scrollback.data = b"parallel Bash spinner..."
+    session.cli_state = None
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {"tool_name": "Bash", "tool_use_id": "bash-finished"},
+        events,
+    )
+    assert session.record.state == "awaiting"
+    assert session.record.awaiting_reason == "approval"
+
+    await apply_hook_observation(
+        session,
+        "PostToolUse",
+        {"tool_name": "Read", "tool_use_id": "read-pending"},
+        events,
+    )
+    assert session.record.state == "working"
+    assert session.record.awaiting_reason is None
+
+
 async def test_session_start_during_an_active_codex_turn_is_not_a_boundary() -> None:
     session = cast(Any, ReplaySession("codex"))
     events = EventBus()

@@ -191,6 +191,7 @@ from .session import (
     clear_standing_activity,
     pty_tail_explain,
     pty_tail_state,
+    session_cli_state_status,
     session_is_unwitnessed,
 )
 from .session_attachments import (
@@ -3963,11 +3964,18 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         pty_explanation = pty_tail_explain(
             pty_tail,
             backend=session.record.backend,
+            cli_state_status=session_cli_state_status(session),
             osc_title=session.osc_signals.title,
             osc_progress=session.osc_signals.progress,
         )
     except (AttributeError, OSError, ValueError):
-        pty_explanation = {"outcome": "unknown", "rules": []}
+        pty_explanation = {
+            "outcome": "unknown",
+            "screen_outcome": "unknown",
+            "outcome_source": "screen",
+            "cli_state_status": session_cli_state_status(session),
+            "rules": [],
+        }
     raw_hook_sequences = session.observation_state.get("hook_sequences", {})
     hook_sequences = dict(raw_hook_sequences) if isinstance(raw_hook_sequences, dict) else {}
     return {
@@ -6604,7 +6612,14 @@ def _current_voice_approval(session: Any) -> tuple[str, str] | None:
         tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
     except (AttributeError, OSError, ValueError):
         return None
-    if pty_tail_state(tail, backend=session.record.backend) != "approval":
+    if (
+        pty_tail_state(
+            tail,
+            backend=session.record.backend,
+            cli_state_status=session_cli_state_status(session),
+        )
+        != "approval"
+    ):
         return None
     return approval_prompt(tail)
 

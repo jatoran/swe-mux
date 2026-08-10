@@ -75,7 +75,7 @@
     "pending_approval_preserved": {
       "fixture": "claude-pending-approval-not-cleared.json",
       "guard": "tests/test_status_contract.py::test_unanswered_approval_survives_everything_that_could_hide_it",
-      "root_cause": "The inverse hazard of clearing a stale awaiting: the tool_use record that triggered the prompt can be observed after it, a parallel tool's result can land while the dialog is up, and idle_prompt can arrive — none of which mean the user answered. Hiding a real prompt is worse than showing a stale one, so clearing requires proof (record newer than the block, screen not showing a dialog)."
+      "root_cause": "The inverse hazard of clearing a stale awaiting: the tool_use record that triggered the prompt can be observed after it, a parallel tool's result can land while the dialog is up, idle_prompt can arrive, and a parallel spinner repaint can appear later in raw PTY write order. None of these mean the user answered. Hiding a real prompt is worse than showing a stale one, so unrelated tool identities cannot cancel its candidate and Claude's own waiting state vetoes a raw spinner until the dialog is gone."
     },
     "notification_semantics": {
       "fixture": "claude-idle-vs-permission-vs-elicitation.json",

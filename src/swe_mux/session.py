@@ -1108,10 +1108,18 @@ def pty_tail_explain(
     tail: str,
     *,
     backend: str | None = None,
+    cli_state_status: str | None = None,
     osc_title: str | None = None,
     osc_progress: str | None = None,
 ) -> dict[str, Any]:
-    """Return the classifier outcome and bounded evidence for every rule."""
+    """Return the effective classifier outcome and bounded evidence for every rule.
+
+    Claude's raw ConPTY stream is a write log, not a terminal-cell snapshot. During
+    parallel tool use its spinner can repaint after a permission dialog while the
+    dialog remains visibly active elsewhere on screen. Claude's own per-process
+    state reports ``waiting`` for exactly that dialog lifetime, so it conservatively
+    corroborates approval and prevents append order from hiding the prompt.
+    """
     normalized = _normalize_tail_text(tail)
     # Most rules share one of only a few regions. Computing the region per rule
     # repeatedly rescanned the whole 32 KiB tail, including every prompt-frame
@@ -1145,7 +1153,18 @@ def pty_tail_explain(
         )
         if matched and rule.state != "background_wait" and outcome == "unknown":
             outcome = cast(PtyTailState, rule.state)
-    return {"outcome": outcome, "rules": evaluations}
+    screen_outcome = outcome
+    normalized_cli_status = str(cli_state_status or "").strip().lower() or None
+    cli_waiting = backend in {None, "claude"} and normalized_cli_status == "waiting"
+    if cli_waiting:
+        outcome = "approval"
+    return {
+        "outcome": outcome,
+        "screen_outcome": screen_outcome,
+        "outcome_source": "cli_state_waiting" if cli_waiting else "screen",
+        "cli_state_status": normalized_cli_status,
+        "rules": evaluations,
+    }
 
 
 def pty_tail_waiting_on_background(tail: str, *, backend: str | None = None) -> bool:
@@ -1157,9 +1176,30 @@ def pty_tail_waiting_on_background(tail: str, *, backend: str | None = None) -> 
     )
 
 
-def pty_tail_state(tail: str, *, backend: str | None = None) -> PtyTailState:
-    """Classify the CLI's current screen from its scrollback tail."""
-    return cast(PtyTailState, pty_tail_explain(tail, backend=backend)["outcome"])
+def pty_tail_state(
+    tail: str,
+    *,
+    backend: str | None = None,
+    cli_state_status: str | None = None,
+) -> PtyTailState:
+    """Classify the CLI's current screen with available CLI corroboration."""
+    return cast(
+        PtyTailState,
+        pty_tail_explain(
+            tail,
+            backend=backend,
+            cli_state_status=cli_state_status,
+        )["outcome"],
+    )
+
+
+def session_cli_state_status(session: Any) -> str | None:
+    """Return one session's normalized CLI-published status, when available."""
+    cli_state = getattr(session, "cli_state", None)
+    if not isinstance(cli_state, dict):
+        return None
+    status = str(cli_state.get("status") or "").strip().lower()
+    return status or None
 
 
 def pty_tail_appears_idle(tail: str, *, backend: str | None = None) -> bool:
@@ -5373,6 +5413,7 @@ class SessionManager:
             pty_tail_explain(
                 tail,
                 backend=session.record.backend,
+                cli_state_status=session_cli_state_status(session),
                 osc_title=getattr(osc_signals, "title", None),
                 osc_progress=getattr(osc_signals, "progress", None),
             )["outcome"],

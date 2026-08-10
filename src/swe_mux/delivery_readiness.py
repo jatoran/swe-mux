@@ -116,11 +116,15 @@ class DeliveryReadinessTracker:
             return cached[2]
 
         from .scrollback import SCREEN_TAIL_BYTES
-        from .session import pty_tail_state
+        from .session import pty_tail_state, session_cli_state_status
 
         try:
             tail = session.scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace")
-            state = pty_tail_state(tail, backend=session.record.backend)
+            state = pty_tail_state(
+                tail,
+                backend=session.record.backend,
+                cli_state_status=session_cli_state_status(session),
+            )
         except (AttributeError, OSError, ValueError):
             state = "unknown"
         if snapshot_max_age > 0:

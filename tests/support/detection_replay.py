@@ -35,6 +35,7 @@ from swe_mux.session import (
     expire_standing_activity,
     note_classifier_blindness,
     pty_tail_state,
+    session_cli_state_status,
     session_is_unwitnessed,
     session_status_health,
     startup_dialog_observation,
@@ -402,6 +403,9 @@ class DetectionReplay:
         elif kind == "pty_tail":
             self.pty_tail = str(step.get("data") or "")
             self.session.scrollback.data = self.pty_tail.encode("utf-8")
+        elif kind == "cli_state":
+            status = str(step.get("status") or "")
+            self.session.cli_state = {"status": status} if status else None
         elif kind == "watchdog":
             await self._watchdog_pass()
         elif kind == "catchup":
@@ -587,7 +591,11 @@ class DetectionReplay:
         # any other watchdog rule and owes nothing to turn state.
         expire_standing_activity(session, now=now)
         stalled = max(0.0, self.clock.monotonic() - session.last_state_change_monotonic)
-        pty_state = pty_tail_state(self.pty_tail, backend=session.record.backend)
+        pty_state = pty_tail_state(
+            self.pty_tail,
+            backend=session.record.backend,
+            cli_state_status=session_cli_state_status(session),
+        )
         unwitnessed = session_is_unwitnessed(session)
         # Startup-dialog tracking and the classifier-drift self-check mirror the
         # production pass through the same shared helpers.

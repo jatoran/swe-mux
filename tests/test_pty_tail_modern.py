@@ -93,6 +93,36 @@ def test_ordering_still_decides_after_normalization() -> None:
     assert pty_tail_state(dialog_then_busy) == "working"
 
 
+def test_cli_waiting_preserves_dialog_across_parallel_tui_redraws() -> None:
+    value = tail("permission-dialog-parallel-redraw.txt")
+
+    raw = pty_tail_explain(value, backend="claude")
+    effective = pty_tail_explain(
+        value,
+        backend="claude",
+        cli_state_status="waiting",
+    )
+
+    # Captured incident shape: raw append order puts spinner animation after a
+    # dialog that remains visible in the rendered terminal cells.
+    assert raw["outcome"] == "working"
+    assert effective["screen_outcome"] == "working"
+    assert effective["outcome"] == "approval"
+    assert effective["outcome_source"] == "cli_state_waiting"
+    assert pty_tail_state(
+        value,
+        backend="claude",
+        cli_state_status="waiting",
+    ) == "approval"
+    # Once Claude leaves its dialog state, the later spinner is valid proof that
+    # work resumed.
+    assert pty_tail_state(
+        value,
+        backend="claude",
+        cli_state_status="busy",
+    ) == "working"
+
+
 def test_window_titles_never_classify_a_frame() -> None:
     # The CLI rewrites the terminal title with the task description while
     # working; title text must not be read as screen content — neither an

@@ -24,6 +24,7 @@ from .session import (
     clear_standing_activity,
     pty_tail_state,
     pty_tail_waiting_on_background,
+    session_cli_state_status,
     set_standing_activity,
     standing_activity_kinds,
     transition_proof,
@@ -1375,6 +1376,7 @@ def session_pty_state(session: Session) -> str:
         return pty_tail_state(
             scrollback.tail_bytes(SCREEN_TAIL_BYTES).decode("utf-8", "replace"),
             backend=session.record.backend,
+            cli_state_status=session_cli_state_status(session),
         )
     except (OSError, ValueError):
         return "unknown"
@@ -1740,6 +1742,7 @@ def cancel_pending_approval(session: Session, reason: str) -> bool:
                 "kind": "approval_stabilization_cancelled",
                 "reason": reason,
                 "source": source_record.get("source"),
+                "tool_use_id": source_record.get("tool_use_id"),
                 "elapsed_seconds": round(elapsed_seconds, 3),
             }
         )
@@ -1768,7 +1771,12 @@ def _note_approval_delegation(session: Session, payload: dict[str, Any]) -> None
     )
 
 
-def note_activity_evidence(session: Session, reason: str) -> bool:
+def note_activity_evidence(
+    session: Session,
+    reason: str,
+    *,
+    tool_use_id: str | None = None,
+) -> bool:
     """Retire an unstabilized approval when the agent is provably still moving.
 
     Cancellation used to be a side effect of `_transition`, which meant every
@@ -1781,9 +1789,16 @@ def note_activity_evidence(session: Session, reason: str) -> bool:
     The PTY veto is the same one `_resume_from_awaiting` applies, and for the same
     reason: a parallel tool's record must not retire a prompt the user can see.
     """
-    if not isinstance(_observation_state(session).get("pending_approval"), dict):
+    pending = _observation_state(session).get("pending_approval")
+    if not isinstance(pending, dict):
         return False
-    if session_pty_state(session) == "approval":
+    approval_tool_use_id = str(pending.get("tool_use_id") or "")
+    matching_tool = bool(
+        approval_tool_use_id and tool_use_id == approval_tool_use_id
+    )
+    if approval_tool_use_id and tool_use_id and not matching_tool:
+        return False
+    if not matching_tool and session_pty_state(session) == "approval":
         return False
     return cancel_pending_approval(session, reason)
 
@@ -1829,6 +1844,7 @@ async def _request_stabilized_approval(
     detail: str,
     source: str,
     evidence: str,
+    tool_use_id: str | None = None,
 ) -> None:
     """Block delivery immediately, but expose approval only after a stable 5 s wait."""
     if getattr(session, "observation_replay", False):
@@ -1885,6 +1901,7 @@ async def _request_stabilized_approval(
             "source": source,
             "evidence": evidence,
             "detail": detail,
+            "tool_use_id": tool_use_id,
         }
         _persist_approval_candidate(session, candidate)
     elapsed_before_start = max(0.0, now_wall - started_at)
@@ -1893,6 +1910,7 @@ async def _request_stabilized_approval(
         "source": source,
         "evidence": evidence,
         "detail": detail,
+        "tool_use_id": tool_use_id,
     }
     state["pending_approval"] = pending
     stabilization_seconds = float(
@@ -1911,6 +1929,7 @@ async def _request_stabilized_approval(
                 "delay_seconds": delay_seconds,
                 "restored": restored,
                 "delegated": delegated,
+                "tool_use_id": tool_use_id,
             }
         )
     # Delivery readiness consumes this internal event. Sounds, UI attention,
@@ -1937,6 +1956,10 @@ async def _request_stabilized_approval(
         _persist_approval_candidate(session, None)
         if session.record.state in {"exited", "crashed"}:
             return
+        if tool_use_id:
+            state["active_approval_tool_use_id"] = tool_use_id
+        else:
+            state.pop("active_approval_tool_use_id", None)
         if transitions is not None:
             transitions.append(
                 {
@@ -1945,6 +1968,7 @@ async def _request_stabilized_approval(
                     "source": source,
                     "evidence": evidence,
                     "gate": gate,
+                    "tool_use_id": tool_use_id,
                     "elapsed_seconds": round(
                         max(0.0, time.monotonic() - float(pending["started"])), 3
                     ),
@@ -2017,6 +2041,7 @@ async def restore_pending_approval(session: Session, events: EventBus) -> bool:
         detail=str(candidate.get("detail") or "Approval needed"),
         source=str(candidate.get("source") or "hook"),
         evidence=str(candidate.get("evidence") or "approval:restored"),
+        tool_use_id=str(candidate.get("tool_use_id") or "") or None,
     )
     return True
 
@@ -2839,9 +2864,22 @@ async def apply_hook_observation(
         # first left the timer to expire on a question nobody was asked.
         # `PreToolUse` is deliberately not evidence here: Codex fires it *before*
         # the permission decision, so it proves an attempt, not an answer.
-        note_activity_evidence(session, f"activity:hook:{event_type}")
+        tool_use_id = str(payload.get("tool_use_id") or "") or None
+        note_activity_evidence(
+            session,
+            f"activity:hook:{event_type}",
+            tool_use_id=tool_use_id,
+        )
         if _transcript_authoritative(session):
             return
+        state = _observation_state(session)
+        if session.record.state == "awaiting" and session.record.awaiting_reason == "approval":
+            active_tool_use_id = str(state.get("active_approval_tool_use_id") or "")
+            if active_tool_use_id and tool_use_id and tool_use_id != active_tool_use_id:
+                return
+            matching_tool = bool(active_tool_use_id and tool_use_id == active_tool_use_id)
+            if not matching_tool and session_pty_state(session) == "approval":
+                return
         await _transition(
             session, events, "working", source="hook", evidence=f"hook:{event_type}"
         )
@@ -2849,6 +2887,11 @@ async def apply_hook_observation(
         tool = str(payload.get("tool_name") or payload.get("message") or "approval")
         if payload.get("omp_event") == "tool_approval_requested":
             cancel_pending_approval(session, "omp_exact_approval")
+            tool_use_id = str(payload.get("tool_use_id") or "")
+            if tool_use_id:
+                _observation_state(session)["active_approval_tool_use_id"] = tool_use_id
+            else:
+                _observation_state(session).pop("active_approval_tool_use_id", None)
             await _transition(
                 session,
                 events,
@@ -2873,9 +2916,11 @@ async def apply_hook_observation(
                 detail=tool,
                 source="hook",
                 evidence=f"hook:{event_type}",
+                tool_use_id=str(payload.get("tool_use_id") or "") or None,
             )
     elif event_type == "approval_resolved":
         cancel_pending_approval(session, "hook:approval_resolved")
+        _observation_state(session).pop("active_approval_tool_use_id", None)
         if session.record.state == "awaiting" and session.record.awaiting_reason == "approval":
             await _transition(
                 session,
@@ -3017,10 +3062,14 @@ async def _transition(
 ) -> bool:
     if getattr(session, "observation_replay", False):
         return False
-    keeps_approval_candidate = state == "awaiting" and awaiting_reason == "approval"
-    if not keeps_approval_candidate and not (
-        state == "working" and session_pty_state(session) == "approval"
-    ):
+    # Working transitions are too coarse to retire a pending approval. The
+    # evidence-producing path above owns that cancellation because it can compare
+    # tool identities and consult the effective screen classifier first.
+    keeps_approval_candidate = (
+        (state == "awaiting" and awaiting_reason == "approval")
+        or state == "working"
+    )
+    if not keeps_approval_candidate:
         cancel_pending_approval(session, f"state_evidence:{state}:{source}")
     # force: interrupt/abort evidence exists only in the transcript; hooks never
     # deliver it, so it may reclaim authority from an earlier hook state. The
@@ -3067,6 +3116,8 @@ async def _transition(
             standing=standing_activity_kinds(session),
             proof=transition_proof(source, inferred),
         )
+    if not (state == "awaiting" and awaiting_reason == "approval"):
+        _observation_state(session).pop("active_approval_tool_use_id", None)
     return True
 
 
