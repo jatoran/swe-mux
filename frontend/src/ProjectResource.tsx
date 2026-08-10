@@ -9,7 +9,6 @@ import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipb
 import { ImageViewer } from './ImageViewer'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useModalFocus } from './modalFocus'
-import { uncommittedEditorText } from './noteComposition'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
@@ -956,14 +955,20 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     // The header no longer carries a close button, so flush any pending edit when the
     // resource unmounts (tab close or reparent) instead of relying on that button.
     //
-    // Rescue the composing run first. Flushing only commits what the editor has handed us,
-    // and text held by an open IME composition never was: Continuity drops it on `destroy()`.
-    // This runs while the element is still live - Preact fires a component's effect cleanups
-    // before unmounting its children, so the editor has not been detached yet.
+    // Commit any open IME composition first. Flushing only sends what the editor has handed
+    // us through `onChange`, and a composing run has not been: it is withheld from the engine
+    // on purpose, so on a phone (where the keyboard holds one open across ordinary typing) the
+    // word being typed would be dropped on teardown.
+    //
+    // Continuity 0.2.35 commits it in `destroy()` too, but that is too late for this host: the
+    // React adapter unbinds its listeners when the ref detaches, and `destroy()` runs a
+    // microtask after the DOM removal that follows, so the change it emits reaches nobody.
+    // Calling it here lands while the listeners are still bound, because Preact runs a
+    // component's effect cleanups before it unmounts that component's children. The commit
+    // emits `continuity-change` synchronously, so the text is in the queue before the flush.
     return()=>{
       unsubscribe()
-      const composing=uncommittedEditorText(editorElement.current)
-      if(composing!==null)noteSaveQueue.submit(noteKey,composing)
+      editorElement.current?.commitComposition()
       noteSaveQueue.flush(noteKey)
     }
   },[autosaved,noteKey])

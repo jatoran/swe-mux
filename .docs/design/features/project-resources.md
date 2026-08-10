@@ -106,20 +106,27 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.25 editor owns mobile touch arbitration. `pointerdown` does not
+- The vendored Continuity 0.2.35 editor owns mobile touch arbitration. `pointerdown` does not
   focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
   cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
   editor's shadow DOM or duplicate caret hit-testing for this behavior.
+- 0.2.35 makes that keyboard gate conditional rather than reflexive: it closes only when there is
+  no keyboard to lose, judged from typing intent plus visual-viewport occlusion, so a long-press
+  or an adjust-handle drag mid-sentence no longer dismisses a keyboard already up. A first tap
+  inside an existing selection now buys the keyboard without collapsing the range, once per
+  selection and on coarse pointers only. Both are editor-internal; no host change was required.
 - Text held by an open IME composition has not reached the engine, so it has not reached the
-  autosave queue either, and the editor's `destroy()` discards it. Because Android keyboards hold
-  one composition open across ordinary typing, that lost run is simply the word being typed:
-  closing the drawer mid-sentence dropped it, and flushing on unmount could not help because the
-  editor never handed it over. Unmount therefore rescues it first (`noteComposition.ts`), reading
-  the editor's textarea - the exported `input` shadow part, which holds the whole document plus
-  the live composing run - and submitting that to the queue before the flush. The rescue is gated
-  on the public `composing` flag: outside a composition the engine is the authority and the
-  textarea only its mirror. **Open ask against the SDK:** `destroy()` should commit an open
-  composition (and `commitComposition()` should be public) so this host-side rescue can retire.
+  autosave queue either. Because Android keyboards hold one composition open across ordinary
+  typing, that run is simply the word being typed: closing the drawer mid-sentence dropped it,
+  and flushing on unmount could not help because the editor never handed it over. Unmount now
+  calls the editor's `commitComposition()` before flushing, which folds the run in and emits its
+  `continuity-change` synchronously, so the queue has the text before the flush sends it.
+- Continuity 0.2.35 also commits an open composition inside `destroy()`, but this host cannot
+  rely on that: the React adapter unbinds its listeners when the ref detaches, and `destroy()`
+  runs a microtask after the DOM removal that follows, so the change it emits reaches nobody
+  here. The explicit call lands while the listeners are still bound, because Preact runs a
+  component's effect cleanups before unmounting that component's children. Hosts that bind
+  directly to the element and never detach need nothing.
 - The SDK also owns two further touch behaviors we cannot reach: Enter continues a list
   marker even while an IME composition is open (Android keyboards hold one across ordinary
   typing, and the editor's `beforeinput` router used to skip its line-break entries for
@@ -250,7 +257,7 @@ The file tree and notes collection are utility-drawer tabs.
   trail does not cover it, and the section's own content fills the screen below it.
 - The editor's `revealRange` is not how heading jumps get there because revealing a range also
   makes it the primary selection.
-  Continuity 0.2.25 accurately reveals find results against projected geometry on desktop and
+  Continuity 0.2.35 accurately reveals find results against projected geometry on desktop and
   coarse pointers, but a heading jump must remain viewport-only and retain one source row for
   the heading trail.
 - No exported geometry converts pixels to lines outside the editor, so the jump is a feedback
@@ -494,7 +501,6 @@ on read (`workspace-layout.md`).
 - `frontend/src/layout.ts` (`openAnchorId`, `openTab`)
 - `frontend/src/editorText.ts`
 - `frontend/src/noteSaveQueue.ts`
-- `frontend/src/noteComposition.ts` (rescuing an open IME composition at editor teardown)
 - `frontend/src/noteSelection.ts` (selection slicing, message composition, delivery payloads)
 - `frontend/src/agentTargets.ts` (which sessions may receive a send)
 - `frontend/src/SendToAgentPicker.tsx`
