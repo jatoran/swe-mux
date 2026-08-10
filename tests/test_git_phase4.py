@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from swe_mux import git_monitor, git_review
+from swe_mux.event_bus import EventBus
 from swe_mux.git_monitor import read_git_reading, read_git_state, read_unique_git_states
 
 _FULL_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
@@ -238,6 +241,80 @@ async def test_unique_git_poll_deduplicates_roots(monkeypatch: pytest.MonkeyPatc
     result = await read_unique_git_states(["one", "one", "two"])
     assert set(result) == {"one", "two"}
     assert sorted(calls) == ["one", "two"]
+
+
+class _FakeSession:
+    """The three attributes `GitMonitor._poll` touches on a session."""
+
+    def __init__(self, cwd: str, attached: bool, git: git_monitor.GitState) -> None:
+        self.subscribers = [object()] if attached else []
+        self.record = SimpleNamespace(id=cwd, git=git, git_cwd=cwd)
+        self.published = 0
+
+    def publish_update(self) -> None:
+        self.published += 1
+
+
+def _monitor(sessions: list[_FakeSession]) -> git_monitor.GitMonitor:
+    manager = cast(Any, SimpleNamespace(sessions={str(i): s for i, s in enumerate(sessions)}))
+    return git_monitor.GitMonitor(manager, EventBus())
+
+
+@pytest.mark.asyncio
+async def test_detached_sessions_are_swept_so_stale_git_state_cannot_outlive_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A closed pane must not freeze a derived value forever.
+
+    `GitState` is a cache of an observation, living on a record that outlives the
+    daemon that wrote it. Without a sweep, a value computed by code that has since
+    been fixed survives the fix for as long as the session lives — which is how a
+    wrong worktree name kept rendering after its bug was gone.
+    """
+    fresh = git_monitor.GitState(branch="master", worktree=None)
+
+    async def fake_read(cwds):  # type: ignore[no-untyped-def]
+        return {cwd: git_monitor.GitReading(fresh, git_monitor.GitEvidence()) for cwd in cwds}
+
+    monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
+    stale = git_monitor.GitState(branch="master", worktree="swe-mux")
+    attached = _FakeSession("C:/repo", True, stale)
+    detached = _FakeSession("C:/repo", False, stale)
+    monitor = _monitor([attached, detached])
+
+    # The first tick is always a sweep: state adopted from a previous daemon is
+    # re-derived by this one rather than trusted.
+    await monitor._poll()
+    assert attached.record.git.worktree is None
+    assert detached.record.git.worktree is None
+
+    detached.record.git = stale
+    await monitor._poll()
+    assert detached.record.git.worktree == "swe-mux", "ordinary ticks stay attached-only"
+
+    for _ in range(git_monitor.GitMonitor.DETACHED_SWEEP_EVERY - 1):
+        await monitor._poll()
+    assert detached.record.git.worktree is None, "the sweep must come back around"
+
+
+@pytest.mark.asyncio
+async def test_sweeping_the_fleet_costs_one_read_per_working_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What makes the sweep affordable: cost scales with cwds, not sessions."""
+    seen: list[list[str]] = []
+
+    async def fake_read(cwds):  # type: ignore[no-untyped-def]
+        listed = list(cwds)
+        seen.append(listed)
+        empty = git_monitor.GitReading(git_monitor.GitState(), git_monitor.GitEvidence())
+        return dict.fromkeys(listed, empty)
+
+    monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
+    fleet = [_FakeSession("C:/repo", False, git_monitor.GitState()) for _ in range(30)]
+    fleet.append(_FakeSession("C:/other", False, git_monitor.GitState()))
+    await _monitor(fleet)._poll()
+    assert sorted(seen[0]) == ["C:/other", "C:/repo"]
 
 
 @pytest.mark.asyncio

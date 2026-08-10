@@ -278,11 +278,31 @@ async def read_unique_git_readings(cwds: Iterable[str]) -> dict[str, GitReading]
 
 
 class GitMonitor:
+    """Keeps every session's `GitState` converging on what git actually says.
+
+    Attached sessions are polled at `cadence`; every session is swept far more
+    slowly. The sweep is not a nicety: `GitState` is a *cache of a derived
+    observation* living on a record that outlives the daemon that wrote it, so a
+    session whose pane is closed used to freeze whatever the last poll computed,
+    for as long as the session lived. A value derived by code that has since been
+    fixed then survives the fix — which is exactly how a wrong `worktree` name
+    kept rendering after the bug that produced it was gone.
+
+    The sweep is affordable because `read_unique_git_readings` deduplicates by
+    cwd: a fleet of thirty sessions in one checkout is one git read, not thirty.
+    Cost scales with distinct working directories, which is why polling more
+    sessions is close to free while polling more often would not be.
+    """
+
+    #: Sweeps including detached sessions, in cadence ticks. 12 * 5 s = one minute.
+    DETACHED_SWEEP_EVERY = 12
+
     def __init__(self, sessions: SessionManager, events: EventBus, cadence: float = 5.0) -> None:
         self.sessions = sessions
         self.events = events
         self.cadence = cadence
         self._task: asyncio.Task[None] | None = None
+        self._sweep = 0
 
     def start(self) -> None:
         self._task = background.start(GIT_MONITOR_LOOP, self._run)
@@ -297,12 +317,24 @@ class GitMonitor:
                 await self._poll()
             await asyncio.sleep(self.cadence)
 
-    async def _poll(self) -> None:
-        attached = [
-            session for session in self.sessions.sessions.values() if session.subscribers
+    def _due(self) -> list[Session]:
+        """Attached sessions every tick; the whole fleet on a sweep tick.
+
+        The first tick after a daemon start is always a sweep, so state adopted
+        from a previous daemon is re-derived by *this* daemon's code rather than
+        trusted indefinitely.
+        """
+        self._sweep += 1
+        everything = self._sweep % self.DETACHED_SWEEP_EVERY == 1
+        return [
+            session
+            for session in self.sessions.sessions.values()
+            if session.subscribers or everything
         ]
+
+    async def _poll(self) -> None:
         by_cwd: dict[str, list[Session]] = {}
-        for session in attached:
+        for session in self._due():
             by_cwd.setdefault(session.record.git_cwd, []).append(session)
         readings = await read_unique_git_readings(by_cwd)
         for cwd, sessions in by_cwd.items():
