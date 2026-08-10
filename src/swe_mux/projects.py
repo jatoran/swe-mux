@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 import uuid
@@ -72,6 +73,7 @@ class ProjectManager:
         self.projects: dict[str, ProjectRecord] = {}
         self.groups: dict[str, ProjectGroupRecord] = {}
         self._order_lock = asyncio.Lock()
+        self._project_write_lock = asyncio.Lock()
 
     def ordered_projects(self) -> list[ProjectRecord]:
         return sorted(self.projects.values(), key=lambda item: (item.position, item.name, item.id))
@@ -151,7 +153,28 @@ class ProjectManager:
             await self._apply_order(ordered_ids)
             return self.ordered_projects()
 
+    async def touch_used(
+        self, project_id: str, *, used_at: float | None = None
+    ) -> ProjectRecord:
+        """Advance the shared explicit-use timestamp for one Project."""
+
+        stamp = time.time() if used_at is None else float(used_at)
+        if not math.isfinite(stamp) or stamp < 0:
+            raise ValueError("project use timestamp must be a non-negative finite number")
+        async with self._project_write_lock:
+            project = self.projects[project_id]
+            next_stamp = max(project.last_used_at, stamp)
+            if next_stamp == project.last_used_at:
+                return project
+            await self.history.set_project_last_used(project_id, next_stamp)
+            project.last_used_at = next_stamp
+            return project
+
     async def update(self, project_id: str, **changes: object) -> ProjectRecord:
+        async with self._project_write_lock:
+            return await self._update(project_id, **changes)
+
+    async def _update(self, project_id: str, **changes: object) -> ProjectRecord:
         project = self.projects[project_id]
         if "position" in changes:
             raise ValueError("use the Project order endpoint to change position")

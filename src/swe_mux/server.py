@@ -624,6 +624,7 @@ def create_app(
             web.get("/api/projects", list_projects),
             web.post("/api/projects", create_project),
             web.put("/api/projects/order", reorder_projects),
+            web.post("/api/projects/{project_id}/used", record_project_use),
             web.patch("/api/projects/{project_id}", patch_project),
             web.delete("/api/projects/{project_id}", delete_project),
             web.get("/api/projects/{project_id}/actions", list_project_actions),
@@ -5328,6 +5329,27 @@ async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
 
 async def list_projects(request: web.Request) -> web.Response:
     return json_response(await _projects_payload(request))
+
+
+_PROJECT_USE_REASONS = frozenset({"prompt_submitted", "session_started"})
+
+
+async def record_project_use(request: web.Request) -> web.Response:
+    """Persist an explicit user action as shared Project recency evidence."""
+
+    body = await request.json()
+    reason = str(body.get("reason") or "")
+    if reason not in _PROJECT_USE_REASONS:
+        raise ValueError({"reason": "must be prompt_submitted or session_started"})
+    project = await request.app["projects"].touch_used(request.match_info["project_id"])
+    await request.app["events"].emit(
+        "project_used",
+        source="user",
+        project_id=project.id,
+        last_used_at=project.last_used_at,
+        reason=reason,
+    )
+    return json_response({"project_id": project.id, "last_used_at": project.last_used_at})
 
 
 async def _project_snapshot(  # type: ignore[no-untyped-def]

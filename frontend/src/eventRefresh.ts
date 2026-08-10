@@ -16,6 +16,7 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'notification',
   'notification_created',
   'project_files_changed',
+  'project_used',
   'queue_delivery',
   'queue_updated',
   'settings_changed',

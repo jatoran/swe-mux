@@ -5,7 +5,7 @@ import {
   EMPTY_SIDEBAR_ORDER, bucketRecency, isBucketCollapsed,
   loadSidebarOrder, mergeVisibleOrder, projectRecency, projectSortLabel,
   pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder, setAllBucketsCollapsed,
-  setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed, touchProjectRecency,
+  setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
 } from '../src/projectSort.ts'
 
 const project = (id: string, name: string, extra: Partial<Project> = {}) =>
@@ -20,7 +20,6 @@ test('sidebar order load tolerates missing, malformed, and unknown modes', () =>
   assert.deepEqual(loadSidebarOrder('{"projectSort":"name","ungroupedIndex":1}'), {
     projectSort: 'name',
     sectionSort: 'custom',
-    recentProjects: [],
     collapsed: [],
   })
   assert.equal(loadSidebarOrder('{"projectSort":"nonsense"}').projectSort, 'custom')
@@ -49,9 +48,11 @@ test('a legacy per-bucket sort map migrates to the single mode that replaced it'
 
 test('sidebar order round-trips', () => {
   const stored = prefs({
-    projectSort: 'name', sectionSort: 'activity', recentProjects: ['p2', 'p1'], collapsed: ['g2'],
+    projectSort: 'name', sectionSort: 'activity', collapsed: ['g2'],
   })
   assert.deepEqual(loadSidebarOrder(serializeSidebarOrder(stored)), stored)
+  // The former browser-local MRU is ignored and removed on the next write.
+  assert.equal(serializeSidebarOrder(loadSidebarOrder('{"recentProjects":["p2","p1"]}')).includes('recentProjects'), false)
 })
 
 test('collapsing a Group toggles without mutating the input', () => {
@@ -81,7 +82,7 @@ test('project sort mode set/read, keeping identity when unchanged', () => {
 })
 
 test('pruneSidebarOrder drops fold state for Groups that no longer exist', () => {
-  const stored = prefs({ collapsed: ['g1', 'gone'], recentProjects: ['p1', 'deleted'] })
+  const stored = prefs({ collapsed: ['g1', 'gone'] })
   const pruned = pruneSidebarOrder(stored, ['g1'])
   // A deleted Group id must not be inherited by a recreated Group with the same id.
   assert.deepEqual(pruned.collapsed, ['g1'])
@@ -90,19 +91,12 @@ test('pruneSidebarOrder drops fold state for Groups that no longer exist', () =>
 
 test('pruneSidebarOrder is the identity before the Group registry has loaded', () => {
   // The caller holds an empty array from mount until the first fetch resolves. Reading
-  // that as an empty registry wiped fold state and the MRU on every page load, and
-  // persisted the wipe, so "not loaded" has to be its own value.
-  const stored = prefs({ collapsed: ['g1'], recentProjects: ['p1', 'p2'] })
+  // that as an empty registry wiped fold state on every page load and persisted the
+  // wipe, so "not loaded" has to be its own value.
+  const stored = prefs({ collapsed: ['g1'] })
   assert.equal(pruneSidebarOrder(stored, null), stored)
   // An empty registry that really is empty stays destructive.
   assert.deepEqual(pruneSidebarOrder(stored, []).collapsed, [])
-})
-
-test('pruneSidebarOrder never touches the recency MRU', () => {
-  // A stale id is inert: `projectRecency` builds a lookup a deleted Project never hits.
-  // Filtering it here is what made an empty snapshot destroy the whole preference.
-  const stored = prefs({ recentProjects: ['p1', 'deleted'] })
-  assert.deepEqual(pruneSidebarOrder(stored, []).recentProjects, ['p1', 'deleted'])
 })
 
 test('custom order is a pass-through of the manual order', () => {
@@ -132,33 +126,15 @@ test('recent-use ordering is newest first and falls back to manual order on a ti
   assert.deepEqual(sortProjects(items, 'activity', recency).map(item => item.id), ['a', 'c', 'b'])
 })
 
-test('explicit Project recency is persisted as a deduplicated MRU', () => {
-  const first = touchProjectRecency(EMPTY_SIDEBAR_ORDER, 'p1')
-  const second = touchProjectRecency(first, 'p2')
-  assert.deepEqual(second.recentProjects, ['p2', 'p1'])
-  assert.equal(touchProjectRecency(second, 'p2'), second)
-  assert.deepEqual(touchProjectRecency(second, 'p1').recentProjects, ['p1', 'p2'])
-  assert.deepEqual(loadSidebarOrder('{"recentProjects":["p2","p2",7,"p1",""]}').recentProjects, ['p2', 'p1'])
-})
-
-test('the recency MRU is bounded, dropping the least recent end', () => {
-  // Nothing filters this list against the live Projects, so the cap is the only bound.
-  const ids = Array.from({ length: 140 }, (_, index) => `p${index}`)
-  const filled = ids.reduce(touchProjectRecency, EMPTY_SIDEBAR_ORDER)
-  assert.equal(filled.recentProjects.length, 100)
-  assert.equal(filled.recentProjects[0], 'p139')
-  assert.equal(filled.recentProjects.at(-1), 'p40')
-  // A blob written by a build without the cap is trimmed on read.
-  const stored = JSON.stringify({ recentProjects: ids })
-  assert.equal(loadSidebarOrder(stored).recentProjects.length, 100)
-  assert.equal(loadSidebarOrder(stored).recentProjects[0], 'p0')
-})
-
-test('projectRecency ranks only ids recorded by explicit user actions', () => {
-  const recency = projectRecency(['p2', 'p1'])
-  assert.equal(recency.get('p2'), 2)
-  assert.equal(recency.get('p1'), 1)
-  assert.equal(recency.has('p3'), false)
+test('projectRecency uses shared daemon timestamps', () => {
+  const recency = projectRecency([
+    project('p2', 'Two', { last_used_at: 200 }),
+    project('p1', 'One', { last_used_at: 100 }),
+    project('p3', 'Three'),
+  ])
+  assert.equal(recency.get('p2'), 200)
+  assert.equal(recency.get('p1'), 100)
+  assert.equal(recency.get('p3'), 0)
 })
 
 const bucket = (id: string, name: string, items: string[]) =>

@@ -138,6 +138,9 @@ export interface Project {
    *  dated them and never observed in history. Sidebar date ordering reads 0 as
    *  unknown and sorts it last. */
   created_at?:number
+  /** Latest explicit prompt submission or user-initiated session start, persisted
+   *  by the daemon and shared by every client. */
+  last_used_at?:number
   /** Derived server-side from history: the latest session activity in this Project,
    *  epoch seconds, 0 if it has never run one. */
   last_activity?:number

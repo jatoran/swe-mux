@@ -22,12 +22,6 @@ export type ProjectSortMode =
 export const SIDEBAR_ORDER_KEY = 'mux.sidebar.order.v1'
 const LEGACY_UNGROUPED_BUCKET_ID = 'ungrouped'
 
-/** Upper bound on the stored MRU. The list is never filtered against the live
- *  Projects (see `pruneSidebarOrder`), so this cap is the only thing that keeps a
- *  device-local preference from growing without limit. Far above the number of
- *  Projects any sidebar can hold, so it bounds the storage rather than the feature. */
-const RECENT_PROJECT_LIMIT = 100
-
 export interface ProjectSortOption {
   id: ProjectSortMode
   label: string
@@ -80,9 +74,6 @@ export interface SidebarOrderPrefs {
   projectSort: ProjectSortMode
   /** How Groups are ordered. */
   sectionSort: SectionSortMode
-  /** Project ids in most-recent-first order. Only explicit prompt submissions and
-   *  session starts update this device-local navigation preference. */
-  recentProjects: string[]
   /** Group ids folded shut. Presentation only: a collapsed Group's Projects
    *  keep their slot in the rail, the numbered shortcuts, and every order. */
   collapsed: string[]
@@ -91,7 +82,6 @@ export interface SidebarOrderPrefs {
 export const EMPTY_SIDEBAR_ORDER: SidebarOrderPrefs = {
   projectSort: 'custom',
   sectionSort: 'custom',
-  recentProjects: [],
   collapsed: [],
 }
 
@@ -114,18 +104,13 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return EMPTY_SIDEBAR_ORDER
     const record = parsed as {
       projectSort?: unknown; sort?: unknown
-      sectionSort?: unknown; recentProjects?: unknown; collapsed?: unknown
+      sectionSort?: unknown; collapsed?: unknown
     }
-    const recentProjects = Array.isArray(record.recentProjects)
-      ? [...new Set(record.recentProjects.filter((id): id is string => typeof id === 'string' && !!id))]
-        .slice(0, RECENT_PROJECT_LIMIT)
-      : []
     return {
       projectSort: isProjectSortMode(record.projectSort)
         ? record.projectSort
         : migrateBucketSort(record.sort) || 'custom',
       sectionSort: isSectionSortMode(record.sectionSort) ? record.sectionSort : 'custom',
-      recentProjects,
       collapsed: Array.isArray(record.collapsed)
         ? record.collapsed.filter((id): id is string =>
           typeof id === 'string' && id !== LEGACY_UNGROUPED_BUCKET_ID)
@@ -142,7 +127,6 @@ export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
   return JSON.stringify({
     projectSort: prefs.projectSort,
     sectionSort: prefs.sectionSort,
-    recentProjects: prefs.recentProjects,
     collapsed: prefs.collapsed,
   })
 }
@@ -155,12 +139,7 @@ export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
  *  destructive by design, which is exactly why the not-yet-loaded case may not be
  *  spelled as one: the caller mounts holding `[]`, so encoding "unloaded" that way
  *  wiped the whole preference on every page load and persisted the wipe.
- *
- *  `recentProjects` is deliberately not pruned against the live Projects. A stale id
- *  is inert: `projectRecency` builds a lookup a deleted Project never hits, and it
- *  cannot perturb the relative order of the live ones. Filtering it bought nothing
- *  and cost a destructive write on any empty snapshot; `RECENT_PROJECT_LIMIT` bounds
- *  the list instead. */
+ */
 export function pruneSidebarOrder(
   prefs: SidebarOrderPrefs,
   groupIds: string[] | null,
@@ -206,23 +185,9 @@ export function setProjectSortMode(
   return prefs.projectSort === mode ? prefs : { ...prefs, projectSort: mode }
 }
 
-/** Move one Project to the head of the explicit-action MRU without churning state
- *  when it is already first. Opening or focusing anything never calls this helper.
- *  The tail past `RECENT_PROJECT_LIMIT` is dropped here rather than by any live-set
- *  filter, so the list stays bounded without ever being emptied. */
-export function touchProjectRecency(prefs: SidebarOrderPrefs, projectId: string): SidebarOrderPrefs {
-  if (!projectId || prefs.recentProjects[0] === projectId) return prefs
-  return {
-    ...prefs,
-    recentProjects: [projectId, ...prefs.recentProjects.filter(id => id !== projectId)]
-      .slice(0, RECENT_PROJECT_LIMIT),
-  }
-}
-
-/** Convert most-recent-first ids into descending ranks consumed by the stable sort. */
-export function projectRecency(recentProjects: string[]): Map<string, number> {
-  const size = recentProjects.length
-  return new Map(recentProjects.map((id, index) => [id, size - index]))
+/** Project recency is daemon-owned and already comparable as epoch seconds. */
+export function projectRecency(projects: Project[]): Map<string, number> {
+  return new Map(projects.map(project => [project.id, project.last_used_at || 0]))
 }
 
 const byName = (a: Project, b: Project) =>
