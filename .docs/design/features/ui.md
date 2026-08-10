@@ -175,6 +175,9 @@ responsive controls.
   can show `5h/weekly[/fable]` while Codex shows only `weekly` when no 5-hour window is reported.
   Missing windows do not render placeholder dashes.
   The provider identity column has a fixed width so its mark stays left-aligned across rows with different window counts.
+  Every window column is a fixed width too, and the row ends in a filler track that absorbs the sidebar's spare width.
+  Sharing one track width is what makes the two provider rows readable as a table: while the columns were `1fr`, a widened sidebar was divided into three tracks on the row reporting Fable and two on the row that was not, so the same reading sat at a different offset in each row and both drifted away from the identity mark.
+  Column contents are start-aligned for the same reason - a centred reading moves whenever its neighbour's width changes.
   Visible percentage signs distinguish usage readings from reset countdowns, while the tooltip names each reported window.
   Each window is banded on its own, so the breakdown says *which* one is hot.
   The weekly reset countdown stays on a second line beneath: "22% used" answers a different question from "and it clears in 4d12h".

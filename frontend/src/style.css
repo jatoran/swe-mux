@@ -156,12 +156,19 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-summary>button.untracked .quota-account{color:var(--muted)}
 .account-summary>button.external .quota-account{color:var(--amber)}
 .account-summary>button.quota-reset-indicator{grid-column:1/-1;border-left:3px solid #a855f7;background:#6b21a822}.account-summary>button.quota-reset-indicator span,.account-summary>button.quota-reset-indicator strong{color:#d8b4fe}
+/* Metric columns are a fixed width rather than `1fr`, and the row ends in a filler
+   track that swallows every spare pixel. Sharing one track width is what lets the
+   Claude and Codex rows line their numbers up: with `1fr` metrics, a widened sidebar
+   was divided into three tracks on the row that reports Fable and two on the row that
+   does not, so the same reading sat at a different offset in each and both drifted
+   away from the glyph. `34px` holds the widest value either line can print - `23h59m`
+   above `100%` at 8px monospace. */
 .quota-grid{min-width:0;display:grid;align-items:stretch;column-gap:7px;color:var(--muted);white-space:nowrap;text-transform:none}
 .quota-grid-0{grid-template-columns:28px}
-.quota-grid-1{grid-template-columns:28px minmax(34px,1fr)}
-.quota-grid-2{grid-template-columns:28px repeat(2,minmax(34px,1fr))}
-.quota-grid-3{grid-template-columns:28px repeat(3,minmax(34px,1fr))}
-.quota-grid-column{min-width:0;display:grid;grid-template-rows:1fr 1fr;align-items:center;justify-items:center;line-height:1.15}
+.quota-grid-1{grid-template-columns:28px 34px minmax(0,1fr)}
+.quota-grid-2{grid-template-columns:28px repeat(2,34px) minmax(0,1fr)}
+.quota-grid-3{grid-template-columns:28px repeat(3,34px) minmax(0,1fr)}
+.quota-grid-column{min-width:0;display:grid;grid-template-rows:1fr 1fr;align-items:center;justify-items:start;line-height:1.15}
 .quota-grid-column>*{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}
 .quota-grid-identity .provider-glyph{display:grid;place-items:center;color:var(--accent);font-style:normal}
 .quota-grid-identity .provider-glyph.claude{color:#d49a78}
