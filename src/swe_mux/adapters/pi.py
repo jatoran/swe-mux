@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -75,11 +75,19 @@ class PiAdapter(BackendAdapter):
         default_args: list[str] | None = None,
         *,
         data_home: Path | None = None,
+        command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
+        # npm installs pi as a `.cmd` batch shim on Windows, which ConPTY cannot
+        # execute. Without a resolver the pane opens and immediately dies with
+        # "The system cannot find the file specified".
+        self.command_resolver = command_resolver
         self._model_context_windows: dict[tuple[str, str], int] | None = None
+
+    def _resolve(self, executable: str) -> tuple[str, tuple[str, ...]]:
+        return self.command_resolver(executable) if self.command_resolver else (executable, ())
 
     @property
     def data_home(self) -> Path:
@@ -95,18 +103,23 @@ class PiAdapter(BackendAdapter):
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         del sid
+        executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
-            opts.exe or self.default_exe,
-            tuple(self._with_hook([*self.default_args, *opts.args])),
+            executable,
+            (*prefix, *self._with_hook([*self.default_args, *opts.args])),
             {},
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
         # pi resumes by id or path through `--session`; `--resume` is its
         # interactive picker and would sit waiting for a keystroke.
+        executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
-            opts.exe or self.default_exe,
-            tuple(self._with_hook(["--session", native_id, *self.default_args, *opts.args])),
+            executable,
+            (
+                *prefix,
+                *self._with_hook(["--session", native_id, *self.default_args, *opts.args]),
+            ),
             {},
         )
 

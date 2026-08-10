@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from ..harness import descriptor
@@ -91,11 +91,18 @@ class OpenCodeAdapter(BackendAdapter):
         *,
         data_home: Path | None = None,
         data_dir: Path | None = None,
+        command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
         self._config_root = data_dir / "opencode-configs" if data_dir else None
+        # npm installs opencode as a `.cmd` batch shim wrapping the real
+        # platform binary, and ConPTY cannot execute a batch shim.
+        self.command_resolver = command_resolver
+
+    def _resolve(self, executable: str) -> tuple[str, tuple[str, ...]]:
+        return self.command_resolver(executable) if self.command_resolver else (executable, ())
 
     @property
     def data_home(self) -> Path:
@@ -130,16 +137,18 @@ class OpenCodeAdapter(BackendAdapter):
         return {"OPENCODE_CONFIG": str(config)} if config is not None else {}
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
+        executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
-            opts.exe or self.default_exe,
-            tuple([*self.default_args, *opts.args]),
+            executable,
+            (*prefix, *self.default_args, *opts.args),
             self._env(opts.session_id or sid),
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        executable, prefix = self._resolve(opts.exe or self.default_exe)
         return SpawnSpec(
-            opts.exe or self.default_exe,
-            tuple(["--session", native_id, *self.default_args, *opts.args]),
+            executable,
+            (*prefix, "--session", native_id, *self.default_args, *opts.args),
             self._env(opts.session_id or native_id),
         )
 

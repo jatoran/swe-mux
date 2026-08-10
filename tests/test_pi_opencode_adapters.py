@@ -162,6 +162,109 @@ def test_registry_builds_both_adapters_from_their_descriptors(tmp_path: Path) ->
     assert opencode.name == "opencode"
 
 
+NODE_SHIM = """@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\\node.exe" (
+  SET "_prog=%dp0%\\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  """ + (
+    '"%dp0%\\node_modules\\pkg\\dist\\cli.js" %*\n'
+)
+
+BINARY_SHIM = """@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\\node_modules\\pkg\\bin\\tool.exe"   %*
+"""
+
+
+def _write_shim(root: Path, name: str, body: str, target: Path) -> Path:
+    shim = root / name
+    shim.write_text(body, encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("", encoding="utf-8")
+    return shim
+
+
+def test_npm_binary_shim_resolves_to_the_real_executable(tmp_path: Path) -> None:
+    """ConPTY cannot execute a `.cmd`; spawning one is what closed the pane."""
+    from swe_mux.launchers import resolve_npm_shim_pty_command
+
+    target = tmp_path / "node_modules" / "pkg" / "bin" / "tool.exe"
+    shim = _write_shim(tmp_path, "tool.cmd", BINARY_SHIM, target)
+    assert resolve_npm_shim_pty_command(str(shim), windows=True) == (str(target), ())
+
+
+def test_npm_node_shim_resolves_to_node_plus_entrypoint(tmp_path: Path) -> None:
+    from swe_mux.launchers import resolve_npm_shim_pty_command
+
+    target = tmp_path / "node_modules" / "pkg" / "dist" / "cli.js"
+    shim = _write_shim(tmp_path, "tool.cmd", NODE_SHIM, target)
+    node = tmp_path / "node.exe"
+    node.write_text("", encoding="utf-8")
+    assert resolve_npm_shim_pty_command(str(shim), windows=True) == (
+        str(node),
+        (str(target),),
+    )
+
+
+def test_npm_shim_resolution_passes_through_a_real_executable(tmp_path: Path) -> None:
+    from swe_mux.launchers import resolve_npm_shim_pty_command
+
+    exe = tmp_path / "already.exe"
+    exe.write_text("", encoding="utf-8")
+    assert resolve_npm_shim_pty_command(str(exe), windows=True) == (str(exe), ())
+
+
+def test_npm_shim_resolution_leaves_an_unreadable_shim_alone(tmp_path: Path) -> None:
+    """An unrecognized shim falls through rather than guessing a target."""
+    from swe_mux.launchers import resolve_npm_shim_pty_command
+
+    shim = tmp_path / "weird.cmd"
+    shim.write_text("@echo off\r\necho nothing here\r\n", encoding="utf-8")
+    assert resolve_npm_shim_pty_command(str(shim), windows=True) == (str(shim), ())
+
+
+def test_pi_spawn_applies_the_resolver_prefix_before_its_own_flags(tmp_path: Path) -> None:
+    adapter = PiAdapter(
+        "pi",
+        data_home=tmp_path,
+        command_resolver=lambda _exe: ("node.exe", ("cli.js",)),
+    )
+    spec = adapter.spawn_spec("sid", SpawnOptions(cwd=tmp_path))
+    assert spec.executable == "node.exe"
+    # The entrypoint must precede --extension or node would treat the flag as its own.
+    assert spec.argv[0] == "cli.js"
+    assert spec.argv[1] == "--extension"
+
+
+def test_opencode_resume_applies_the_resolver_prefix_before_session(tmp_path: Path) -> None:
+    adapter = OpenCodeAdapter(
+        "opencode",
+        data_home=tmp_path,
+        command_resolver=lambda _exe: ("opencode.exe", ()),
+    )
+    spec = adapter.resume_spec("ses_abc", SpawnOptions(cwd=tmp_path))
+    assert spec.executable == "opencode.exe"
+    assert spec.argv[:2] == ("--session", "ses_abc")
+
+
 def test_pi_and_omp_resolve_separate_default_homes() -> None:
     """They share `PI_CODING_AGENT_DIR`, but their defaults must not collide."""
     assert descriptor("pi").data_home() != descriptor("omp").data_home()

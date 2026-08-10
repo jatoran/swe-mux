@@ -59,7 +59,12 @@ def build_agent_adapter(
         # carry no MCP page and its dist references none), so there is nothing
         # to register the mux server with. Extension-registered native tools are
         # the route if that surface is ever wanted.
-        return PiAdapter(executable, args, data_home=harness.data_home())
+        return PiAdapter(
+            executable,
+            args,
+            data_home=harness.data_home(),
+            command_resolver=command_resolver,
+        )
     if harness.adapter_family == "opencode":
         # No `mcp_url` yet either: opencode does have MCP, but registering it
         # belongs with the observation work rather than the launch path.
@@ -68,6 +73,7 @@ def build_agent_adapter(
             args,
             data_home=harness.data_home(),
             data_dir=data_dir,
+            command_resolver=command_resolver,
         )
     assert_never(harness.adapter_family)
 

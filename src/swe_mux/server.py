@@ -87,7 +87,12 @@ from .keybindings import (
     keybinding_policy,
     normalize_binding,
 )
-from .launchers import create_agent_shims, resolve_codex_pty_command, resolve_command
+from .launchers import (
+    create_agent_shims,
+    resolve_codex_pty_command,
+    resolve_command,
+    resolve_npm_shim_pty_command,
+)
 from .layouts import attach_leaf, attach_terminal, stack_leaf
 from .lifecycle import HEARTBEAT_INTERVAL_SECONDS, daemon_clean_exit, daemon_started, heartbeat
 from .logsetup import current_log_level, set_log_level
@@ -933,8 +938,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             args=config.harness_args[name],
             data_dir=config.data_dir,
             mcp_url=mcp_url,
+            # Codex keeps its own resolver: it knows the `@openai/codex`
+            # entrypoint directly and is pinned by its own tests. Every other
+            # npm-shipped harness reads its `.cmd` shim generically.
             command_resolver=(
-                resolve_codex_pty_command if harness.adapter_family == "codex" else None
+                resolve_codex_pty_command
+                if harness.adapter_family == "codex"
+                else resolve_npm_shim_pty_command
             ),
         )
     child_env = create_agent_shims(
