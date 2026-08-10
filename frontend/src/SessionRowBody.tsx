@@ -45,6 +45,17 @@ function diffCells(added: number, removed: number) {
     index >= magnitude ? 'off' as const : index < addCells ? 'add' as const : 'del' as const)
 }
 
+/**
+ * The scope mark a token carries, drawn ahead of its value.
+ *
+ * Inside the same element as the value so the shared-checkout underline covers
+ * both: a mark that sat outside would read as belonging to the separator.
+ */
+function Prefix({ token }: { token: RowToken }) {
+  if (!token.prefix) return null
+  return <span class="row-prefix" aria-hidden="true">{token.prefix}</span>
+}
+
 function TokenView({ token, session, config }: { token: RowToken; session: Session; config: SessionRowConfig }) {
   if (token.kind === 'title') {
     // Deliberately a <strong>: the sidebar's attention tiers (active / unread /
@@ -77,21 +88,26 @@ function TokenView({ token, session, config }: { token: RowToken; session: Sessi
   if (token.kind === 'diff' && token.diff) {
     if (config.diffStyle === 'bar') {
       return <span class="row-diffbar" title={token.title} role="img" aria-label={token.text}>
+        <Prefix token={token} />
         {diffCells(token.diff.added, token.diff.removed).map((cell, index) => <i key={index} class={cell} />)}
       </span>
     }
     return <span class="row-diff" title={token.title}>
+      <Prefix token={token} />
       <span class="add">+{token.diff.added}</span> <span class="del">-{token.diff.removed}</span>
     </span>
   }
   if (token.kind === 'count' && config.countStyle === 'pips' && (token.count ?? 0) <= MAX_PIPS) {
     const count = token.count ?? 0
-    if (!count) return <span class="row-text muted" title={token.title}>·</span>
+    if (!count) return <span class="row-text muted" title={token.title}><Prefix token={token} />·</span>
     return <span class="row-pips" title={token.title} role="img" aria-label={token.text}>
+      <Prefix token={token} />
       {Array.from({ length: count }, (_, index) => <i key={index} />)}
     </span>
   }
-  return <span class={`row-text${token.tone && token.tone !== 'default' ? ` ${token.tone}` : ''}`} title={token.title}>{token.text}</span>
+  return <span class={`row-text${token.tone && token.tone !== 'default' ? ` ${token.tone}` : ''}`} title={token.title}>
+    <Prefix token={token} />{token.text}
+  </span>
 }
 
 function SectionView({ section, session, config }: { section: RowSection; session: Session; config: SessionRowConfig }) {
@@ -101,7 +117,7 @@ function SectionView({ section, session, config }: { section: RowSection; sessio
         which is why width shedding happens in the token engine and never as a
         CSS `display:none`, whose hidden token would leave its separator here. */}
     {section.tokens.map((token, index) =>
-      <span key={`${token.id}:${index}`} class="row-token">
+      <span key={`${token.id}:${index}`} class={`row-token${token.shared ? ' shared' : ''}`}>
         {index > 0 && section.separator ? <span class="row-sep" aria-hidden="true">{section.separator}</span> : null}
         <TokenView token={token} session={session} config={config} />
       </span>)}

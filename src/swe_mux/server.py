@@ -969,7 +969,17 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                     "could not reset misattributed provider telemetry for session %s",
                     repaired_session_id,
                 )
-    git_monitor = GitMonitor(sessions, events, config.git_poll_seconds)
+    # The monitor's branch-scoped diff is measured against the same base the Git
+    # drawer uses, so the sidebar and the drawer cannot report a session's branch
+    # against two different refs. A Project that has vanished infers, like any
+    # Project that never set an override.
+    def _project_compare_ref(project_id: str) -> str | None:
+        project = projects.projects.get(project_id)
+        return project.git_compare_ref if project else None
+
+    git_monitor = GitMonitor(
+        sessions, events, config.git_poll_seconds, compare_override=_project_compare_ref
+    )
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)

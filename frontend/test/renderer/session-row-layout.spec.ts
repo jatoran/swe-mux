@@ -79,6 +79,44 @@ test('the indicator sits inside its gutter and never overlaps the text', async (
   expect(g.indicator.y + g.indicator.height).toBeLessThanOrEqual(g.row.y + g.row.height)
 })
 
+/**
+ * The indicator's size is user-configurable per device class, and everything
+ * around it is expressed as `--session-dot` so that one number moves the gutter
+ * column, the thread, the title line, and the row's own height together.
+ *
+ * The hazard the bounds exist to contain is a row whose height was a fixed 40px:
+ * at the top of the range the indicator was taller than the box drawn for it, so
+ * the dot spilled into the row beneath. Measured at both endpoints because only
+ * a real layout can answer whether it fits.
+ */
+for (const size of [10, 24]) {
+  test(`a ${size}px indicator still fits its row, gutter, and thread`, async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 600 })
+    await page.goto('/session-row-harness.html')
+    await page.evaluate(px => {
+      document.documentElement.style.setProperty('--session-dot', `${px}px`)
+    }, size)
+    const g = await geometry(page)
+
+    expect(Math.abs(g.indicator.width - size)).toBeLessThanOrEqual(0.6)
+    // Contained vertically: the row grew with it rather than clipping it.
+    expect(g.indicator.y).toBeGreaterThanOrEqual(g.row.y - 0.5)
+    expect(g.indicator.y + g.indicator.height).toBeLessThanOrEqual(g.row.y + g.row.height + 0.5)
+    // Contained horizontally: the gutter column is the indicator, so the text
+    // must still start beyond it at any size.
+    expect(g.indicator.x).toBeGreaterThanOrEqual(g.row.x)
+    expect(g.indicator.x + g.indicator.width).toBeLessThanOrEqual(g.title.x + 0.5)
+    // Still aligned to the title line rather than drifting toward the row centre.
+    expect(Math.abs(centerY(g.indicator) - centerY(g.title))).toBeLessThanOrEqual(1)
+    // And the thread still runs through the dot instead of across it.
+    const threadCenter = g.branch.x + g.threadLeft + 1
+    expect(Math.abs(threadCenter - centerX(g.indicator))).toBeLessThanOrEqual(0.6)
+    expect(g.branch.y + g.threadGapTop).toBeLessThanOrEqual(g.indicator.y + 0.6)
+    expect(g.branch.y + g.threadGapBottom)
+      .toBeGreaterThanOrEqual(g.indicator.y + g.indicator.height - 0.6)
+  })
+}
+
 test('the visible dot is larger than the 6px one it replaced', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
   await page.goto('/session-row-harness.html')

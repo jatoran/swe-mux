@@ -3,8 +3,8 @@
 ## What it is
 
 - Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is
-  available) for branch, dirty count, upstream divergence, linked-worktree identity, and
-  lines changed against HEAD.
+  available) for branch, dirty count, upstream divergence, linked-worktree identity, working-tree
+  root, lines changed against HEAD, and lines and files changed against the comparison ref.
 - User-initiated worktree API wraps `git worktree` without performing other mutating git operations.
 
 ## Operations
@@ -40,6 +40,50 @@
 - `added`/`removed` are `None` when the measurement could not be made — no HEAD yet, or a failed
   diff — which is deliberately distinct from a measured `0`. A display that conflates the two
   reports a clean tree for a repository it merely failed to read.
+
+### Every field is a property of the checkout
+
+`GitState` describes the working tree a session is in, never the session.
+`git status` answers for the whole repository however it is invoked, so two agents in one
+checkout cannot be told apart by anything Git can answer, and the monitor's deduplication by
+checkout is a consequence of that rather than a cause of it.
+`GitState.root` is served so a client can say so: a per-session row printing a per-checkout
+quantity invites reading it as "what this agent changed", and `root` is the only key by which
+two rows can be known to be quoting one measurement.
+The sidebar marks a quantity whose root carries more than one live session
+(`design/features/ui.md`, "Configurable session rows").
+
+### Branch-scoped comparison
+
+`compare_ref`, `compare_added`, `compare_removed`, and `compare_files` measure the working tree
+against its **merge base** with the checkout's comparison ref, so they cover committed and
+uncommitted work together.
+
+- They exist because `added`/`removed` are measured against HEAD and therefore drop to zero the
+  moment a session commits. A worktree-per-branch fleet that commits as it goes reports `+0 -0`
+  on the HEAD-scoped pair while having changed a great deal.
+- The merge base, not the ref itself: diffing a branch straight against a base that has advanced
+  reports the base's inbound commits as this branch's deletions, which reads as work destroyed
+  rather than work not yet merged.
+- The ref is resolved by `git_review.resolve_comparison_ref`, the same inference the Git drawer
+  uses, so the sidebar and the drawer cannot disagree about which base a number is measured from.
+  `git_review.infer_comparison` is that function plus the drawer's bounded selector candidate
+  list, which the monitor must not pay `for-each-ref` for on a five-second cadence.
+- Resolution is cached per `(root, project override)` for `COMPARE_REF_TTL_SECONDS`; its answer
+  changes when a remote HEAD is re-pointed or a branch appears, never between two polls seconds
+  apart. A cached ref that stops resolving is dropped immediately rather than waiting out its TTL.
+- The measurement is memoized per `(root, ref)` on `(comparison oid, HEAD, dirty_hash)` — all
+  three, because the branch diff moves for a strictly larger set of reasons than the working-tree
+  diff: committing changes it while leaving the dirty fingerprint untouched, and the base advances
+  underneath it. On the memoized path the poll costs one extra `rev-parse`, issued inside the
+  existing parallel gather.
+- All four are `None` when no base resolves or the diff failed. A zero would claim a branch
+  identical to its base, which is the one thing a reader would act on.
+- The poll's deduplication key is the checkout **and** its comparison override, because two
+  Projects may point at one directory with different bases; collapsing them onto the cwd would
+  serve one Project the other's number. The override is injected into `GitMonitor` as a
+  `project_id -> ref` callable, so the monitor keeps knowing nothing about the Project registry,
+  and a lookup that raises degrades to automatic inference rather than to no Git state.
 - OSC-driven targets are existing local directories, debounced for 1.25 seconds, and limited
   to 12 accepted switches per session per minute before Git polling follows them. Invalid,
   remote, fragmented-spam, and over-limit telemetry cannot create subprocess churn.

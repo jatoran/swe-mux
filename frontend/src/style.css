@@ -279,7 +279,17 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .project-group.active>.project-row strong { color:#91e49f }
 .project-group.active>.project-row .project-chevron { color:#77d887 }
 .project-group .session-list { padding:0 0 3px 14px }
-.project-group .session-row,.session-row,.session-row:hover,.session-row.active { height:calc(40px*var(--ui-scale));margin:0;padding:5px 8px;border:0;background:transparent;box-shadow:none }
+/* Height is the scaled row *or* what the row's own content needs, whichever is
+   larger: a constant `40px * --ui-scale` stopped containing that content the
+   moment `--session-dot` became user-configurable. The second term is the
+   indicator's box plus the row's padding, inter-line gap, and second line, plus
+   2px of the slack the fixed value already carried. Every existing
+   configuration keeps exactly the height it had; only a row that would have
+   clipped grows. Computed here rather than as a `:root` variable because a
+   custom property that references another is substituted where it is
+   *declared*: derived at the root it would ignore the `--session-dot` override
+   the settings preview sets on its own container. */
+.project-group .session-row,.session-row,.session-row:hover,.session-row.active { height:max(calc(40px*var(--ui-scale)),calc(25px + max(var(--session-dot),var(--session-line-box))));margin:0;padding:5px 8px;border:0;background:transparent;box-shadow:none }
 .session-row.active { color:#9beaA8 }
 .session-row.active:before { display:none;content:none }
 .agent-prefix { margin-right:6px;color:#79a982;font-weight:500 }.agent-prefix.claude { color:#d49a78 }.agent-prefix.codex { color:#77c9a7 }
@@ -1022,7 +1032,7 @@ body {
    note/preview rows a branch may carry. */
 .layout-cluster.stack>.layout-branch:before,.layout-cluster.stack>.layout-branch:after{content:"";position:absolute;z-index:3;left:calc(var(--session-row-inset-x) + var(--session-dot)/2 - 1px);width:2px;background:color-mix(in srgb,var(--blue) 62%,transparent);pointer-events:none}
 .layout-cluster.stack>.layout-branch:before{top:0;height:var(--session-row-inset-y)}
-.layout-cluster.stack>.layout-branch:after{top:calc(var(--session-row-inset-y) + var(--session-dot));bottom:0}
+.layout-cluster.stack>.layout-branch:after{top:calc(var(--session-row-inset-y) + max(var(--session-dot),var(--session-line-box)));bottom:0}
 .layout-cluster.stack>.layout-branch.first:before,.layout-cluster.stack>.layout-branch.last:after{content:none}
 .layout-cluster .session-row{position:relative;z-index:2}.layout-resource-row{height:calc(40px*var(--ui-scale));display:flex;align-items:center;gap:8px;color:var(--muted)}.layout-loose{margin-top:4px;padding-top:3px}.layout-loose-divider{height:10px;display:grid;grid-template-columns:13px 1fr;align-items:center;color:var(--muted);font-size:8px}.layout-loose-divider i{display:block;border-top:1px dotted var(--line)}.foreign-scope{margin-left:6px;color:var(--amber)}.anchor-badge{color:var(--green);margin-left:auto}.project-row .anchor-badge+small{margin-left:0}
 .pane-stack{width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;display:grid;grid-template-rows:calc(31px*var(--ui-scale)) minmax(0,1fr)}.stack-active{min-width:0;min-height:0;overflow:hidden;display:flex}.stack-active>.terminal-pane,.stack-active>.note-pane,.stack-active>.preview-pane,.stack-active>.pane-split{width:100%;height:100%;min-width:0;min-height:0;flex:1 1 0}.stack-tabs-rail{--overflow-rail-bg:var(--panel);--overflow-rail-accent:var(--green)}.stack-tabs{width:100%;height:100%;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:none}.stack-tabs::-webkit-scrollbar{display:none}.stack-tabs button{flex:0 0 auto;max-width:220px;height:calc(31px*var(--ui-scale));border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);display:flex;align-items:center;gap:7px;padding:0 11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}/* The active tab was distinguished only by swapping --panel for --bg, a difference of a few
@@ -2820,13 +2830,29 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    shape, its hollow "standing" variant, and the context gauge that follows the
    shape's outline are all geometry CSS cannot express on a bordered box. */
 .session-list{container-type:inline-size}
-/* The indicator's box, the sidebar row's gutter column, and the stack thread's
-   geometry all derive from these two numbers, so the thread cannot drift off the
-   dots it is drawn through the way a hard-coded offset did.
-   Deliberately NOT multiplied by `--ui-scale`: like every other icon and touch
-   target, the indicator stays put while type and row heights scale. */
+/* The indicator's box, the sidebar row's gutter column, the row's own height,
+   and the stack thread's geometry all derive from these numbers, so the thread
+   cannot drift off the dots it is drawn through the way a hard-coded offset did.
+
+   `--session-dot` is user-configurable per device class (`sessionRowPrefs.ts`
+   writes it onto the root element from the stored row layout); the values here
+   are the shipped defaults and what an unreachable daemon falls back to, so they
+   must stay equal to `DEFAULT_DOT_SIZE_*` in `sessionRowConfig.ts`.
+
+   `--session-dot` is deliberately NOT multiplied by `--ui-scale`: like every
+   other icon and touch target, the indicator stays put while type and row
+   heights scale. `--session-line-box` is, because the type inside that line is. */
 :root{
   --session-dot:15px;
+  /* The title line's own line box, which the indicator's box is floored at and
+     the row height is derived from. An indicator *smaller* than the line it is
+     aligned to top-aligns inside it and sits visibly above the name — the
+     failure a 10px indicator produced once the size became configurable.
+     Measured, not assumed: 14px at scale 1, growing with the type, but never
+     shrinking below 14px because the line also carries a 12px provider mark
+     raised 2px, which sets a floor of its own that no scale-down removes. */
+  --session-title-line:14px;
+  --session-line-box:max(var(--session-title-line),calc(var(--session-title-line)*var(--ui-scale)));
   /* Mirrors `.session-row`'s effective padding, which is asymmetric (5px 8px), so
      the thread needs both axes: the horizontal inset places its rule on the dot's
      centre, the vertical one places the break it leaves for the dot. Keep these
@@ -2872,24 +2898,32 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    between the two lines, which reads as belonging to neither, and left the stack
    thread painting straight across it. */
 .session-row{grid-template-columns:var(--session-dot) minmax(0,1fr)}
+/* Width is the configured size; height is that floored at the title line, and the
+   SVG's own `preserveAspectRatio` then centres the shape in whatever slack is
+   left. So a small indicator is centred on the name rather than top-aligned
+   above it, and a large one sizes the line itself. */
 .session-row .state-dot.state-indicator{
-  width:var(--session-dot);height:var(--session-dot);align-self:start;margin-top:0
+  width:var(--session-dot);
+  height:max(var(--session-dot),var(--session-line-box));
+  align-self:start;margin-top:0
 }
 
 .session-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
 .row-line{display:flex;align-items:baseline;min-width:0}
 /* Same height as the indicator and centred, so the two boxes start together and
    their centres coincide at any type size instead of only at the default one. */
-.row-line.top{font-size:12px;min-height:var(--session-dot);align-items:center}
+.row-line.top{font-size:12px;min-height:max(var(--session-dot),var(--session-line-box));align-items:center}
 .row-line.bottom{font:9px 'Cascadia Mono',Consolas,monospace;color:var(--muted);min-height:12px}
 /* The blank bottom line is kept on desktop — constant row height is what makes
    the list scannable — but dropped on mobile, where vertical space is the
    scarce resource and identity-only rows are the point. */
-/* Mobile rows are shorter and their titles smaller, so the indicator steps down
-   with them rather than towering over a 9px name. The thread and the gutter
-   column follow automatically, being expressed in the same variable. */
+/* Mobile runs the indicator *larger* than desktop, not smaller. It is read at
+   arm's length, it is never hovered for the tooltip that would confirm it, and
+   on a phone it is competing with a touch target rather than with a dense
+   scannable list. The thread, the gutter column, and the row height follow
+   automatically, being expressed in the same variable. */
 @media(max-width:760px){
-  :root{--session-dot:13px}
+  :root{--session-dot:17px}
   .row-line.bottom.empty{display:none;min-height:0}
 }
 .row-section{display:flex;align-items:baseline;min-width:0;white-space:nowrap}
@@ -2925,6 +2959,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-diffbar i.add{background:#5f9e6a}.row-diffbar i.del{background:#a5605a}
 .row-pips{display:inline-flex;gap:2px;align-self:center;flex:none}
 .row-pips i{width:3px;height:3px;border-radius:50%;background:#697381;display:block}
+/* Scope mark on a branch-scoped Git token. Dimmed and tight against its value:
+   it qualifies the number rather than competing with it, and the row cannot
+   afford a token's worth of width to say so in words. */
+.row-prefix{color:#5c6f61;margin-right:2px;flex:none}
+/* A value that describes a checkout more than one live session is working in.
+   A border rather than a glyph because it costs no row width and no shedding
+   decision, and it groups: the rows quoting one shared number underline
+   together, which is the fact being reported. */
+.row-token.shared>:not(.row-sep){
+  border-bottom:1px dotted color-mix(in srgb,currentColor 45%,transparent)
+}
 .session-row.active .row-title{color:var(--text)}
 .session-row .activity-badges{align-self:center}
 /* Width shedding is NOT done here. Hiding a token with `display:none` removes
@@ -2939,6 +2984,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .session-row-settings h5{margin:0 0 3px;color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
 .session-row-preview{width:100%;max-width:420px;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .session-row-preview .session-row{cursor:default}
+/* Slider plus a live readout, because a size in pixels is a number the user has
+   to be able to say back — a bare track leaves "how big is it now" unanswerable
+   and makes the two device values impossible to compare. */
+.row-size-control{display:grid;grid-template-columns:minmax(0,1fr) minmax(90px,140px) auto;align-items:center;gap:8px}
+.row-size-control input[type=range]{width:100%;min-width:0}
+.row-size-control output{color:var(--muted);font-variant-numeric:tabular-nums;font-size:10px;text-align:right}
 .row-line-editor{margin:8px 0 4px;padding:8px;border:1px solid var(--line);border-radius:6px}
 .row-line-editor>h4{margin-top:0}
 .row-line-editor>p{margin:0 0 6px;color:var(--muted);font-size:9px}

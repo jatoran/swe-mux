@@ -154,7 +154,9 @@ import { activityBadges, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape } from './sessionRowConfig'
-import { useObservedWidth, useRowClock, useSessionRowConfig } from './sessionRowPrefs'
+import {
+  applySessionDotSize, useObservedWidth, useRowClock, useSessionRowConfig, watchSessionDotProfile,
+} from './sessionRowPrefs'
 import { buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc, shedForWidth } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
@@ -1409,6 +1411,14 @@ export function App() {
     uiScaleRef.current=scale
     setUiScale(scale)
   }), [])
+
+  // The state indicator's size is stored per device class for the same reason,
+  // and is published as a custom property because the sidebar's gutter column,
+  // stack thread, and row height are all derived from it rather than from the
+  // glyph. Applied here rather than in the row component: it is one root-level
+  // value, and every surface that draws an indicator must agree on it.
+  useEffect(()=>{applySessionDotSize(rowConfig)},[rowConfig])
+  useEffect(()=>watchSessionDotProfile(),[])
 
   // Browser-style UI scaling is captured before xterm, editors, command bindings, or
   // Chromium's page zoom see it. Plain wheel/key input and every non-exact modifier

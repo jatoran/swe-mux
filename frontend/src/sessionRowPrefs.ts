@@ -6,9 +6,16 @@
 // same information in the same order on both screens. What differs is how much
 // of it fits, and that is `mobileFields`, a single flag inside the one blob,
 // rather than a second layout to keep in sync by hand.
+//
+// Two values inside that one blob *are* per device class — `dotSizeDesktop` and
+// `dotSizeMobile` — and they are the exception that proves the rule: a physical
+// size is the one property a shared layout cannot express, because the screens
+// are held at different distances. They stay fields of the single blob rather
+// than a second profile bucket, so editing either is one write and either can be
+// set from either device.
 
 import { useEffect, useState } from 'preact/hooks'
-import { rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
+import { MOBILE_QUERY, currentProfile, rawDomain, saveDomain, type SettingsProfile } from './deviceSettings.ts'
 import {
   defaultSessionRowConfig, normalizeSessionRowConfig, type SessionRowConfig,
 } from './sessionRowConfig.ts'
@@ -25,6 +32,46 @@ export async function saveSessionRowConfig(config: SessionRowConfig): Promise<vo
 
 export async function resetSessionRowConfig(): Promise<void> {
   await saveSessionRowConfig(defaultSessionRowConfig())
+}
+
+/** The indicator size this configuration gives a device class, in CSS pixels. */
+export function sessionDotSize(
+  config: SessionRowConfig, profile: SettingsProfile = currentProfile(),
+): number {
+  return profile === 'mobile' ? config.dotSizeMobile : config.dotSizeDesktop
+}
+
+let appliedConfig: SessionRowConfig | null = null
+
+/**
+ * Write the indicator size for this device's class onto the root element.
+ *
+ * A custom property rather than a prop because the size is not the indicator's
+ * alone: the sidebar's gutter column, the stack thread's x and its break, the
+ * title line's height, and the row's own height are all expressed as
+ * `--session-dot` in `style.css`. Handing the number to `StateIndicator` would
+ * resize the glyph and leave every one of those behind, which is the failure the
+ * variable was introduced to prevent. Idempotent; safe to call on every change.
+ */
+export function applySessionDotSize(config: SessionRowConfig): number {
+  appliedConfig = config
+  const size = sessionDotSize(config)
+  document.documentElement.style.setProperty('--session-dot', `${size}px`)
+  return size
+}
+
+/**
+ * Re-resolve when the device class changes under a live page.
+ *
+ * A desktop window dragged across the breakpoint adopts the mobile layout, and
+ * without this it would keep the desktop size while rendering it — the same
+ * reason chrome scale watches the same query.
+ */
+export function watchSessionDotProfile(): () => void {
+  const query = window.matchMedia(MOBILE_QUERY)
+  const update = () => { if (appliedConfig) applySessionDotSize(appliedConfig) }
+  query.addEventListener('change', update)
+  return () => query.removeEventListener('change', update)
 }
 
 /** The live configuration, re-read whenever any device edits settings. */
