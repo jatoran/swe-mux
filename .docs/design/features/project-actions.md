@@ -7,7 +7,9 @@ It imports tasks from the Project root and opens every resulting process as an o
 
 The worktree launcher is an explicit Git operation rather than a Project Action.
 It creates a named branch below the configured global worktree root through `POST /api/git/worktrees`, closes the launcher once that durable operation succeeds, then bootstraps and starts the selected backend through `POST /api/git/worktrees/session`.
-The completed session joins the Project session list without changing the user's current Project, pane, tab, or focus.
+The browser immediately creates and focuses a client-only pending session row and pane at the worktree path.
+The pending pane identifies worktree setup, then is replaced in place by the daemon session when setup and spawn finish.
+Moving elsewhere during setup is respected: completion updates the pending location without reclaiming focus.
 Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git and processes.
 The resulting absolute path remains editable before creation, and changing the setting does not move existing worktrees.
 Whitespace entered in the branch field becomes `-`, keeping the Git branch and suggested filesystem path aligned.

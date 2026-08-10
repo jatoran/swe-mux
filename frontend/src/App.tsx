@@ -149,6 +149,7 @@ import {
   toggleBucketCollapsed,
 } from './projectSort'
 import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail } from './projectRecency'
+import { placePendingTerminal, replacePendingTerminal, type PendingSpawnPlacement } from './pendingSession'
 import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { activityBadges, sessionStatus } from './sessionStatus'
@@ -267,30 +268,20 @@ type RenameTarget = { kind: 'session'; session: Session } | { kind: 'project'; p
 type NoteTarget={projectId:string;kind:'note'|'global-note'|'file'|'worktree-file';resourceId:string;worktree?:string}
 type StartupMilestone = 'pane_mounted' | 'socket_open' | 'replay_ready'
 type ClientStartupTiming = Partial<Record<'api_response' | StartupMilestone, number>>
-type PendingSpawnPlacement = {
-  projectId:string
-  split:false|SplitDirection|'stack'
-  targetId:string|null
-  position:'before'|'after'
-  resolvedId?:string
-}
 type RunMenuState={project:Project;x:number;y:number}
+type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
+type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
 
-function placePendingTerminal(layout:PaneLayout,id:string,placement:PendingSpawnPlacement):PaneLayout {
-  if(!placement.split)return openTab(layout,placement.targetId,terminalLeaf(id))
-  if(placement.split==='stack'&&placement.targetId)return stackTerminal(layout,placement.targetId,id)
-  return splitTerminal(layout,placement.targetId,id,placement.split as SplitDirection,placement.position)
-}
-
-function pendingTerminal(id:string,project:Project,backend:string='shell'):Session {
+function pendingTerminal(id:string,project:Project,backend:string='shell',options?:{cwd?:string;name?:string;label?:string;detail?:string}):Session {
   const now=Date.now()/1000
+  const cwd=options?.cwd||project.root
   return {
-    id,name:`starting ${backend==='shell'?'terminal':backend}…`,project_id:project.id,backend,native_session_id:id,
-    cwd:project.root,exe:'',args:[],pid:-1,created_at:now,state:'starting',tokens_in:0,
+    id,name:options?.name||`starting ${backend==='shell'?'terminal':backend}…`,project_id:project.id,backend,native_session_id:id,
+    cwd,exe:'',args:[],pid:-1,created_at:now,state:'starting',tokens_in:0,
     process_job_assignment:'pending',tokens_out:0,tokens_cache_read:0,tokens_cache_write:0,cost_usd:0,context_window:0,context_pct:0,last_activity_ts:now,
     git:{dirty:0,ahead:0,behind:0},pinned_attention:false,broadcast:false,context_peak_pct:0,
-    compaction_count:0,runtime_cwd:project.root,runtime_cwd_live:false,runtime_cwd_source:'spawn',
-    runtime_cwd_dropped:0,pending:true,
+    compaction_count:0,runtime_cwd:cwd,runtime_cwd_live:false,runtime_cwd_source:'spawn',
+    runtime_cwd_dropped:0,pending:true,pending_label:options?.label,pending_detail:options?.detail,
   }
 }
 
@@ -1215,7 +1206,7 @@ export function App() {
           next[project.id] = reconcilePreviews(reconcileTerminals(base, live), livePreviews)
           for(const [pendingId,placement] of Object.entries(pendingSpawns.current)){
             if(placement.projectId!==project.id)continue
-            next[project.id]=placePendingTerminal(next[project.id],placement.resolvedId||pendingId,placement)
+            next[project.id]=placePendingTerminal(next[project.id],placement.resolvedId||pendingId,placement,false)
           }
         }
         layoutValues.current=next
@@ -2445,18 +2436,78 @@ export function App() {
     openRunMenu(project,element)
   }
 
-  const attachActionSessions=async(targetProject:string,nextSessions:Session[],activate=true)=>{
+  const startWorktreeSession=async(targetProject:string,path:string,backend:string)=>{
+    const target=projectsRef.current.find(item=>item.id===targetProject)
+    if(!target){setError(`Worktree created at ${path}, but its Project is no longer available.`);return}
+    const startupOrigin=performance.now()
+    const pendingId=`pending-${browserUuid()}`
+    const currentLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
+    const focused=targetProject===projectId?openAnchorId(currentLayout,focusedViewId||activeId):spawnAnchorId(currentLayout)
+    const placement:PendingSpawnPlacement={projectId:targetProject,split:false,targetId:focused,position:'after'}
+    pendingSpawns.current[pendingId]=placement
+    const optimisticLayout=placePendingTerminal(currentLayout,pendingId,placement)
+    layoutValues.current[targetProject]=optimisticLayout
+    setSessions(items=>[...items,pendingTerminal(pendingId,target,backend,{
+      cwd:path,
+      name:`setting up ${backend==='shell'?'shell':backend}…`,
+      label:'Setting up worktree…',
+      detail:`Running the repository setup before starting ${backend==='shell'?'the shell':backend}…`,
+    })])
+    setLayoutMap(current=>({...current,[targetProject]:optimisticLayout}))
+    setProjectId(targetProject)
+    setActiveId(pendingId)
+    setFocusedViewId(pendingId)
+    setSidebarOpen(false)
+    try{
+      const result=await api<WorktreeSpawnResult>('POST','/api/git/worktrees/session',{
+        path,spawn:{project_id:targetProject,backend},
+      },{timeoutMs:35*60*1000})
+      if(result.status!=='spawned'||!result.session_id){
+        const setupFailed=result.setup&&['failed','timed_out','error'].includes(result.setup.status)
+        const setupDetail=setupFailed?` Setup also failed (${result.setup?.error||result.setup?.exit_code||result.setup?.status}); the tree is not bootstrapped.`:''
+        throw new Error(`the session failed: ${result.error||'unknown error'}.${setupDetail}`)
+      }
+      const next=result.session||await api<Session>('GET',`/api/sessions/${encodeURIComponent(result.session_id)}`)
+      markProjectRecent(targetProject)
+      startupOrigins.current[next.id]=startupOrigin
+      const browserTiming={api_response:performance.now()-startupOrigin}
+      clientStartupTimingValues.current[next.id]=browserTiming
+      setClientStartupTimings(current=>({...current,[next.id]:browserTiming}))
+      localStorage.setItem('mux.lastBackend',backend)
+      placement.resolvedId=next.id
+      setSessions(items=>[
+        ...items.filter(item=>item.id!==pendingId&&item.id!==next.id),
+        mergeSessionSnapshot(items.find(item=>item.id===next.id),next),
+      ])
+      setActiveId(current=>current===pendingId?next.id:current)
+      setFocusedViewId(current=>current===pendingId?next.id:current)
+      const latestLayout=layoutValues.current[targetProject]||optimisticLayout
+      const withPending=terminalIds(latestLayout).includes(pendingId)?latestLayout:placePendingTerminal(latestLayout,pendingId,placement,false)
+      const nextLayout=replacePendingTerminal(withPending,pendingId,next.id)
+      await updateLayout(targetProject,nextLayout)
+      emitTutorialAction({action:'session-launched',backend})
+      if(result.setup&&['failed','timed_out','error'].includes(result.setup.status)){
+        const detail=result.setup.error||(result.setup.exit_code!=null?`exit code ${result.setup.exit_code}`:result.setup.status)
+        setError(`Worktree session started, but setup failed (${detail}). The tree is not bootstrapped; setup output is in the session scrollback.`)
+      }
+      window.setTimeout(()=>{delete pendingSpawns.current[pendingId]},500)
+    }catch(cause){
+      delete pendingSpawns.current[pendingId]
+      setSessions(items=>items.filter(item=>item.id!==pendingId))
+      const failedLayout=removeLeaf(layoutValues.current[targetProject]||optimisticLayout,'terminal',pendingId)
+      layoutValues.current[targetProject]=failedLayout
+      setLayoutMap(current=>({...current,[targetProject]:failedLayout}))
+      const fallback=terminalIds(failedLayout)[0]||null
+      setActiveId(current=>current===pendingId?fallback:current)
+      setFocusedViewId(current=>current===pendingId?fallback:current)
+      setError(`Worktree created at ${path}, but ${cause instanceof Error?cause.message:String(cause)}`)
+    }
+  }
+
+  const attachActionSessions=async(targetProject:string,nextSessions:Session[])=>{
     if(!nextSessions.length)return
     const target=projectsRef.current.find(item=>item.id===targetProject)
     if(!target)return
-    if(!activate){
-      setSessions(items=>[
-        ...items.filter(item=>!nextSessions.some(next=>next.id===item.id)),
-        ...nextSessions.map(next=>mergeSessionSnapshot(items.find(item=>item.id===next.id),next)),
-      ])
-      markProjectRecent(targetProject)
-      return
-    }
     let nextLayout=layoutValues.current[targetProject]||layoutMap[targetProject]||parseLayout(target.layout)
     let targetId=openAnchorId(nextLayout,targetProject===projectId?(focusedViewId||activeId):null)
     for(const session of nextSessions){nextLayout=openTab(nextLayout,targetId,terminalLeaf(session.id));targetId=session.id}
@@ -4418,8 +4469,8 @@ export function App() {
     const id = session.id
     const agentSession=isAgent(session)
     if(session.pending)return <section class={`terminal-pane pending-terminal-pane ${activeId===id?'focused':''}`} onPointerDown={()=>{setActiveId(id);setFocusedViewId(id)}}>
-      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">starting terminal…</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
-      <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>Starting terminal</strong><small>Resolving the project and opening the shell…</small></div>
+      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">{session.pending_label||'starting terminal…'}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
+      <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>{session.pending_label||'Starting terminal'}</strong><small>{session.pending_detail||'Resolving the project and opening the shell…'}</small></div>
     </section>
     const displayedCwd=session.runtime_cwd||session.spawn_cwd||session.cwd
     const cwdIsLive=session.runtime_cwd_live
@@ -4945,7 +4996,7 @@ export function App() {
       </form>
     </div>}
 
-    {runMenu&&<ProjectRunMenu project={runMenu.project} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={backend=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,undefined,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={(items,activate)=>void attachActionSessions(runMenu.project.id,items,activate)} onError={setError}/>}
+    {runMenu&&<ProjectRunMenu project={runMenu.project} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={backend=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,undefined,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onError={setError}/>}
 
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
