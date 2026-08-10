@@ -127,7 +127,7 @@ import { absoluteProjectPath, FILE_COPY_MAX_LINES, truncateForClipboard } from '
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettings } from './mobileInput'
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
-import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import {
@@ -1484,6 +1484,10 @@ export function App() {
       // keyboard fires resizes throughout its open animation.
       if (inset !== lastInset) {
         lastInset = inset
+        // Remembered across sessions and reloads, because a pane that reserves the
+        // keyboard's height has to know it *before* the keyboard opens — the first time it
+        // asks, on a device that has never shown one, is exactly when no measurement exists.
+        if (inset > 0) rememberSoftKeyboardInset(inset)
         window.dispatchEvent(new CustomEvent(SOFT_KEYBOARD_EVENT, { detail: inset }))
       }
       setViewportWidth(window.innerWidth)

@@ -91,7 +91,8 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, holdSoftKeyboard, nextPeekState, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, type PeekTrigger } from './mobileKeyboard'
+import { nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
 import {
   caretResolverForBackend,
   caretSteerCommand,
@@ -129,6 +130,20 @@ const BASE_FONT_SIZE = 11
  * resolve, which is the bug this notice exists for.
  */
 const LETTERBOX_NOTICE_DELAY_MS = 1500
+/** How long output must stop for before the keyboard-layout questions are re-asked. */
+const KEYBOARD_LAYOUT_SETTLE_MS = 250
+/**
+ * How recently the reader must have typed for output in the hidden half of the grid to be
+ * left alone. Typing means they are composing rather than waiting for an answer, and a pane
+ * that jumps to the top mid-sentence is worse than one that never moves.
+ */
+const HIDDEN_OUTPUT_INPUT_GRACE_MS = 1500
+/**
+ * Whether a soft keyboard is what this device types with. `MOBILE_QUERY` is a width, and a
+ * desktop window dragged narrow matches it — reserving 40% of that pane for a keyboard that
+ * is never coming would be a bug with no symptom the user could connect to anything.
+ */
+const typesWithSoftKeyboard = () => !!window.matchMedia?.('(pointer:coarse)').matches
 
 /**
  * How long the Claude width-cap notice stays up after a resize that the cap clamped.
@@ -379,6 +394,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     query.addEventListener('change',on)
     return()=>query.removeEventListener('change',on)
   },[])
+  const compactLayoutRef=useRef(compactLayout)
+  compactLayoutRef.current=compactLayout
   const widthCap=claudeWidthCap(session.backend,compactLayout,claudeMaxColumns)
   // The cap is invisible from inside the terminal. The grid is correct, the pane is
   // simply narrower than the box holding it, and every symptom of that - a drag that
@@ -473,12 +490,59 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // to look at the top of the grid instead of the composer. Only meaningful while the
   // keyboard is up: with it down the whole grid fits and there is no slice to move.
   const [keyboardInset,setKeyboardInset]=useState(0)
-  const [peekTop,setPeekTop]=useState(false)
-  const peekTopRef=useRef(false)
-  peekTopRef.current=peekTop
-  const applyPeek=(trigger:Parameters<typeof nextPeekState>[1])=>{
-    const next=nextPeekState(peekTopRef.current,trigger)
-    if(next!==peekTopRef.current){peekTopRef.current=next;setPeekTop(next)}
+  // Whether this pane is holding the keyboard's height back out of its own grid, so the
+  // keyboard covers dead space instead of conversation (see keyboardReserve.ts). A reserved
+  // pane has nothing hidden to peek at, which is why every peek path below reads
+  // `effectiveKeyboardInset` rather than the raw inset.
+  const [keyboardReserved,setKeyboardReserved]=useState(false)
+  const keyboardReservedRef=useRef(false)
+  keyboardReservedRef.current=keyboardReserved
+  // The pixels held back while reserved, and when that last changed. Refs rather than
+  // state because the evaluator runs off a timer inside the mount effect and its own
+  // previous answer is an input to the next one.
+  const reservePxRef=useRef(0)
+  const reserveChangedAtRef=useRef(0)
+  // Set inside the mount effect. The keyboard opening or closing changes both keyboard-layout
+  // answers without producing a single byte of output, so the event has to ask for the pass
+  // that output would otherwise have scheduled.
+  const scheduleKeyboardSettleRef=useRef<()=>void>(()=>{})
+  const effectiveKeyboardInset=keyboardReserved?0:keyboardInset
+  // How far the grid is pushed back down inside the slid surface: 0 is the composer, the
+  // full inset is the top of the grid, and a drag parks it anywhere between. Held in a ref
+  // as well as state because a touch-move writes it at pointer rate and must not wait for
+  // a render to read back what it just set.
+  const [peekOffset,setPeekOffset]=useState(0)
+  const peekOffsetRef=useRef(0)
+  const effectiveKeyboardInsetRef=useRef(0)
+  effectiveKeyboardInsetRef.current=effectiveKeyboardInset
+  // A drag moves the grid every frame; a button press or an auto-move is a jump. Only the
+  // jump gets an animation, because a transition on a dragged offset lags the finger.
+  const [peekAnimated,setPeekAnimated]=useState(false)
+  // Set inside the mount effect: writes the offset straight to the surface element. A drag
+  // produces one of these per pointer move, and re-rendering a terminal pane at pointer rate
+  // is a frame budget this pane does not have, so state catches up when the gesture ends
+  // (`commitPeekOffset`) rather than on every move.
+  const paintPeekOffsetRef=useRef<(offset:number)=>void>(()=>{})
+  const setPeekOffsetValue=(next:number,animated:boolean)=>{
+    if(next===peekOffsetRef.current&&animated===peekAnimated)return
+    peekOffsetRef.current=next
+    if(animated){setPeekOffset(next);setPeekAnimated(true);return}
+    paintPeekOffsetRef.current(next)
+  }
+  const commitPeekOffset=()=>{
+    if(peekOffsetRef.current===peekOffset&&!peekAnimated)return
+    setPeekOffset(peekOffsetRef.current)
+    setPeekAnimated(false)
+  }
+  const commitPeekOffsetRef=useRef(commitPeekOffset)
+  commitPeekOffsetRef.current=commitPeekOffset
+  const setPeekOffsetValueRef=useRef(setPeekOffsetValue)
+  setPeekOffsetValueRef.current=setPeekOffsetValue
+  const applyPeek=(trigger:PeekTrigger)=>{
+    setPeekOffsetValueRef.current(
+      nextPeekOffset(peekOffsetRef.current,trigger,effectiveKeyboardInsetRef.current),
+      true,
+    )
   }
   const applyPeekRef=useRef(applyPeek)
   applyPeekRef.current=applyPeek
@@ -487,10 +551,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const inset=(event as CustomEvent<number>).detail
       setKeyboardInset(inset)
       if(inset<=0)applyPeekRef.current('keyboardClosed')
+      scheduleKeyboardSettleRef.current()
     }
     window.addEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
     return()=>window.removeEventListener(SOFT_KEYBOARD_EVENT,onKeyboard)
   },[])
+  // A pane that reserved space while peeked would leave the grid pushed down past a
+  // keyboard that now covers nothing. Reserving and peeking are alternatives, not layers.
+  useEffect(()=>{
+    if(keyboardReserved&&peekOffsetRef.current!==0)setPeekOffsetValueRef.current(0,true)
+  },[keyboardReserved])
   // Set inside the mount effect; lets a layout change outside the ResizeObserver's reach
   // (the voice strip appearing/vanishing under the terminal) force an xterm re-fit.
   const scheduleFitRef=useRef<()=>void>(()=>{})
@@ -1025,7 +1095,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     const tailScroll = term.onScroll(syncTail)
     const tailRender = term.onRender(syncTail)
     // Parse-progress clock for the write-pipeline liveness check below.
-    const writeParsed = term.onWriteParsed(() => { lastParsedAt = performance.now() })
+    const writeParsed = term.onWriteParsed(() => {
+      lastParsedAt = performance.now()
+      scheduleKeyboardSettleRef.current()
+    })
     // The invariant half of terminal display correctness (`terminalHealth.ts`):
     // every event path can be raced or missed, so on the same slow clock as the
     // terminal-state report, compare what the pane shows against what it should
@@ -1104,9 +1177,96 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         surfaceRepair.resume()
       }
     }
+    // Both keyboard-layout questions are answered from one read of the grid, and both only
+    // mean anything once the harness has stopped painting: whether this pane may hold the
+    // keyboard's height back out of its own geometry, and whether output has landed in the
+    // half of the grid the keyboard is covering. Asking per write would run them hundreds of
+    // times through a streaming reply and read a half-drawn screen every time.
+    let keyboardSettleTimer: number | undefined
+    // The hidden region as it read at the last settle, and the inset it was read under. The
+    // inset is half of it because the region only exists while the keyboard is up: a change
+    // measured across the keyboard opening or closing is the geometry moving, not output.
+    let hiddenRegionText = ''
+    let hiddenRegionInset = -1
+    const gridRowText = (index: number) =>
+      term.buffer.active.getLine(term.buffer.active.baseY + index)?.translateToString(true) ?? ''
+    const evaluateKeyboardReserve = () => {
+      const rowHeight = paneRowHeight()
+      const reservePx = reservedKeyboardPx(lastSoftKeyboardInset(), window.innerHeight)
+      reservePxRef.current = reservePx
+      const decision = nextReserveState({
+        reserved: keyboardReservedRef.current,
+        rows: term.rows,
+        reserveRows: rowHeight > 0 ? Math.ceil(reservePx / rowHeight) : term.rows,
+        painted: paintedRowCount(term.rows, gridRowText),
+        // A letterboxed pane draws another device's geometry and must not push its own at
+        // the PTY; a hidden one has no keyboard over it. Both give the space back.
+        eligible: compactLayoutRef.current
+          && typesWithSoftKeyboard()
+          && !letterboxed
+          && !paneIsHidden()
+          && reservePx > 0,
+        // A replaying buffer reads emptier than the session is, and reserving on that
+        // reading would shrink a PTY whose content simply has not arrived yet.
+        measurable: !replaying && socket?.readyState === WebSocket.OPEN,
+        now: Date.now(),
+        changedAt: reserveChangedAtRef.current,
+      })
+      if (decision.reserved === keyboardReservedRef.current) return
+      keyboardReservedRef.current = decision.reserved
+      reserveChangedAtRef.current = Date.now()
+      setKeyboardReserved(decision.reserved)
+      recordTerminalRenderDiagnostic(session.id, 'keyboard_reserve', {
+        reserved: decision.reserved,
+        reason: decision.reason,
+        reservePx,
+        rows: term.rows,
+        painted: paintedRowCount(term.rows, gridRowText),
+      })
+    }
+    const checkHiddenOutput = () => {
+      const inset = effectiveKeyboardInsetRef.current
+      const rowHeight = paneRowHeight()
+      const hiddenRows = inset > 0 && rowHeight > 0 ? Math.min(term.rows, Math.floor(inset / rowHeight)) : 0
+      let text = ''
+      for (let index = 0; index < hiddenRows; index += 1) text += `${gridRowText(index)}\n`
+      const comparable = hiddenRegionInset === inset
+      const changed = comparable && text !== hiddenRegionText
+      hiddenRegionText = text
+      hiddenRegionInset = inset
+      if (!changed || text.trim() === '') return
+      // The reader is at the top already, or they are typing rather than waiting — either
+      // way the pane moving under them is an interruption, not a service.
+      if (peekOffsetRef.current > 0) return
+      if (lastHumanInputAt !== null && performance.now() - lastHumanInputAt < HIDDEN_OUTPUT_INPUT_GRACE_MS) return
+      applyPeekRef.current('hiddenOutput')
+    }
+    const scheduleKeyboardSettle = () => {
+      if (keyboardSettleTimer !== undefined) window.clearTimeout(keyboardSettleTimer)
+      keyboardSettleTimer = window.setTimeout(() => {
+        keyboardSettleTimer = undefined
+        if (disposed) return
+        evaluateKeyboardReserve()
+        checkHiddenOutput()
+      }, KEYBOARD_LAYOUT_SETTLE_MS)
+    }
+    scheduleKeyboardSettleRef.current = scheduleKeyboardSettle
+    paintPeekOffsetRef.current = (offset: number) => {
+      const surface = host.current?.parentElement
+      if (!surface) return
+      // The animation belongs to the jumps (the toggle, landed output), and a transition on a
+      // length the finger is already setting reads as the pane lagging the drag.
+      surface.classList.remove('keyboard-peek-animated')
+      surface.classList.toggle('keyboard-peek', offset > 0)
+      surface.style.setProperty('--peek-offset', `${offset}px`)
+    }
     const terminalStateTimer = window.setInterval(() => {
       reportTerminalState()
       sweepTerminalHealth()
+      // Backstop for a session that has stopped writing entirely: the settle timer is driven
+      // by output, and a pane that grew into its reserved grid and then went quiet would
+      // otherwise keep holding space back.
+      evaluateKeyboardReserve()
     }, TERMINAL_HEALTH_SWEEP_MS)
     // Shared-PTY geometry. `localFit` is what this pane would show at its own font size;
     // `serverGeometry` is what the daemon arbitrated across every attached device. They
@@ -2447,12 +2607,27 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       if(Math.abs(event.clientY-touch.startY)>8)cancelLongPress()
-      const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)
-      touch.lastY=event.clientY
-      if(!delta)return
       const mouseActive=term.modes.mouseTrackingMode!=='none'
       const dragTarget=mobileDragTarget(mobileInput.verticalDrag,mouseActive)
-      if(dragTarget==='disabled')return
+      if(dragTarget==='disabled'){touch.lastY=event.clientY;return}
+      // The keyboard covers part of a grid that cannot be shrunk to fit it, so this pane is a
+      // window on a taller sheet — and a drag moves the window before it moves anything inside
+      // it. Nearest content first: what the keyboard hides is the top of the *current* screen,
+      // which is closer than the harness's own history, and on the alternate screen that
+      // history cannot be reached by scrolling at all. Only the share of the finger the window
+      // could not spend chains through to the scroll below, so a drag that runs the window to
+      // its end keeps going into scrollback without a second gesture.
+      const rawDy=event.clientY-touch.lastY
+      const panInset=effectiveKeyboardInsetRef.current
+      const panned=panInset>0?clampPeekOffset(peekOffsetRef.current+rawDy,panInset):peekOffsetRef.current
+      const panShare=rawDy===0?0:(panned-peekOffsetRef.current)/rawDy
+      if(panned!==peekOffsetRef.current){
+        event.preventDefault()
+        setPeekOffsetValueRef.current(panned,false)
+      }
+      const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)*(1-panShare)
+      touch.lastY=event.clientY
+      if(!delta)return
       // Claimed before the row check: a sub-row move is still part of this drag, and letting it
       // through would hand the browser a page scroll partway through a gesture.
       event.preventDefault()
@@ -2524,7 +2699,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         }
       }
       if(focusOnMouseClaim)focusTerminalInput()
-      stopSelectionScroll();cancelLongPress();touch=null
+      stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()
       // A gesture that was not a typing tap gives the keyboard back exactly as it found
       // it — up if it was up, down if it was down. Deferred a frame, and ordered after
       // the copy, because the platform makes its own focus decision as the tap resolves:
@@ -2537,7 +2712,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     const pointerCancel=(event:PointerEvent)=>{
       if(activePointerId!==event.pointerId)return
-      activePointerId=null;tap=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null
+      activePointerId=null;tap=null;focusOnMouseClaim=false;stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()
       // A cancelled pointer is the platform taking the gesture over, which is precisely
       // when it lowers the keyboard without anything here asking. Nothing typed, so the
       // keyboard state before the touch is the one to keep.
@@ -2649,7 +2824,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     loadLatestReply()
     window.addEventListener(PRESENCE_REPORTED_EVENT, onPresenceReported)
     connect(false)
-    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
+    return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
@@ -2999,7 +3174,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     fontSize:`${baseFont}px`,
     fontWeight:'600',
   }:undefined
-  return <div class={`terminal-surface${peekTop?' keyboard-peek':''}`}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailScroller key={row.id}>{row.nodes}{index===renderedRailRows.length-1&&<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>}{index===renderedRailRows.length-1&&onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, rows, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(keyboardInset,peekTop,offTail,appOffTail)&&<button class={`terminal-peek-top${peekTop?' active':''}`} aria-pressed={peekTop} title={peekTop?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekTop?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekTop?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+  // Two lengths the stylesheet cannot know: how far this pane's grid is currently pushed
+  // down (a drag writes it at pointer rate), and how much of its own height it is holding
+  // back for the keyboard. Both are inert until the mobile rules that read them apply.
+  const surfaceStyle={
+    '--peek-offset':`${peekOffset}px`,
+    '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
+  } as Record<string,string>
+  return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/><div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailScroller key={row.id}>{row.nodes}{index===renderedRailRows.length-1&&<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>}{index===renderedRailRows.length-1&&onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, rows, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }

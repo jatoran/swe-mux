@@ -1561,7 +1561,23 @@ body {
      `position:fixed` descendants even at zero, which would re-anchor the sidebar and drawer
      overlays. Both of those dismiss the keyboard when they open, so the two never coincide. */
   :root.soft-keyboard-open .terminal-pane{overflow:hidden}
-  :root.soft-keyboard-open .terminal-surface{transform:translateY(calc(-1*var(--keyboard-inset,0px)))}
+  :root.soft-keyboard-open .terminal-surface:not(.keyboard-reserved){transform:translateY(calc(-1*var(--keyboard-inset,0px)))}
+  /* A pane that reserved the keyboard's height out of its own geometry has nothing behind
+     the keyboard to slide out from under it: the grid was sized to the space above the
+     keyboard in the first place, the strip below is dead space the keyboard covers, and
+     the whole conversation stays on screen. Held back at the *surface*, not the host, so
+     the command rail rides up with the terminal and stays next to it rather than being
+     stranded at the bottom of the pane behind the keyboard.
+     `keyboardReserve.ts` owns when this is allowed. In one line: only while everything the
+     harness has painted still fits in the smaller grid, so the resize that reaches the PTY
+     can never be the destructive one.
+     A margin and not a height, because the surface is a flex item under a pane bar whose own
+     height is a layout result: `height:100% - reserve` would measure the reservation from the
+     top of the *pane* and leave the rail sitting the bar's height inside the keyboard. A
+     bottom margin is subtracted from the space the item is shrunk into however tall the
+     chrome above it turns out to be, which is the only way the surface's bottom edge lands
+     exactly on the keyboard's top edge. */
+  .terminal-surface.keyboard-reserved{margin-bottom:var(--terminal-keyboard-reserve,0px)}
   /* The pane's clip protects everything above the pane — the tab rail and the toolbar are
      outside its box — but the pane's own header and read-aloud strip are inside it, and the
      surface is a later sibling, so a translated surface paints straight over them. They are
@@ -1577,7 +1593,12 @@ body {
      Pushing the host back down *inside* the already-slid surface reveals the grid's top while
      the command rail and the chips stay where the slide put them, above the keyboard, so the
      control that got you here is still the control that takes you back. */
-  :root.soft-keyboard-open .terminal-surface.keyboard-peek>.terminal-host{transform:translateY(var(--keyboard-inset,0px))}
+     A drag moves this continuously rather than flipping between the two ends, so the offset
+     is a length the pane writes per pointer move and not a class. The button and the
+     landed-output move are jumps and animate; a dragged offset must not, because a
+     transition on a value the finger is already setting reads as the pane lagging behind. */
+  :root.soft-keyboard-open .terminal-surface>.terminal-host{transform:translateY(var(--peek-offset,0px))}
+  :root.soft-keyboard-open .terminal-surface.keyboard-peek-animated>.terminal-host{transition:transform 140ms ease-out}
   /* Every other mobile surface shortens instead of sliding, and the difference is not a
      stylistic one. The terminal must not resize because shrinking an alternate-screen PTY
      destroys the rows that no longer fit. A note editor, a file view, or the drawer reflows
