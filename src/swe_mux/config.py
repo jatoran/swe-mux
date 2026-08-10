@@ -327,6 +327,9 @@ class Config:
     # 120 is what the app has always done: installing this build changes nothing.
     claude_max_columns: int = 120
     git_poll_seconds: float = 5.0
+    # Empty means the app-managed directory below data_dir. The public config exposes
+    # the resolved absolute value so browser clients never infer the daemon's home.
+    worktree_root: str = ""
     process_poll_seconds: float = 5.0
     process_orphan_grace_seconds: float = 15.0
     # Windows-only sweep for headless-browser windows that DWM composites even
@@ -532,9 +535,16 @@ class Config:
     def database_path(self) -> Path:
         return self.data_dir / "mux.db"
 
+    @property
+    def resolved_worktree_root(self) -> Path:
+        configured = self.worktree_root.strip()
+        root = Path(configured).expanduser() if configured else self.data_dir / "worktrees"
+        return root.resolve()
+
     def public_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["data_dir"] = str(self.data_dir)
+        result["worktree_root"] = str(self.resolved_worktree_root)
         result.pop("config_path", None)
         # Legacy input is still accepted so existing config files start cleanly,
         # but layout v6 has no dock/pop-out presentation preference.
@@ -743,6 +753,14 @@ def _validate(config: Config) -> None:
         errors["attach_replay_bytes"] = "must be between 1 KiB and 1 GiB"
     if not 0.25 <= config.git_poll_seconds <= 3600:
         errors["git_poll_seconds"] = "must be between 0.25 and 3600 seconds"
+    if not isinstance(config.worktree_root, str):
+        errors["worktree_root"] = "must be an absolute directory path or empty"
+    elif config.worktree_root.strip():
+        worktree_root = Path(config.worktree_root.strip()).expanduser()
+        if not worktree_root.is_absolute():
+            errors["worktree_root"] = "must be an absolute directory path or empty"
+        elif worktree_root.parent == worktree_root:
+            errors["worktree_root"] = "must not be a filesystem root"
     if not 0.5 <= config.process_poll_seconds <= 60:
         errors["process_poll_seconds"] = "must be between 0.5 and 60 seconds"
     if not 1 <= config.process_orphan_grace_seconds <= 3600:

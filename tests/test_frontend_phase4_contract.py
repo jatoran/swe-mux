@@ -519,11 +519,20 @@ def test_dialog_layers_stack_above_persistent_chrome() -> None:
     assert layers["folder-picker-layer"] > layers["project-registry-dialog-layer"]
 
 
-def test_worktrees_are_not_a_first_class_frontend_surface() -> None:
+def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> None:
     app = source("App.tsx")
     assert "worktreeCreate" not in app
     assert "manageWorktrees" not in app
     assert "Create worktree" not in app
+    run_menu = source("ProjectRunMenu.tsx")
+    assert "New worktree session" in run_menu
+    assert "'/api/git/worktrees'" in run_menu
+    assert "spawn:{project_id:project.id,backend:worktree.backend}" in run_menu
+    assert "onSessions([session])" in run_menu
+    assert "api<{worktree_root?:string}>('GET','/api/config')" in run_menu
+    settings = source("Settings.tsx")
+    assert "<h3>Git and worktrees</h3>" in settings
+    assert "change('worktree_root'" in settings
 
 
 def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:

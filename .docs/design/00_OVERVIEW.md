@@ -77,7 +77,8 @@
 - A Group organizes Project rows only.
 - Each Project has a flat collection of Project-owned notes and one folder browser.
 - Notes are created from that collection and are independent of terminal and session lifetimes.
-- Worktrees remain backend Git capability, not a sidebar, tab, or session-creation concept.
+- Worktrees remain Git artifacts rather than Projects, sidebar rows, or workspace tabs.
+  The Project Run menu may create one and start a session in its exact root as a single explicit user operation.
 - Native transcripts stay in vendor locations and are never deleted by swe-mux.
 - Live provider system auth is authoritative. Startup never restores an older saved account;
   explicit switching replaces auth only while config, skills, transcripts, and running processes

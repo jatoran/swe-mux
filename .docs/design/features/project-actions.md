@@ -2,9 +2,13 @@
 
 ## What it is
 
-The Project-level **Run** menu is the single launch surface for a new Claude, Codex, shell,
-custom terminal, or an explicitly selected repository task. It imports tasks from the Project
-root and opens every resulting process as an ordinary Project-owned terminal tab.
+The Project-level **Run** menu is the single launch surface for a new Claude, Codex, shell, custom terminal, worktree session, or an explicitly selected repository task.
+It imports tasks from the Project root and opens every resulting process as an ordinary Project-owned terminal tab.
+
+The worktree launcher is an explicit Git operation rather than a Project Action.
+It creates a named branch below the configured global worktree root through `POST /api/git/worktrees`, starts the selected backend at that exact worktree root, and places the returned session like every other Run result.
+Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git and processes.
+The resulting absolute path remains editable before creation, and changing the setting does not move existing worktrees.
 
 ## Discovery
 
@@ -76,6 +80,8 @@ the Run menu and its normal trust check.
   changes its runtime cwd.
 - Invalid or unsupported imports remain visible as diagnostics and do not block built-in session
   launchers.
+- Worktree launch fields are user-authored and do not execute repository task files.
+  A failed session start leaves the successfully created worktree intact and changes the launcher to retry only `POST /api/sessions` against that Git-listed root.
 
 This is an explicit exception to the normally inert repository-configuration rule: a task file
 can authorize only the command the user selected, only after exact-content approval. It cannot
@@ -121,9 +127,9 @@ POST /api/projects/{project_id}/actions/trust   {fingerprint}
 POST /api/projects/{project_id}/actions/run     {action_id}
 ```
 
-The desktop active-Project header and every Project row expose Run. Mobile exposes the same menu
-from its contextual toolbar. Built-ins are `Claude`, `Codex`, `Shell`, and `Custom terminal…`;
-imported actions follow in source sections.
+The desktop active-Project header and every Project row expose Run.
+Mobile exposes the same menu from its contextual toolbar.
+Built-ins are the launchable agent harnesses, `Shell`, `Custom terminal…`, and `New worktree session…`; imported actions follow in source sections.
 
 ## Key files
 
@@ -131,6 +137,7 @@ imported actions follow in source sections.
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/server.py`
 - `frontend/src/ProjectRunMenu.tsx`
+- `frontend/src/worktreeLaunch.ts`
 - `frontend/src/App.tsx`
 
 ## Relates to

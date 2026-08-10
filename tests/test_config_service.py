@@ -510,6 +510,26 @@ def test_project_ignore_defaults_are_hot_reloadable_and_bounded(tmp_path: Path) 
         update_config(config, {"project_ignore_patterns": ["x"] * 257})
 
 
+def test_worktree_root_defaults_below_data_dir_and_accepts_an_absolute_override(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.public_dict()["worktree_root"] == str((tmp_path / "worktrees").resolve())
+
+    custom = (tmp_path / "agent-checkouts").resolve()
+    hot, restart = update_config(config, {"worktree_root": str(custom)})
+    assert hot == {"worktree_root"}
+    assert restart == set()
+    assert load_config(path).resolved_worktree_root == custom
+
+    update_config(config, {"worktree_root": ""})
+    assert config.resolved_worktree_root == (tmp_path / "worktrees").resolve()
+
+    with pytest.raises(ValueError, match="absolute directory"):
+        update_config(config, {"worktree_root": "relative/worktrees"})
+
+
 def test_mobile_input_defaults_are_hot_reloadable_and_validated(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)

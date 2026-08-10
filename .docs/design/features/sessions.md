@@ -13,8 +13,7 @@ and reattachable browser viewports.
   `backend` and `native_session_id` may change only for a legitimate agent run promoted
   inside a root shell. A provider launched as the root can never be demoted by a child CLI.
 - A session has one immutable canonical `project_id`. It cannot exist before a Project does.
-- The daemon starts every new, split, stacked, resumed, or review session at the owning
-  Project's canonical root.
+- The daemon starts every new, split, stacked, resumed, or review session at the owning Project's canonical root unless the request names a contained subdirectory or exact Git-listed worktree root of the same repository.
 - Validated OSC 7/runtime cwd is display and Git telemetry only. Navigating elsewhere does
   not change Project membership, layout, note, file browser, defaults, or history ownership.
 

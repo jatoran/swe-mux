@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from swe_mux import server
+from swe_mux.config import Config
 
 # The helper never touches the app on any path under test; typed Any so mypy accepts it.
 APP: Any = SimpleNamespace()
@@ -48,14 +49,21 @@ async def test_cwd_is_forced_to_the_new_worktree(
 
     async def fake_spawn(app: Any, body: dict[str, Any]) -> Any:
         seen.update(body)
-        return SimpleNamespace(record=SimpleNamespace(id="sess-1"))
+        return SimpleNamespace(
+            record=SimpleNamespace(id="sess-1", snapshot=lambda: {"id": "sess-1", "cwd": worktree})
+        )
 
     monkeypatch.setattr(server, "_spawn_from_body", fake_spawn)
     # A caller trying to redirect the session elsewhere must not be able to.
     result = await server._spawn_into_worktree(
         APP, {"project_id": "p1", "cwd": "C:/somewhere/else"}, worktree
     )
-    assert result == {"status": "spawned", "session_id": "sess-1", "cwd": worktree}
+    assert result == {
+        "status": "spawned",
+        "session_id": "sess-1",
+        "cwd": worktree,
+        "session": {"id": "sess-1", "cwd": worktree},
+    }
     assert seen["cwd"] == worktree
     assert seen["project_id"] == "p1"
 
@@ -86,3 +94,23 @@ async def test_an_unexpected_failure_still_leaves_the_worktree(
     assert result["status"] == "error"
     assert "RuntimeError" in result["error"]
     assert Path(worktree).is_dir(), "the worktree must survive an unexpected spawn failure"
+
+
+def test_missing_parents_are_created_below_the_configured_worktree_root(tmp_path: Path) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    target = config.resolved_worktree_root / "project-12345678" / "feature"
+
+    server._ensure_worktree_parent(config, target)
+
+    assert target.parent.is_dir()
+
+
+def test_missing_parents_outside_the_configured_worktree_root_are_refused(
+    tmp_path: Path,
+) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    target = tmp_path / "other" / "project" / "feature"
+
+    with pytest.raises(ValueError, match="parent directory does not exist"):
+        server._ensure_worktree_parent(config, target)
+    assert not target.parent.exists()

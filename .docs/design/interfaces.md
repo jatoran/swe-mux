@@ -1042,12 +1042,12 @@ Patch output is capped at 1 MiB and 10,000 lines and subprocess timeouts are fou
 Git review failures use typed JSON `{error, code}` with status 400, 404, 409, 413, or 504 as appropriate.
 Success and error logs contain metadata only and never patch bodies or file contents.
 
-`POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`. With `spawn`
-present (an ordinary spawn body; `project_id` required) it creates the worktree and then
-starts a session whose cwd is forced to the new tree. The reply always carries
-`spawn: {status}` where status is `not_requested | spawned | error`, plus `session_id` on
-success or `error` on failure — the worktree is the durable artefact, so a failed spawn is
-reported rather than raised and never unwinds it.
+`POST /git/worktrees` takes `{cwd, path, branch?, start_point?, spawn?}`.
+With `spawn` present as an ordinary spawn body with required `project_id`, it creates the worktree and then starts a session whose cwd is forced to the new tree.
+The reply always carries `spawn: {status}` where status is `not_requested | spawned | error`, plus `session_id` and the complete `session` snapshot on success or `error` on failure.
+The worktree is the durable artifact, so a failed spawn is reported rather than raised and never unwinds it.
+If the target parent is missing, the daemon creates it only when it is below the configured `worktree_root`; otherwise the existing-parent requirement remains.
+The public configuration returns `worktree_root` as an absolute path, resolving an empty stored value to `<data_dir>/worktrees`.
 
 Process snapshots expose bounded observational states `active | exited | escaped |
 suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time identity,

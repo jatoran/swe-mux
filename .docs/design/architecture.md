@@ -98,16 +98,16 @@ automatic fallback whenever the supervisor is unreachable.
 2. Project creation initializes `.swe-mux/config.toml` and the first ordinary note at
    `.swe-mux/notes/project.md`, seeding it only when that file is absent.
    Additional notes are created explicitly from the Project's Notes collection.
-3. `POST /api/sessions` requires `project_id`; the daemon ignores no alternate cwd and
-   always spawns at the canonical root.
+3. `POST /api/sessions` requires `project_id` and defaults to the canonical root.
+   An explicit cwd may be a contained subdirectory or an exact Git-listed worktree root of the same repository.
 4. Session PATCH cannot change Project ownership. `cd` affects only validated runtime cwd.
 5. Resume and cross-vendor review require a valid target Project and also start at its root.
 6. Layout v6 stores one recursive split tree of mixed-view pane stacks, caps it at 64 leaves
    and depth 24, and uses optimistic revisions. Leaf IDs are globally unique within a layout.
    Closing resources never deletes files; terminal close uses an explicit kill path.
 7. Group updates only change sidebar organization.
-8. Worktree endpoints remain for Git tooling, but the primary UI does not create or display
-   worktrees as Projects, tabs, or sidebar rows.
+8. Worktrees are never Projects, tabs, or sidebar rows.
+   The Git tab manages them, and the Project Run menu may create a worktree and start one session in it atomically.
 9. Preview proxying accepts only bounded literal-loopback destinations attributable to a live
    session in the requesting Project or explicitly approved by the user. Endpoint identity is
    Project-wide; ownership follows the actual listener, and sandboxed cross-service requests

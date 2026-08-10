@@ -135,10 +135,16 @@ and provider-managed worktrees may live outside that root.
   is created first and a session is then started with its cwd forced to the new tree; the
   caller's own `cwd` is ignored, so this cannot be used to redirect a session elsewhere.
   `spawn.project_id` is required, and the rest of the body is an ordinary spawn request.
+- The Project Run menu exposes this as `New worktree session…` with backend, new branch, optional start point, and absolute path fields.
+  It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments and attaches the returned session to the active Project pane.
+  `worktree_root` is a global Settings value under Git and processes; its empty/default form resolves to `<data_dir>/worktrees`, normally `~/.mux/worktrees`.
+  The daemon creates a missing parent hierarchy only when the target remains below that configured root.
+  A manually entered target outside the configured root retains the existing rule that its parent must already exist.
+  Changing the setting affects only later suggestions and never moves existing worktrees.
 - **The worktree is the durable artefact, so spawn failures are reported, not raised.**
-  The response always carries `spawn.status` — `not_requested`, `spawned` (with
-  `session_id`), or `error` (with `error`) — and a failed spawn never unwinds the worktree
-  or fails the request. The caller retries the spawn alone.
+  The response always carries `spawn.status`: `not_requested`, `spawned` with `session_id` and the `session` snapshot, or `error` with `error`.
+  A failed spawn never unwinds the worktree or fails the request.
+  The Run launcher retains the created path and retries the spawn alone, permitting a backend correction without repeating `git worktree add`.
 - Containment is widened by exactly one allow-list, `resolve_listed_cwd`, keyed on
   `git worktree list --porcelain` output. Git is the authority on which paths are worktrees
   of a given repository, so this admits parallel checkouts of the same codebase without
@@ -163,6 +169,6 @@ and provider-managed worktrees may live outside that root.
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - Routes: `src/swe_mux/server.py`
-- Drawer tab and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`
+- Drawer tab, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`

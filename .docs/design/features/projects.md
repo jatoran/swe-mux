@@ -12,8 +12,9 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Group, persisted position, registration date, and `sidebar_visible` state.
 - A Project is the only container for sessions, layout, notes, file resources, Project options,
   and Project-scoped history work. A session's `project_id` is immutable.
-- Every spawn begins at the canonical Project root. Later `cd` commands update runtime/Git
-  telemetry only and never retarget ownership.
+- Every spawn defaults to the canonical Project root.
+  An explicit spawn may use a contained subdirectory or an exact Git-listed worktree root of the same repository.
+  Later `cd` commands update runtime/Git telemetry only and never retarget ownership.
 - A Group owns a name, order, and Project membership only. It never owns a folder, layout,
   session, note, setting, or behavior.
 - Git scopes, repository IDs, and repository groups are derived metadata. They cannot replace

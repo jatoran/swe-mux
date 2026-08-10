@@ -58,7 +58,8 @@ Useful controls:
 - Sidebar/header `×` uses inline two-click confirmation; context-menu Kill is immediate.
 - Right-click a project for terminals, its project note, files, settings, and grouping.
 - Use **Run** in the active-project header, Project row, or mobile toolbar to start Claude,
-  Codex, a shell/custom terminal, or an imported Project task. VS Code tasks, root package
+  Codex, a shell/custom terminal, a new worktree session, or an imported Project task.
+  VS Code tasks, root package
   scripts, and `.swe-mux/actions.toml` are inert until their exact current files are reviewed
   and trusted; any edit requires approval again.
 - Create optional named Groups to organize projects in the sidebar; Groups do not control panes.
@@ -102,6 +103,9 @@ detected Tailscale IPv4 address. Open the tailnet URL reported by Settings → R
 security or `mux doctor`, for example `http://100.x.y.z:8765`. Tailscale policy is the
 access boundary; swe-mux has no separate remote login. Use `muxd --local-only` or disable
 the tailnet listener in Settings to keep access local.
+
+New worktrees launched from a Project Run menu default below `~/.mux/worktrees`, grouped by Project and branch.
+Change the root in Settings → Git & processes → Git and worktrees; existing worktrees are not moved.
 
 Tailscale encrypts direct tailnet transport, but browsers still treat an HTTP URL as an
 insecure context and may restrict programmatic clipboard APIs. Optional HTTPS:

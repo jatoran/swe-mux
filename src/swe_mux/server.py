@@ -8081,20 +8081,72 @@ async def _spawn_into_worktree(app: web.Application, spawn_body: Any, path: str)
     try:
         session = await _spawn_from_body(app, {**spawn_body, "cwd": path})
     except ValueError as exc:
+        log.warning(
+            "worktree_spawn_failed project_id=%s backend=%s path=%s error_type=validation error=%s",
+            spawn_body.get("project_id"),
+            spawn_body.get("backend"),
+            path,
+            exc,
+        )
         return {"status": "error", "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - the worktree must survive any spawn failure
-        logging.getLogger(__name__).exception("spawn into worktree %s failed", path)
+        log.exception(
+            "worktree_spawn_failed project_id=%s backend=%s path=%s error_type=%s",
+            spawn_body.get("project_id"),
+            spawn_body.get("backend"),
+            path,
+            type(exc).__name__,
+        )
         return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
-    return {"status": "spawned", "session_id": session.record.id, "cwd": path}
+    return {
+        "status": "spawned",
+        "session_id": session.record.id,
+        "cwd": path,
+        "session": session.record.snapshot(),
+    }
+
+
+def _ensure_worktree_parent(config: Config, target: Path) -> None:
+    """Create missing target parents only below the configured worktree root."""
+
+    parent = target.parent
+    if parent.is_dir():
+        return
+    configured_root = config.resolved_worktree_root
+    try:
+        parent.relative_to(configured_root)
+    except ValueError as exc:
+        raise ValueError({"path": "target parent directory does not exist"}) from exc
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ValueError({"path": f"unable to create target parent: {exc}"}) from exc
+    log.info(
+        "worktree_parent_created path=%s configured_root=%s",
+        parent,
+        configured_root,
+    )
 
 
 async def create_worktree(request: web.Request) -> web.Response:
+    started_at = time.perf_counter()
     body = await request.json()
     cwd, path = str(body["cwd"]), str(Path(body["path"]).resolve())
+    spawn_body = body.get("spawn")
+    log.info(
+        "worktree_create_started cwd=%s path=%s branch=%s start_point=%s "
+        "spawn_requested=%s project_id=%s backend=%s",
+        cwd,
+        path,
+        body.get("branch"),
+        body.get("start_point"),
+        spawn_body is not None,
+        spawn_body.get("project_id") if isinstance(spawn_body, dict) else None,
+        spawn_body.get("backend") if isinstance(spawn_body, dict) else None,
+    )
     if not Path(cwd).is_dir():
         raise ValueError({"cwd": "repository directory does not exist"})
-    if not Path(path).parent.is_dir():
-        raise ValueError({"path": "target parent directory does not exist"})
+    _ensure_worktree_parent(request.app["config"], Path(path))
     existing = await _listed_worktree_paths(cwd)
     if path.casefold() in existing:
         raise ValueError({"path": "target is already a registered worktree"})
@@ -8106,6 +8158,14 @@ async def create_worktree(request: web.Request) -> web.Response:
         args.append(str(start_point))
     code, output = await _git(cwd, *args)
     if code:
+        log.warning(
+            "worktree_create_failed cwd=%s path=%s branch=%s git_code=%s duration_ms=%.1f",
+            cwd,
+            path,
+            body.get("branch"),
+            code,
+            (time.perf_counter() - started_at) * 1000,
+        )
         return json_response(
             {
                 "error": output or "git worktree add failed",
@@ -8114,9 +8174,19 @@ async def create_worktree(request: web.Request) -> web.Response:
             504 if code == 124 else 400,
         )
     result: dict[str, Any] = {"ok": True, "path": path, "spawn": {"status": "not_requested"}}
-    if (spawn_body := body.get("spawn")) is not None:
+    if spawn_body is not None:
         result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path)
     await request.app["events"].emit("worktree_created", source="user", cwd=cwd, path=path)
+    log.info(
+        "worktree_create_completed cwd=%s path=%s branch=%s spawn_status=%s session_id=%s "
+        "duration_ms=%.1f",
+        cwd,
+        path,
+        body.get("branch"),
+        result["spawn"]["status"],
+        result["spawn"].get("session_id"),
+        (time.perf_counter() - started_at) * 1000,
+    )
     return json_response(result, 201)
 
 

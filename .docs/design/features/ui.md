@@ -307,6 +307,8 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Git and processes exposes the absolute `worktree_root` used by the Project Run launcher.
+  An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
 - Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
   A caller that names a section still wins - Voice from the read-aloud chip, Accounts from the
   account switcher, Command rail from a pane - because that caller knows where the user needs
