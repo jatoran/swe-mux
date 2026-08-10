@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "backend": "pi",
+  "description": "An oh-my-pi-only record appearing in a pi transcript is counted as unknown-record drift, which is why pi carries its own known-record set instead of aliasing omp's. It also pins a consequence of sharing omp's reader: classification and handling are separate passes, so an omp-only record is still *acted on* even while it is counted unknown - here `reset_boundary` clears the open turn. Harmless in practice because pi never writes these, but this is the fixture that would fail loudly if the two vocabularies ever converged by accident.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session", "version": 3, "id": "pi-drift", "cwd": "."}},
+    {"kind": "transcript", "record": {"type": "credential_pin", "id": "x1", "parentId": null, "provider": "anthropic", "hash": "0000000000000000000000000000000000000000000000000000000000000000"}},
+    {"kind": "transcript", "record": {"type": "reset_boundary", "id": "x2", "parentId": "x1"}},
+    {"kind": "transcript", "record": {"type": "message", "id": "u1", "parentId": "x2", "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "a1", "parentId": "u1", "message": {"role": "assistant", "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "content": [{"type": "text", "text": "hi"}], "stopReason": "stop", "usage": {"input": 5, "output": 2, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 7, "cost": {"total": 0.0001}}}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_aborted", "source": "transcript", "scope": "root", "outcome": "cleared"},
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 3, "unknown": 2, "unknown_signatures": {"pi:credential_pin": 1, "pi:reset_boundary": 1}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

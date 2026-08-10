@@ -264,8 +264,14 @@ def summarize_transcript(path: Path, backend: Backend) -> dict[str, Any]:
                         summary["measurement_source"] = "codex-transcript-backfill"
             elif backend == "shell":
                 continue
-            elif backend == "omp":
+            elif backend == "opencode":
+                # No transcript file to back-fill from; opencode's history lives
+                # in `opencode.db`.
+                continue
+            elif backend == "omp" or backend == "pi":
                 event_type = event.get("type")
+                # `credential_pin` is an oh-my-pi record; upstream pi never
+                # writes one, so this simply never matches for pi.
                 if event_type == "credential_pin":
                     provider = str(event.get("provider") or "").strip()
                     account_hash = str(event.get("hash") or "").strip().lower()
@@ -290,7 +296,7 @@ def summarize_transcript(path: Path, backend: Backend) -> dict[str, Any]:
                     summary["provider"] = provider
                 if model:
                     summary["model"] = model
-                summary["measurement_source"] = "omp-transcript-backfill"
+                summary["measurement_source"] = f"{backend}-transcript-backfill"
             else:
                 assert_never(backend)
     summary["final_context_pct"] = final

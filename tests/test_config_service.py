@@ -284,11 +284,15 @@ def test_legacy_harness_executable_and_argument_keys_migrate_to_registry_maps(
         "claude": "claude-custom",
         "codex": "codex-custom",
         "omp": "omp",
+        "pi": "pi",
+        "opencode": "opencode",
     }
     assert config.harness_args == {
         "claude": ["--claude-flag"],
         "codex": ["--codex-flag"],
         "omp": [],
+        "pi": [],
+        "opencode": [],
     }
     persisted = tomllib.loads(path.read_text(encoding="utf-8"))
     assert persisted["harness_exe"] == config.harness_exe

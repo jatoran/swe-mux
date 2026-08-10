@@ -7,9 +7,11 @@ from .base import BackendAdapter, SpawnOptions, SpawnSpec
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .omp import OmpAdapter
+from .opencode import OpenCodeAdapter
+from .pi import PiAdapter
 from .shell import ShellAdapter
 
-HOOK_INSTALLER_FAMILIES = frozenset({"claude", "codex", "omp"})
+HOOK_INSTALLER_FAMILIES = frozenset({"claude", "codex", "omp", "pi", "opencode"})
 
 
 def build_agent_adapter(
@@ -52,6 +54,21 @@ def build_agent_adapter(
             data_dir=data_dir,
             mcp_url=mcp_url,
         )
+    if harness.adapter_family == "pi":
+        # No `mcp_url`: pi 0.74.2 has no MCP client at all (its bundled docs
+        # carry no MCP page and its dist references none), so there is nothing
+        # to register the mux server with. Extension-registered native tools are
+        # the route if that surface is ever wanted.
+        return PiAdapter(executable, args, data_home=harness.data_home())
+    if harness.adapter_family == "opencode":
+        # No `mcp_url` yet either: opencode does have MCP, but registering it
+        # belongs with the observation work rather than the launch path.
+        return OpenCodeAdapter(
+            executable,
+            args,
+            data_home=harness.data_home(),
+            data_dir=data_dir,
+        )
     assert_never(harness.adapter_family)
 
 __all__ = [
@@ -61,6 +78,8 @@ __all__ = [
     "ClaudeAdapter",
     "CodexAdapter",
     "OmpAdapter",
+    "OpenCodeAdapter",
+    "PiAdapter",
     "ShellAdapter",
     "build_agent_adapter",
     "HOOK_INSTALLER_FAMILIES",

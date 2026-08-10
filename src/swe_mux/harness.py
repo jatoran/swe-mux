@@ -10,8 +10,8 @@ from typing import Literal, TypeGuard
 StateSource = Literal["hook", "transcript", "pty", "cli_state"]
 MeasurementSource = Literal["transcript", "none"]
 ToolCatalogSource = Literal["documented_catalog", "runtime_dependent"]
-Backend = Literal["shell", "claude", "codex", "omp"]
-AdapterFamily = Literal["claude", "codex", "omp"]
+Backend = Literal["shell", "claude", "codex", "omp", "pi", "opencode"]
+AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 
 DataHomeResolver = Callable[[], Path]
 ToolCatalog = tuple[tuple[str, str], ...]
@@ -88,7 +88,7 @@ class HarnessDescriptor:
         plus transcript measurements provide the complete managed surface.
         """
         has_hooks = "hook" in self.state_sources
-        has_measurements = self.measurement_source == "transcript"
+        has_measurements = self.measurement_source != "none"
         if has_hooks and has_measurements:
             return HarnessLevel.managed
         if has_hooks:
@@ -130,12 +130,60 @@ def _omp_data_home() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".omp" / "agent"
 
 
+def _pi_data_home() -> Path:
+    """pi's agent directory.
+
+    ``PI_CODING_AGENT_DIR`` is deliberately read here even though
+    :func:`_omp_data_home` reads it too: oh-my-pi is a fork of pi and the two
+    genuinely share the variable (measured 2026-08-10 — it is the only ``PI_*``
+    directory variable pi 0.74.2 reads, and omp reads it as well). Mirroring the
+    CLI's own resolution is the whole job of a data-home resolver, so when the
+    user exports one value both harnesses resolve to it exactly as both CLIs
+    would. Binding survives the overlap because a pi conversation is bound from
+    its extension's reported session file and a live transcript may only be
+    claimed by one session.
+
+    ``PI_CONFIG_DIR`` is *not* read: it is an omp addition and pi ignores it.
+    """
+    configured = os.environ.get("PI_CODING_AGENT_DIR")
+    return Path(configured).expanduser() if configured else Path.home() / ".pi" / "agent"
+
+
+def _opencode_data_home() -> Path:
+    """opencode's data directory, holding ``opencode.db``.
+
+    opencode uses the XDG-style ``~/.local/share/opencode`` on every platform,
+    including Windows (measured: the installed 1.18.16 created
+    ``C:\\Users\\<user>\\.local\\share\\opencode``), so this does not branch on
+    ``APPDATA``. ``OPENCODE_DATA_DIR`` may name a comma-separated list; the first
+    entry is the write target and the only one mux follows.
+    """
+    configured = os.environ.get("OPENCODE_DATA_DIR")
+    if configured:
+        first = configured.split(",")[0].strip()
+        if first:
+            return Path(first).expanduser()
+    return Path.home() / ".local" / "share" / "opencode"
+
+
 _NORMALIZED_AGENT_EVENTS = (
     "turn_started",
     "turn_ended",
     "tool_use",
     "tool_result",
     "approval_needed",
+)
+
+# pi has no native approval flow at all: the CLI runs a tool as soon as the model
+# asks for it, and gating is something a *user* extension implements on top of
+# `tool_call` (its own examples ship `permission-gate.ts`, which pairs `tool_call`
+# with `ui.confirm`). Declaring `approval_needed` here would promise an evidence
+# kind pi cannot produce, so the corpus would demand a fixture that cannot exist.
+_PI_NORMALIZED_EVENTS = (
+    "turn_started",
+    "turn_ended",
+    "tool_use",
+    "tool_result",
 )
 
 _CLAUDE_TOOLS: ToolCatalog = (
@@ -207,6 +255,30 @@ _OMP_TOOLS: ToolCatalog = (
     ("manage_skill", "Create or update isolated managed skills"),
 )
 
+_PI_TOOLS: ToolCatalog = (
+    ("read", "Read a file"),
+    ("write", "Create or overwrite a file"),
+    ("edit", "Apply an exact string replacement"),
+    ("bash", "Run a workspace shell command"),
+    ("glob", "Find paths using glob patterns"),
+    ("grep", "Search file contents with regular expressions"),
+    ("list", "List a directory"),
+)
+
+_OPENCODE_TOOLS: ToolCatalog = (
+    ("read", "Read a file"),
+    ("write", "Create or overwrite a file"),
+    ("edit", "Apply an exact string replacement"),
+    ("patch", "Apply a structured patch"),
+    ("bash", "Run a workspace shell command"),
+    ("glob", "Find paths using glob patterns"),
+    ("grep", "Search file contents with regular expressions"),
+    ("list", "List a directory"),
+    ("task", "Run a subagent"),
+    ("todowrite", "Maintain the session task list"),
+    ("webfetch", "Fetch a web page"),
+)
+
 _CLAUDE_HOOK_EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
@@ -243,6 +315,38 @@ _OMP_HOOK_EVENTS = (
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",
+    "PermissionRequest",
+    "approval_resolved",
+    "context_compacted",
+    "SessionEnd",
+)
+
+
+_PI_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "turn_started",
+    "turn_ended",
+    "task_started",
+    "task_complete",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "context_compacted",
+    "SessionEnd",
+)
+
+# opencode's plugin surface is one universal `event` subscription plus a small
+# number of named hooks. The set below is what the mux plugin binds and
+# normalizes; opencode's full bus carries LSP, installation, TUI, and PTY events
+# that say nothing about agent lifecycle.
+_OPENCODE_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "turn_started",
+    "turn_ended",
+    "PreToolUse",
+    "PostToolUse",
     "PermissionRequest",
     "approval_resolved",
     "context_compacted",
@@ -343,6 +447,104 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         tool_catalog=_OMP_TOOLS,
         tool_catalog_source="documented_catalog",
         hook_events=_OMP_HOOK_EVENTS,
+    ),
+    "pi": HarnessDescriptor(
+        name="pi",
+        display_name="pi",
+        executable="pi",
+        default_args=(),
+        data_home=_pi_data_home,
+        adapter_family="pi",
+        config_dir_name=".pi",
+        script_base_name="pi",
+        rollout_file_prefix=None,
+        # The mux extension reports `ctx.sessionManager.getSessionFile()` on
+        # `session_start`. That is pi's only strong pane-to-conversation link:
+        # unlike oh-my-pi it writes no `terminal-sessions/<terminal-id>`
+        # breadcrumb (measured 2026-08-10 — its data home holds only auth.json,
+        # extensions/, and sessions/, and upstream pi-tui ships no ttyid.ts).
+        reports_transcript_path=True,
+        external_usage_command=False,
+        provider_account_management=False,
+        # In-process extension, ordered against its own transcript writes, as omp.
+        hook_ordering_guarantee=True,
+        repaints_scrollback=True,
+        # No `pty`: the PTY rule table is backend-scoped and each harness's
+        # markers have to be pinned to captured screens from the installed
+        # build. pi's have not been captured, and a screen rule guessed from
+        # documentation is the marker-drift problem restated. Hooks and the
+        # transcript already reach `managed`; adding `pty` is a measurement
+        # exercise, not a code one.
+        state_sources=("hook", "transcript"),
+        measurement_source="transcript",
+        reports_conversation_rollover=True,
+        assigns_conversation_id=False,
+        resolves_transcript_by_cwd=True,
+        submission="terminal_line",
+        root_completion="assistant_stop",
+        screen="normal",
+        native_hooks=True,
+        transcript="semantic",
+        pty=None,
+        normalized_events=_PI_NORMALIZED_EVENTS,
+        tool_catalog=_PI_TOOLS,
+        tool_catalog_source="documented_catalog",
+        hook_events=_PI_HOOK_EVENTS,
+    ),
+    "opencode": HarnessDescriptor(
+        name="opencode",
+        display_name="opencode",
+        executable="opencode",
+        default_args=(),
+        data_home=_opencode_data_home,
+        adapter_family="opencode",
+        config_dir_name=".opencode",
+        script_base_name="opencode",
+        rollout_file_prefix=None,
+        # There is no transcript file to report; conversations live as rows in
+        # `opencode.db`, addressed by session id.
+        reports_transcript_path=False,
+        external_usage_command=False,
+        provider_account_management=False,
+        # The plugin posts over loopback HTTP while the server writes the store
+        # on its own schedule; nothing measured guarantees the POST lands after
+        # the row it describes. Declared false so the transcript-liveness rule
+        # keeps arbitrating rather than trusting hook order.
+        hook_ordering_guarantee=False,
+        repaints_scrollback=False,
+        # opencode keeps conversations as rows in `opencode.db`, not as an
+        # append-only file, so the byte-offset transcript tailer has nothing to
+        # attach to and `transcript`/`measurement` are deliberately absent here.
+        # Its `event(aggregate_id, seq, type, data)` table is an ordered
+        # per-session log that can carry both, but adopting it means teaching the
+        # observer a second evidence transport with its own liveness and
+        # staleness rules. Until that lands, the plugin's hooks are the state
+        # source and mux publishes no tokens, cost, or context for opencode
+        # rather than publishing a number it has not verified.
+        # No `pty` for the same reason as pi: opencode's screens have not been
+        # captured, and its TUI holds the alternate screen, where mux's tail
+        # rules read a repainted frame rather than a transcript.
+        state_sources=("hook",),
+        measurement_source="none",
+        # `/new` mints a fresh `ses_…` in the same pane and the plugin reports it
+        # as `session.created`, which is a CLI-reported rollover exactly as
+        # Claude's SessionStart is. There is also no filesystem transcript-switch
+        # heuristic here for the flag to suppress.
+        reports_conversation_rollover=True,
+        assigns_conversation_id=False,
+        # A session row is keyed by id and carries its own `directory`; the
+        # conversation never moves when the CLI's working directory changes.
+        resolves_transcript_by_cwd=False,
+        submission="terminal_line",
+        root_completion="session_idle",
+        screen="alternate",
+        native_hooks=True,
+        transcript=None,
+        pty=None,
+        normalized_events=_NORMALIZED_AGENT_EVENTS,
+        tool_catalog=_OPENCODE_TOOLS,
+        tool_catalog_source="runtime_dependent",
+        hook_events=_OPENCODE_HOOK_EVENTS,
     ),
 }
 

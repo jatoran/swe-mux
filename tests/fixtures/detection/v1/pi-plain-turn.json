@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "backend": "pi",
+  "description": "A pi session header followed by its startup model/thinking entries and a plain user-assistant exchange produces one complete root turn. Record shapes copied from a real pi 0.74.2 session file.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session", "version": 3, "id": "pi-native", "cwd": "."}},
+    {"kind": "transcript", "record": {"type": "model_change", "id": "c970c64a", "parentId": null, "provider": "openrouter", "modelId": "moonshotai/kimi-k2.6"}},
+    {"kind": "transcript", "record": {"type": "thinking_level_change", "id": "cce05220", "parentId": "c970c64a", "thinkingLevel": "medium"}},
+    {"kind": "transcript", "record": {"type": "message", "id": "8a3e107b", "parentId": "cce05220", "message": {"role": "user", "content": [{"type": "text", "text": "say ok"}]}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "270b7fc3", "parentId": "8a3e107b", "message": {"role": "assistant", "api": "openai-completions", "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "content": [{"type": "text", "text": "ok"}], "stopReason": "stop", "usage": {"input": 12, "output": 3, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 15, "cost": {"input": 0.0001, "output": 0.0002, "cacheRead": 0, "cacheWrite": 0, "total": 0.0003}}}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 5, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

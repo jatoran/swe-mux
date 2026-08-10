@@ -13,6 +13,8 @@ from typing import Any, assert_never
 
 from .adapters.codex import codex_lifecycle_hook_args
 from .adapters.omp import materialize_mux_extension, retire_mux_extension, with_mux_hook
+from .adapters.opencode import materialize_mux_config, opencode_plugin_path, retire_mux_config
+from .adapters.pi import pi_hook_path
 from .codex_tui import with_scrollback_safe_tui
 from .harness import Backend, agent_harnesses, descriptor, is_agent_harness, require_backend
 from .shim_paths import is_mux_shim, path_without_shim_dirs
@@ -154,6 +156,42 @@ def _omp(args: list[str]) -> tuple[str, list[str], str]:
     return exe, with_mux_hook([*configured, *args], extension), ""
 
 
+def _pi(args: list[str]) -> tuple[str, list[str], str]:
+    prefix = _env_prefix("pi")
+    exe = os.environ.get(f"{prefix}_EXE", "pi")
+    configured = json.loads(os.environ.get(f"{prefix}_ARGS", "[]"))
+    hook = str(pi_hook_path())
+    merged = [*configured, *args]
+    # pi mints its own conversation id, so the shim promotes with an empty
+    # native id and the extension's `session_start` report establishes identity.
+    if hook in merged:
+        return exe, merged, ""
+    return exe, ["--extension", hook, *merged], ""
+
+
+def _opencode(args: list[str]) -> tuple[str, list[str], str]:
+    prefix = _env_prefix("opencode")
+    exe = os.environ.get(f"{prefix}_EXE", "opencode")
+    configured = json.loads(os.environ.get(f"{prefix}_ARGS", "[]"))
+    root = os.environ.get("MUX_OPENCODE_CONFIG_ROOT")
+    session_id = os.environ.get("MUX_SESSION_ID")
+    if root and session_id:
+        try:
+            config = materialize_mux_config(
+                Path(root) / session_id, opencode_plugin_path()
+            )
+        except OSError:
+            # Forfeit the plugin, never the pane.
+            pass
+        else:
+            # opencode takes no per-launch plugin flag, so the plugin is added
+            # through an extra *merged* config layer rather than by replacing
+            # OPENCODE_CONFIG_DIR, which would hide the user's own agents,
+            # commands, and auth.
+            os.environ["OPENCODE_CONFIG"] = str(config)
+    return exe, [*configured, *args], ""
+
+
 def _attach_parent_console() -> None:
     """Join the invoking shim's console before spawning the agent.
 
@@ -256,6 +294,10 @@ def _build_launch(backend: Backend, args: list[str]) -> tuple[str, list[str], st
         pass
     elif backend == "omp":
         return _omp(args)
+    elif backend == "pi":
+        return _pi(args)
+    elif backend == "opencode":
+        return _opencode(args)
     else:
         assert_never(backend)
     harness = descriptor(backend)
@@ -269,6 +311,10 @@ def _build_launch(backend: Backend, args: list[str]) -> tuple[str, list[str], st
         return _codex(args, name=backend, default_executable=harness.executable)
     if harness.adapter_family == "omp":
         return _omp(args)
+    if harness.adapter_family == "pi":
+        return _pi(args)
+    if harness.adapter_family == "opencode":
+        return _opencode(args)
     assert_never(harness.adapter_family)
 
 
@@ -292,6 +338,11 @@ def main() -> None:
             session_id = os.environ.get("MUX_SESSION_ID")
             if root and session_id:
                 retire_mux_extension(Path(root), session_id)
+        if backend == "opencode":
+            config_root = os.environ.get("MUX_OPENCODE_CONFIG_ROOT")
+            session_id = os.environ.get("MUX_SESSION_ID")
+            if config_root and session_id:
+                retire_mux_config(Path(config_root), session_id)
     raise SystemExit(exit_code)
 
 

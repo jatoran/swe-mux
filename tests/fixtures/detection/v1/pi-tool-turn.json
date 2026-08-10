@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "backend": "pi",
+  "description": "A pi turn that calls a tool: the assistant's toolCall content and the following toolResult message keep the root turn open until the final assistant message stops.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session", "version": 3, "id": "pi-tools", "cwd": "."}},
+    {"kind": "transcript", "record": {"type": "message", "id": "u1", "parentId": null, "message": {"role": "user", "content": [{"type": "text", "text": "read the readme"}]}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "a1", "parentId": "u1", "message": {"role": "assistant", "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "content": [{"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "README.md"}}], "stopReason": "toolUse", "usage": {"input": 20, "output": 8, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 28, "cost": {"total": 0.0005}}}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "t1", "parentId": "a1", "message": {"role": "toolResult", "toolCallId": "call-1", "toolName": "read", "content": [{"type": "text", "text": "# readme"}], "isError": false}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "a2", "parentId": "t1", "message": {"role": "assistant", "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "content": [{"type": "text", "text": "it is a readme"}], "stopReason": "stop", "usage": {"input": 40, "output": 6, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 46, "cost": {"total": 0.0009}}}}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "tool_use", "source": "transcript", "scope": "root", "tool": "read"},
+      {"type": "tool_result", "source": "transcript", "scope": "root", "tool": "read", "success": true},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 5, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

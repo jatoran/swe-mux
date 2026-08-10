@@ -85,6 +85,39 @@ def with_mux_hook(args: list[str], extension_path: Path | None = None) -> list[s
     return ["--extension", target, *args]
 
 
+def session_header(path: Path) -> dict[str, Any] | None:
+    """Read the ``{"type": "session"}`` header from a pi-family session file.
+
+    Shared by oh-my-pi and upstream pi because the two forks write the same
+    header record. Current omp files begin with a fixed 256-byte title slot;
+    legacy omp files and every pi file begin with the header itself, so this
+    inspects logical records first and only then probes the byte boundary. That
+    boundary probe exists for a torn title-slot rewrite, where the slot's
+    trailing newline is briefly missing.
+    """
+    try:
+        with path.open("rb") as handle:
+            prefix = handle.read(64 * 1024)
+    except OSError:
+        return None
+    for raw in prefix.splitlines()[:3]:
+        try:
+            value = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("type") == "session":
+            return value
+    if len(prefix) > _TITLE_SLOT_BYTES:
+        raw = prefix[_TITLE_SLOT_BYTES:].splitlines()[0]
+        try:
+            value = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if isinstance(value, dict) and value.get("type") == "session":
+            return value
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalBreadcrumb:
     cwd: Path
@@ -248,32 +281,7 @@ class OmpAdapter(BackendAdapter):
 
     @staticmethod
     def _header(path: Path) -> dict[str, Any] | None:
-        try:
-            with path.open("rb") as handle:
-                prefix = handle.read(64 * 1024)
-        except OSError:
-            return None
-        # Current files start with a 256-byte title line. Legacy files start
-        # directly with the session header, so inspect logical records instead
-        # of assuming the physical slot is present.
-        for raw in prefix.splitlines()[:3]:
-            try:
-                value = json.loads(raw)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if isinstance(value, dict) and value.get("type") == "session":
-                return value
-        # A torn title-slot rewrite can temporarily hide its newline. The header
-        # still begins at the fixed byte boundary and is safe to probe directly.
-        if len(prefix) > _TITLE_SLOT_BYTES:
-            raw = prefix[_TITLE_SLOT_BYTES:].splitlines()[0]
-            try:
-                value = json.loads(raw)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return None
-            if isinstance(value, dict) and value.get("type") == "session":
-                return value
-        return None
+        return session_header(path)
 
     def _session_files(self) -> list[Path]:
         root = self.data_home / "sessions"

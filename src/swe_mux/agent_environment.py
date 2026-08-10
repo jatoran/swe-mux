@@ -521,6 +521,45 @@ def _config_sources(
                         loaded_at,
                     ),
                 )
+    elif backend == "pi":
+        pi_home = descriptor("pi").data_home()
+        pi_sources: tuple[tuple[Path, str, Scope], ...] = (
+            (pi_home / "settings.json", "~/.pi/agent/settings.json", "user"),
+            (cwd / ".pi" / "settings.json", ".pi/settings.json", "project"),
+        )
+        for path, label, scope in pi_sources:
+            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+    elif backend == "opencode":
+        opencode_sources: tuple[tuple[Path, str, Scope], ...] = (
+            (
+                Path.home() / ".config" / "opencode" / "opencode.json",
+                "~/.config/opencode/opencode.json",
+                "user",
+            ),
+            (
+                Path.home() / ".config" / "opencode" / "opencode.jsonc",
+                "~/.config/opencode/opencode.jsonc",
+                "user",
+            ),
+            (cwd / "opencode.json", "opencode.json", "project"),
+            (cwd / "opencode.jsonc", "opencode.jsonc", "project"),
+        )
+        for path, label, scope in opencode_sources:
+            _source_once(sources, _load_source(path, label, scope, "json", loaded_at))
+        # The mux-owned layer added through OPENCODE_CONFIG. Listing it keeps the
+        # inventory honest about the plugin mux injected.
+        session_config = os.environ.get("OPENCODE_CONFIG")
+        if session_config:
+            _source_once(
+                sources,
+                _load_source(
+                    Path(session_config),
+                    "Session config (OPENCODE_CONFIG)",
+                    "session",
+                    "json",
+                    loaded_at,
+                ),
+            )
     elif backend == "shell":
         raise ValueError("shell sessions do not have agent configuration")
     else:
@@ -664,6 +703,8 @@ def _plugin_inventory(
             item["changed_after_start"] = item["changed_after_start"] or changed
             items.append(item)
     elif backend == "omp":
+        pass
+    elif backend == "pi" or backend == "opencode":
         pass
     elif backend == "shell":
         raise ValueError("shell sessions do not have agent plugins")
@@ -904,6 +945,12 @@ def _mcp_from_data(
         key = "mcp_servers"
     elif backend == "omp":
         key = "mcpServers"
+    elif backend == "opencode":
+        key = "mcp"
+    elif backend == "pi":
+        # pi 0.74.2 ships no MCP client: its bundled docs have no MCP page and
+        # its dist references no MCP config. There is no table to read.
+        return []
     elif backend == "shell":
         raise ValueError("shell sessions do not have agent MCP configuration")
     else:
@@ -1125,6 +1172,8 @@ def _agent_inventory(
                 )
     elif backend == "omp":
         pass
+    elif backend == "pi" or backend == "opencode":
+        pass
     elif backend == "shell":
         raise ValueError("shell sessions do not have agent definitions")
     else:
@@ -1172,6 +1221,21 @@ def _tool_inventory(
         pass
     elif backend == "omp":
         pass
+    elif backend == "pi":
+        # `--tools` is an allowlist and `--no-tools`/`--no-builtin-tools`
+        # disable by default, mirroring Claude's shape closely enough to reuse
+        # the same restriction pass below.
+        selected = _value_after(args, "--tools", "-t")
+        if selected:
+            allowed = {
+                part.strip().split("(", 1)[0]
+                for part in re.split(r"[, ]+", selected)
+                if part.strip()
+            }
+        elif "--no-tools" in args or "-nt" in args:
+            allowed = set()
+    elif backend == "opencode":
+        pass
     elif backend == "shell":
         raise AssertionError("shell backend rejected before tool dispatch")
     else:
@@ -1211,6 +1275,8 @@ def _policy_inventory(backend: Backend, sources: list[ConfigSource]) -> list[dic
         )
     elif backend == "omp":
         keys = ()
+    elif backend == "pi" or backend == "opencode":
+        keys = ()
     elif backend == "shell":
         raise ValueError("shell sessions do not have agent policy")
     else:
@@ -1242,6 +1308,8 @@ def _feature_inventory(backend: Backend, sources: list[ConfigSource]) -> list[di
     if backend == "claude":
         return []
     if backend == "omp":
+        return []
+    if backend == "pi" or backend == "opencode":
         return []
     if backend == "shell":
         raise ValueError("shell sessions do not have agent features")

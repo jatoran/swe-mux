@@ -11,13 +11,12 @@ from typing import Any
 
 from swe_mux.delivery_readiness import DeliveryReadinessTracker
 from swe_mux.event_bus import EventBus
+from swe_mux.harness import is_agent_harness
 from swe_mux.models import MuxEvent, SessionRecord, SessionState
 from swe_mux.observation import (
     IncrementalJsonlDecoder,
-    _claude,
-    _codex,
+    _dispatch_transcript_event,
     _finish_transcript_catchup,
-    _omp,
     _record_parser_observation,
     _transcript_authoritative,
     apply_hook_observation,
@@ -366,14 +365,16 @@ class DetectionReplay:
         self.session.transcript_growth_ts = self.clock.wall()
         self.tail_records.append(dict(record))
         recognized, signature = classify_transcript_event(self.session.record.backend, record)
-        if self.session.record.backend == "claude":
-            await _claude(self.session, record, self.events)  # type: ignore[arg-type]
-        elif self.session.record.backend == "codex":
-            await _codex(self.session, record, self.events)  # type: ignore[arg-type]
-        elif self.session.record.backend == "omp":
-            await _omp(self.session, record, self.events)  # type: ignore[arg-type]
-        else:
-            raise AssertionError(f"no transcript parser for {self.session.record.backend}")
+        # Route through the production dispatcher rather than repeating its
+        # branches: a harness added to the registry but missed here would
+        # otherwise fail as "no transcript parser" at fixture time instead of
+        # being caught by the `assert_never` that guards the real path.
+        await _dispatch_transcript_event(
+            self.session.record.backend,
+            self.session,  # type: ignore[arg-type]
+            record,
+            self.events,
+        )
         await _record_parser_observation(
             self.session, self.events, recognized, signature  # type: ignore[arg-type]
         )
@@ -727,6 +728,8 @@ class DetectionReplay:
 def load_manifest(path: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
-    assert manifest["backend"] in {"claude", "codex", "omp"}
+    # Read from the registry rather than a literal set so a newly registered
+    # harness cannot ship fixtures the runner silently refuses to load.
+    assert is_agent_harness(manifest["backend"])
     assert isinstance(manifest["steps"], list)
     return manifest

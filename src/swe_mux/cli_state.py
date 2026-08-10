@@ -52,6 +52,12 @@ def _publishes_cli_state(backend: Backend) -> bool:
         return False
     if backend == "omp":
         return False
+    if backend == "pi":
+        return False
+    if backend == "opencode":
+        # opencode does publish live status, but over its server's SSE stream
+        # rather than a state file on disk, which is not what this layer reads.
+        return False
     if backend == "shell":
         return False
     assert_never(backend)

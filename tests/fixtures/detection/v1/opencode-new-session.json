@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "backend": "opencode",
+  "description": "`/new` in a live opencode pane mints a fresh ses_ id and the plugin reports it as session.created. That is a CLI-reported rollover in the same sense as Claude's SessionStart, which is why the descriptor sets reports_conversation_rollover. There is no filesystem transcript-switch heuristic here for that flag to suppress - opencode keeps conversations as rows in opencode.db.",
+  "steps": [
+    {"kind": "hook", "event": "SessionStart", "payload": {"source": "startup", "session_id": "ses_first", "opencode_event": "session.created"}},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"agent": "build", "opencode_event": "chat.message"}, "expect_state": "working"},
+    {"kind": "hook", "event": "turn_ended", "payload": {"root_completion": true, "opencode_event": "session.idle"}, "expect_state": "idle"},
+    {"kind": "hook", "event": "SessionStart", "payload": {"source": "startup", "session_id": "ses_second", "opencode_event": "session.created"}},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"agent": "build", "opencode_event": "chat.message"}, "expect_state": "working"},
+    {"kind": "hook", "event": "turn_ended", "payload": {"root_completion": true, "opencode_event": "session.idle"}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"},
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"},
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "backend": "pi",
+  "description": "A pi compaction entry is context-compacted evidence inside the same conversation, not a rollover: the native id and transcript file are unchanged. Shape taken from a real pi 0.74.2 auto-compaction.",
+  "steps": [
+    {"kind": "transcript", "record": {"type": "session", "version": 3, "id": "pi-compact", "cwd": "."}},
+    {"kind": "transcript", "record": {"type": "message", "id": "u1", "parentId": null, "message": {"role": "user", "content": [{"type": "text", "text": "keep going"}]}}, "expect_state": "working"},
+    {"kind": "transcript", "record": {"type": "message", "id": "a1", "parentId": "u1", "message": {"role": "assistant", "provider": "openrouter", "model": "moonshotai/kimi-k2.6", "content": [{"type": "text", "text": "done"}], "stopReason": "stop", "usage": {"input": 30, "output": 4, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 34, "cost": {"total": 0.001}}}}, "expect_state": "idle"},
+    {"kind": "transcript", "record": {"type": "compaction", "id": "41721aca", "parentId": "a1", "summary": "## Goal\nsummarised", "firstKeptEntryId": "u1", "tokensBefore": 2, "details": {"readFiles": [], "modifiedFiles": []}, "fromHook": false}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "transcript", "scope": "root"},
+      {"type": "turn_ended", "source": "transcript", "scope": "root", "outcome": "completed"},
+      {"type": "context_compacted", "source": "transcript", "scope": "root"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "transcript", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "transcript", "proof": "proven"}
+    ],
+    "parser": {"status": "ready", "recognized": 4, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}

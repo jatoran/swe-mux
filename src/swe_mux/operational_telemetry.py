@@ -98,6 +98,20 @@ OMP_KNOWN_RECORDS = {
     "title_change",
     "ttsr_injection",
 }
+# Upstream pi's narrower vocabulary. Kept separate from the omp set so an
+# oh-my-pi-only record appearing in a pi transcript counts as drift.
+PI_KNOWN_RECORDS = {
+    "branch_summary",
+    "compaction",
+    "custom",
+    "custom_message",
+    "label",
+    "message",
+    "model_change",
+    "session",
+    "session_info",
+    "thinking_level_change",
+}
 RESET_EXPECTED_TOLERANCE_SECONDS = 15 * 60
 # Rebound a confirming sample may show over the reset's post-value and still
 # count as "stayed low". A provider that reports whole percents needs the wider
@@ -2133,9 +2147,13 @@ def scan_native_telemetry(
                 )
         elif backend == "shell":
             unknown += 1
-        elif backend == "omp":
+        elif backend == "opencode":
+            # No transcript records exist to derive telemetry from.
+            unknown += 1
+        elif backend == "omp" or backend == "pi":
             outer = str(record.get("type") or "")
-            if outer not in OMP_KNOWN_RECORDS:
+            known_records = OMP_KNOWN_RECORDS if backend == "omp" else PI_KNOWN_RECORDS
+            if outer not in known_records:
                 unknown += 1
                 continue
             recognized += 1

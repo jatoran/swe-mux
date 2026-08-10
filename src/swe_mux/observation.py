@@ -111,7 +111,26 @@ OMP_KNOWN_RECORDS = {
     "mode_change",
 }
 
-TRANSCRIPT_CLASSIFIER_BACKENDS = frozenset({"claude", "codex", "omp"})
+# Upstream pi's entry vocabulary, measured against pi 0.74.2's bundled
+# `docs/session-format.md` and a real session file. It is omp's set minus the
+# records oh-my-pi added after the fork, plus `session_info` (pi's display-name
+# entry, which omp spells `title_change`). Kept as its own set rather than
+# aliased to OMP_KNOWN_RECORDS so that an omp-only record showing up in a pi
+# transcript is reported as unknown-record drift instead of silently accepted.
+PI_KNOWN_RECORDS = {
+    "session",
+    "message",
+    "thinking_level_change",
+    "model_change",
+    "compaction",
+    "branch_summary",
+    "custom",
+    "custom_message",
+    "label",
+    "session_info",
+}
+
+TRANSCRIPT_CLASSIFIER_BACKENDS = frozenset({"claude", "codex", "omp", "pi"})
 
 # Local slash commands (/copy, /model, /resume, ...) are logged as user records
 # but never reach the model, so they must not begin or sustain a root turn.
@@ -751,8 +770,21 @@ async def _dispatch_transcript_event(
         await _claude(session, event, events)
     elif backend == "codex":
         await _codex(session, event, events)
-    elif backend == "omp":
+    elif backend == "omp" or backend == "pi":
+        # pi and oh-my-pi write the same session records — the same
+        # `{"type":"session"}` header, the same `id`/`parentId` entry tree, the
+        # same `usage`/`cost` shape on an assistant message. pi's set is omp's
+        # minus the extras omp added (reset_boundary, credential_pin,
+        # title_change, mode_change, ttsr_injection, service_tier_change), so
+        # the omp reader is not "close enough" here, it is the same reader over
+        # a subset. The omp-only branches are simply unreachable for pi, and
+        # `_omp_context_window` already resolves the window off the session's own
+        # adapter rather than assuming omp's models.db.
         await _omp(session, event, events)
+    elif backend == "opencode":
+        # opencode keeps no transcript file, so no transcript event can arrive
+        # for it. Its state comes from the plugin's hooks.
+        return
     elif backend == "shell":
         return
     else:
@@ -936,6 +968,12 @@ def classify_transcript_event(backend: Backend, event: dict[str, Any]) -> tuple[
         )
     if backend == "omp":
         return outer in OMP_KNOWN_RECORDS, f"omp:{outer}"
+    if backend == "pi":
+        # Signed with pi's own prefix so unknown-record drift is attributed to
+        # the harness that produced it rather than pooled with omp's.
+        return outer in PI_KNOWN_RECORDS, f"pi:{outer}"
+    if backend == "opencode":
+        return False, f"opencode:{outer}"
     if backend == "shell":
         return False, f"shell:{outer}"
     assert_never(backend)
@@ -994,8 +1032,10 @@ def tail_turn_state(backend: Backend, records: list[dict[str, Any]]) -> str:
         return _claude_tail_state(records)
     if backend == "codex":
         return _codex_tail_state(records)
-    if backend == "omp":
+    if backend == "omp" or backend == "pi":
         return _omp_tail_state(records)
+    if backend == "opencode":
+        return "unknown"
     if backend == "shell":
         return "unknown"
     assert_never(backend)

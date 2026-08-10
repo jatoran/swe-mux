@@ -599,6 +599,10 @@ def discover_skills(
         home = codex_home or codex_data_home()
     elif backend == "omp":
         home = omp_home or descriptor("omp").data_home()
+    elif backend == "pi":
+        home = descriptor("pi").data_home()
+    elif backend == "opencode":
+        home = descriptor("opencode").data_home()
     elif backend == "shell":
         raise ValueError("shell sessions do not have agent skills")
     else:
@@ -613,6 +617,15 @@ def discover_skills(
         inventory = _codex_inventory(root, home, moment)
     elif backend == "omp":
         inventory = _omp_inventory(root, home, moment)
+    elif backend == "pi" or backend == "opencode":
+        # Both have their own extensibility surfaces (pi: skills, prompt
+        # templates and themes via `--skill`/`--prompt-template`/`--theme` and
+        # its package manager; opencode: `.opencode/` agents and commands), but
+        # neither's discovery roots have been measured against an installed
+        # build the way Claude's, Codex's, and omp's were. An empty inventory
+        # reports "mux found none", which is true, rather than scanning
+        # directories guessed from documentation and mislabelling what it finds.
+        inventory = SkillInventory(backend=backend, cwd=str(root), generated_at=moment)
     elif backend == "shell":
         raise AssertionError("shell backend rejected before skill dispatch")
     else:

@@ -39,8 +39,16 @@ def test_observed_and_hooked_harnesses_have_runtime_integrations() -> None:
     from swe_mux.observation import TRANSCRIPT_CLASSIFIER_BACKENDS
 
     for harness in HARNESSES.values():
-        if harness.level >= HarnessLevel.observed:
+        # A harness is `observed` when *any* state source reports, so the
+        # requirement is per-source rather than per-level: only a harness that
+        # declares it reads a transcript owes a transcript classifier. opencode
+        # reaches `observed` on hooks alone and keeps its conversations as rows
+        # in `opencode.db`, so demanding one of it would force either a dead
+        # branch or a false capability claim.
+        if "transcript" in harness.state_sources:
             assert harness.name in TRANSCRIPT_CLASSIFIER_BACKENDS
+        if harness.level >= HarnessLevel.observed:
+            assert harness.state_sources
         if harness.level >= HarnessLevel.hooked:
             assert harness.adapter_family in HOOK_INSTALLER_FAMILIES
 
@@ -54,7 +62,9 @@ def test_registry_accessors_preserve_declaration_order() -> None:
     assert agent_harnesses() == tuple(HARNESSES)
     assert AGENT_BACKENDS == frozenset(HARNESSES)
     assert descriptor("claude") is HARNESSES["claude"]
-    assert harnesses_at_least("managed") == ("claude", "codex", "omp")
+    # opencode is absent: hooks make it `observed`/`hooked`, but with no
+    # transcript and no measurement source it cannot reach `managed`.
+    assert harnesses_at_least("managed") == ("claude", "codex", "omp", "pi")
 
 
 def test_capability_queries_fail_closed_for_non_harnesses() -> None:

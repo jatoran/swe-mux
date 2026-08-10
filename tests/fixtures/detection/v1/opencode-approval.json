@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "backend": "opencode",
+  "description": "opencode reports both halves of an approval. permission.updated raises the request and permission.replied resolves it, so mux never has to infer the resolution from a screen - the gap Codex still has.",
+  "steps": [
+    {"kind": "hook", "event": "SessionStart", "payload": {"source": "startup", "session_id": "ses_approval", "opencode_event": "session.created"}},
+    {"kind": "hook", "event": "UserPromptSubmit", "payload": {"agent": "build", "opencode_event": "chat.message"}, "expect_state": "working"},
+    {"kind": "hook", "event": "PermissionRequest", "payload": {"permission_id": "per_1", "tool_name": "bash", "pattern": "rm *", "opencode_event": "permission.updated"}, "expect_state": "awaiting"},
+    {"kind": "hook", "event": "approval_resolved", "payload": {"permission_id": "per_1", "approved": true, "response": "once", "opencode_event": "permission.replied"}, "expect_state": "working"},
+    {"kind": "hook", "event": "turn_ended", "payload": {"root_completion": true, "opencode_event": "session.idle"}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "turn_started", "source": "hook", "scope": "root"},
+      {"type": "approval_needed", "source": "hook", "scope": "root", "kind": "approval"},
+      {"type": "approval_resolved", "source": "hook", "scope": "root", "tool": null, "approved": true},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "awaiting", "source": "hook", "proof": "proven", "awaiting_reason": "approval"},
+      {"previous": "awaiting", "state": "working", "source": "hook", "proof": "proven"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "unknown",
+    "delivery_reason": "readiness_debounce_pending"
+  }
+}
