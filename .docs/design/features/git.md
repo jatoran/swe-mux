@@ -136,15 +136,19 @@ and provider-managed worktrees may live outside that root.
   caller's own `cwd` is ignored, so this cannot be used to redirect a session elsewhere.
   `spawn.project_id` is required, and the rest of the body is an ordinary spawn request.
 - The Project Run menu exposes this as `New worktree session…` with backend, new branch, optional start point, and absolute path fields.
-  It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments and attaches the returned session to the active Project pane.
-  `worktree_root` is a global Settings value under Git and processes; its empty/default form resolves to `<data_dir>/worktrees`, normally `~/.mux/worktrees`.
+  The suggested branch convention is `worktree-<name>`.
+  Branch-field whitespace is normalized to `-` before both branch creation and path derivation.
+  It suggests `<worktree_root>/<project-name>-<project-id>/<branch>` with filesystem-safe path segments.
+  The launcher waits only for worktree creation, closes once the durable tree exists, then calls `POST /api/git/worktrees/session` for setup and spawn in the background.
+  The completed session appears under its Project without changing the current Project, pane, tab, or focus.
+  `worktree_root` is a global Settings value under Git and worktrees; its empty/default form resolves to `<data_dir>/worktrees`, normally `~/.mux/worktrees`.
   The daemon creates a missing parent hierarchy only when the target remains below that configured root.
   A manually entered target outside the configured root retains the existing rule that its parent must already exist.
   Changing the setting affects only later suggestions and never moves existing worktrees.
 - **The worktree is the durable artefact, so spawn failures are reported, not raised.**
   The response always carries `spawn.status`: `not_requested`, `spawned` with `session_id` and the `session` snapshot, or `error` with `error`.
   A failed spawn never unwinds the worktree or fails the request.
-  The Run launcher retains the created path and retries the spawn alone, permitting a backend correction without repeating `git worktree add`.
+  `POST /api/git/worktrees/session` can retry setup and spawn against the durable path without repeating `git worktree add`.
 - Containment is widened by exactly one allow-list, `resolve_listed_cwd`, keyed on
   `git worktree list --porcelain` output. Git is the authority on which paths are worktrees
   of a given repository, so this admits parallel checkouts of the same codebase without
@@ -157,18 +161,27 @@ and provider-managed worktrees may live outside that root.
   user- or client-initiated, can reach a sibling worktree.
 - Project config (`.swe-mux/`) is still read from the **Project root**, not the worktree.
   The session's cwd is the worktree, which is what the agent and its `CLAUDE.md` discovery
-  care about, but per-worktree project configuration is not a thing yet.
-- **Dependency bootstrap is not performed.** A fresh worktree has no `.venv` or
-  `node_modules`, and running a repo-authored setup script from an HTTP endpoint is
-  untrusted code execution that belongs behind the Project Actions trust gate
-  (`project-actions.md`). Until that is wired, the spawned agent runs `.worktree-setup`
-  or installs its own dependencies.
+  care about, while every worktree shares the committed Project configuration.
+- Worktree creation with `spawn`, and the split `POST /api/git/worktrees/session` flow, run bootstrap before the session process starts.
+  `[worktree].setup_command` in the primary checkout's `.swe-mux/config.toml` is the explicit override.
+  When no override exists, an executable `.worktree-setup` in the new checkout is the convention.
+  Windows treats a shebang script as executable when its interpreter can be resolved, including Git Bash for this repository's Bash convention.
+  Setup is a daemon-owned subprocess with an 1800-second timeout, bounded captured output, and process-tree cleanup on cancellation or timeout.
+  Its output is seeded into the new session's supervisor-owned scrollback before the harness starts.
+  Setup failure never removes the worktree and never blocks session creation.
+  The terminal scrollback and `spawn.setup` result state that the tree is not bootstrapped.
+- Harness preparation is adapter-owned and best effort.
+  Claude atomically clones the primary checkout's `~/.claude.json` trust entry to the canonical forward-slashed worktree key, copies the primary `.claude/settings.local.json` permission allowlist, and adds `--add-dir <primary-root>`.
+  Codex atomically writes `trust_level = "trusted"` under the canonical worktree key in the runtime `CODEX_HOME` config and grants the primary root through `sandbox_workspace_write.writable_roots`.
+  OMP and shell currently need no trust preflight or extra-directory argument.
+  A preparation failure falls back to the harness's interactive behavior and does not fail the spawn.
 
 ## Key files
 
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - Routes: `src/swe_mux/server.py`
+- Bootstrap runner: `src/swe_mux/worktree_setup.py`
 - Drawer tab, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`

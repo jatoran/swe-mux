@@ -125,6 +125,7 @@ class RemotePtyHost:
         graceful_exit: str = "exit\r",
         max_scrollback: int = 5 * 1024 * 1024,
         meta: dict[str, Any] | None = None,
+        initial_output: bytes = b"",
     ) -> None:
         self.client = client
         self.sid = sid
@@ -136,6 +137,7 @@ class RemotePtyHost:
         self.env = env or {}
         self.max_scrollback = max_scrollback
         self.meta = meta or {}
+        self.initial_output = initial_output
         self.pid = -1
         self.reaper_assignment = "supervisor_pending"
         self._graceful_exit = graceful_exit
@@ -493,7 +495,8 @@ class SupervisorClient:
                 "graceful_exit": host.graceful_exit,
                 "max_scrollback": host.max_scrollback,
                 "meta": host.meta,
-            }
+            },
+            host.initial_output,
         )
         host.pid = int(response.get("pid", -1))
         host.reaper_assignment = str(response.get("reaper_assignment", "supervisor_unknown"))

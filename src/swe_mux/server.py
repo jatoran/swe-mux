@@ -233,6 +233,7 @@ from .voice import (
     clip_snapshot,
 )
 from .win_jobobj import ReaperJob
+from .worktree_setup import WorktreeSetupResult, run_worktree_setup
 
 log = logging.getLogger(__name__)
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -809,6 +810,7 @@ def create_app(
             web.get("/api/git/commits/{oid}/changes", git_commit_changes),
             web.get("/api/git/diff", git_diff),
             web.post("/api/git/worktrees", create_worktree),
+            web.post("/api/git/worktrees/session", spawn_worktree_session),
             web.delete("/api/git/worktrees", remove_worktree),
             web.post("/api/reveal", reveal_path),
             web.get("/pty/{sid}", pty_ws),
@@ -3788,7 +3790,9 @@ async def _decorate_generated_titles(app: web.Application, items: list[dict[str,
             item["generated_title_annotation"] = annotation
 
 
-async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Session:
+async def _spawn_from_body(
+    app: web.Application, body: dict[str, Any], *, initial_output: bytes | None = None
+) -> Session:
     startup_started_at = time.perf_counter()
     startup_timing_ms: dict[str, float] = {}
     spec = SpawnRequest.parse(body)
@@ -3832,6 +3836,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
     # ./frontend); the containment check is here because this is the only layer
     # that knows which project owns the request.
     cwd = owning_project.root
+    worktree_project_root: Path | None = None
     if spec.cwd:
         try:
             cwd = resolve_contained_cwd(spec.cwd, Path(owning_project.root))
@@ -3841,6 +3846,7 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
             # codebase on another branch and a session belongs in them. The git query
             # only runs on this failure path, so ordinary spawns pay nothing for it.
             cwd = resolve_listed_cwd(spec.cwd, await _listed_worktree_paths(owning_project.root))
+            worktree_project_root = Path(owning_project.root).resolve()
     executable = spec.executable
     argv = list(spec.argv)
     profile_id: str | None = None
@@ -3866,6 +3872,24 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         # Short bodies ride argv; over-bound ones are staged into the workspace
         # with a reader prompt (file I/O off-loop).
         argv = [*argv, await asyncio.to_thread(stage_seed_argv, cwd, spec.seed_text)]
+    if worktree_project_root is not None:
+        adapter = manager.adapters.get(backend)
+        if adapter is not None:
+            try:
+                await asyncio.to_thread(
+                    adapter.preflight_worktree,
+                    worktree_project_root,
+                    Path(cwd).resolve(),
+                )
+            except Exception as exc:  # noqa: BLE001 - harness trust is best effort
+                log.warning(
+                    "worktree_harness_preflight_degraded project_id=%s backend=%s "
+                    "path=%s error_type=%s",
+                    project_id,
+                    backend,
+                    cwd,
+                    type(exc).__name__,
+                )
     spawn_values: dict[str, Any] = dict(
         backend=backend,
         name=spec.name,
@@ -3878,6 +3902,10 @@ async def _spawn_from_body(app: web.Application, body: dict[str, Any]) -> Sessio
         extra_env=dict(spec.env),
         project_label=owning_project.name,
     )
+    if worktree_project_root is not None:
+        spawn_values["worktree_project_root"] = worktree_project_root
+    if initial_output:
+        spawn_values["initial_output"] = initial_output
     if isinstance(manager, SessionManager):
         spawn_values["project"] = project
         spawn_values["startup_started_at"] = startup_started_at
@@ -8063,7 +8091,12 @@ async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
     }
 
 
-async def _spawn_into_worktree(app: web.Application, spawn_body: Any, path: str) -> dict[str, Any]:
+async def _spawn_into_worktree(
+    app: web.Application,
+    spawn_body: Any,
+    path: str,
+    setup: WorktreeSetupResult | None = None,
+) -> dict[str, Any]:
     """Start a session whose cwd is a worktree that was just created.
 
     Reports failure rather than raising: the worktree already exists and is the durable
@@ -8079,7 +8112,12 @@ async def _spawn_into_worktree(app: web.Application, spawn_body: Any, path: str)
     if not spawn_body.get("project_id"):
         return {"status": "error", "error": "spawn requires project_id"}
     try:
-        session = await _spawn_from_body(app, {**spawn_body, "cwd": path})
+        forced_body = {**spawn_body, "cwd": path}
+        session = (
+            await _spawn_from_body(app, forced_body, initial_output=setup.terminal_output())
+            if setup is not None
+            else await _spawn_from_body(app, forced_body)
+        )
     except ValueError as exc:
         log.warning(
             "worktree_spawn_failed project_id=%s backend=%s path=%s error_type=validation error=%s",
@@ -8088,7 +8126,10 @@ async def _spawn_into_worktree(app: web.Application, spawn_body: Any, path: str)
             path,
             exc,
         )
-        return {"status": "error", "error": str(exc)}
+        result: dict[str, Any] = {"status": "error", "error": str(exc)}
+        if setup is not None:
+            result["setup"] = setup.public_dict()
+        return result
     except Exception as exc:  # noqa: BLE001 - the worktree must survive any spawn failure
         log.exception(
             "worktree_spawn_failed project_id=%s backend=%s path=%s error_type=%s",
@@ -8097,13 +8138,55 @@ async def _spawn_into_worktree(app: web.Application, spawn_body: Any, path: str)
             path,
             type(exc).__name__,
         )
-        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
-    return {
+        result = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        if setup is not None:
+            result["setup"] = setup.public_dict()
+        return result
+    result = {
         "status": "spawned",
         "session_id": session.record.id,
         "cwd": path,
         "session": session.record.snapshot(),
     }
+    if setup is not None:
+        result["setup"] = setup.public_dict()
+    return result
+
+
+async def _prepare_worktree_setup(
+    app: web.Application, spawn_body: Any, path: str
+) -> WorktreeSetupResult:
+    if not isinstance(spawn_body, dict) or not spawn_body.get("project_id"):
+        return WorktreeSetupResult("not_configured")
+    project_id = str(spawn_body["project_id"])
+    project = app["projects"].projects.get(project_id)
+    if project is None:
+        return WorktreeSetupResult("not_configured")
+    try:
+        resolved_path = Path(path).resolve()
+        listed = await _listed_worktree_paths(project.root)
+        if str(resolved_path).casefold() not in listed:
+            return WorktreeSetupResult(
+                "error", error="new worktree does not belong to the selected Project"
+            )
+        identity = await resolve_project(project.root)
+        project_config = await read_project_config(project.root, project=identity)
+        if project_config["status"] == "malformed":
+            return WorktreeSetupResult(
+                "error", error=f"Project config is malformed: {project_config.get('error')}"
+            )
+        values = (
+            project_config["values"] if project_config["status"] in {"ready", "read-only"} else {}
+        )
+        return await run_worktree_setup(resolved_path, values, project_id=project_id)
+    except Exception as exc:  # noqa: BLE001 - setup failure must not block spawn
+        log.warning(
+            "worktree_setup_preparation_failed project_id=%s path=%s error_type=%s",
+            project_id,
+            path,
+            type(exc).__name__,
+        )
+        return WorktreeSetupResult("error", error=str(exc))
 
 
 def _ensure_worktree_parent(config: Config, target: Path) -> None:
@@ -8175,7 +8258,8 @@ async def create_worktree(request: web.Request) -> web.Response:
         )
     result: dict[str, Any] = {"ok": True, "path": path, "spawn": {"status": "not_requested"}}
     if spawn_body is not None:
-        result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path)
+        setup = await _prepare_worktree_setup(request.app, spawn_body, path)
+        result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path, setup)
     await request.app["events"].emit("worktree_created", source="user", cwd=cwd, path=path)
     log.info(
         "worktree_create_completed cwd=%s path=%s branch=%s spawn_status=%s session_id=%s "
@@ -8188,6 +8272,40 @@ async def create_worktree(request: web.Request) -> web.Response:
         (time.perf_counter() - started_at) * 1000,
     )
     return json_response(result, 201)
+
+
+async def spawn_worktree_session(request: web.Request) -> web.Response:
+    """Bootstrap an existing Project worktree, then start its session.
+
+    This endpoint is separate from worktree creation so interactive clients can close
+    their creation UI as soon as the durable Git artifact exists. Validation remains
+    in the setup and ordinary spawn paths, both of which require an exact Git-listed
+    worktree owned by the selected Project.
+    """
+    started_at = time.perf_counter()
+    body = await request.json()
+    path = str(Path(body["path"]).resolve())
+    spawn_body = body.get("spawn")
+    log.info(
+        "worktree_session_start_requested path=%s project_id=%s backend=%s",
+        path,
+        spawn_body.get("project_id") if isinstance(spawn_body, dict) else None,
+        spawn_body.get("backend") if isinstance(spawn_body, dict) else None,
+    )
+    setup = await _prepare_worktree_setup(request.app, spawn_body, path)
+    result = await _spawn_into_worktree(request.app, spawn_body, path, setup)
+    log.info(
+        "worktree_session_start_completed path=%s project_id=%s backend=%s "
+        "spawn_status=%s session_id=%s setup_status=%s duration_ms=%.1f",
+        path,
+        spawn_body.get("project_id") if isinstance(spawn_body, dict) else None,
+        spawn_body.get("backend") if isinstance(spawn_body, dict) else None,
+        result["status"],
+        result.get("session_id"),
+        setup.status,
+        (time.perf_counter() - started_at) * 1000,
+    )
+    return json_response(result)
 
 
 async def remove_worktree(request: web.Request) -> web.Response:

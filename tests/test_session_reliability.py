@@ -568,12 +568,20 @@ async def test_spawn_returns_live_session_before_durable_registration(
     project = ProjectIdentity("scope", "Project", ".", "cwd")
 
     session = await asyncio.wait_for(
-        manager.spawn(backend="shell", name=None, cwd=".", project_id="project", project=project),
+        manager.spawn(
+            backend="shell",
+            name=None,
+            cwd=".",
+            project_id="project",
+            project=project,
+            initial_output=b"setup scrollback\r\n",
+        ),
         timeout=0.25,
     )
     assert manager.sessions[session.record.id] is session
     assert session.record.pid == 123
     assert "server_ready" in session.record.startup_timing_ms
+    assert session.scrollback.bytes().startswith(b"setup scrollback\r\n")
     await asyncio.wait_for(registration_started.wait(), timeout=0.25)
     assert persisted == []
 

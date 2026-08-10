@@ -280,7 +280,7 @@ class SupervisorServer:
             # Reserve and validate synchronously; run the blocking ConPTY spawn
             # off the read loop so one slow spawn cannot stall other sessions'
             # input frames on this connection.
-            entry = self._reserve_spawn(connection, header)
+            entry = self._reserve_spawn(connection, header, payload)
             self._spawn_background(
                 self._finish_spawn(connection, entry, request_id), connection, request_id
             )
@@ -441,7 +441,9 @@ class SupervisorServer:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    def _reserve_spawn(self, connection: Connection, header: dict[str, Any]) -> SupervisedSession:
+    def _reserve_spawn(
+        self, connection: Connection, header: dict[str, Any], initial_output: bytes
+    ) -> SupervisedSession:
         sid = str(header["sid"])
         if sid in self.sessions:
             raise ValueError(f"session already exists: {sid}")
@@ -466,6 +468,8 @@ class SupervisorServer:
             ScrollbackBuffer(int(header.get("max_scrollback", 5 * 1024 * 1024))),
             meta=meta if isinstance(meta, dict) else {},
         )
+        if initial_output:
+            entry.scrollback.append(initial_output)
         entry.subscribers.add(connection)
         self.sessions[sid] = entry
         return entry

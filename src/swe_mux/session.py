@@ -2221,6 +2221,8 @@ class SessionManager:
         startup_started_at: float | None = None,
         startup_timing_ms: dict[str, float] | None = None,
         completion_mode: Literal["interactive", "one_shot"] = "interactive",
+        worktree_project_root: Path | None = None,
+        initial_output: bytes | None = None,
     ) -> Session:
         startup_started_at = startup_started_at or time.perf_counter()
         startup_timing_ms = dict(startup_timing_ms or {})
@@ -2244,7 +2246,14 @@ class SessionManager:
         if not resolved_cwd.is_dir():
             raise ValueError(f"cwd does not exist: {resolved_cwd}")
         adapter = self.adapters[backend]
-        opts = SpawnOptions(resolved_cwd, exe, args or [], sid, mcp_token)
+        opts = SpawnOptions(
+            resolved_cwd,
+            exe,
+            args or [],
+            sid,
+            mcp_token,
+            worktree_project_root,
+        )
         spawn_spec = (
             adapter.resume_spec(native_id, opts)
             if resume_native_id
@@ -2350,6 +2359,7 @@ class SessionManager:
                 env=merge_environment(env_base, env_extra),
                 graceful_exit=adapter.graceful_exit_keys(),
                 max_scrollback=self.max_scrollback,
+                initial_output=initial_output or b"",
                 # Adoptable from its first instant. The meta mirror is coalesced
                 # (~0.5s), so a daemon crash inside that window used to leave the
                 # supervisor holding a live session with meta {} — permanently
@@ -2421,6 +2431,8 @@ class SessionManager:
             mcp_token=mcp_token,
             attach_replay_bytes=self.attach_replay_bytes,
         )
+        if initial_output:
+            session.scrollback.append(initial_output)
         self.sessions[sid] = session
         self._attach_ledger_sink(session)
         if isinstance(pty, RemotePtyHost):

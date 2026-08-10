@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import logging
 import os
 import re
 import shlex
 import shutil
 import sys
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
 from ..harness import HARNESSES, descriptor
-from .base import SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec
+
+log = logging.getLogger(__name__)
 
 
 def encode_cwd(cwd: Path | str) -> str:
@@ -49,7 +54,7 @@ def _hook_command(event: str, executable: str | None = None) -> str:
     return shlex.join([python, "-m", "swe_mux.hook_client", event])
 
 
-class ClaudeAdapter:
+class ClaudeAdapter(BackendAdapter):
     name = "claude"
     # Spawned with an injected `--session-id` and per-session hook settings, so
     # every conversation replacement (`/clear`, in-CLI `/resume`) is reported by
@@ -75,16 +80,16 @@ class ClaudeAdapter:
         config_dir_name: str = ".claude",
         script_base_name: str = "claude",
         data_home_resolver: Callable[[], Path] | None = None,
+        user_home_resolver: Callable[[], Path] | None = None,
     ) -> None:
         self.name = name
         self.shim_name = f"{name}.cmd"
         self.config_dir_name = config_dir_name
         self.script_base_name = script_base_name
         self._data_home_resolver = data_home_resolver or (
-            claude_data_home
-            if name == "claude"
-            else lambda: Path.home() / config_dir_name
+            claude_data_home if name == "claude" else lambda: Path.home() / config_dir_name
         )
+        self._user_home_resolver = user_home_resolver or Path.home
         family = descriptor(name) if name in HARNESSES else descriptor("claude")
         self.reports_conversation_rollover = family.reports_conversation_rollover
         self.assigns_conversation_id = family.assigns_conversation_id
@@ -158,7 +163,97 @@ class ClaudeAdapter:
         settings = self._session_settings(opts.session_id)
         if settings:
             args.extend(["--settings", str(settings)])
-        return [*args, *self.default_args, *opts.args]
+        worktree_args = (
+            self.worktree_spawn_args(opts.worktree_project_root)
+            if opts.worktree_project_root is not None
+            else ()
+        )
+        return [*args, *worktree_args, *self.default_args, *opts.args]
+
+    @staticmethod
+    def _canonical_project_key(path: Path) -> str:
+        return path.resolve().as_posix()
+
+    @staticmethod
+    def _atomic_write(path: Path, data: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        temporary.write_bytes(data)
+        os.replace(temporary, path)
+
+    def _preseed_trust(self, project_root: Path, worktree_path: Path) -> None:
+        path = self._user_home_resolver() / ".claude.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OSError(f"Claude trust file is unreadable: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Claude trust file root must be an object")
+        projects = payload.setdefault("projects", {})
+        if not isinstance(projects, dict):
+            raise ValueError("Claude trust projects must be an object")
+        target_key = self._canonical_project_key(worktree_path)
+        if target_key in projects:
+            return
+        source = projects.get(self._canonical_project_key(project_root), {})
+        entry = copy.deepcopy(source) if isinstance(source, dict) else {}
+        entry["hasTrustDialogAccepted"] = True
+        projects[target_key] = entry
+        self._atomic_write(path, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
+
+    def _copy_local_permissions(self, project_root: Path, worktree_path: Path) -> None:
+        source = project_root / ".claude" / "settings.local.json"
+        if not source.is_file():
+            return
+        source_payload = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(source_payload, dict):
+            raise ValueError("primary Claude local settings must be an object")
+        target = worktree_path / ".claude" / "settings.local.json"
+        if not target.exists():
+            self._atomic_write(
+                target, (json.dumps(source_payload, indent=2) + "\n").encode("utf-8")
+            )
+            return
+        target_payload = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(target_payload, dict):
+            raise ValueError("worktree Claude local settings must be an object")
+        source_permissions = source_payload.get("permissions")
+        if isinstance(source_permissions, dict) and isinstance(
+            source_permissions.get("allow"), list
+        ):
+            permissions = target_payload.setdefault("permissions", {})
+            if not isinstance(permissions, dict):
+                raise ValueError("worktree Claude permissions must be an object")
+            current = permissions.get("allow", [])
+            if not isinstance(current, list):
+                raise ValueError("worktree Claude permission allowlist must be an array")
+            permissions["allow"] = list(dict.fromkeys([*current, *source_permissions["allow"]]))
+        self._atomic_write(target, (json.dumps(target_payload, indent=2) + "\n").encode("utf-8"))
+
+    def preflight_worktree(self, project_root: Path, worktree_path: Path) -> None:
+        failures: list[str] = []
+        operations: tuple[tuple[str, Callable[[], None]], ...] = (
+            ("trust", lambda: self._preseed_trust(project_root, worktree_path)),
+            ("permissions", lambda: self._copy_local_permissions(project_root, worktree_path)),
+        )
+        for label, operation in operations:
+            try:
+                operation()
+            except Exception as exc:  # noqa: BLE001 - trust preflight is explicitly best effort
+                failures.append(f"{label}: {exc}")
+                log.warning(
+                    "claude_worktree_preflight_failed phase=%s project_root=%s "
+                    "worktree=%s error_type=%s",
+                    label,
+                    project_root,
+                    worktree_path,
+                    type(exc).__name__,
+                )
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
+    def worktree_spawn_args(self, project_root: Path) -> tuple[str, ...]:
+        return ("--add-dir", str(project_root.resolve()))
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
         return SpawnSpec(

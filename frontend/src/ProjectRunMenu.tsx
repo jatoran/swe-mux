@@ -4,7 +4,7 @@ import { fitScrollingMenuInViewport } from './menuPosition'
 import type { Project, ProjectAction, ProjectActionCatalog, ProjectBackend, Session } from './types'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import { isAbsolutePath } from './gitWorktrees'
-import { worktreePathForBranch } from './worktreeLaunch'
+import { normalizeWorktreeBranchInput, worktreePathForBranch } from './worktreeLaunch'
 
 type Anchor={x:number;y:number}
 type Props={
@@ -13,7 +13,7 @@ type Props={
   onClose:()=>void
   onLaunch:(backend:ProjectBackend)=>void
   onCustom:()=>void
-  onSessions:(sessions:Session[])=>void
+  onSessions:(sessions:Session[],activate?:boolean)=>void
   onError:(message:string)=>void
 }
 
@@ -22,7 +22,8 @@ const sourceLabel:Record<ProjectAction['source'],string>={
 }
 
 type WorktreeDraft={backend:ProjectBackend;branch:string;startPoint:string;path:string;pathEdited:boolean}
-type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;cwd?:string;session?:Session;error?:string}
+type WorktreeSetupResult={status:'not_configured'|'succeeded'|'failed'|'timed_out'|'error';error?:string;exit_code?:number|null}
+type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:string;cwd?:string;session?:Session;error?:string;setup?:WorktreeSetupResult}
 type WorktreeCreateResult={ok:true;path:string;spawn:WorktreeSpawnResult}
 
 export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessions,onError}:Props){
@@ -35,7 +36,6 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
   const [pending,setPending]=useState<ProjectAction|null>(null)
   const [worktreeOpen,setWorktreeOpen]=useState(false)
   const [worktreeError,setWorktreeError]=useState('')
-  const [createdPath,setCreatedPath]=useState('')
   const [worktreeRoot,setWorktreeRoot]=useState('')
   const [worktreeConfigError,setWorktreeConfigError]=useState('')
   const [worktree,setWorktree]=useState<WorktreeDraft>({
@@ -103,36 +103,49 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
     finally{setBusy('')}
   }
   const openWorktree=()=>{
-    setWorktreeError(worktreeConfigError);setCreatedPath('')
+    setWorktreeError(worktreeConfigError)
     setWorktree(current=>({...current,branch:'',startPoint:'',path:worktreePathForBranch(worktreeRoot,project.name,project.id,''),pathEdited:false}))
     setWorktreeOpen(true)
   }
-  const changeBranch=(branch:string)=>setWorktree(current=>({
-    ...current,branch,path:current.pathEdited?current.path:worktreePathForBranch(worktreeRoot,project.name,project.id,branch),
-  }))
+  const changeBranch=(value:string)=>{
+    const branch=normalizeWorktreeBranchInput(value)
+    setWorktree(current=>({
+      ...current,branch,path:current.pathEdited?current.path:worktreePathForBranch(worktreeRoot,project.name,project.id,branch),
+    }))
+  }
+  const startWorktreeSession=async(path:string,backend:ProjectBackend)=>{
+    try{
+      const result=await api<WorktreeSpawnResult>('POST','/api/git/worktrees/session',{
+        path,spawn:{project_id:project.id,backend},
+      },{timeoutMs:35*60*1000})
+      if(result.status!=='spawned'||!result.session_id){
+        const setupFailed=result.setup&&['failed','timed_out','error'].includes(result.setup.status)
+        const setupDetail=setupFailed?` Setup also failed (${result.setup?.error||result.setup?.exit_code||result.setup?.status}); the tree is not bootstrapped.`:''
+        onError(`Worktree created at ${path}, but the session failed: ${result.error||'unknown error'}.${setupDetail}`)
+        return
+      }
+      const session=result.session||await api<Session>('GET',`/api/sessions/${encodeURIComponent(result.session_id)}`)
+      if(result.setup&&['failed','timed_out','error'].includes(result.setup.status)){
+        const detail=result.setup.error||(result.setup.exit_code!=null?`exit code ${result.setup.exit_code}`:result.setup.status)
+        onError(`Worktree session started, but setup failed (${detail}). The tree is not bootstrapped; setup output is in the session scrollback.`)
+      }
+      onSessions([session],false)
+    }catch(cause){
+      onError(`Worktree created at ${path}, but the session could not be started: ${cause instanceof Error?cause.message:String(cause)}`)
+    }
+  }
   const launchWorktree=async(event:SubmitEvent)=>{
     event.preventDefault()
-    const branch=worktree.branch.trim(),path=(createdPath||worktree.path).trim()
-    if(!createdPath&&!branch){setWorktreeError('New branch is required.');return}
+    const branch=worktree.branch.trim(),path=worktree.path.trim()
+    if(!branch){setWorktreeError('New branch is required.');return}
     if(!isAbsolutePath(path)){setWorktreeError('Worktree path must be absolute.');return}
     setBusy('__worktree__');setWorktreeError('')
     try{
-      let session:Session
-      if(createdPath){
-        session=await api<Session>('POST','/api/sessions',{project_id:project.id,backend:worktree.backend,cwd:createdPath},{timeoutMs:30000})
-      }else{
-        const result=await api<WorktreeCreateResult>('POST','/api/git/worktrees',{
-          cwd:project.root,path,branch,start_point:worktree.startPoint.trim()||undefined,
-          spawn:{project_id:project.id,backend:worktree.backend},
-        },{timeoutMs:30000})
-        if(result.spawn.status!=='spawned'||!result.spawn.session_id){
-          setCreatedPath(result.path)
-          setWorktreeError(`Worktree created at ${result.path}, but the session failed: ${result.spawn.error||'unknown error'}`)
-          return
-        }
-        session=result.spawn.session||await api<Session>('GET',`/api/sessions/${encodeURIComponent(result.spawn.session_id)}`)
-      }
-      onSessions([session]);onClose()
+      const result=await api<WorktreeCreateResult>('POST','/api/git/worktrees',{
+        cwd:project.root,path,branch,start_point:worktree.startPoint.trim()||undefined,
+      },{timeoutMs:30000})
+      onClose()
+      void startWorktreeSession(result.path,worktree.backend)
     }catch(cause){setWorktreeError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
@@ -146,11 +159,11 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
       {worktreeOpen?<form class="run-worktree-form" onSubmit={event=>void launchWorktree(event)}>
         <small>NEW WORKTREE SESSION</small>
         <label>Session<select value={worktree.backend} disabled={!!busy} onChange={event=>setWorktree(current=>({...current,backend:event.currentTarget.value}))}>{harnesses.map(harness=><option value={harness.name}>{harness.display_name}</option>)}<option value="shell">Shell</option></select></label>
-        <label>New branch<input autofocus value={worktree.branch} disabled={!!busy||!!createdPath} placeholder="feature/my-change" onInput={event=>changeBranch(event.currentTarget.value)}/></label>
-        <label>Start point <em>optional</em><input value={worktree.startPoint} disabled={!!busy||!!createdPath} placeholder="HEAD" onInput={event=>setWorktree(current=>({...current,startPoint:event.currentTarget.value}))}/></label>
-        <label>Absolute path<input value={createdPath||worktree.path} disabled={!!busy||!!createdPath} onInput={event=>setWorktree(current=>({...current,path:event.currentTarget.value,pathEdited:true}))}/></label>
+        <label>New branch<input autofocus value={worktree.branch} disabled={!!busy} placeholder="worktree-my-change" spellcheck={false} onInput={event=>changeBranch(event.currentTarget.value)}/></label>
+        <label>Start point <em>optional</em><input value={worktree.startPoint} disabled={!!busy} placeholder="HEAD" onInput={event=>setWorktree(current=>({...current,startPoint:event.currentTarget.value}))}/></label>
+        <label>Absolute path<input value={worktree.path} disabled={!!busy} onInput={event=>setWorktree(current=>({...current,path:event.currentTarget.value,pathEdited:true}))}/></label>
         {worktreeError&&<p class="error" role="alert">{worktreeError}</p>}
-        <div><button type="button" disabled={!!busy} onClick={()=>setWorktreeOpen(false)}>Back</button><button class="primary" type="submit" disabled={!!busy}>{busy?'Starting…':createdPath?'Retry session':'Create and start'}</button></div>
+        <div><button type="button" disabled={!!busy} onClick={()=>setWorktreeOpen(false)}>Back</button><button class="primary" type="submit" disabled={!!busy}>{busy?'Creating…':'Create and start'}</button></div>
       </form>:<>
       <div class="run-menu-section"><small>NEW SESSION</small>
         {harnesses.map(harness=><button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span aria-hidden="true">▶</span><div><strong>{harness.display_name}</strong></div></button>)}

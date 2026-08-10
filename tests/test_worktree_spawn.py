@@ -8,6 +8,7 @@ fail and be unable to tell that the worktree exists.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ import pytest
 
 from swe_mux import server
 from swe_mux.config import Config
+from swe_mux.worktree_setup import WorktreeSetupResult
 
 # The helper never touches the app on any path under test; typed Any so mypy accepts it.
 APP: Any = SimpleNamespace()
@@ -83,6 +85,36 @@ async def test_a_rejected_spawn_is_reported_not_raised(
 
 
 @pytest.mark.asyncio
+async def test_setup_output_is_seeded_before_spawn_and_failure_does_not_block_session(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_spawn(
+        app: Any, body: dict[str, Any], *, initial_output: bytes | None = None
+    ) -> Any:
+        del app, body
+        seen["initial_output"] = initial_output
+        return SimpleNamespace(
+            record=SimpleNamespace(id="sess-1", snapshot=lambda: {"id": "sess-1"})
+        )
+
+    monkeypatch.setattr(server, "_spawn_from_body", fake_spawn)
+    setup = WorktreeSetupResult(
+        "failed", "convention", ".worktree-setup", 7, 50, b"dependency error\n"
+    )
+
+    result = await server._spawn_into_worktree(
+        APP, {"project_id": "p1", "backend": "claude"}, worktree, setup
+    )
+
+    assert result["status"] == "spawned"
+    assert result["setup"]["status"] == "failed"
+    assert b"dependency error" in seen["initial_output"]
+    assert b"not bootstrapped" in seen["initial_output"]
+
+
+@pytest.mark.asyncio
 async def test_an_unexpected_failure_still_leaves_the_worktree(
     monkeypatch: pytest.MonkeyPatch, worktree: str
 ) -> None:
@@ -114,3 +146,43 @@ def test_missing_parents_outside_the_configured_worktree_root_are_refused(
     with pytest.raises(ValueError, match="parent directory does not exist"):
         server._ensure_worktree_parent(config, target)
     assert not target.parent.exists()
+
+
+@pytest.mark.asyncio
+async def test_existing_worktree_session_endpoint_runs_setup_before_spawn(
+    monkeypatch: pytest.MonkeyPatch, worktree: str
+) -> None:
+    calls: list[str] = []
+    setup = WorktreeSetupResult("succeeded", "convention", ".worktree-setup", 0, 20)
+
+    async def prepare(app: Any, spawn_body: Any, path: str) -> WorktreeSetupResult:
+        del app
+        assert spawn_body == {"project_id": "p1", "backend": "claude"}
+        assert path == str(Path(worktree).resolve())
+        calls.append("setup")
+        return setup
+
+    async def spawn(
+        app: Any, spawn_body: Any, path: str, prepared: WorktreeSetupResult
+    ) -> dict[str, Any]:
+        del app, spawn_body, path
+        assert prepared is setup
+        calls.append("spawn")
+        return {"status": "spawned", "session_id": "sess-1"}
+
+    class Request:
+        app: Any = APP
+
+        async def json(self) -> dict[str, Any]:
+            return {
+                "path": worktree,
+                "spawn": {"project_id": "p1", "backend": "claude"},
+            }
+
+    monkeypatch.setattr(server, "_prepare_worktree_setup", prepare)
+    monkeypatch.setattr(server, "_spawn_into_worktree", spawn)
+
+    response = await server.spawn_worktree_session(Request())  # type: ignore[arg-type]
+
+    assert calls == ["setup", "spawn"]
+    assert json.loads(response.text)["session_id"] == "sess-1"

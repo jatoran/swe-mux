@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from .base import SpawnOptions, SpawnSpec
+from .base import BackendAdapter, SpawnOptions, SpawnSpec
 
 
-class ShellAdapter:
+class ShellAdapter(BackendAdapter):
     name = "shell"
     reports_conversation_rollover = False
     # A shell has no conversation of its own; promotion adopts the agent's id.

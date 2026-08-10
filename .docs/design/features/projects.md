@@ -117,20 +117,24 @@ promised: a step that must finish before the next begins belongs in the same com
 shell's own `&&` or `;`. The registration is already durable when they run, so a command that
 fails to launch is reported and never unwinds the Project.
 
-This is not an exception to the repository-configuration boundary. A Project Action is imported
+This is not an exception to the ordinary repository-configuration boundary. A Project Action is imported
 from the checkout and therefore needs exact-content approval; a setup command is typed by the
 user into their own settings, so authoring it is the authorization. Execution reuses the Project
 Action spawn contract, and nothing here reads repository content.
 
 ## Configuration boundary
 
-Project-owned `.swe-mux/config.toml` is versioned and permits only typed portable options:
+Project-owned `.swe-mux/config.toml` is versioned and permits typed portable options:
 `default_shell_profile`, `preferred_backend`, `prompt_library_scope`,
-`notification_sounds_enabled`, and additive `ignore_patterns`. Effective precedence is explicit
+`notification_sounds_enabled`, additive `ignore_patterns`, and the narrow `[worktree].setup_command` launch hook.
+Effective precedence is explicit
 request where supported, database Project override, portable Project value, then global default.
 
-Repository-owned `.swe-mux/config.toml` cannot authorize commands, executables, hooks, network
-bindings, automatic actions, credentials, or secrets. Separately, `.vscode/tasks.json`, root
+Repository-owned `.swe-mux/config.toml` cannot authorize general commands, executables, hooks, network bindings, automatic actions, credentials, or secrets.
+The sole command exception is `[worktree].setup_command`, which runs only after an explicit user create-and-spawn worktree request and before that worktree's session starts.
+The Projects manager exposes it under Git and worktrees and states that it is committed executable configuration.
+Blank uses an executable `.worktree-setup` convention instead.
+Separately, `.vscode/tasks.json`, root
 `package.json` scripts, and `.swe-mux/actions.toml` may execute only after the user selects a
 Project Action and locally approves the exact current task-file fingerprint. They never execute
 on discovery, Project open, or daemon startup.

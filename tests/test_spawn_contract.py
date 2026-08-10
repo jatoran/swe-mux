@@ -107,6 +107,8 @@ def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> Non
 def test_base_session_env_drops_no_color_for_agents_but_keeps_it_for_shells() -> None:
     environment = {
         "NO_COLOR": "1",  # ambient pollution: daemon relaunched inside an agent session
+        "FORCE_COLOR": "3",
+        "CLICOLOR_FORCE": "1",
         "CLAUDECODE": "1",  # always scrubbed, regardless of backend
         "PATH": r"C:\Windows",
     }
@@ -115,11 +117,15 @@ def test_base_session_env_drops_no_color_for_agents_but_keeps_it_for_shells() ->
     for agent in ("claude", "codex", "omp"):
         env = base_session_env(environment, agent)
         assert "NO_COLOR" not in env
+        assert "FORCE_COLOR" not in env
+        assert "CLICOLOR_FORCE" not in env
         assert "CLAUDECODE" not in env
         assert env["PATH"] == r"C:\Windows"
     # A plain shell keeps honouring an inherited NO_COLOR (no-color.org).
     shell = base_session_env(environment, "shell")
     assert shell["NO_COLOR"] == "1"
+    assert "FORCE_COLOR" not in shell
+    assert "CLICOLOR_FORCE" not in shell
     assert "CLAUDECODE" not in shell
 
 

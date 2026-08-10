@@ -84,6 +84,12 @@ The descriptor is the source of truth for all generic surfaces.
   selection swaps only the system auth file, so adapters, shims, configuration, skills,
   transcript discovery, and live-process behavior require no account-specific launch path.
 - Claude explicit spawn uses `--session-id`; resume uses `--resume`.
+- Worktree startup policy belongs to adapters because trust artifacts and primary-checkout access differ by harness.
+  The base adapter has no-op `preflight_worktree` and `worktree_spawn_args` hooks, so future harnesses opt in without provider branches in worktree orchestration.
+  Claude preflight clones the canonical primary trust entry into `~/.claude.json`, carries `.claude/settings.local.json`, and contributes `--add-dir`.
+  Codex preflight updates the `config.toml` under the adapter's resolved data home, including an externally supplied `CODEX_HOME`, and contributes a sandbox writable-root override.
+  OMP has no known startup trust gate and retains the no-op behavior.
+  Every preflight is best effort because an interactive harness trust prompt remains the fallback.
 - Shell child PATH begins with generated shims that resolve the real executable before
   PATH modification, assign/retain the native ID, inject hooks, then POST promotion
   with the inherited per-session secret.

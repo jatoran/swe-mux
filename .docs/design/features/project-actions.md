@@ -6,9 +6,11 @@ The Project-level **Run** menu is the single launch surface for a new Claude, Co
 It imports tasks from the Project root and opens every resulting process as an ordinary Project-owned terminal tab.
 
 The worktree launcher is an explicit Git operation rather than a Project Action.
-It creates a named branch below the configured global worktree root through `POST /api/git/worktrees`, starts the selected backend at that exact worktree root, and places the returned session like every other Run result.
+It creates a named branch below the configured global worktree root through `POST /api/git/worktrees`, closes the launcher once that durable operation succeeds, then bootstraps and starts the selected backend through `POST /api/git/worktrees/session`.
+The completed session joins the Project session list without changing the user's current Project, pane, tab, or focus.
 Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git and processes.
 The resulting absolute path remains editable before creation, and changing the setting does not move existing worktrees.
+Whitespace entered in the branch field becomes `-`, keeping the Git branch and suggested filesystem path aligned.
 
 ## Discovery
 
@@ -80,7 +82,9 @@ the Run menu and its normal trust check.
   changes its runtime cwd.
 - Invalid or unsupported imports remain visible as diagnostics and do not block built-in session
   launchers.
-- Worktree launch fields are user-authored and do not execute repository task files.
+- Worktree launch fields are user-authored and do not execute imported Project Action files.
+  Worktree bootstrap is a separate, narrow repository execution path: an explicit create-and-spawn request runs `[worktree].setup_command` or the executable `.worktree-setup` convention before the harness starts.
+  Its failure is shown in session scrollback and never blocks session creation or removes the worktree.
   A failed session start leaves the successfully created worktree intact and changes the launcher to retry only `POST /api/sessions` against that Git-listed root.
 
 This is an explicit exception to the normally inert repository-configuration rule: a task file
@@ -91,6 +95,7 @@ and process ownership model.
 Project setup commands (`projects.md`) reuse this spawn contract but sit outside the trust
 boundary entirely: they are typed by the user into machine-local settings rather than imported
 from a checkout, so there is nothing to fingerprint and nothing repository-supplied to approve.
+Worktree setup is different: it is committed repository configuration, but it has authority only after the user explicitly selects New worktree session, and only for the newly created Git-listed root before that one session starts.
 
 ## Native file shape
 

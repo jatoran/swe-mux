@@ -155,7 +155,10 @@ def session_terminal_env(backend: str) -> dict[str, str]:
 def base_session_env(environment: Mapping[str, str], backend: str) -> dict[str, str]:
     """The scrubbed daemon environment a session of ``backend`` inherits.
 
-    Always drops parent-Claude session markers (:func:`scrub_claude_session_markers`).
+    Always drops parent-Claude session markers (:func:`scrub_claude_session_markers`) and
+    inherited forced-colour flags. The latter are session policy rather than ambient user
+    configuration: agent panes add the known values back through
+    :func:`session_terminal_env`, while shells must keep pipe output free of forced ANSI.
     Agent harnesses additionally drop ``NO_COLOR``: those panes force colour
     (:func:`session_terminal_env`), so an ambient ``NO_COLOR`` — inherited when the
     daemon was (re)launched from inside an agent session, the designed redeploy
@@ -166,7 +169,11 @@ def base_session_env(environment: Mapping[str, str], backend: str) -> dict[str, 
     A deliberate per-session opt-out still works through shell-profile or task env,
     which override this base. Shells keep an inherited ``NO_COLOR`` (no-color.org).
     """
-    base = scrub_claude_session_markers(environment)
+    base = {
+        key: value
+        for key, value in scrub_claude_session_markers(environment).items()
+        if key.upper() not in {"FORCE_COLOR", "CLICOLOR_FORCE"}
+    }
     if is_agent_harness(backend):
         base = {key: value for key, value in base.items() if key.upper() != "NO_COLOR"}
     return base
