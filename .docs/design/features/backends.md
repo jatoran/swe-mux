@@ -218,6 +218,41 @@ The descriptor is the source of truth for all generic surfaces.
   They do not report browser rendering, PTY delivery readiness, or approval timing by themselves.
   The in-process extension supplies low-latency lifecycle and approval evidence, while PTY rules
   remain the visible-screen guard for delivery.
+- **pi is an oh-my-pi family member, not an oh-my-pi clone.**
+  oh-my-pi forked upstream pi, so the session file is the same shape: a `{"type":"session","version":3,...}` header, an `id`/`parentId` entry tree with a mutable leaf, and the same `usage` (`input`/`output`/`cacheRead`/`cacheWrite`) plus `usage.cost.total` on an assistant message.
+  pi therefore reuses the omp record classifier rather than a near-copy of it, and `_omp_context_window` already resolves the window from the session's own adapter.
+  Three measured divergences (pi 0.74.2, 2026-08-10) are why the adapter is separate.
+  - **Session bucket encoding.** pi always writes `sessions/--<absolute path with `/`, `\`, and `:` collapsed to `-`>--/<timestamp>_<uuid>.jsonl`, including under the user's home directory. omp shortens a home-relative or temp-relative path to a scope-prefixed short name, so reusing its encoder finds nothing for the common case and fails silently rather than raising. `adapters/pi.py:pi_session_dir_name` owns pi's rule and is pinned by test.
+  - **No terminal breadcrumb.** pi's data home holds only `auth.json`, `extensions/`, and `sessions/`; upstream `pi-tui` ships no `ttyid.ts` and pi's own documentation states session identity serves that purpose. Binding is therefore hook-first: the mux extension reports `ctx.sessionManager.getSessionFile()` and `getSessionId()` on every envelope, which is why the descriptor sets `reports_transcript_path`. Cwd-bucket correlation is the fallback when the extension does not load.
+  - **`parentSession` rather than `previousSessionFiles`.** pi records a single forked-from path; omp keeps an append-only array. Only omp's can describe a chain.
+- **pi has no approval flow, so its descriptor does not claim one.**
+  pi runs a tool as soon as the model asks for it; gating is something a user extension implements over `tool_call` (pi ships `examples/extensions/permission-gate.ts` doing exactly that).
+  Its `normalized_events` therefore omits `approval_needed`, which keeps the replay corpus from demanding a fixture for evidence pi cannot produce.
+- **pi has no MCP client**, so the mux MCP server is not registered for it and its MCP configuration table is empty rather than searched.
+  Extension-registered native tools are the route if that surface is ever wanted.
+- **`PI_CODING_AGENT_DIR` is shared between pi and oh-my-pi and is read by both descriptors.**
+  Mirroring the CLI's own resolution is the job of a data-home resolver, so an exported value moves both harnesses exactly as it moves both CLIs.
+  Overlap is survivable because a pi conversation binds from its extension's reported session file and a live transcript may only be claimed by one session.
+  `PI_CONFIG_DIR` is an oh-my-pi addition and is deliberately not read for pi.
+  Redirecting either harness to a mux-private agent directory is rejected: credentials, sessions, and the agent database live there, and per-pane redirection strands them.
+- **opencode keeps conversations in SQLite, so it has no transcript to tail.**
+  `~/.local/share/opencode/opencode.db` holds `session`, `message`, `part`, `permission`, and an ordered `event(aggregate_id, seq, type, data)` log keyed by session id.
+  The byte-offset transcript tailer has no referent here, so the descriptor declares `transcript=None` and `measurement_source="none"`, and every transcript method on the adapter answers `None`.
+  mux publishes no tokens, cost, or context for opencode rather than publishing an unverified number.
+  The `event` table is the ordered per-session log that would carry both state and measurement, and the `session` row already holds exact `cost`, `tokens_*`, `model`, and `agent` values as a single row read.
+  Adopting it means teaching the observer a second evidence transport with its own liveness and staleness rules, which is what stands between opencode and `managed`.
+- **opencode's plugin is added through `OPENCODE_CONFIG`, never `OPENCODE_CONFIG_DIR`.**
+  opencode merges its configuration layers, and `OPENCODE_CONFIG` names one additional file, so a mux-owned JSON listing the plugin by absolute path adds the plugin while the user's global, project, and `.opencode/` layers keep loading.
+  `OPENCODE_CONFIG_DIR` *replaces* the config directory, which would require mirroring the user's agents, commands, modes, plugins, and auth into an overlay and keeping that mirror honest — on Windows through directory junctions, whose teardown is a known hazard.
+  Verified against opencode 1.18.16 (2026-08-10): a plugin named by absolute path in an `OPENCODE_CONFIG` file loads and receives the full event bus.
+  A failure to materialize the config forfeits the plugin, never the pane.
+- **opencode reports both halves of an approval** (`permission.updated` raises, `permission.replied` resolves), which is the discriminator Codex still lacks.
+  Its one unambiguous root-completion signal is `session.idle`; `session.status` carries `busy`/`idle`/`retry`.
+  Its live bus emits more types than the SDK's typed union (measured: `message.part.delta`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`), so the plugin classifies known types and drops the rest rather than guessing.
+- **Neither pi nor opencode declares `pty`.**
+  The PTY rule table is backend-scoped and each harness's markers must be pinned to captured screens from the installed build; neither has been captured.
+  A screen rule inferred from documentation is the marker-drift problem restated.
+  opencode additionally holds the alternate screen, where a tail rule reads a repainted frame rather than a transcript.
 - **`tui.raw_output_mode` is the CLI's to decide, not mux's.** It was previously forced to
   `true` alongside the screen-buffer default and is no longer set at all. Raw output suppresses
   Codex's rich transcript rendering, which cost panes their colour (measured 2026-08-05 over a
@@ -488,7 +523,8 @@ this boundary is additionally scrubbed by `text_safety.utf8_safe`; see
 ## Key files
 
 - Harness registry: `src/swe_mux/harness.py`
-- Adapters: `src/swe_mux/adapters/`
+- Adapters: `src/swe_mux/adapters/` (pi: `adapters/pi.py`; opencode: `adapters/opencode.py`)
+- Injected lifecycle reporters: `src/swe_mux/assets/omp_mux_hook.ts`, `src/swe_mux/assets/pi_mux_hook.ts`, `src/swe_mux/assets/opencode_mux_plugin.js`
 - Tailer/parsers: `src/swe_mux/observation.py`
 - Hook command: `src/swe_mux/hook_client.py`
 - Unicode boundary: `src/swe_mux/text_safety.py`
