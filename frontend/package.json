@@ -16,7 +16,7 @@
     "test:renderer": "playwright test --config playwright.renderer.config.ts"
   },
   "dependencies": {
-    "@continuity-editor/editor": "file:vendor/continuity-editor-0.2.25.tgz",
+    "@continuity-editor/editor": "file:vendor/continuity-editor-0.2.35.tgz",
     "@ricky0123/vad-web": "^0.0.24",
     "@xterm/addon-clipboard": "^0.2.0",
     "@xterm/addon-fit": "^0.11.0",

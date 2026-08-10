@@ -100,10 +100,14 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.25 editor owns mobile touch arbitration. `pointerdown` does not
-  focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
-  cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
-  editor's shadow DOM or duplicate caret hit-testing for this behavior.
+- The vendored Continuity 0.2.35 editor owns mobile touch and soft-keyboard arbitration.
+  `pointerdown` does not focus its textarea; a resolved typing tap projects the caret and focuses
+  synchronously, while scrolling and cancellation do not raise the keyboard.
+  Long-press selection and selection-handle adjustment preserve an already-visible keyboard but
+  leave a dismissed keyboard down.
+  With a selected range and the keyboard down, the first tap inside that range raises the keyboard
+  without collapsing the range or removing its action bar; a later tap may collapse it normally.
+  swe-mux does not inspect the editor's shadow DOM or duplicate caret hit-testing for this behavior.
 - The SDK also owns two further touch behaviors we cannot reach: Enter continues a list
   marker even while an IME composition is open (Android keyboards hold one across ordinary
   typing, and the editor's `beforeinput` router used to skip its line-break entries for

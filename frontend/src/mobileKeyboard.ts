@@ -136,6 +136,22 @@ export function softKeyboardInset(layoutHeight:number, visualHeight:number):numb
 /** Published whenever the keyboard's inset changes, carrying the new inset in pixels. */
 export const SOFT_KEYBOARD_EVENT = 'mux:soft-keyboard'
 
+/** Where this device's keyboard measured last, so a pane can reserve its height before it opens. */
+const KEYBOARD_INSET_KEY = 'mux.softKeyboardInset'
+
+export function rememberSoftKeyboardInset(inset:number):void {
+  if(!Number.isFinite(inset)||inset<=0)return
+  try{ localStorage.setItem(KEYBOARD_INSET_KEY,String(Math.round(inset))) }catch{ /* private mode */ }
+}
+
+/** The last keyboard inset seen on this device, or 0 if one has never been measured. */
+export function lastSoftKeyboardInset():number {
+  try{
+    const stored=Number(localStorage.getItem(KEYBOARD_INSET_KEY))
+    return Number.isFinite(stored)&&stored>0?stored:0
+  }catch{ return 0 }
+}
+
 /**
  * What can move a terminal between showing the composer and showing the top of its grid.
  *
@@ -145,20 +161,41 @@ export const SOFT_KEYBOARD_EVENT = 'mux:soft-keyboard'
  * response is streaming into it. Snapping back on writes would make the toggle useless
  * exactly when it is needed, and it is the easy thing to get backwards, so it is named
  * rather than left implicit.
+ *
+ * `hiddenOutput` is the one exception, and it is deliberately not the same event. It means
+ * the *hidden* half of the grid changed while the reader was parked at the composer with
+ * nothing to look at: a first message and its reply on a fresh session land there, and a
+ * pane that holds still for that is showing blank rows while the answer paints off-screen.
+ * Output the reader can already see never raises it.
  */
-export type PeekTrigger = 'toggle'|'input'|'keyboardClosed'|'output'
+export type PeekTrigger = 'toggle'|'input'|'keyboardClosed'|'output'|'hiddenOutput'
 
 /**
- * Whether a terminal is showing the top of its grid after `trigger`.
+ * How far a terminal's grid is pushed back down after `trigger`, in pixels.
  *
- * Typing returns to the composer because that is where the caret is and a reader who types
- * has stopped reading. Losing the keyboard ends peeking outright: the whole grid fits again,
- * so there is no slice left to move.
+ * Zero is the composer; `inset` is the top of the grid; everything between is a reader
+ * mid-drag. Typing returns to the composer because that is where the caret is and a reader
+ * who types has stopped reading. Losing the keyboard ends it outright: the whole grid fits
+ * again, so there is no slice left to move.
  */
-export function nextPeekState(peeking:boolean, trigger:PeekTrigger):boolean {
-  if(trigger==='toggle')return !peeking
-  if(trigger==='output')return peeking
-  return false
+export function nextPeekOffset(offset:number, trigger:PeekTrigger, inset:number):number {
+  if(trigger==='toggle')return offset>0?0:Math.max(0,inset)
+  if(trigger==='hiddenOutput')return Math.max(0,inset)
+  if(trigger==='output')return clampPeekOffset(offset,inset)
+  return 0
+}
+
+/**
+ * A drag's new offset, held inside the travel the keyboard actually covers.
+ *
+ * The pane is a window on a grid taller than the space left over, and this is where the
+ * window sits. Clamping rather than rubber-banding because the two ends are real positions
+ * a reader parks at — the composer and the top of the grid — and an end that springs back
+ * cannot be parked at.
+ */
+export function clampPeekOffset(offset:number, inset:number):number {
+  if(!Number.isFinite(offset)||!Number.isFinite(inset)||inset<=0)return 0
+  return Math.min(Math.max(offset,0),inset)
 }
 
 /**

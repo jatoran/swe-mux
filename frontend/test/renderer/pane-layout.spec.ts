@@ -25,8 +25,27 @@ const bounds = () => {
     pane: box('.terminal-pane')!, bar: box('.pane-bar')!, surface: box('.terminal-surface')!,
     host: box('.terminal-host')!, overlay: box('.voice-overlay'), strip: box('.voice-strip'),
     panel: box('.dictation-panel'), anchor: box('.voice-overlay-anchor'),
+    draft: box('.mobile-terminal-draft'), rail: box('.terminal-action-rail'),
   }
 }
+
+test('the mobile Draft composer overlays the host without resizing the terminal', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 780 })
+  await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=0')
+  const off = await page.evaluate(bounds)
+  await page.goto('/pane-harness.html?overlay=0&mobile=1&draft=1')
+  await expect(page.locator('.mobile-terminal-draft')).toBeVisible()
+  const on = await page.evaluate(bounds)
+  expect(on.surface).toEqual(off.surface)
+  expect(on.host).toEqual(off.host)
+  expect(on.draft!.x).toBeGreaterThanOrEqual(on.surface.x)
+  expect(on.draft!.x + on.draft!.width).toBeLessThanOrEqual(on.surface.x + on.surface.width)
+  expect(on.draft!.y + on.draft!.height).toBeLessThanOrEqual(on.rail!.y)
+
+  await page.goto('/pane-harness.html?overlay=1&mobile=1&draft=1')
+  const shared = await page.evaluate(bounds)
+  expect(shared.overlay!.y + shared.overlay!.height).toBeLessThanOrEqual(shared.draft!.y)
+})
 
 for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }, { name: 'mobile', width: 390, height: 780, mobile: 1 }]) {
   test(`voice surfaces float without moving the terminal on ${viewport.name}`, async ({ page }) => {

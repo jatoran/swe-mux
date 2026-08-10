@@ -1,5 +1,9 @@
 const WINDOWS_RESERVED = /[<>:"/\\|?*\u0000-\u001f]+/g
 
+export function normalizeWorktreeBranchInput(value: string): string {
+  return value.replace(/\s+/g, '-')
+}
+
 function safeLeaf(value: string, fallback: string): string {
   return value
     .trim()

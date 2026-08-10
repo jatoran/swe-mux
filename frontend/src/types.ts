@@ -97,6 +97,9 @@ export interface Session {
   relaunchable?: boolean
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
+  /** Client-only copy for a pending pane whose preparation is more specific than startup. */
+  pending_label?: string
+  pending_detail?: string
   /** Daemon process generation plus session-local ordering for multi-channel snapshots. */
   _snapshot_generation?: string
   _snapshot_revision?: number

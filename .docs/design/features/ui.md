@@ -1084,6 +1084,16 @@ responsive controls.
   scrolls, and positions without raising the on-screen keyboard, so selection auto-copy and
   Paste work keyboard-down; tapping the toggle again restores typing. Sending a key from the
   rail in this mode never raises the keyboard.
+- Agent terminals also expose a touch-only **Draft** rail action beside the keyboard toggle.
+  It opens a native multiline composer as a floating surface in the terminal cell, so its appearance does not resize the terminal or reflow the running TUI.
+  Live input, read/select, and Draft are exclusive modes: opening Draft suppresses terminal focus, hiding it restores the prior live or read/select mode, and pressing the keyboard toggle from Draft closes it into read/select mode.
+- Draft text is device-local and keyed by session rather than pane, so hiding the composer, changing workspace tabs, remounting the pane, reloading, or browser suspension does not discard it.
+  The registry is written immediately to `localStorage`, limits each draft to 64 KiB, retains at most 50 sessions for 30 days, and falls back to memory if browser storage is unavailable.
+  A green dot on the Draft action and every tab for that terminal discloses unsent text without exposing its content.
+- Enter inserts a newline in Draft, while Ctrl+Enter or its dedicated **Send** button uses the existing session-targeted terminal insertion and submission path.
+  A successful send clears the saved draft, while a rejected send leaves the text editable and reports the error in the composer.
+  The send appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
+  Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
   target. Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
@@ -1536,18 +1546,18 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.20 separately owns note-touch
-  arbitration: pointerdown does not focus, a resolved tap places the caret and focuses, and
-  scroll/cancel/long-press paths call no `focus()`. swe-mux adds no shadow-DOM or caret
+  text entry, so the early blur is safe. Continuity 0.2.35 separately owns single-finger note-touch
+  arbitration and the editor's Android soft-keyboard gate. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
-- That arbitration is about focus, and focus is not the whole of what raises an Android
-  keyboard. A note whose keyboard was dismissed with the back gesture keeps its editor
-  `<textarea>` focused, so a long-press-and-drag selection over it can re-raise the keyboard
-  without any `focus()` being called and with nothing for the host to intercept — the surface
-  is inside Continuity's shadow root, and `readOnly` is the only keyboard-adjacent property the
-  host can reach. Closing this needs an `inputmode` gate in the editor, not a host workaround;
-  the ask is `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the
-  terminal side is covered by that pane's own gesture rules.
+- Continuity tracks explicit typing intent and visual-viewport keyboard occlusion per editor.
+  A long-press selection or selection-handle adjustment leaves an already-visible keyboard up and
+  leaves a dismissed keyboard down. When a selection exists with the keyboard down, the first tap
+  inside the selected range raises the keyboard without collapsing the range or removing its
+  action bar; a later tap may collapse or reposition it normally. This policy must stay inside
+  Continuity because Android can hide the IME without blurring its focused shadow-root textarea.
+  The original gate rationale and device verification sequence remain in
+  `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`. The same platform behavior on the terminal side
+  is covered by that pane's own gesture rules.
 - Spawning a terminal closes the mobile sidebar. Every launch focuses the new tab, so every
   launch has to clear what is covering it — launching from a sidebar Project row otherwise
   focused a tab the drawer was still hiding, which reads as "the Run button did nothing". This
@@ -1751,6 +1761,8 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/src/ResourceUsage.tsx`
 - `frontend/src/TerminalPane.tsx`
+- `frontend/src/TerminalDraftComposer.tsx`
+- `frontend/src/mobileTerminalDraft.ts`
 - `frontend/src/ProjectRunMenu.tsx`
 - `frontend/src/DirectoryPicker.tsx`
 - `frontend/src/terminalRenderDiagnostics.ts`
