@@ -156,6 +156,10 @@
 - The expanded sidebar's status block uses one two-row metric grid per provider.
   The first row shows the provider icon, 5-hour reset countdown, weekly reset countdown, and optional Fable heading.
   The second row shows the selected account label's first four characters followed by the corresponding usage percentages.
+  Each column centres its two rows on each other, so a percentage sits under the middle of its reset countdown and the icon over the middle of the account abbreviation rather than both being start-aligned against strings of different lengths.
+  Column tracks are sized in `ch`, not pixels, because `.app-shell *` forces `--ui-font-size` onto this surface with `!important`: the 8 px monospace the block's own rule requests is never what renders, and tracks cut for it were narrower than their own content, so every countdown overflowed into the gutter and columns nearly touched.
+  A track that a narrow sidebar cannot seat shrinks and ellipsizes within itself, keeping the gutter, rather than overrunning its neighbour; rows with different window counts therefore share one track width whenever they fit, which covers the shipped sidebar width at every chrome scale.
+  `frontend/test/renderer/quota-grid-layout.spec.ts` measures the separation, the centring, and both regimes, because this geometry is pure CSS and invisible to unit tests.
   Both condensed surfaces — the collapsed desktop rail and the mobile toolbar — instead draw one 28 px square per provider, icon above weekly percentage: the rail's width cannot contain the grid, and the phone's toolbar cannot spare the row (see `ui.md` § quota indicators). Either square opens the same popover, which is where the window-by-window reading lives for a device with no hover.
   The full switcher is a viewport-level overlay anchored to the status block, so sidebar width and overflow never clip it.
 - The Usage dashboard queries durable quota history by provider, saved local account, date range, and raw/daily resolution.

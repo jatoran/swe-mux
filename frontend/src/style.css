@@ -156,20 +156,42 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .account-summary>button.untracked .quota-account{color:var(--muted)}
 .account-summary>button.external .quota-account{color:var(--amber)}
 .account-summary>button.quota-reset-indicator{grid-column:1/-1;border-left:3px solid #a855f7;background:#6b21a822}.account-summary>button.quota-reset-indicator span,.account-summary>button.quota-reset-indicator strong{color:#d8b4fe}
-/* Metric columns are a fixed width rather than `1fr`, and the row ends in a filler
+/* Metric columns share one width rather than being `1fr`, and the row ends in a filler
    track that swallows every spare pixel. Sharing one track width is what lets the
    Claude and Codex rows line their numbers up: with `1fr` metrics, a widened sidebar
    was divided into three tracks on the row that reports Fable and two on the row that
    does not, so the same reading sat at a different offset in each and both drifted
-   away from the glyph. `34px` holds the widest value either line can print - `23h59m`
-   above `100%` at 8px monospace. */
-.quota-grid{min-width:0;display:grid;align-items:stretch;column-gap:7px;color:var(--muted);white-space:nowrap;text-transform:none}
-.quota-grid-0{grid-template-columns:28px}
-.quota-grid-1{grid-template-columns:28px 34px minmax(0,1fr)}
-.quota-grid-2{grid-template-columns:28px repeat(2,34px) minmax(0,1fr)}
-.quota-grid-3{grid-template-columns:28px repeat(3,34px) minmax(0,1fr)}
-.quota-grid-column{min-width:0;display:grid;grid-template-rows:1fr 1fr;align-items:center;justify-items:start;line-height:1.15}
-.quota-grid-column>*{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}
+   away from the glyph.
+
+   Tracks are sized in `ch`, not px, because this surface does not render the font its
+   own rule asks for: `.app-shell *` forces `--ui-font-size` with `!important`, so the
+   8px monospace the button requests is really 11px at weight 600 and scales further
+   with `--ui-scale`. Tracks cut for the 8px font were narrower than their own content -
+   `23h59m` measured 38.7px inside a 34px track - so every heading overflowed into the
+   7px gutter and left barely 2px of daylight between columns. In `ch` against a
+   monospace face the track is exactly as wide as the widest string it must hold
+   (6 characters: `23h59m`, `13d23h`) at any scale.
+
+   `minmax(0,...)` lets a row that cannot seat its tracks shrink them rather than
+   overrun the gutter, and that is a deliberate trade against the alignment above: a
+   squeezed three-window row ends up with narrower tracks than a two-window row beside
+   it. Overrunning is the worse failure - it is the defect being fixed, and it collides
+   with the neighbouring column's text - while shrinking degrades to an ellipsis inside
+   the track with the gutter intact. Rows agree whenever they fit, which covers the
+   shipped sidebar width at every chrome scale.
+   `frontend/test/renderer/quota-grid-layout.spec.ts` measures both regimes. */
+.quota-grid{min-width:0;display:grid;align-items:stretch;column-gap:1.5ch;color:var(--muted);white-space:nowrap;text-transform:none}
+.quota-grid-0{grid-template-columns:minmax(0,4ch)}
+.quota-grid-1{grid-template-columns:minmax(0,4ch) minmax(0,6ch) minmax(0,1fr)}
+.quota-grid-2{grid-template-columns:minmax(0,4ch) repeat(2,minmax(0,6ch)) minmax(0,1fr)}
+.quota-grid-3{grid-template-columns:minmax(0,4ch) repeat(3,minmax(0,6ch)) minmax(0,1fr)}
+/* Both rows of a column stretch to the track and centre their text, so a percentage
+   sits under the middle of its reset time and the provider glyph sits over the middle
+   of the account abbreviation, whatever the two strings' lengths. Stretching is also
+   what keeps `text-overflow` working: an item sized to its own content overflows a
+   short track on both sides instead of ellipsizing inside it. */
+.quota-grid-column{min-width:0;display:grid;grid-template-rows:1fr 1fr;align-items:center;justify-items:stretch;line-height:1.15}
+.quota-grid-column>*{min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;font:inherit}
 .quota-grid-identity .provider-glyph{display:grid;place-items:center;color:var(--accent);font-style:normal}
 .quota-grid-identity .provider-glyph.claude{color:#d49a78}
 .quota-grid-identity .provider-glyph.codex{color:#77c9a7}
