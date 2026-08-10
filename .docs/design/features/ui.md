@@ -1680,12 +1680,18 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The default configuration is almost entirely `when notable`, so a quiet fleet shows a title and a duration and anything visible has earned its place.
 - **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
 - **Sections meet but never overlap.**
-  As the sidebar narrows they slide together to a minimum gap, then the left section sheds whole low-priority tokens at container-query breakpoints before anything truncates.
-  Shedding beats ellipsis because truncation degrades every token at once, while shedding keeps the survivors fully legible.
+  Neither bottom-line section shrinks; the right one is pushed over only while there is room, and the line clips.
+  So as the sidebar narrows the two slide together, meet at a fixed gap, and then run off the right edge — rather than the right section squeezing the left one out of existence, which is what a flexible left section beside a fixed right one actually does.
+- **Width shedding happens in the token engine, never in CSS.**
+  Below width thresholds the left section drops whole low-priority tokens, so the survivors stay fully legible instead of every token losing its tail at once.
+  It cannot be a container query: hiding a token with `display:none` removes the token but not the separator already emitted beside it, so a narrowed row rendered as `· apply_patch` — a leading mark belonging to a token that was gone.
+  The separator invariant is a property of the token list, so the list is what sheds; the width is measured with a `ResizeObserver`.
 - **The empty bottom line is kept on desktop and dropped on mobile.**
   Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
 - **One duration field, whose meaning shifts with state.**
-  Working, awaiting, and starting report elapsed time in state; `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
+  A working session is aged from its **turn**, not its state: a turn survives every tool call and every approval inside it, while `state_since` restarts on each of them, so a busy agent's timer reset every few seconds and never reported the length of the actual work.
+  An awaiting session is aged from the block instead, because there the question really is "how long has it been waiting on me".
+  `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
   Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
   A ready session's number is static, so a settled fleet re-renders on no clock at all.
 - **Context pressure renders in exactly one place**, chosen by a single setting: an arc around the indicator (default, costs no row width, marks the peak on the same outline), a four-cell gauge, a percentage, or off.

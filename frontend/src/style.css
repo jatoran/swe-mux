@@ -2859,7 +2859,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 }
 
 .session-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
-.row-line{display:flex;align-items:baseline;gap:10px;min-width:0}
+.row-line{display:flex;align-items:baseline;min-width:0}
 /* Same height as the indicator and centred, so the two boxes start together and
    their centres coincide at any type size instead of only at the default one. */
 .row-line.top{font-size:12px;min-height:var(--session-dot);align-items:center}
@@ -2875,10 +2875,21 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .row-line.bottom.empty{display:none;min-height:0}
 }
 .row-section{display:flex;align-items:baseline;min-width:0;white-space:nowrap}
-.row-section.left{flex:1 1 auto;overflow:hidden}
 /* Fixed rather than flexible so a value changing from `22m` to `1h30` cannot
    reflow its neighbours; jitter in a live list is most of what reads as noise. */
-.row-section.right{flex:0 0 auto;font-variant-numeric:tabular-nums}
+.row-section.right{font-variant-numeric:tabular-nums}
+/* The top line's left section shrinks so a long title ellipsizes in place. */
+.row-line.top{overflow:hidden}
+.row-line.top .row-section.left{flex:1 1 auto;overflow:hidden}
+/* The bottom line does the opposite: neither section shrinks, the right one is
+   pushed over by `margin-left:auto` only while there is room, and the line
+   clips. So the two sections slide together as the sidebar narrows, meet at a
+   fixed gap, and then run off the right edge — rather than the right section
+   squeezing the left one out of existence, which is what `flex:1 1 auto` on the
+   left plus `flex:0 0 auto` on the right actually does. */
+.row-line.bottom{overflow:hidden}
+.row-line.bottom .row-section{flex:0 0 auto}
+.row-line.bottom .row-section.right{margin-left:auto;padding-left:10px}
 .row-token{display:inline-flex;align-items:baseline;min-width:0;flex:0 1 auto}
 .row-section.left .row-token:last-child{overflow:hidden}
 .row-sep{color:#5c6f61;opacity:.7;white-space:pre;flex:none}
@@ -2898,11 +2909,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .row-pips i{width:3px;height:3px;border-radius:50%;background:#697381;display:block}
 .session-row.active .row-title{color:var(--text)}
 .session-row .activity-badges{align-self:center}
-/* Width shedding: whole tokens leave, lowest priority first, so what survives
-   stays fully legible instead of every token losing its tail at once. */
-@container (max-width:270px){.row-section.left .shed-1{display:none}}
-@container (max-width:230px){.row-section.left .shed-2{display:none}}
-@container (max-width:195px){.row-section.left .shed-3,.row-section.right .shed-1{display:none}}
+/* Width shedding is NOT done here. Hiding a token with `display:none` removes
+   the token but not the separator already emitted beside it, which rendered a
+   narrowed row as `· apply_patch`. The token engine sheds instead, so the
+   separator invariant — only between tokens that drew — survives resizing.
+   See `shedForWidth` in sessionRowFields.ts. */
 @media(prefers-reduced-motion:reduce){.state-dot.state-indicator{animation:none!important}}
 
 /* Settings → Appearance → Session rows. */

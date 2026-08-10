@@ -34,6 +34,8 @@ export interface Session {
   state_since?: number
   /** Wall-clock length of the last completed root turn, milliseconds. Run-scoped. */
   last_turn_ms?: number | null
+  /** Epoch seconds the current root turn began; absent while no turn is open. */
+  turn_started_at?: number | null
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]

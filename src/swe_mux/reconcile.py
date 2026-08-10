@@ -20,15 +20,8 @@ from .transcript_view import TRANSCRIPT_PARSER_VERSION
 
 log = logging.getLogger(__name__)
 
-CLAUDE_CONTEXT_WINDOWS = {
-    "claude-opus-4-8": 1_000_000,
-    "claude-opus-4-7": 1_000_000,
-    "claude-opus-4-6": 1_000_000,
-    "claude-sonnet-5": 1_000_000,
-    "claude-sonnet-4-6": 1_000_000,
-    "claude-haiku-4-5": 200_000,
-    "claude-haiku-4-5-20251001": 200_000,
-}
+# Re-exported for callers that imported it from here; `claude_models` owns it.
+from .claude_models import CLAUDE_CONTEXT_WINDOWS, claude_context_window  # noqa: E402,F401
 
 
 @dataclass(slots=True)
@@ -234,7 +227,7 @@ def summarize_transcript(path: Path, backend: Backend) -> dict[str, Any]:
                 message = event.get("message") or {}
                 usage = message.get("usage") or {}
                 model = str(message.get("model") or "")
-                window = CLAUDE_CONTEXT_WINDOWS.get(model, 0)
+                window = claude_context_window(model)
                 current_in = sum(
                     int(usage.get(key, 0))
                     for key in (

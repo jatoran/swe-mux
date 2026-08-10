@@ -513,6 +513,9 @@ Two timings cross the API boundary so a client can age a session without a secon
   Wall-clock rather than monotonic because a browser has no access to this process's clock origin.
   A record adopted from a daemon that predates the field is seeded at adoption rather than left
   at zero, and a client renders `0` as "unknown", never as "just now".
+- `turn_started_at` is the wall-clock instant the current root turn began, cleared when it ends.
+  This, not `state_since`, is what "how long has it been working" means: a turn spans every tool call and every approval inside it, while `state_since` restarts on each of them.
+  Run-scoped like `last_turn_ms`.
 - `last_turn_ms` is the wall-clock length of the last **completed** root turn.
   A harness-reported `duration_ms` outranks the daemon's own measurement, which also counts the
   lag before the boundary was observed.

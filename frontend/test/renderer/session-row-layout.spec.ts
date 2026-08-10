@@ -90,6 +90,66 @@ test('the visible dot is larger than the 6px one it replaced', async ({ page }) 
   expect(g.core.width).toBeLessThanOrEqual(g.indicator.width)
 })
 
+/**
+ * As the sidebar narrows the two bottom sections must slide together, meet at a
+ * fixed gap, and then run off the right edge — clipped, not collapsed.
+ *
+ * The regression this pins: with the left section flexible and the right one
+ * fixed, the right section squeezed the left one to nothing, so the branch and
+ * diff vanished while the duration stayed put. That is the opposite of what a
+ * narrowing sidebar should drop.
+ */
+test('narrowing slides the sections together and clips, never squeezes the left out', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html')
+
+  const measure = async (width: number) => {
+    await page.evaluate(w => {
+      document.querySelector<HTMLElement>('.sidebar')!.style.width = `${w}px`
+    }, width)
+    return page.evaluate(() => {
+      const row = document.querySelectorAll('.session-row')[0]
+      const line = row.querySelector('.row-line.bottom')!
+      const box = (el: Element | null) => {
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.x, width: r.width, right: r.right }
+      }
+      const left = line.querySelector('.row-section.left') as HTMLElement
+      return {
+        line: box(line),
+        left: box(left),
+        right: box(line.querySelector('.row-section.right')),
+        leftText: left.innerText.trim(),
+        // Equal means the section is showing all of its content; smaller means
+        // it was squeezed and is clipping its own tokens.
+        leftScroll: left.scrollWidth,
+        leftClient: left.clientWidth,
+      }
+    })
+  }
+
+  const wide = await measure(420)
+  expect(wide.left!.width).toBeGreaterThan(0)
+  expect(wide.left!.right).toBeLessThanOrEqual(wide.right!.x + 0.5)
+
+  const narrow = await measure(200)
+  // The left section keeps every token it drew rather than being squeezed and
+  // clipping its own content — this is the assertion the old rules failed.
+  expect(narrow.leftText.length).toBeGreaterThan(0)
+  // Narrower *does* legitimately shrink this section — the container queries
+  // shed whole low-priority tokens. What must never happen is the section being
+  // squeezed below the tokens it still draws, which is self-clipping.
+  expect(narrow.leftClient).toBeGreaterThanOrEqual(narrow.leftScroll)
+  // They meet with a gap preserved, and never overlap.
+  expect(narrow.left!.right).toBeLessThanOrEqual(narrow.right!.x + 0.5)
+  // Overflow leaves the line to the right and is clipped, not wrapped.
+  expect(narrow.right!.right).toBeGreaterThan(narrow.line!.x)
+  const lineStyle = await page.evaluate(() =>
+    getComputedStyle(document.querySelector('.row-line.bottom')!).overflowX)
+  expect(lineStyle).toBe('hidden')
+})
+
 for (const shape of ['hexagon', 'circle', 'square'] as const) {
   test(`the ${shape} indicator stays concentric with its gauge`, async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 600 })

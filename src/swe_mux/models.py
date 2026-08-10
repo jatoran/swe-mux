@@ -102,6 +102,12 @@ class SessionRecord:
     #: None until a turn has ended on this run. Reset with observation identity,
     #: because a duration from a replaced conversation is not this one's.
     last_turn_ms: float | None = None
+    #: Epoch seconds the current root turn began; None while no turn is open.
+    #: This, not ``state_since``, is what "how long has it been working" means:
+    #: a turn survives every tool call and every approval blip inside it, while
+    #: ``state_since`` restarts on each of them, so a busy agent's timer reset
+    #: every few seconds and never reported the length of the actual work.
+    turn_started_at: float | None = None
     # Set whenever state == "awaiting"; cleared by every transition elsewhere.
     awaiting_reason: str | None = None
     # The idle-axis sibling of `awaiting_reason`. `waiting_on_background` means

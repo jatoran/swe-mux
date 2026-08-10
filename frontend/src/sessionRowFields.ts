@@ -29,10 +29,31 @@ export interface SessionRowContext {
   multiAccount: boolean
   /** Pending queue depth by target session id. */
   queueDepth: Record<string, number>
+  /**
+   * How many low-priority tokens each section sheds for the current width.
+   *
+   * Shedding lives here rather than in a container query because the separator
+   * invariant is a property of the *token list*: a CSS rule that hides a token
+   * with `display:none` leaves the separator that JSX already emitted beside it,
+   * so a narrowed row rendered as `· apply_patch` — a leading mark belonging to
+   * a token that is no longer there.
+   */
+  shed: number
 }
 
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
-  return { now, defaultBranch: {}, defaultModel: {}, multiAccount: false, queueDepth: {} }
+  return { now, defaultBranch: {}, defaultModel: {}, multiAccount: false, queueDepth: {}, shed: 0 }
+}
+
+/** Width thresholds, widest first; the index is how many tokens are shed. */
+const SHED_STEPS = [270, 230, 195]
+
+/** Tokens to shed at `width` (container inline size, CSS px). */
+export function shedForWidth(width: number): number {
+  if (!width) return 0
+  let shed = 0
+  for (const step of SHED_STEPS) if (width <= step) shed += 1
+  return shed
 }
 
 export type RowTokenKind = 'text' | 'diff' | 'gauge' | 'count' | 'badges' | 'glyph' | 'title' | 'broadcast'
@@ -104,7 +125,15 @@ const isEnded = (session: Session) => session.state === 'exited' || session.stat
 /**
  * The time this state has cost, which is a different question per state.
  *
- * A ready session reports how long its *last turn* took rather than how long it
+ * A working session is aged from the **turn** it is in, not from the state it is
+ * in. A turn survives every tool call and every approval inside it, while
+ * `state_since` restarts on each of them — so a busy agent's timer reset every
+ * few seconds and never once reported the length of the actual work.
+ *
+ * An awaiting session is the exception, and deliberately so: there the question
+ * is "how long has it been blocked on me", which is time in *that* state.
+ *
+ * A ready session reports how long its last turn took rather than how long it
  * has been ready — that number is static, which also means a settled fleet
  * re-renders on no clock at all.
  */
@@ -119,6 +148,10 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
     if (typeof session.last_turn_ms !== 'number' || session.last_turn_ms <= 0) return null
     const seconds = session.last_turn_ms / 1000
     return { text: formatRowDuration(seconds), title: `last turn took ${formatRowDuration(seconds)}`, seconds }
+  }
+  if (session.state !== 'awaiting' && session.turn_started_at) {
+    const seconds = Math.max(0, context.now - session.turn_started_at)
+    return { text: formatRowDuration(seconds), title: `this turn has run ${formatRowDuration(seconds)}`, seconds }
   }
   const seconds = secondsInState(session, context.now)
   if (!session.state_since) return null
@@ -336,7 +369,23 @@ function buildSection(
     if (slot.mode === 'notable' && !candidate.notable) continue
     tokens.push(candidate.token)
   }
-  return { align, separator, tokens }
+  return { align, separator, tokens: shedLowestPriority(tokens, context.shed) }
+}
+
+/**
+ * Drop the `count` lowest-priority tokens, preserving the configured order of
+ * those that survive. The title is never shed — a row without one is not
+ * identifiable — and shedding happens before the renderer sees the list, so
+ * separators are still emitted only between tokens that actually draw.
+ */
+function shedLowestPriority(tokens: RowToken[], count: number): RowToken[] {
+  if (count <= 0 || tokens.length <= 1) return tokens
+  const sheddable = tokens.filter(token => token.kind !== 'title')
+  if (!sheddable.length) return tokens
+  const doomed = new Set(
+    [...sheddable].sort((a, b) => a.priority - b.priority).slice(0, count),
+  )
+  return tokens.filter(token => !doomed.has(token))
 }
 
 /**
@@ -388,6 +437,7 @@ export function deriveRowContext(
   sessions: readonly Session[],
   queueDepth: Record<string, number>,
   now: number,
+  shed = 0,
 ): SessionRowContext {
   const byProject = new Map<string, Session[]>()
   for (const session of sessions) {
@@ -405,5 +455,5 @@ export function deriveRowContext(
   for (const session of sessions) {
     for (const hash of Object.values(session.provider_account_hashes || {})) if (hash) accounts.add(hash)
   }
-  return { now, defaultBranch, defaultModel, multiAccount: accounts.size > 1, queueDepth }
+  return { now, defaultBranch, defaultModel, multiAccount: accounts.size > 1, queueDepth, shed }
 }

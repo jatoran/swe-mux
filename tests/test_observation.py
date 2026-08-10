@@ -497,6 +497,37 @@ async def test_codex_parser_normalizes_turn_completion() -> None:
     assert session.record.context_pct == 0.25
 
 
+async def test_codex_model_comes_from_turn_context() -> None:
+    """The CLI records the model per turn, not in `session_meta` or `token_count`.
+
+    Both of those older sources are gone from current rollouts, so every Codex
+    session reported no model at all while Claude sessions reported one. Reading
+    it per turn also means a mid-conversation `/model` is picked up.
+    """
+    session = cast(Any, SimpleNamespace(record=record("codex")))
+    events = EventBus()
+    await _codex(session, {"type": "session_meta", "payload": {"id": "native-1"}}, events)
+    assert session.record.model is None
+
+    await _codex(
+        session,
+        {"type": "turn_context", "payload": {"cwd": ".", "model": "gpt-5.6-sol"}},
+        events,
+    )
+    assert session.record.model == "gpt-5.6-sol"
+
+    await _codex(
+        session,
+        {"type": "turn_context", "payload": {"cwd": ".", "model": "gpt-5.6-codex"}},
+        events,
+    )
+    assert session.record.model == "gpt-5.6-codex"
+
+    # A context with no model must not blank an already-known one.
+    await _codex(session, {"type": "turn_context", "payload": {"cwd": "."}}, events)
+    assert session.record.model == "gpt-5.6-codex"
+
+
 async def test_codex_parser_correlates_tool_result_and_exit_code() -> None:
     session = cast(Any, SimpleNamespace(record=record("codex")))
     events = EventBus()

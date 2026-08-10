@@ -423,6 +423,16 @@ The descriptor is the source of truth for all generic surfaces.
   model context window. Codex context usage is `last_token_usage.input_tokens` divided
   by `model_context_window`; cumulative session totals are retained as token counters
   but never displayed as current-window utilization.
+- The Claude context window comes from `claude_models.claude_context_window`, one table
+  shared by the live observer and the history reconciler. Unlisted models resolve by
+  model *family*, longest prefix first. That fallback is load-bearing: a bare table
+  lookup made an unrecognized model report a zero-token window, which renders as 0%
+  context used — indistinguishable from a fresh conversation rather than obviously
+  broken, and every session on a newly released model looked idle-fresh forever.
+- The Codex model is read from `turn_context.payload.model`, per turn. `session_meta`
+  carried it in an earlier CLI and no longer does, and `token_count`'s `info.model` is
+  absent too, so a parser reading only those reported no model for any Codex session.
+  Reading it per turn also picks up a mid-conversation model switch.
 - Transcript cwd/time matching remains a fallback for non-shim or unusual launch paths.
   The primary promotion endpoint requires the unexposed per-session hook secret, so
   unrelated browser/tailnet clients cannot claim a terminal.

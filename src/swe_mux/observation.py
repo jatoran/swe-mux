@@ -157,15 +157,8 @@ CODEX_RESUME_PAYLOADS = frozenset(
     }
 )
 
-CLAUDE_CONTEXT_WINDOWS = {
-    "claude-opus-4-8": 1_000_000,
-    "claude-opus-4-7": 1_000_000,
-    "claude-opus-4-6": 1_000_000,
-    "claude-sonnet-5": 1_000_000,
-    "claude-sonnet-4-6": 1_000_000,
-    "claude-haiku-4-5": 200_000,
-    "claude-haiku-4-5-20251001": 200_000,
-}
+# Re-exported for callers that imported it from here; `claude_models` owns it.
+from .claude_models import CLAUDE_CONTEXT_WINDOWS, claude_context_window  # noqa: E402,F401
 
 # Standing-activity extraction (Claude). Record shapes verified 2026-07-31
 # against live transcripts and the CLI's own tool schemas:
@@ -1412,6 +1405,9 @@ async def _begin_root_turn(
     # Same clock the turn is *closed* against, so the two ends of one measurement
     # cannot come from different time sources under the replay harness.
     state["turn_started_at"] = _session_now(session)
+    # Mirrored onto the record so a client can age the *turn* rather than the
+    # state, which restarts on every tool call and approval inside that turn.
+    session.record.turn_started_at = state["turn_started_at"]
     state["turn_saw_activity"] = False
     await events.emit("turn_started", session_id=session.record.id, source=source, scope="root")
 
@@ -1457,6 +1453,7 @@ def _record_turn_duration(
     """
     started = float(state.get("turn_started_at") or 0.0)
     state["turn_started_at"] = 0.0
+    session.record.turn_started_at = None
     # A harness that reports its own turn duration is more authoritative than the
     # daemon's wall clock, which also counts the lag before the boundary was seen.
     reported = payload.get("duration_ms")
@@ -3124,7 +3121,7 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             )
             session.record.tokens_out = int(usage.get("output_tokens", 0))
             model = str(message.get("model") or "")
-            window = CLAUDE_CONTEXT_WINDOWS.get(model, 0)
+            window = claude_context_window(model)
             session.record.context_window = window
             session.record.context_pct = min(1, session.record.tokens_in / window) if window else 0
             session.record.context_peak_pct = max(
@@ -3198,6 +3195,17 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             kind=str(payload_type or outer_type or "activity"),
         )
         return
+    if outer_type == "turn_context":
+        # Where the current CLI records the model. `session_meta` carried it once
+        # and no longer does, and `token_count`'s `info.model` is absent too, so
+        # every Codex session reported no model at all while Claude reported one.
+        # Read per turn rather than once: `/model` mid-conversation is a real
+        # thing, and the next turn's context is what says so.
+        if not provisional_observation(session):
+            model = str(payload.get("model") or "")
+            if model and model != session.record.model:
+                session.record.model = model
+                _publish_update(session)
     if payload_type in CODEX_RESUME_PAYLOADS:
         # Tooling or the model is running again, so any approval was answered.
         await _resume_from_awaiting(session, events, event, evidence=str(payload_type))

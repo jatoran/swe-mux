@@ -153,8 +153,8 @@ import { activityBadges, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape } from './sessionRowConfig'
-import { useRowClock, useSessionRowConfig } from './sessionRowPrefs'
-import { buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc } from './sessionRowFields'
+import { useObservedWidth, useRowClock, useSessionRowConfig } from './sessionRowPrefs'
+import { buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc, shedForWidth } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
@@ -405,9 +405,14 @@ export function App() {
     ()=>Object.fromEntries(Object.entries(queueSummary).map(([id,target])=>[id,target.pending])),
     [queueSummary],
   )
+  // Width-driven token shedding is measured, not queried in CSS: hiding a token
+  // with `display:none` leaves the separator JSX already emitted beside it.
+  const sidebarRef=useRef<HTMLElement>(null)
+  const rowWidth=useObservedWidth(sidebarRef)
+  const rowShed=shedForWidth(rowWidth)
   const rowContext=useMemo(
-    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow),
-    [sessions,rowQueueDepth,rowNow],
+    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowShed),
+    [sessions,rowQueueDepth,rowNow,rowShed],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -4689,7 +4694,7 @@ export function App() {
       <header class="app-topbar">
         <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
-      <aside class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
+      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
             rows, while only explicit Groups receive their own headers. */}
         <div class="sidebar-tools sidebar-projects-header">

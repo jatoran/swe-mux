@@ -20,8 +20,6 @@ import type { Session } from './types'
 const GAUGE_CELLS = 4
 /** Counts at or below this render as pips; above it, as a numeral. */
 const MAX_PIPS = 4
-/** How many of a section's lowest-priority tokens get a width-shed class. */
-const SHED_TIERS = 3
 
 function gaugeCells(pct: number, peak: number) {
   const filled = Math.max(1, Math.ceil(Math.min(1, pct) * GAUGE_CELLS))
@@ -96,26 +94,14 @@ function TokenView({ token, session, config }: { token: RowToken; session: Sessi
   return <span class={`row-text${token.tone && token.tone !== 'default' ? ` ${token.tone}` : ''}`} title={token.title}>{token.text}</span>
 }
 
-/**
- * Shed class per token: the lowest-priority tokens in a section are the first to
- * disappear as the sidebar narrows. The title never sheds — a row without one
- * is not identifiable.
- */
-function shedClasses(section: RowSection): Map<RowToken, string> {
-  const ranked = [...section.tokens]
-    .filter(token => token.kind !== 'title')
-    .sort((a, b) => a.priority - b.priority)
-  const classes = new Map<RowToken, string>()
-  ranked.slice(0, SHED_TIERS).forEach((token, index) => classes.set(token, `shed-${index + 1}`))
-  return classes
-}
-
 function SectionView({ section, session, config }: { section: RowSection; session: Session; config: SessionRowConfig }) {
   if (!section.tokens.length) return <span class={`row-section ${section.align}`} />
-  const shed = shedClasses(section)
   return <span class={`row-section ${section.align}`}>
+    {/* The separator is emitted between tokens that are actually in this list —
+        which is why width shedding happens in the token engine and never as a
+        CSS `display:none`, whose hidden token would leave its separator here. */}
     {section.tokens.map((token, index) =>
-      <span key={`${token.id}:${index}`} class={`row-token${shed.get(token) ? ` ${shed.get(token)}` : ''}`}>
+      <span key={`${token.id}:${index}`} class="row-token">
         {index > 0 && section.separator ? <span class="row-sep" aria-hidden="true">{section.separator}</span> : null}
         <TokenView token={token} session={session} config={config} />
       </span>)}

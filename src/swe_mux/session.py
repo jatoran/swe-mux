@@ -3072,6 +3072,7 @@ class SessionManager:
         # conversation is not this one's, and keeping it would date the new run's
         # first idle with the old run's last turn.
         record.last_turn_ms = None
+        record.turn_started_at = None
         # Annotations describe the observation identity being reset here. This is
         # a silent record-level clear for the adoption-repair paths (no Session,
         # no ledger yet); live callers ledger via clear_all_standing_activity

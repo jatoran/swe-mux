@@ -8,7 +8,7 @@ import {
 } from '../src/sessionRowConfig.ts'
 import {
   buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
-  identityRowTokens, sessionContextArc, secondsInState,
+  identityRowTokens, sessionContextArc, secondsInState, shedForWidth,
 } from '../src/sessionRowFields.ts'
 import { shapePath } from '../src/dotShapes.ts'
 
@@ -57,6 +57,28 @@ test('a working session reports elapsed time in state', () => {
   const config = withBottom(defaultSessionRowConfig(), ['duration'])
   const working = session({ state: 'working', state_since: NOW - 1320 })
   assert.deepEqual(bottomText(working, config), ['22m'])
+})
+
+test('a working session is aged from its turn, so tool calls do not reset it', () => {
+  // The defect this pins: every tool call and every auto-approved permission is
+  // a state transition, so `state_since` restarted every few seconds and the
+  // timer never once showed how long the work had been running.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const midTurn = session({ state: 'working', state_since: NOW - 3, turn_started_at: NOW - 1320 })
+  assert.deepEqual(bottomText(midTurn, config), ['22m'])
+})
+
+test('an awaiting session is aged from the block, not from the turn', () => {
+  // Here the question really is "how long has it been waiting on me".
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const blocked = session({ state: 'awaiting', state_since: NOW - 300, turn_started_at: NOW - 3600 })
+  assert.deepEqual(bottomText(blocked, config), ['5m'])
+})
+
+test('a working session with no open turn falls back to time in state', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const working = session({ state: 'working', state_since: NOW - 600, turn_started_at: null })
+  assert.deepEqual(bottomText(working, config), ['10m'])
 })
 
 test('a ready session with no completed turn shows no duration at all', () => {
@@ -170,6 +192,43 @@ test('with no fleet baseline every branch reads as divergent', () => {
   // needlessly costs width, a branch hidden wrongly hides which tree you are in.
   const config = withBottom(defaultSessionRowConfig(), ['branch'], 'notable')
   assert.deepEqual(bottomText(session(), config, context()), ['master'])
+})
+
+test('shedding drops whole tokens and leaves no dangling separator', () => {
+  // Shedding used to be a container query hiding tokens with `display:none`,
+  // which removed the token but not the separator JSX beside it — a narrowed
+  // row rendered as `· apply_patch`, a mark belonging to a token that was gone.
+  const config = withBottom(defaultSessionRowConfig(), ['branch', 'diff', 'queue', 'detail'])
+  const item = session({
+    state: 'working', state_detail: 'apply_patch',
+    git: { branch: 'feat-x', dirty: 2, ahead: 0, behind: 0, added: 9, removed: 1 },
+  })
+  const full = context({ queueDepth: { s1: 2 } })
+  assert.deepEqual(bottomText(item, config, full), ['feat-x', '+9 -1', '⋮2', 'apply_patch'])
+
+  // Lowest priority sheds first — diff (55) then branch (60) — while the queue
+  // depth (65) and what it is doing (70) survive, and the configured order of
+  // the survivors is preserved.
+  const tight = buildSessionRowTokens(item, config, { ...full, shed: 2 })
+  assert.deepEqual(tight.bottom.left.tokens.map(token => token.id), ['queue', 'detail'])
+  // The renderer emits a separator only between the tokens in this list, so a
+  // shed token cannot leave one behind.
+  assert.equal(tight.bottom.left.tokens[0].id, 'queue')
+})
+
+test('the width thresholds shed progressively and never below zero', () => {
+  assert.equal(shedForWidth(0), 0, 'unmeasured width sheds nothing')
+  assert.equal(shedForWidth(400), 0)
+  assert.equal(shedForWidth(270), 1)
+  assert.equal(shedForWidth(230), 2)
+  assert.equal(shedForWidth(195), 3)
+  assert.equal(shedForWidth(120), 3, 'shedding stops once the list is exhausted')
+})
+
+test('the title survives any amount of shedding', () => {
+  const config = defaultSessionRowConfig()
+  const tokens = buildSessionRowTokens(session(), config, { ...context(), shed: 99 })
+  assert.ok(tokens.top.left.tokens.some(token => token.kind === 'title'))
 })
 
 test('the identity projection drops every non-identity field', () => {

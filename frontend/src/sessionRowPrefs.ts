@@ -50,6 +50,30 @@ export function useSessionRowConfig(): SessionRowConfig {
 export const ROW_CLOCK_INTERVAL_MS = 5_000
 
 /**
+ * Observed inline size of an element, for width-driven token shedding.
+ *
+ * A `ResizeObserver` rather than a container query because shedding has to
+ * happen in the token list, not in CSS: hiding a token with `display:none`
+ * strips the token but leaves the separator JSX already emitted beside it.
+ * Quantized to whole pixels so a drag emits one update per pixel at most.
+ */
+export function useObservedWidth(target: { current: HTMLElement | null }): number {
+  const [width, setWidth] = useState(0)
+  useEffect(() => {
+    const element = target.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(entries => {
+      const size = entries[0]?.contentRect.width
+      if (typeof size === 'number') setWidth(Math.round(size))
+    })
+    observer.observe(element)
+    setWidth(Math.round(element.getBoundingClientRect().width))
+    return () => observer.disconnect()
+  }, [target])
+  return width
+}
+
+/**
  * Shared quantized wall clock, in epoch seconds.
  *
  * One timer for the whole sidebar instead of one per row, and stopped entirely
