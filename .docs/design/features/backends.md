@@ -267,10 +267,19 @@ The descriptor is the source of truth for all generic surfaces.
   Redirecting either harness to a mux-private agent directory is rejected: credentials, sessions, and the agent database live there, and per-pane redirection strands them.
 - **opencode keeps conversations in SQLite, so it has no transcript to tail.**
   `~/.local/share/opencode/opencode.db` holds `session`, `message`, `part`, `permission`, and an ordered `event(aggregate_id, seq, type, data)` log keyed by session id.
-  The byte-offset transcript tailer has no referent here, so the descriptor declares `transcript=None` and `measurement_source="none"`, and every transcript method on the adapter answers `None`.
-  mux publishes no tokens, cost, or context for opencode rather than publishing an unverified number.
-  The `event` table is the ordered per-session log that would carry both state and measurement, and the `session` row already holds exact `cost`, `tokens_*`, `model`, and `agent` values as a single row read.
-  Adopting it means teaching the observer a second evidence transport with its own liveness and staleness rules, which is what stands between opencode and `managed`.
+  The byte-offset transcript tailer has no referent here, so the descriptor declares `transcript=None` and every transcript method on the adapter answers `None`.
+  It needs no tailer: opencode maintains running `cost` and `tokens_*` totals on the `session` row itself, so `measurement_source="database"` reads them with one indexed lookup at the turn boundary.
+  No parse, no byte offsets, and no exposure to the Windows frozen-mtime hazard, because nothing here derives freshness from a timestamp.
+  That is why opencode reaches `managed` without a transcript: the tier derives from the two capability axes, and neither of them is "has a file".
+  The database is opened read-only against the live WAL, which neither blocks nor corrupts opencode's writer.
+  `immutable` is deliberately not set — it would pin the snapshot and hide every update the session is still making.
+  A missing row publishes nothing rather than zeroes, because a published zero is indistinguishable from a genuinely empty conversation.
+  The `event(aggregate_id, seq, type, data)` table remains available as an ordered per-session log if state ever needs a second source; state currently comes from the plugin's hooks alone.
+- **Each harness's context window comes from its own catalogue, never a neighbour's.**
+  opencode caches the models.dev data at `~/.cache/opencode/models.json` (`limit.context`); pi ships its own under `@earendil-works/pi-ai`.
+  They disagree on the same model: measured 2026-08-10, `openai/gpt-5.6-sol` is 1,050,000 tokens to opencode and 272,000 to pi.
+  Each harness routes through its own provider stack, so its own view is the correct one for its sessions, and borrowing the other's would render context percentage wrong by roughly 4x.
+  An unknown model reports no context at all rather than 0%, which renders as a fresh conversation rather than a missing reading.
 - **opencode's plugin is added through `OPENCODE_CONFIG`, never `OPENCODE_CONFIG_DIR`.**
   opencode merges its configuration layers, and `OPENCODE_CONFIG` names one additional file, so a mux-owned JSON listing the plugin by absolute path adds the plugin while the user's global, project, and `.opencode/` layers keep loading.
   `OPENCODE_CONFIG_DIR` *replaces* the config directory, which would require mirroring the user's agents, commands, modes, plugins, and auth into an overlay and keeping that mirror honest — on Windows through directory junctions, whose teardown is a known hazard.
