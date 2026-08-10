@@ -66,7 +66,13 @@ The file tree and notes collection are utility-drawer tabs.
   save queue outlives both. The unmount flushes, and the arriving editor adopts any text the
   daemon has not acknowledged yet (`noteSaveQueue.pendingText`, which covers both debounced typing
   and the snapshot a running PUT is carrying) rather than the copy its own GET returned — that GET
-  can be answered from the pre-flush file. Cursor and undo history do not survive a move; they do
+  can be answered from the pre-flush file. That answer can also arrive *after* the flush's PUT has
+  been acknowledged, leaving nothing pending to prefer it over; the queue therefore remembers the
+  revisions its own saves replaced (`noteSaveQueue.hasSuperseded`) and a load that is handed one
+  re-reads instead of adopting it. Revisions are content hashes and carry no order, so a revision
+  this browser provably replaced is the only recognisable signature of a stale read. Adopting one
+  would revert the editor and leave the queue holding a revision the daemon has moved past, so the
+  next keystroke would overwrite the good text or conflict. Cursor and undo history do not survive a move; they do
   survive drawer tab switches, because the Notes body is kept mounted and hidden rather than
   unmounted (see `ui.md` — the other half of that is `insertTarget`, which refuses a detached
   editor and would otherwise route a Clipboard paste into a terminal).
@@ -104,6 +110,16 @@ The file tree and notes collection are utility-drawer tabs.
   focus its textarea; a resolved tap projects the caret and focuses synchronously, while scroll,
   cancellation, and long-press paths leave the keyboard closed. swe-mux does not inspect the
   editor's shadow DOM or duplicate caret hit-testing for this behavior.
+- Text held by an open IME composition has not reached the engine, so it has not reached the
+  autosave queue either, and the editor's `destroy()` discards it. Because Android keyboards hold
+  one composition open across ordinary typing, that lost run is simply the word being typed:
+  closing the drawer mid-sentence dropped it, and flushing on unmount could not help because the
+  editor never handed it over. Unmount therefore rescues it first (`noteComposition.ts`), reading
+  the editor's textarea - the exported `input` shadow part, which holds the whole document plus
+  the live composing run - and submitting that to the queue before the flush. The rescue is gated
+  on the public `composing` flag: outside a composition the engine is the authority and the
+  textarea only its mirror. **Open ask against the SDK:** `destroy()` should commit an open
+  composition (and `commitComposition()` should be public) so this host-side rescue can retire.
 - The SDK also owns two further touch behaviors we cannot reach: Enter continues a list
   marker even while an IME composition is open (Android keyboards hold one across ordinary
   typing, and the editor's `beforeinput` router used to skip its line-break entries for
@@ -478,6 +494,7 @@ on read (`workspace-layout.md`).
 - `frontend/src/layout.ts` (`openAnchorId`, `openTab`)
 - `frontend/src/editorText.ts`
 - `frontend/src/noteSaveQueue.ts`
+- `frontend/src/noteComposition.ts` (rescuing an open IME composition at editor teardown)
 - `frontend/src/noteSelection.ts` (selection slicing, message composition, delivery payloads)
 - `frontend/src/agentTargets.ts` (which sessions may receive a send)
 - `frontend/src/SendToAgentPicker.tsx`

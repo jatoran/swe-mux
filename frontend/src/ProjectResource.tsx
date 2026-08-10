@@ -9,6 +9,7 @@ import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipb
 import { ImageViewer } from './ImageViewer'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import { useModalFocus } from './modalFocus'
+import { uncommittedEditorText } from './noteComposition'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
@@ -72,6 +73,10 @@ const parentPath=(path:string)=>path.includes('/')?path.slice(0,path.lastIndexOf
 const watchIdentity=()=>`resource-${Date.now()}-${Math.random().toString(36).slice(2)}`
 const treeKey=(paths:Iterable<string>)=>[...paths].sort().join('\n')
 const TREE_LONG_PRESS_MS=550
+// How many times a load may re-read after the daemon answers with a revision this browser has
+// already replaced. One re-read is enough by construction (the superseding write is complete
+// before its predecessor is recorded), so this is a loop guard, not a retry budget.
+const STALE_LOAD_REREADS=2
 
 // Expand state persists to the shared server settings blob. Debounce the write at
 // module scope (keyed by project) so a rapid burst of toggles collapses to one PUT
@@ -217,7 +222,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause));return false}
   }
 
-  const loadText=async():Promise<boolean>=>{
+  const loadText=async(staleReads=0):Promise<boolean>=>{
     if(resource.kind==='files')return true
     const requestGeneration=isNote?++noteLoadGeneration.current:0
     setStatus('loading');setError('')
@@ -236,6 +241,15 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       // can still be in flight while this GET is answered from the older file. Without this,
       // arriving would silently show — and then save — the pre-move text.
       const unsaved=autosaved?noteSaveQueue.pendingText(noteKey):null
+      // The same handoff, one beat later: this GET can be answered from the file as it stood
+      // before that flush, while the flush's PUT is still landing. By the time the answer is
+      // processed the PUT has been acknowledged, so `unsaved` is empty and nothing else marks
+      // the payload as stale - adopting it would revert the editor to the pre-move text and
+      // hand the queue a revision the daemon has moved past. The write has provably landed
+      // (that is what made its predecessor superseded), so re-reading now sees it.
+      if(autosaved&&unsaved===null&&staleReads<STALE_LOAD_REREADS&&noteSaveQueue.hasSuperseded(noteKey,payload.revision)){
+        return loadText(staleReads+1)
+      }
       const next=unsaved??stored
       setRevision(payload.revision);setText(next);setBaseline(stored);setStatus(payload.status)
       if(!('markdown' in payload)){
@@ -941,7 +955,17 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const unsubscribe=noteSaveQueue.subscribe(noteKey,setNoteSave)
     // The header no longer carries a close button, so flush any pending edit when the
     // resource unmounts (tab close or reparent) instead of relying on that button.
-    return()=>{unsubscribe();noteSaveQueue.flush(noteKey)}
+    //
+    // Rescue the composing run first. Flushing only commits what the editor has handed us,
+    // and text held by an open IME composition never was: Continuity drops it on `destroy()`.
+    // This runs while the element is still live - Preact fires a component's effect cleanups
+    // before unmounting its children, so the editor has not been detached yet.
+    return()=>{
+      unsubscribe()
+      const composing=uncommittedEditorText(editorElement.current)
+      if(composing!==null)noteSaveQueue.submit(noteKey,composing)
+      noteSaveQueue.flush(noteKey)
+    }
   },[autosaved,noteKey])
 
   const resolveKeepMine=async()=>{
