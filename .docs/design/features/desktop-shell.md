@@ -84,6 +84,21 @@ continues to own every terminal.
 - `packaging/build_desktop.py` builds the frontend in `.runtime/`, publishes hashed assets before
   `index.html`, generates the ICO, and runs PyInstaller. It never empties the live static tree;
   locked content-addressed stale assets may remain harmlessly until a later build.
+- **`build_frontend` runs `vite build` directly, so npm's `postbuild` hook never fires and every
+  step it performs has to be repeated explicitly.** Forgetting one is silent in the worst way: the
+  bundle builds, the daemon starts and reports healthy, and the defect appears only in a browser.
+  `test_the_desktop_frontend_build_repeats_every_postbuild_step` reads `frontend/package.json` and
+  fails when a `postbuild` script has no counterpart here. (`prebuild` needs no such guard: this
+  path runs `npm run check`, whose `precheck` performs those steps.)
+- **Precompressed variants are dropped on publish and regenerated, never copied over.** Vite emits
+  no `.gz`, so a publish that only copies leaves the previous build's compressed files beside the
+  new source. The daemon prefers a `.gz` for any client sending `Accept-Encoding: gzip` - every
+  browser - and `index.html.gz` names content-hashed assets, so a stale one serves an index whose
+  every asset 404s: a blank screen on a bundle that reports itself healthy.
+  This defect also defeats the asset-hash check in the repository's `CLAUDE.md`, because `curl`
+  without `--compressed` is served the correct plain `index.html`. To check the file a browser
+  actually receives, request it compressed:
+  `curl -s --compressed http://127.0.0.1:8765/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'`.
 - `packaging/swe_mux.spec` emits windowed `dist/swe-mux/swe-mux.exe` and `_internal/`. The
   complete `onedir` folder is the distributable unit; the executable is not standalone. It is
   deliberately the *only* executable here: a second one (`swe-mux-action.exe`) used to root

@@ -76,15 +76,25 @@ def build_frontend() -> None:
     node = shutil.which("node")
     if node is None:
         raise SystemExit("node is required to verify the bundled frontend")
+    # This path runs `vite build` directly, so npm's `postbuild` hook does NOT run
+    # and every step it would have performed has to be repeated here. Forgetting one
+    # is silent: the bundle ships, the daemon starts healthy, and the defect only
+    # appears in a browser.
+    #
     # Refuse to ship a bundle carrying a dropped-declaration ReferenceError (the
-    # defect class that rendered every oh-my-pi pane black). This path bypasses
-    # `npm run build`, so the postbuild hook does not cover it.
+    # defect class that rendered every oh-my-pi pane black).
     subprocess.run(
         [node, "scripts/verify-bundle.mjs", str(staging / "assets")],
         cwd=frontend,
         check=True,
     )
     publish_frontend(staging, ROOT / "src" / "swe_mux" / "static")
+    # Regenerate the precompressed variants the publish just dropped. Skipping this
+    # left the previous build's `index.html.gz` in place, and because the daemon
+    # prefers a `.gz` for any client that accepts gzip, every browser was served an
+    # index naming asset hashes that no longer existed: a blank screen on a bundle
+    # that reported itself healthy.
+    subprocess.run([node, "scripts/compress-static.mjs"], cwd=frontend, check=True)
 
 
 def build_app_bundle(distpath: Path | None = None) -> None:

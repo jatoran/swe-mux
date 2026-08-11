@@ -89,6 +89,72 @@ def test_frontend_publish_never_empties_live_static_tree(tmp_path: Path) -> None
     assert (destination / "notification-sounds" / "ding.mp3").read_bytes() == b"sound"
 
 
+def test_frontend_publish_drops_every_precompressed_variant(tmp_path: Path) -> None:
+    """A stale `.gz` outliving its source is a blank screen, not a slow page.
+
+    The daemon serves a precompressed variant to any client sending
+    `Accept-Encoding: gzip`, which is every browser. `index.html.gz` names
+    content-hashed assets, so last build's copy points at files this build deleted:
+    the page loads and every asset 404s. It hides from the usual asset-hash check
+    too, because `curl` without `--compressed` is served the correct plain
+    `index.html`.
+
+    Vite emits no `.gz`, so a publish that only copies cannot overwrite them. They
+    are dropped instead, and the caller regenerates them.
+    """
+    staging = tmp_path / "staging"
+    destination = tmp_path / "static"
+    (staging / "assets").mkdir(parents=True)
+    (destination / "assets").mkdir(parents=True)
+    (staging / "index.html").write_text("index-new.js", encoding="utf-8")
+    (staging / "assets" / "index-new.js").write_text("new", encoding="utf-8")
+    # Everything the previous build left behind, compressed.
+    (destination / "index.html").write_text("index-old.js", encoding="utf-8")
+    (destination / "index.html.gz").write_bytes(b"gzipped index-old.js")
+    (destination / "sw.js.gz").write_bytes(b"gzipped old worker")
+    (destination / "assets" / "index-old.js").write_text("old", encoding="utf-8")
+    (destination / "assets" / "index-old.js.gz").write_bytes(b"gzipped old")
+
+    publish_frontend(staging, destination)
+
+    assert (destination / "index.html").read_text() == "index-new.js"
+    assert not (destination / "index.html.gz").exists()
+    assert not (destination / "sw.js.gz").exists()
+    assert not (destination / "assets" / "index-old.js.gz").exists()
+    assert not (destination / "assets" / "index-old.js").exists()
+
+
+def test_the_desktop_frontend_build_repeats_every_postbuild_step() -> None:
+    """`vite build` runs directly here, so npm's `postbuild` hook never fires.
+
+    Each step that hook performs has to be repeated in `build_frontend`, and
+    forgetting one is silent: the bundle ships, the daemon reports healthy, and the
+    defect only appears in a browser. Omitting `compress-static` did exactly that.
+
+    Asserted against the package manifest rather than a hardcoded list, so a script
+    added to `postbuild` later is required to appear here too.
+
+    Only `postbuild` is checked because it is the only uncovered hook: `build_frontend`
+    runs `npm run check`, whose own `precheck` performs every `prebuild` step.
+    """
+    import json
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    manifest = json.loads((root / "frontend" / "package.json").read_text(encoding="utf-8"))
+    postbuild = manifest["scripts"]["postbuild"]
+    source = (root / "packaging" / "build_desktop.py").read_text(encoding="utf-8")
+    build_frontend = source.split("def build_frontend()")[1].split("\ndef ")[0]
+
+    scripts = set(re.findall(r"scripts/([\w.-]+\.mjs)", postbuild))
+    assert scripts, "postbuild runs no scripts; this guard would assert nothing"
+    for script in sorted(scripts):
+        assert f"scripts/{script}" in build_frontend, (
+            f"frontend/package.json runs scripts/{script} in postbuild, which the "
+            f"desktop build bypasses. Run it explicitly in build_frontend."
+        )
+
+
 def test_frozen_desktop_dispatches_allowlisted_internal_modules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
