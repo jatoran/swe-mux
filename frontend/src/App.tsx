@@ -129,7 +129,9 @@ import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettin
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
-import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { dismissStack } from './dismissStack.ts'
+import { installSystemBack } from './systemBack.ts'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import {
   DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
@@ -627,6 +629,7 @@ export function App() {
   const [mobileInput, setMobileInput] = useState<MobileInputSettings>(defaultMobileInputSettings)
   const [mobileGestures, setMobileGestures] = useState<MobileGestureSettings>(defaultMobileGestureSettings)
   const [swipeAwayClose, setSwipeAwayClose] = useState(true)
+  const [overlayBack, setOverlayBack] = useState(true)
   // On a phone the navigation sidebar and the clipboard panel are both full-height
   // drawers over the workspace, entering from opposite edges. Two open at once leave
   // no workspace between them and bury one under the other's scrim, so opening either
@@ -1288,6 +1291,7 @@ export function App() {
       JSON.stringify(current) === JSON.stringify(nextMobileInput) ? current : nextMobileInput)
     setMobileGestures(mobileGestureSettings(config))
     setSwipeAwayClose(swipeAwayCloseEnabled(config))
+    setOverlayBack(overlayBackEnabled(config))
     setClipboardEnabled(config.clipboard_history_enabled!==false)
     setDrawerTabDisplay(config.drawer_tab_display==='title'?'title':'icon')
     setUtilityRailDisplay(config.utility_rail_display==='title'?'title':'icon')
@@ -3730,6 +3734,14 @@ export function App() {
     { id: 'mobileTab.next', label: 'Focus next tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(1) },
     { id: 'mobileTab.previous', label: 'Focus previous tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(-1) },
     { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(true) },
+    // Unconditionally available, and deliberately not gated on `dismissStack.depth()`:
+    // `available` is a render-time snapshot, but a drill-down level (History's transcript)
+    // lives in its own component's state and opens without re-rendering App. A stale
+    // `false` would make `runCommand` refuse the command and toast at exactly the moment
+    // the user swiped back. `pop()` is already inert on an empty stack, which is the same
+    // outcome without the lie. Subscribing App to the stack instead would re-render the
+    // whole shell on every overlay open for a greyed-out palette row.
+    { id: 'nav.back', label: 'Back (close one overlay level)', category: 'view', available: true, run: () => { dismissStack.pop() } },
     { id: 'sidebar.close', label: 'Close navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(false) },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
@@ -4121,6 +4133,27 @@ export function App() {
     return () => window.removeEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
   })
 
+  // The platform back gesture closes one overlay level. Installed for every device, not
+  // just the mobile workspace: a desktop browser's Back button and mouse-4 reach the same
+  // handler, and a standalone PWA has no other route back at all.
+  useEffect(() => installSystemBack(), [])
+  // A dismissable level that refuses to be dismissed: back must not walk out of the app
+  // while the daemon is mid-restart, and there is nothing behind these overlays to reach.
+  useEffect(() => {
+    if (!daemonReloading && !redeploying) return
+    const id = dismissStack.register({ label: 'daemon-reload', blocking: true, dismiss: () => undefined })
+    return () => dismissStack.unregister(id)
+  }, [daemonReloading, redeploying])
+  // Field diagnostics for "back did the wrong thing" reports: the live level names and the
+  // recent transition ring, readable from a phone's remote console with no build change.
+  useEffect(() => {
+    ;(window as unknown as { __muxDismiss?: unknown }).__muxDismiss = {
+      depth: () => dismissStack.depth(),
+      top: () => dismissStack.topLabel(),
+      trace: () => dismissStack.trace(),
+    }
+  }, [])
+
   // Mobile touch gestures. Handled at the shell level so the terminal's own pointer
   // pipeline (scroll, long-press selection, tap-to-focus) is untouched: terminals
   // ignore horizontal drags and second fingers, so we only claim what they discard.
@@ -4144,11 +4177,15 @@ export function App() {
       // open shadow root, including Continuity's command rail, keeps its drag.
       const path = event.composedPath().filter((node): node is Element => node instanceof Element)
       // Act over the workspace, the sidebar, or its scrim (so a swipe over the dimmed
-      // area toggles the open sidebar shut). Taps inside modals/menus/palette match none
-      // of these, so open overlays stay immune to gesture hijacking.
-      // The utility drawer and its scrim are included so the leftward two-finger
-      // swipe that pulls the drawer in can also push it back out from over it.
-      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)) { state = null; detachMove(); return }
+      // area toggles the open sidebar shut). The utility drawer and its scrim are included
+      // so the leftward two-finger swipe that pulls the drawer in can also push it back
+      // out from over it.
+      // `.modal-layer` is the shared wrapper every full-screen dialog renders, and it is
+      // here only so the back swipe can reach an open overlay. Overlays are still immune
+      // to gesture *hijacking*: `resolveGestureCommand` resolves every non-back slot to
+      // nothing whenever the dismiss stack is non-empty, so no binding runs behind a
+      // modal. Menus and the palette remain outside the recognizer entirely.
+      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)) { state = null; detachMove(); return }
       // A drag that has claimed the pointer owns it outright (`pointerDragClaim.ts`); a
       // second finger landing mid-drag does not get to start a gesture behind it.
       if (pointerDragOwnsPointer()) { state = null; detachMove(); return }
@@ -4200,7 +4237,7 @@ export function App() {
       const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
       state = null
       if (!slot) return
-      const command = resolveGestureCommand(slot, mobileGestures, overlayPanels.current, swipeAwayClose)
+      const command = resolveGestureCommand(slot, mobileGestures, overlayPanels.current, swipeAwayClose, { depth: dismissStack.depth(), enabled: overlayBack })
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }
@@ -4215,7 +4252,7 @@ export function App() {
       window.removeEventListener('touchend', onEnd)
       window.removeEventListener('touchcancel', onEnd)
     }
-  }, [mobileWorkspace, mobileGestures, swipeAwayClose])
+  }, [mobileWorkspace, mobileGestures, swipeAwayClose, overlayBack])
 
   const recordClientStartupTiming=(sessionId:string,milestone:StartupMilestone,elapsedMs:number)=>{
     const current=clientStartupTimingValues.current[sessionId]||{}

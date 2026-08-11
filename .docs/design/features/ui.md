@@ -277,6 +277,18 @@ responsive controls.
 - Account, resource-usage, context, and command popovers are viewport-anchored. Settings,
   Projects, transcript review, and confirmation dialogs use the modal layer. Opening a child
   dialog from Projects must place it above the manager, never beneath it.
+- **"Back" is one concept with one implementation.**
+  Every dismissable level registers with the dismiss stack (`dismissStack.ts`) while it is open, and Escape, the platform back gesture, and the mobile back swipe all resolve to a single `pop()` that closes exactly one level.
+  Registration happens through `useModalFocus`, so declaring a focus-trapped modal is also how it declares what back means for it; a drill-down that is not its own modal uses `useDismissLevel`.
+  Three surfaces had already grown private versions of this ladder — the paired `useModalFocus` gates in `AutomationDashboard.tsx`, the nested Escape ternary in `ProjectRunMenu.tsx`, and the eighteen-setter Escape handler in `App.tsx` — which is the evidence that it is one behavior rather than a per-dialog decision.
+- Stack order is **temporal, not structural**: the most recently registered active level pops first.
+  A drill-down therefore needs no knowledge of its own depth, and nesting is expressed by mounting its registration after its parent's.
+  The `enabled` gate never re-registers a level, because re-registering would move a parent above levels that opened after it.
+- A level is gated off only to stop being the dismiss *target*, never to give up focus containment.
+  The transcript inside session history registers **above** the browser rather than gating it off, so back returns to the results while the modal keeps its focus trap for the whole time the transcript is open.
+  Before that level existed, Escape in a transcript closed the entire browser and discarded the search while the visible `← Results` button went back one step, so keyboard and pointer disagreed about what back meant.
+- A level may declare itself **blocking**, which absorbs a back instead of letting it fall through to whatever is behind it.
+  The daemon-reload and redeploy overlays use this: they are `alertdialog` waits with nothing reachable behind them, and back must not walk out of the app while the daemon is mid-restart.
 - Every full-screen dialog layer stacks above all persistent chrome: the mobile toolbar, mobile
   nav toggle, desktop top bar, and context menus. Chrome painting over a dialog does not merely
   look wrong, it silently swallows taps on the dialog's own header, which is where close and
@@ -694,6 +706,23 @@ responsive controls.
   recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable
   `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input →
   touch gestures).
+- **The platform back gesture closes one overlay level.**
+  swe-mux installs as a `display: standalone` PWA, where back is the primary navigation control, and the app keeps no route history of its own (the URL is only ever `replaceState`d to track the focused session).
+  With nothing to pop, Android's back backgrounded the whole app while a modal was open.
+  `systemBack.ts` keeps **one** sentinel history entry alive for exactly as long as the dismiss stack is non-empty: pushed when the first level opens, consumed by the platform on a back gesture, and re-pushed if levels remain.
+  One sentinel rather than one per level is the invariant that matters — per-level entries desynchronize the first time a level closes by button instead of by back, with nothing able to resynchronize them.
+  Closing the last level steps back over the sentinel so the next back press is not silently swallowed, and the popstate that step causes is counted and ignored rather than read as a user gesture.
+  A sentinel that is no longer the current history entry is dropped rather than stepped over, because navigating the user somewhere they did not ask to go is the worse failure.
+- The one back press this deliberately does not see is the one that dismisses the Android soft keyboard: the platform consumes it and never tells the page, so an overlay behind the keyboard survives the first press.
+  That matches how the keyboard shadows back everywhere else on the platform and is not special-cased.
+- The same motion is available in-app as a **rightward swipe** while any level is open, since Android owns the edge-anchored swipes and only a mid-screen one is available.
+  `.modal-layer` is in the recognizer's target allowlist solely to carry it.
+  Overlays remain immune to gesture *hijacking* by a stronger rule than the old one: whenever the dismiss stack is non-empty, `resolveGestureCommand` resolves the back slots to `nav.back` and **every other slot to nothing**, so no binding can run behind a modal.
+  Turning off the hot-reloadable `mobile_gesture_overlay_back` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour of an overlay swallowing every gesture, rather than letting the old bindings back through.
+  The platform back gesture is unaffected by that switch.
+- `nav.back` is a registered command like any other, so it is bindable to a key, assignable to any gesture slot, and reachable from the palette.
+  It is unconditionally available rather than gated on stack depth: availability is a render-time snapshot, and a drill-down level owned by its own component opens without re-rendering the composition root, so a depth gate would refuse the command at exactly the moment the user swiped back.
+  `pop()` is already inert on an empty stack, which reaches the same outcome without the stale claim.
 - A pane that loses terminal input it was holding says so, instead of silently swallowing
   keystrokes: a strip names the device with the keyboard and offers a one-click "Take over".
   It appears for exactly two things — input this pane held moved to another device, or a
@@ -1749,6 +1778,9 @@ Colour still arrives through the existing `.state-dot` state classes, so themes 
 ## Key files
 
 - `frontend/src/App.tsx`
+- `frontend/src/dismissStack.ts`
+- `frontend/src/systemBack.ts`
+- `frontend/src/modalFocus.ts`
 - `frontend/src/sessionRowConfig.ts`
 - `frontend/src/sessionRowFields.ts`
 - `frontend/src/sessionRowPrefs.ts`

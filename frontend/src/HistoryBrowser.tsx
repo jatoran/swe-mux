@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
-import { useModalFocus } from './modalFocus'
+import { useDismissLevel, useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
 import { transcriptClamped, transcriptSpeaker, transcriptTimestampIso, transcriptTimestampLabel } from './transcriptView'
 import type { Project } from './types'
@@ -97,6 +97,10 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   const manualCopyArea=useRef<HTMLTextAreaElement>(null)
   const panel=useRef<HTMLElement>(null)
   useModalFocus(panel,onClose)
+  // Reading a transcript is a level of its own, so back returns to the results that found
+  // it instead of discarding the search. Registered after the modal and therefore above
+  // it: `← Results` and back now agree, where Escape used to close the whole browser.
+  useDismissLevel(()=>setTranscript(null),!!transcript,'history-transcript')
 
   const parameters=(cursor?:string)=>{
     const value=new URLSearchParams({limit:'50',scope})
