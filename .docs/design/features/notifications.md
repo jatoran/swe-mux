@@ -38,8 +38,19 @@ apply identically to sounds and to web push (`classify_notification` and
 The first two read fields that must be present on `state_changed`, not only on
 `turn_ended` — see `features/status-detection.md` § What `state_changed` carries.
 
-The account popover can persistently classify a Codex alert as manual usage or discard any alert
-as a detection error. Reviewed evidence remains in telemetry history but leaves the active alert
+A confirmed unexpected reset is one *provider* event, not one per account. The provider rolls
+the whole plan over at once, so every enabled account of that provider confirms the same
+rollover inside a single sequential polling pass; the durable classifier therefore coalesces
+confirmed resets per provider for 60 seconds and raises one alert carrying `count` and a
+`resets` array. Confirmation already lags the drop by 5-45 minutes, so the extra minute buys
+one chime per rollover instead of up to `2N` for `N` accounts. This is a source-side collapse,
+not a delivery-side dedup: the push sender's 8 s `(session, category)` window is keyed on an
+empty session id for resets and only ever coincidentally caught them.
+
+The account popover reviews the whole unreviewed group in one action, and every resolution -
+`seen`, `manual_usage`, `discarded` - is written server-side. Dismissal is a property of the
+evidence, not of the browser that saw it, so acknowledging an alert at the desk clears it on
+the phone. Reviewed evidence remains in telemetry history but leaves the active alert
 summary; review cannot retract a sound already emitted for the original confirmed event.
 
 ## Settling the "ready" alert

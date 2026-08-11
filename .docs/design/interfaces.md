@@ -1130,7 +1130,7 @@ GET|POST /usage
 DELETE /usage/cache
 GET    /telemetry/operational[?provider=&account=&limit=]
 GET    /telemetry/quota-series[?provider=&account=&since=&until=&resolution=raw|daily&limit=]
-PATCH  /telemetry/quota-resets/{reset_id} {resolution: manual_usage|discarded}
+POST   /telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 ```
 
 Auth file contents never appear in API responses. `GET /provider-accounts` reports each live

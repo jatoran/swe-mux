@@ -124,7 +124,7 @@ function ResetLog({items,accounts}:{items:ResetEvent[];accounts:ProviderAccount[
   return <section class="reset-log"><h3>Reset evidence log</h3>{items.length?items.map(item=>{
     const account=accounts.find(candidate=>candidate.id===item.account_id)
     return <article key={item.id} class={item.classification==='unexpected'&&item.confirmed&&!item.suppression_reason&&!item.review_status?'confirmed-unexpected':''}>
-      <strong>{item.review_status==='manual_usage'?'manual Codex usage':item.review_status==='discarded'?'discarded detection error':`${item.classification} ${item.window} reset · ${account?.label||item.account_id}`}</strong>
+      <strong>{item.review_status==='manual_usage'?'manual Codex usage':item.review_status==='discarded'?'discarded detection error':item.review_status==='seen'?`acknowledged ${item.window} reset · ${account?.label||item.account_id}`:`${item.classification} ${item.window} reset · ${account?.label||item.account_id}`}</strong>
       <span>{item.before_value}% to {item.after_value}% · {new Date(item.observed_at*1000).toLocaleString()}</span>
       <small>confidence {item.confidence} · {item.confirmed?'confirmed':'awaiting confirmation'}{item.suppression_reason?` · suppressed: ${item.suppression_reason}`:''}{item.expected_reset_at?` · expected ${new Date(item.expected_reset_at*1000).toLocaleString()}`:''}</small>
     </article>

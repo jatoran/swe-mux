@@ -16,8 +16,12 @@ type AccountConflict={kind:'duplicate_account';provider_account_id:string;primar
 type MatchHint={account_id:string;label?:string|null;reason:string}
 export type ProviderAccount={id:string;provider:ProviderName;label:string;email?:string|null;organization?:string|null;provider_account_id?:string|null;identity_source?:IdentitySource|null;identity_verified_at?:number|null;created_at:number;updated_at:number;quota?:AccountQuota|null;conflict?:AccountConflict|null}
 type CurrentProviderAccount={state:'saved'|'external'|'signed_out'|'unreadable';account_id:string|null;email?:string|null;organization?:string|null;provider_account_id?:string|null;identity_source?:IdentitySource|null;match_hint?:MatchHint|null}
-type ResetAlert={count:number;latest?:{id:string;provider:ProviderName;account_id:string;window:string;before_value:number;after_value:number;confirmed_at?:number}|null}
-type ResetReview={item:{id:string;provider:ProviderName;review_status:'manual_usage'|'discarded';reviewed_at:number};reset_alert:ResetAlert}
+type ResetEvidence={id:string;provider:ProviderName;account_id:string;window:string;before_value:number;after_value:number;confirmed_at?:number}
+/** Every unreviewed confirmed reset, not just the newest: one provider rollover lands on
+ *  every account of that provider, and triaging them one at a time was N alerts per fact. */
+type ResetAlert={count:number;items:ResetEvidence[]}
+type ResetResolution='seen'|'manual_usage'|'discarded'
+type ResetReview={items:ResetEvidence[];reset_alert:ResetAlert}
 export type ProviderAccountsStatus={providers:ProviderName[];selected:Record<ProviderName,string|null>;current:Record<ProviderName,CurrentProviderAccount>;accounts:ProviderAccount[];poll_minutes:number;stale_minutes:number;refreshing:boolean;reset_alert?:ResetAlert}
 
 const providerEvent='swe-mux:provider-accounts-changed'
@@ -79,32 +83,27 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
   const {status,setStatus,error,setError}=useProviderAccounts()
   const [open,setOpen]=useState(false)
   const [busy,setBusy]=useState('')
-  const [resetUnread,setResetUnread]=useState(false)
   const [resetSound,setResetSound]=useState(()=>alertPreferences().enabled&&soundPreferences().enabled&&soundPreferences().events.reset)
   const root=useRef<HTMLDivElement>(null)
   const popover=useRef<HTMLDivElement>(null)
   const [popoverStyle,setPopoverStyle]=useState<Record<string,string>>({})
   const providers=status?.providers||[]
   const selected=(provider:ProviderName)=>status?.accounts.find(account=>account.id===status.selected[provider])
-  const latestReset=status?.reset_alert?.latest
-  useEffect(()=>{
-    if(!latestReset?.id)return
-    const seen=localStorage.getItem('swe-mux:last-seen-reset')
-    if(seen===latestReset.id)return
-    setResetUnread(true)
-  },[latestReset?.id])
-  const dismissReset=()=>{if(latestReset?.id)localStorage.setItem('swe-mux:last-seen-reset',latestReset.id);setResetUnread(false)}
+  // Unread is now purely the server's unreviewed set. It used to be a localStorage
+  // marker, which is why dismissing at the desk left the same alert waiting on the phone.
+  const resetItems=status?.reset_alert?.items||[]
+  const resetProviders=useMemo(()=>[...new Set(resetItems.map(item=>item.provider))],[resetItems])
+  const resetUnread=resetItems.length>0
   const toggleResetSound=()=>setResetSound(value=>{const next=!value,prefs=soundPreferences();if(next){const alerts=alertPreferences();setAlertPreferencesFor(currentProfile(),{...alerts,enabled:true})}setSoundPreferences({...prefs,enabled:next||prefs.enabled,events:{...prefs.events,reset:next}});return next})
-  const reviewReset=async(resolution:'manual_usage'|'discarded')=>{
-    if(!latestReset?.id)return
-    const reviewedId=latestReset.id
+  // One click resolves the whole group: three accounts observing one provider rollover
+  // is one judgement, not three.
+  const reviewResets=async(resolution:ResetResolution)=>{
+    const ids=resetItems.map(item=>item.id)
+    if(!ids.length)return
     setBusy(`reset-${resolution}`);setError('')
     try{
-      const result=await api<ResetReview>('PATCH',`/api/telemetry/quota-resets/${reviewedId}`,{resolution})
-      localStorage.setItem('swe-mux:last-seen-reset',reviewedId)
+      const result=await api<ResetReview>('POST','/api/telemetry/quota-resets/review',{ids,resolution})
       setStatus(current=>current?{...current,reset_alert:result.reset_alert}:current)
-      const nextId=result.reset_alert.latest?.id
-      setResetUnread(Boolean(nextId&&localStorage.getItem('swe-mux:last-seen-reset')!==nextId))
       notifyChanged()
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
@@ -141,7 +140,7 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
       <header><div><strong>ACCOUNTS</strong><span>session · weekly</span></div><button aria-label="Close account switcher" onClick={()=>setOpen(false)}>×</button></header>
       {providers.map(provider=>{const current=status?.current[provider];const active=selected(provider);return <section><h4>{provider}</h4>{current?.state!=='saved'&&<p class={`account-current-notice ${current?.state||'signed_out'}`}>{currentDescription(current,active)}{current?.match_hint?` ${hintDescription(current)}`:''}</p>}{status?.accounts.filter(account=>account.provider===provider).map(account=><button class={`${status.selected[provider]===account.id?'active':''} ${account.conflict&&!account.conflict.is_primary?'conflicted':''}`} disabled={!!busy} onClick={()=>void choose(account)} title={account.conflict?conflictDescription(account):quotaTitle(account)}><span>{status.selected[provider]===account.id?'◆':'◇'}</span><strong>{account.label}</strong><small>{account.conflict&&!account.conflict.is_primary?'duplicate account · polling suspended':<>{quotaSummary(account)}{account.quota?.refreshed_at?<i class="account-refresh-age" title={`Quotas refreshed ${new Date(account.quota.refreshed_at*1000).toLocaleString()}`}> · {formatRefreshAge(account.quota.refreshed_at)}</i>:''}</>}</small></button>)}{!status?.accounts.some(account=>account.provider===provider)&&<p>No saved accounts</p>}</section>})}
       {error&&<p class="account-error" role="alert">{error}</p>}
-      {latestReset&&resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p><strong>{latestReset.provider} {latestReset.window}</strong> moved {latestReset.before_value}% → {latestReset.after_value}% and was confirmed by a second fresh sample.</p><div>{latestReset.provider==='codex'&&<button disabled={!!busy} onClick={()=>void reviewReset('manual_usage')}>{busy==='reset-manual_usage'?'marking…':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewReset('discarded')}>{busy==='reset-discarded'?'discarding…':'discard as error'}</button><button disabled={!!busy} onClick={dismissReset}>mark seen</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
+      {resetUnread&&<section class="account-reset-alert"><h4>quota reset evidence</h4><p>{resetItems.length===1?'One confirmed unexpected reset:':`${status?.reset_alert?.count??resetItems.length} confirmed unexpected resets · one provider rollover reaches every account on that plan:`}</p><ul>{resetItems.map(item=><li key={item.id}><strong>{item.provider} {item.window}</strong> · {status?.accounts.find(account=>account.id===item.account_id)?.label||item.account_id} · {item.before_value}% → {item.after_value}%</li>)}</ul><div>{resetProviders.length===1&&resetProviders[0]==='codex'&&<button disabled={!!busy} onClick={()=>void reviewResets('manual_usage')}>{busy==='reset-manual_usage'?'marking…':resetItems.length>1?'all manual Codex usage':'manual Codex usage'}</button>}<button class="danger" disabled={!!busy} onClick={()=>void reviewResets('discarded')}>{busy==='reset-discarded'?'discarding…':resetItems.length>1?'discard all as errors':'discard as error'}</button><button disabled={!!busy} onClick={()=>void reviewResets('seen')}>{busy==='reset-seen'?'marking…':'mark seen'}</button><button disabled={!!busy} onClick={toggleResetSound}>{resetSound?'mute reset sound':'enable reset sound'}</button></div></section>}
       <footer><button disabled={!!busy} onClick={()=>void refresh()}>{busy==='refresh'?'refreshing…':'refresh quotas'}</button><button onClick={()=>{setOpen(false);onManage()}}>manage…</button></footer>
     </div>
   const quotas=providerQuotaWindows(status?.accounts||[],status?.selected||{})
@@ -187,7 +186,7 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
   // name, and the toolbar names every window there even though it draws only one.
   const quotaChip=(provider:ProviderName,title:string)=>{
     const weekly=quotas[provider]?.weekly||null
-    return <button key={provider} class={`rail-quota usage-${shownUsageBand(weekly?.used_percent)} ${resetUnread&&latestReset?.provider===provider?'quota-reset-unread':''}`} aria-label={title} aria-expanded={open} title={title} onClick={toggle}>
+    return <button key={provider} class={`rail-quota usage-${shownUsageBand(weekly?.used_percent)} ${resetProviders.includes(provider)?'quota-reset-unread':''}`} aria-label={title} aria-expanded={open} title={title} onClick={toggle}>
       <span class={`provider-glyph ${provider}`} aria-hidden="true">{providerGlyph(provider)}</span><strong>{weekly?`${Math.round(weekly.used_percent)}%`:'—'}</strong>
     </button>
   }
@@ -204,7 +203,7 @@ export function AccountSwitcher({variant='full',placement,onManage}:{
     :variant==='compact'?providers.map(provider=>quotaChip(provider,toolbarTitle(provider)))
     :<div class="account-summary">
       {providers.map(provider=>{const account=selected(provider);const current=status?.current[provider];const state=account?account.quota?.status||'pending':current?.state||'loading';return <button class={account?'tracked':current?.state==='external'?'external':'untracked'} aria-label={`${provider} account: ${currentLabel(current,account)}; ${currentSummary(current,account)}; ${state}`} aria-expanded={open} onClick={toggle} title={`${provider} · ${account?quotaTitle(account):currentDescription(current,account)}`}>{quotaGrid(provider)}{state!=='ready'&&<em>{state}</em>}</button>})}
-      {resetUnread&&<button class="quota-reset-indicator" title="Confirmed unexpected reset; open for evidence" onClick={show}><span>RESET</span><strong>unexpected quota reset</strong><small>{latestReset?.provider} · {latestReset?.window}</small></button>}
+      {resetUnread&&<button class="quota-reset-indicator" title="Confirmed unexpected reset; open for evidence" onClick={show}><span>RESET</span><strong>{resetItems.length>1?`${resetItems.length} unexpected quota resets`:'unexpected quota reset'}</strong><small>{resetProviders.join(' · ')}</small></button>}
     </div>}
     {popup&&createPortal(popup,document.body)}
   </div>

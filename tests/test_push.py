@@ -81,6 +81,16 @@ def test_classify_covers_categories() -> None:
     assert classify_notification(_event("turn_aborted", outcome="interrupted")) is None
 
 
+def test_coalesced_reset_alert_names_how_many_accounts_it_covers() -> None:
+    # One provider rollover reaches every account on the plan and arrives as one alert, so a
+    # body claiming a single reset would understate what the user is looking at.
+    single = classify_notification(_event("unexpected_quota_reset", provider="codex", count=1))
+    assert single["body"] == "Unexpected quota reset."
+    group = classify_notification(_event("unexpected_quota_reset", provider="codex", count=3))
+    assert group["category"] == "reset"
+    assert group["body"] == "Unexpected quota reset on 3 codex accounts."
+
+
 def test_classify_excludes_subagent_and_nonroot() -> None:
     assert classify_notification(_event("approval_needed", scope="subagent")) is None
     assert classify_notification(_event("approval_needed", sidechain=True)) is None

@@ -45,14 +45,17 @@ def test_reset_indicator_is_purple_deduplicated_and_sound_is_per_device_profile(
     device_settings = source("deviceSettings.ts")
     styles = source("style.css")
     assert "quota-reset-indicator" in accounts
-    assert "swe-mux:last-seen-reset" in accounts
+    # Dismissal is server-side review, not a per-browser marker: the old localStorage
+    # key meant "mark seen" at the desk left the same alert waiting on the phone.
+    assert "swe-mux:last-seen-reset" not in accounts
     # Sound preferences moved from per-browser localStorage to server-persisted
     # desktop/mobile device-class profiles; the old local blob is imported once.
     assert "soundPreferencesFor" in sounds and "rawDomain" in sounds
     assert "'swe-mux:session-sounds-v1'" in device_settings
     assert "migrateLegacySounds" in device_settings
     assert "unexpected_quota_reset" in sounds
-    assert "/api/telemetry/quota-resets/" in accounts
+    assert "/api/telemetry/quota-resets/review" in accounts
+    assert "'seen'" in accounts
     assert "manual Codex usage" in accounts
     assert "discard as error" in accounts
     assert "Sound in the open app" in alert_settings

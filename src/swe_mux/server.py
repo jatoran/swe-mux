@@ -782,7 +782,7 @@ def create_app(
             web.delete("/api/usage/cache", clear_usage_cache),
             web.get("/api/telemetry/operational", operational_telemetry),
             web.get("/api/telemetry/quota-series", quota_telemetry_series),
-            web.patch("/api/telemetry/quota-resets/{reset_id}", review_quota_reset),
+            web.post("/api/telemetry/quota-resets/review", review_quota_resets),
             web.get("/api/provider-accounts", get_provider_accounts),
             web.get("/api/provider-accounts/audit", get_provider_account_audit),
             web.post("/api/provider-accounts/refresh", refresh_provider_accounts),
@@ -6983,19 +6983,27 @@ async def quota_telemetry_series(request: web.Request) -> web.Response:
     return json_response(result)
 
 
-async def review_quota_reset(request: web.Request) -> web.Response:
+async def review_quota_resets(request: web.Request) -> web.Response:
     body = await request.json()
     resolution = str(body.get("resolution") or "")
+    raw_ids = body.get("ids")
+    if not isinstance(raw_ids, list):
+        raise web.HTTPBadRequest(text="ids must be a list of quota reset ids")
     telemetry: OperationalTelemetryStore = request.app["telemetry"]
-    reviewed = await telemetry.review_quota_reset(request.match_info["reset_id"], resolution)
+    try:
+        reviewed = await telemetry.review_quota_resets([str(item) for item in raw_ids], resolution)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    except KeyError as exc:
+        raise web.HTTPNotFound(text=f"unknown quota reset {exc.args[0]}") from None
     await request.app["events"].emit(
         "quota_reset_reviewed",
         source="user",
-        reset_id=reviewed["id"],
-        provider=reviewed["provider"],
-        resolution=reviewed["review_status"],
+        reset_ids=[item["id"] for item in reviewed],
+        providers=sorted({str(item["provider"]) for item in reviewed}),
+        resolution=resolution,
     )
-    return json_response({"item": reviewed, "reset_alert": await telemetry.reset_summary()})
+    return json_response({"items": reviewed, "reset_alert": await telemetry.reset_summary()})
 
 
 async def get_provider_accounts(request: web.Request) -> web.Response:
