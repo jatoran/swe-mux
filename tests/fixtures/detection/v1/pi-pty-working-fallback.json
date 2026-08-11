@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "backend": "pi",
+  "description": "Before pi's extension binds, submitted input plus its measured working screen give a conservative PTY-only reading. pi's PTY rules are working-only by design: its status footer appears on the idle and the working screen alike, so it identifies the harness rather than the state, and an idle rule keyed on it would read an uncovered dialog as ready-for-input. The screen can therefore raise working but never return the session to idle - that is the hook's job, and the last step proves the handover.",
+  "steps": [
+    {"kind": "pty_tail", "data": "D:\\PROJECTS\\swe-mux (master)\n$0.000 (sub) 0.0%/272k (auto)          (openai-codex) gpt-5.6-sol \u2022 medium"},
+    {"kind": "watchdog", "expect_state": "idle"},
+    {"kind": "input", "submit": true},
+    {"kind": "pty_tail", "data": " \u280f Working...\nD:\\PROJECTS\\swe-mux (master)\n$0.016 (sub) 1.1%/272k (auto)          (openai-codex) gpt-5.6-sol \u2022 medium"},
+    {"kind": "watchdog", "expect_state": "working"},
+    {"kind": "hook", "event": "SessionStart", "payload": {"source": "startup", "session_id": "019fedb9-8f68-758a-8259-7386f6778141", "transcript_path": "pi.jsonl", "pi_event": "session_start"}},
+    {"kind": "hook", "event": "task_complete", "payload": {"will_continue": false, "pi_event": "agent_end"}, "expect_state": "idle"}
+  ],
+  "expected": {
+    "events": [
+      {"type": "terminal_input", "source": "daemon"},
+      {"type": "turn_started", "source": "watchdog-pty", "scope": "root"},
+      {"type": "agent_native_id_bound", "source": "hook", "scope": "root"},
+      {"type": "turn_ended", "source": "hook", "scope": "root", "outcome": "completed"}
+    ],
+    "states": [
+      {"previous": "idle", "state": "working", "source": "watchdog-pty", "proof": "inferred"},
+      {"previous": "working", "state": "idle", "source": "hook", "proof": "proven"}
+    ],
+    "parser": {"status": "watching", "recognized": 0, "unknown": 0, "unknown_signatures": {}},
+    "delivery_state": "blocked",
+    "delivery_reason": "operator_recently_typed"
+  }
+}

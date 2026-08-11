@@ -516,13 +516,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # In-process extension, ordered against its own transcript writes, as omp.
         hook_ordering_guarantee=True,
         repaints_scrollback=True,
-        # No `pty`: the PTY rule table is backend-scoped and each harness's
-        # markers have to be pinned to captured screens from the installed
-        # build. pi's have not been captured, and a screen rule guessed from
-        # documentation is the marker-drift problem restated. Hooks and the
-        # transcript already reach `managed`; adding `pty` is a measurement
-        # exercise, not a code one.
-        state_sources=("hook", "transcript"),
+        # `pty` is a working-only reading, pinned to a captured pi 0.84.1 screen
+        # (`working.pi_spinner`). It can veto delivery and detect activity; it
+        # never grants idle, which hooks and the transcript already prove.
+        state_sources=("hook", "transcript", "pty"),
         measurement_source="transcript",
         reports_conversation_rollover=True,
         assigns_conversation_id=False,
@@ -532,7 +529,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         screen="normal",
         native_hooks=True,
         transcript="semantic",
-        pty=None,
+        pty="telemetry",
         normalized_events=_PI_NORMALIZED_EVENTS,
         tool_catalog=_PI_TOOLS,
         tool_catalog_source="documented_catalog",
@@ -566,9 +563,16 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # attach to and `transcript` is absent from the state sources. Its
         # `session` row carries running token and cost totals, which the adapter
         # reads directly on turn boundaries — exact, native, and not a parse.
-        # No `pty` for the same reason as pi: opencode's screens have not been
-        # captured, and its TUI holds the alternate screen, where mux's tail
-        # rules read a repainted frame rather than a transcript.
+        # No `pty`, and this is a measured conclusion rather than a deferral.
+        # opencode's screens were captured (2026-08-10): it paints
+        # absolutely-positioned frames on the alternate screen, so the byte
+        # stream carries no line structure for a tail rule to read. Stripping
+        # its control sequences yields interleaved fragments — "hree",
+        # "evenEight" — where cursor moves overwrote earlier text. Any regex
+        # matching that would be matching one frame's paint order by accident,
+        # which is the marker-drift problem the rule table exists to avoid.
+        # Reading opencode's screen would need a real emulator applying the
+        # sequences to a buffer, which `_normalize_tail_text` is not.
         state_sources=("hook",),
         measurement_source="database",
         # `/new` mints a fresh `ses_…` in the same pane and the plugin reports it

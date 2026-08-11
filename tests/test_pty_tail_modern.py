@@ -61,6 +61,34 @@ def test_current_cli_screens_classify(fixture: str, expected: str) -> None:
     assert pty_tail_state(tail(fixture)) == expected
 
 
+def test_pi_screens_classify_working_but_never_grant_idle() -> None:
+    """Captured from pi 0.84.1 on Windows ConPTY, 2026-08-10.
+
+    pi gets a working marker and deliberately no idle marker. Its status footer
+    is present on both screens, so it identifies the harness rather than the
+    state; keying idle on it would mean asserting "no working marker", which
+    reads any dialog the capture did not cover as ready-for-input. A working-only
+    rule can block delivery but never grant it.
+    """
+    working = tail("pi-working-spinner.txt")
+    idle = tail("pi-idle-footer.txt")
+
+    assert pty_tail_state(working, backend="pi") == "working"
+    # The footer alone is not evidence of readiness.
+    assert pty_tail_state(idle, backend="pi") == "unknown"
+
+    # Scoped to pi: the same screen must not move another harness's state, and
+    # pi's marker must not be readable as anything on a backend that never
+    # draws it.
+    assert pty_tail_state(working, backend="codex") != "working"
+
+    # Region-scoped, so prose mentioning the word cannot fake a live reading.
+    prose = "\n".join(
+        ["I am working... on the parser", *["filler"] * 12, "$0.00 (sub) 0.0%/272k"]
+    )
+    assert pty_tail_state(prose, backend="pi") != "working"
+
+
 def test_background_wait_reads_only_the_background_wait_screen() -> None:
     # Captured 2026-07-31: at turn end with a task still running, the current
     # CLI replaces its idle footer hint with "1 shell still running · check the

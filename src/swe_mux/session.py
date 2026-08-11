@@ -1022,6 +1022,26 @@ PTY_RULES: tuple[ScreenRule, ...] = (
         _contains("…"),
         frozenset({"claude"}),
     ),
+    # Captured from pi 0.84.1 on Windows ConPTY, 2026-08-10. pi paints a
+    # braille spinner and the literal word on the normal screen while a turn
+    # runs: " ⠏ Working...". Scoped to the bottom lines rather than the whole
+    # tail so a transcript that merely contains the word cannot fake it.
+    #
+    # pi gets a working marker and deliberately no idle marker. Its persistent
+    # status footer ("$0.000 (sub) 0.0%/272k … gpt-5.6-sol • medium") is present
+    # on *both* the idle and the working screen, so it identifies the harness,
+    # not the state. Keying idle on it would mean asserting "no working marker",
+    # which reads any pi dialog this capture did not cover as ready-for-input —
+    # a false safe, and the codebase records that as the dangerous direction.
+    # A working-only rule can block delivery or detect activity but can never
+    # grant safety, and pi's hooks already prove idle.
+    ScreenRule(
+        "working.pi_spinner",
+        "working",
+        bottom_non_empty_lines(6),
+        re.compile(r"(?i)\bworking\.\.\."),
+        frozenset({"pi"}),
+    ),
     ScreenRule("idle.shortcuts", "idle", AFTER_LAST_PROMPT_MARKER, _contains("? for shortcuts")),
     ScreenRule(
         "idle.mode_cycle",
