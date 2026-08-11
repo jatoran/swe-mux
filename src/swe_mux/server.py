@@ -76,6 +76,7 @@ from .harness import (
     needs_resize_repaint,
     public_harness_registry,
     repaints_scrollback,
+    replay_needs_repaint,
 )
 from .history import HistoryIndex
 from .history_backfill import HistoryBackfillManager
@@ -782,7 +783,7 @@ def create_app(
             web.delete("/api/usage/cache", clear_usage_cache),
             web.get("/api/telemetry/operational", operational_telemetry),
             web.get("/api/telemetry/quota-series", quota_telemetry_series),
-            web.patch("/api/telemetry/quota-resets/{reset_id}", review_quota_reset),
+            web.post("/api/telemetry/quota-resets/review", review_quota_resets),
             web.get("/api/provider-accounts", get_provider_accounts),
             web.get("/api/provider-accounts/audit", get_provider_account_audit),
             web.post("/api/provider-accounts/refresh", refresh_provider_accounts),
@@ -6983,19 +6984,27 @@ async def quota_telemetry_series(request: web.Request) -> web.Response:
     return json_response(result)
 
 
-async def review_quota_reset(request: web.Request) -> web.Response:
+async def review_quota_resets(request: web.Request) -> web.Response:
     body = await request.json()
     resolution = str(body.get("resolution") or "")
+    raw_ids = body.get("ids")
+    if not isinstance(raw_ids, list):
+        raise web.HTTPBadRequest(text="ids must be a list of quota reset ids")
     telemetry: OperationalTelemetryStore = request.app["telemetry"]
-    reviewed = await telemetry.review_quota_reset(request.match_info["reset_id"], resolution)
+    try:
+        reviewed = await telemetry.review_quota_resets([str(item) for item in raw_ids], resolution)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from None
+    except KeyError as exc:
+        raise web.HTTPNotFound(text=f"unknown quota reset {exc.args[0]}") from None
     await request.app["events"].emit(
         "quota_reset_reviewed",
         source="user",
-        reset_id=reviewed["id"],
-        provider=reviewed["provider"],
-        resolution=reviewed["review_status"],
+        reset_ids=[item["id"] for item in reviewed],
+        providers=sorted({str(item["provider"]) for item in reviewed}),
+        resolution=resolution,
     )
-    return json_response({"item": reviewed, "reset_alert": await telemetry.reset_summary()})
+    return json_response({"items": reviewed, "reset_alert": await telemetry.reset_summary()})
 
 
 async def get_provider_accounts(request: web.Request) -> web.Response:
@@ -8556,6 +8565,10 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         sender_task = asyncio.create_task(
             _pty_sender(ws, session, subscriber, snapshot_generation, output_flow)
         )
+        # The replay just sent may have been a window over a differential frame stream,
+        # which reconstructs to whichever cells happened to change inside it. One pulse
+        # makes the child restate the whole screen.
+        _schedule_attach_repaint(request, session)
         for pending_message in pending_messages:
             await _handle_pty_client_message(
                 request, ws, session, connection_id, pending_message, output_flow
@@ -8952,7 +8965,9 @@ async def _handle_terminal_input(
 
 # A `repaint` frame makes the child restate its whole transcript (~100 KB+ for a deep
 # session), so back-to-back requests — several panes of one session finishing replay
-# together, or a reconnect storm — collapse into one restatement they all receive.
+# together, or a reconnect storm — collapse into one restatement they all receive. The
+# same window bounds the attach pulse an alternate-screen session takes
+# (`_schedule_attach_repaint`), whose restatement is one screen rather than a transcript.
 CLIENT_REPAINT_MIN_INTERVAL_SECONDS = 2.0
 # How long the arbitrated geometry must hold still before an alternate-screen child is
 # pulsed into restating its screen. Long enough that a drag (which emits changes at
@@ -9041,6 +9056,60 @@ def _schedule_resize_repaint(request: web.Request, session: Session) -> None:
     task.add_done_callback(session.tasks.discard)
 
 
+async def _repaint_after_truncated_replay(request: web.Request, session: Session) -> None:
+    repainted = await session.repaint_current_geometry()
+    request.app["events"].emit_background(
+        "terminal_repaint_requested",
+        session_id=session.record.id,
+        source="daemon",
+        reason="truncated_replay",
+        backend=session.record.backend,
+        applied=repainted,
+    )
+
+
+def _schedule_attach_repaint(request: web.Request, session: Session) -> None:
+    """Restate an alternate-screen child's screen when its replay was only a window.
+
+    Unconditional on truncation rather than on any judgement about what the bytes
+    parsed to, because for this harness class there is nothing to judge: a slice of a
+    differential frame stream is complete only if a full repaint happened to fall
+    inside it (`replay_needs_repaint`), and neither end can see whether one did. The
+    client cannot either — the signal that serves the normal-screen case, "the parse
+    produced no scrollback", is meaningless against a buffer that has none by design,
+    which is why `_handle_client_repaint` refuses these sessions and why they were left
+    with no attach-time repair at all. Their only repaint path was a geometry *change*,
+    so the workaround was to resize the window by hand.
+
+    The cost the retired OMP attach pulse was carrying does not transfer: that pulse
+    bought a ~460-line transcript restatement on every healthy cold attach, while an
+    alternate-screen child restates one screen. Deliberately not conditioned on
+    `hidden` — a warm pane mass-mounted after a Reload UI parses into its buffer while
+    its rendering is paused, so the reveal it is heading for finds a whole screen.
+
+    Ordering is safe wherever this is called from: the pulse's bytes reach this client
+    through the subscriber queue registered before the replay snapshot, so they are
+    delivered after the replay rather than painted over by it.
+    """
+    if not replay_needs_repaint(session.record.backend):
+        return
+    if not session.replay_window_truncated():
+        return
+    now = time.monotonic()
+    if now - session.last_client_repaint_ts < CLIENT_REPAINT_MIN_INTERVAL_SECONDS:
+        return
+    # Shares the stamp with `_handle_client_repaint`: both are a browser causing one
+    # restatement, and a reconnect storm (desktop and phone returning together) must
+    # cost the session one pulse rather than one per socket.
+    session.last_client_repaint_ts = now
+    task = asyncio.create_task(
+        _repaint_after_truncated_replay(request, session),
+        name=f"attach-repaint-{session.record.id}",
+    )
+    session.tasks.add(task)
+    task.add_done_callback(session.tasks.discard)
+
+
 async def _handle_client_repaint(request: web.Request, session: Session) -> None:
     """A client whose parsed replay produced no scrollback asks the child to restate it.
 
@@ -9050,7 +9119,9 @@ async def _handle_client_repaint(request: web.Request, session: Session) -> None
     the ring into an empty-looking replay and the only one that answers a width pulse
     by re-rendering its transcript. Alternate-screen TUIs (Claude) never qualify:
     their buffer has no scrollback by design, so a client-side request keyed on
-    missing scrollback would fire forever.
+    missing scrollback would fire forever. Their own version of this problem — a
+    windowed replay of a differential frame stream — is repaired without asking the
+    client anything, in `_schedule_attach_repaint`.
     """
     if not repaints_scrollback(session.record.backend):
         return

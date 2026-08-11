@@ -88,12 +88,25 @@ enumeration.
    5–45 minutes later and still before the advertised boundary. Stale or out-of-order evidence,
    rebounds, account/auth transitions, and reaching the scheduled boundary suppress it.
 6. Store startup re-evaluates legacy unexpected classifications under these deterministic
-   rules. Only confirmed unsuppressed unexpected resets produce the purple account indicator
-   and optional browser-local sound; `localStorage` deduplicates per-device playback and the
-   preference defaults off.
-7. User review preserves the detector evidence while removing it from the active alert summary.
-   A Codex row may be `manual_usage`; any provider row may be `discarded`. Review state survives
-   daemon restart and is shown in the evidence log.
+   rules. Only confirmed unsuppressed unexpected resets raise an alert.
+7. Confirmed alerts are coalesced per provider for 60 seconds before the
+   `unexpected_quota_reset` event is emitted.
+   A provider rolls its whole plan over at once, so every enabled account of that provider
+   confirms the same rollover inside one sequential 15-minute polling pass; emitting per
+   account-window turned one fact into up to `2N` sounds and lock-screen pushes.
+   The event carries `count` and a `resets` array alongside the scalar
+   `reset_id`/`account_id`/`window` of the newest member.
+   Daemon shutdown flushes anything still held rather than dropping it.
+8. The active alert is the whole unreviewed set, not its newest row, so one rollover is
+   triaged once instead of once per account.
+   It drives the purple account indicator and the optional alert sound, whose preference
+   defaults off.
+9. User review preserves the detector evidence while removing it from the active alert summary,
+   and applies to every id in the submitted group.
+   `seen` is a plain acknowledgement available for any row; a Codex row may be `manual_usage`;
+   any provider row may be `discarded`.
+   Review state is durable and server-side, so dismissing an alert on one device silences it on
+   every device, and it is shown in the evidence log.
 
 Positive quota deltas produce probabilistic attribution records. Mux session overlap defines
 the correlated range; unclaimed movement remains an explicit external/unassigned range.
@@ -154,15 +167,16 @@ records must be sanitized into the versioned fixture corpus.
 ```text
 GET /api/telemetry/operational?provider=&account=&limit=
 GET /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily&limit=
-PATCH /api/telemetry/quota-resets/{reset_id} {resolution: manual_usage|discarded}
+POST /api/telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 GET /api/provider-accounts
 GET /api/processes[?session=]
 POST /api/processes/action {session_id, pid, identity_id, action}
 ```
 
 The operational snapshot is bounded to 1–1,000 rows per collection and returns
-`interpretation: observational_correlation_only`. Provider-account responses include the
-latest confirmed reset summary. Process snapshots expose evidence states
+`interpretation: observational_correlation_only`. Provider-account responses carry
+`reset_alert` as the true unreviewed `count` plus up to 100 evidence `items`, newest first.
+Process snapshots expose evidence states
 `active|exited|escaped|suspected_orphan|stale|inaccessible`, stable attribution provenance, derived server eligibility, and bounded ownership diagnostics.
 The quota-series endpoint applies provider, local account, and epoch-range filters in SQLite instead of truncating a global sample list in the browser.
 Daily resolution combines retained rollups with current raw samples and returns one series per verified provider identity.

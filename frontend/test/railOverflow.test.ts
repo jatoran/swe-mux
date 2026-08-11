@@ -54,6 +54,22 @@ test('command rail owns the first touch drag without dropping the soft keyboard'
   assert.match(styles, /\.terminal-action-scroller\.overflow-rail-touch-drag\{touch-action:none\}/)
 })
 
+test('command rail terminal writes preserve rather than request mobile keyboard focus', () => {
+  const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
+  const pasteHelper = source.slice(source.indexOf('async function pasteBrowserClipboard'), source.indexOf('function TerminalPaneImpl'))
+  const paste = source.slice(source.indexOf('const paste = async'), source.indexOf('const copyLastReply'))
+  const sendKey = source.slice(source.indexOf('const sendKey='), source.indexOf('const railKeySendRef='))
+  const injectText = source.slice(source.indexOf('const injectText='), source.indexOf('const insertMobileDraft='))
+
+  assert.doesNotMatch(pasteHelper, /term\.focus\(\)/)
+  for (const handler of [paste, sendKey, injectText]) {
+    assert.match(handler, /focusAfterTerminalActionRef\.current\(\)/)
+    assert.doesNotMatch(handler, /focusTerminalInputRef\.current\(\)/)
+  }
+  assert.match(source, /if\(typingIntent&&!mobileCursorInitialized\)\{term\.focus\(\)/)
+  assert.match(source, /closest\('\.terminal-action-rail'\)\)holdSoftKeyboard\(event\)/)
+})
+
 test('jump-to-latest does not request terminal input focus', () => {
   const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
   const handler = source.slice(source.indexOf('const jumpToLatest='), source.indexOf('const setMobileInputMode='))

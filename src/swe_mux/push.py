@@ -136,6 +136,16 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
         return None
     kind = event.type
     if kind == "unexpected_quota_reset":
+        # The telemetry store coalesces one provider rollover into a single alert, so the
+        # body has to say how many accounts it covers or it reads as a single-account event.
+        count = int(payload.get("count") or 1)
+        if count > 1:
+            provider = str(payload.get("provider") or "provider")
+            return {
+                "category": "reset",
+                "title": "swe-mux",
+                "body": f"Unexpected quota reset on {count} {provider} accounts.",
+            }
         return {"category": "reset", "title": "swe-mux", "body": "Unexpected quota reset."}
     if kind == "approval_needed":
         if payload.get("kind") == "input":

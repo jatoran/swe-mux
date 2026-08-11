@@ -709,6 +709,31 @@ def needs_resize_repaint(name: object) -> bool:
     return isinstance(name, str) and name in HARNESSES and HARNESSES[name].screen == "alternate"
 
 
+def replay_needs_repaint(name: object) -> bool:
+    """Whether a *bounded* replay window can leave this harness's screen incomplete.
+
+    An alternate-screen TUI's retained bytes are a differential frame stream, not a
+    transcript. Measured 2026-08-11 across eight live Claude panes: steady-state output
+    addresses only the five rows that actually change (spinner, context meter, status),
+    while the input box border and the prompt are drawn once and then left alone for as
+    long as they look the same. `Session.replay_bytes` restates `?1049h` for a window
+    carrying no toggle of its own, and that sequence *clears* the alternate buffer — so a
+    bounded window starts the client from a blank screen and can only fill the cells it
+    happens to contain.
+
+    Whether that reconstructs to a whole screen is therefore luck: it holds only when a
+    full repaint landed inside the window. The same sweep, run twice, found one pane of
+    eight reconstructing with no border and no prompt — the user-visible "statusline is
+    missing until I resize the window" — and it was a different pane each run.
+
+    Normal-screen harnesses are excluded for the reason given in `needs_resize_repaint`:
+    their transcript is real scrollback lines, so a bounded window is a shorter history
+    rather than a partial frame. Their opposite problem — a ring wrapped until the window
+    holds no transcript at all — is `repaints_scrollback`.
+    """
+    return isinstance(name, str) and name in HARNESSES and HARNESSES[name].screen == "alternate"
+
+
 def external_usage_harnesses() -> tuple[str, ...]:
     return tuple(name for name, harness in HARNESSES.items() if harness.external_usage_command)
 

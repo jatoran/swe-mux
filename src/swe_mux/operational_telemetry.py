@@ -123,6 +123,13 @@ RESET_CONFIRMATION_MIN_SECONDS = 5 * 60
 RESET_CONFIRMATION_MAX_SECONDS = 45 * 60
 RESET_UNEXPECTED_MIN_DROP_PERCENT = 20.0
 RESET_UNEXPECTED_MAX_AFTER_PERCENT = 10.0
+#: How long a confirmed unexpected reset is held before its alert is emitted.
+#: One provider rollover lands on *every* enabled account of that provider, and the
+#: sequential refresh pass confirms them a second or two apart — three chimes and three
+#: lock-screen buzzes for one fact. Confirmation already lags the drop by 5-45 minutes
+#: (`RESET_CONFIRMATION_MIN_SECONDS`), so another minute costs nothing and buys one
+#: alert per rollover instead of one per account-window.
+RESET_ALERT_COALESCE_SECONDS = 60.0
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -396,6 +403,7 @@ class OperationalTelemetryStore:
         *,
         retention_days: int = 180,
         process_retention_days: int = 30,
+        reset_alert_coalesce_seconds: float = RESET_ALERT_COALESCE_SECONDS,
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
@@ -409,6 +417,12 @@ class OperationalTelemetryStore:
         self._reconcile_task: asyncio.Task[None] | None = None
         self._event_queue: asyncio.Queue[MuxEvent] | None = None
         self._event_bus: EventBus | None = None
+        self._reset_alert_coalesce_seconds = reset_alert_coalesce_seconds
+        # Confirmed unexpected resets awaiting their provider's coalescing window, and
+        # the timer holding each one. Keyed by provider: two providers rolling over in
+        # the same pass are two facts, three accounts of one provider are one.
+        self._pending_reset_alerts: dict[str, list[dict[str, Any]]] = {}
+        self._reset_alert_timers: dict[str, asyncio.Task[None]] = {}
         self.sessions: Any = None
         self.history: Any = None
 
@@ -587,6 +601,9 @@ class OperationalTelemetryStore:
         self._event_task = None
         await background.stop(TELEMETRY_RETENTION_LOOP)
         self._reconcile_task = None
+        # A held alert is evidence the user has not seen yet. Emitting it now beats
+        # dropping it on a daemon restart the reload flow makes routine.
+        await self.flush_reset_alerts()
         if self._event_bus and self._event_queue:
             self._event_bus.unsubscribe(self._event_queue)
         self._event_bus = None
@@ -1232,16 +1249,73 @@ class OperationalTelemetryStore:
         if self._event_bus:
             for item in generated:
                 if item.get("confirmed") and item.get("classification") == "unexpected":
-                    await self._event_bus.emit(
-                        "unexpected_quota_reset",
-                        source="operational_telemetry",
-                        reset_id=item["id"],
-                        provider=provider,
-                        account_id=account_id,
-                        window=item["window"],
-                        confidence=item["confidence"],
-                    )
+                    self._hold_reset_alert(provider, account_id, item)
         return {"sample_id": sample_id, "reset_events": generated}
+
+    def _hold_reset_alert(self, provider: str, account_id: str, item: dict[str, Any]) -> None:
+        """Buffer one confirmed unexpected reset behind its provider's coalescing timer.
+
+        The provider rolls the whole plan over at once, so every enabled account of
+        that provider registers the same rollover inside a single sequential refresh
+        pass. Alerting per account-window turned one fact into up to `2N` chimes.
+        """
+        self._pending_reset_alerts.setdefault(provider, []).append(
+            {
+                "id": str(item["id"]),
+                "account_id": account_id,
+                "window": str(item["window"]),
+                "confidence": str(item["confidence"]),
+                "before_value": item.get("before_value"),
+                "after_value": item.get("after_value"),
+            }
+        )
+        if provider in self._reset_alert_timers:
+            return
+        timer = asyncio.create_task(self._coalesce_reset_alert(provider), name="quota-reset-alert")
+        self._reset_alert_timers[provider] = timer
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._reset_alert_timers.get(provider) is done:
+                del self._reset_alert_timers[provider]
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception:
+                log.exception("quota reset alert emit failed")
+
+        timer.add_done_callback(finished)
+
+    async def _coalesce_reset_alert(self, provider: str) -> None:
+        await asyncio.sleep(self._reset_alert_coalesce_seconds)
+        await self._emit_reset_alert(provider)
+
+    async def _emit_reset_alert(self, provider: str) -> None:
+        pending = self._pending_reset_alerts.pop(provider, [])
+        if not pending or self._event_bus is None:
+            return
+        newest = pending[-1]
+        # The scalar fields stay populated and keep their old meaning so an automation
+        # rule matching on them still fires; `count`/`resets` describe the whole group.
+        await self._event_bus.emit(
+            "unexpected_quota_reset",
+            source="operational_telemetry",
+            reset_id=newest["id"],
+            provider=provider,
+            account_id=newest["account_id"],
+            window=newest["window"],
+            confidence=newest["confidence"],
+            count=len(pending),
+            resets=pending,
+        )
+
+    async def flush_reset_alerts(self) -> None:
+        """Emit every held alert immediately, cancelling its timer."""
+        for timer in list(self._reset_alert_timers.values()):
+            timer.cancel()
+        self._reset_alert_timers.clear()
+        for provider in list(self._pending_reset_alerts):
+            await self._emit_reset_alert(provider)
 
     def _detect_resets_and_attribution(self, sample_id: int) -> list[dict[str, Any]]:
         current = self._db.execute(
@@ -1820,43 +1894,67 @@ class OperationalTelemetryStore:
 
         return await self._run(op)
 
-    async def reset_summary(self) -> dict[str, Any]:
+    async def reset_summary(self, *, limit: int = 100) -> dict[str, Any]:
+        """Every unreviewed confirmed unexpected reset, newest first.
+
+        The whole set, not just the newest row: one provider rollover produces one row
+        per enabled account, and surfacing them one at a time made the user triage the
+        same fact N times. `count` is the true total even when `items` is capped.
+        """
+
         def op() -> dict[str, Any]:
-            row = self._db.execute(
+            rows = self._db.execute(
                 "SELECT * FROM quota_reset_events WHERE classification='unexpected' "
                 "AND confirmed=1 AND suppression_reason IS NULL AND review_status IS NULL "
-                "ORDER BY confirmed_at DESC LIMIT 1"
-            ).fetchone()
+                "ORDER BY confirmed_at DESC LIMIT ?",
+                (max(1, min(limit, 1000)),),
+            ).fetchall()
             count = self._db.execute(
                 "SELECT COUNT(*) count FROM quota_reset_events WHERE classification='unexpected' "
                 "AND confirmed=1 AND suppression_reason IS NULL AND review_status IS NULL"
             ).fetchone()["count"]
-            return {"count": count, "latest": dict(row) if row else None}
+            return {"count": count, "items": [dict(row) for row in rows]}
 
         return await self._run(op)
 
-    async def review_quota_reset(self, reset_id: str, resolution: str) -> dict[str, Any]:
-        if resolution not in {"manual_usage", "discarded"}:
-            raise ValueError("resolution must be manual_usage or discarded")
+    async def review_quota_resets(
+        self, reset_ids: list[str], resolution: str
+    ) -> list[dict[str, Any]]:
+        """Resolve a whole group of reset evidence in one write.
 
-        def op() -> dict[str, Any]:
-            row = self._db.execute(
-                "SELECT * FROM quota_reset_events WHERE id=?", (reset_id,)
-            ).fetchone()
-            if row is None:
-                raise KeyError(reset_id)
-            if resolution == "manual_usage" and row["provider"] != "codex":
-                raise ValueError("manual_usage is only valid for Codex quota evidence")
+        `seen` is an acknowledgement rather than a classification, and it lives here
+        rather than in browser storage on purpose: the evidence is one server-side
+        fact, so dismissing it at the desk has to silence the phone too.
+        """
+        if resolution not in {"seen", "manual_usage", "discarded"}:
+            raise ValueError("resolution must be seen, manual_usage or discarded")
+        if not reset_ids:
+            raise ValueError("at least one reset id is required")
+
+        def op() -> list[dict[str, Any]]:
+            # Validate the whole group first: a half-applied review would leave the
+            # user staring at the remainder of an alert they thought they resolved.
+            for reset_id in reset_ids:
+                row = self._db.execute(
+                    "SELECT provider FROM quota_reset_events WHERE id=?", (reset_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(reset_id)
+                if resolution == "manual_usage" and row["provider"] != "codex":
+                    raise ValueError("manual_usage is only valid for Codex quota evidence")
             reviewed_at = time.time()
-            self._db.execute(
+            self._db.executemany(
                 "UPDATE quota_reset_events SET review_status=?,reviewed_at=? WHERE id=?",
-                (resolution, reviewed_at, reset_id),
+                [(resolution, reviewed_at, reset_id) for reset_id in reset_ids],
             )
             self._db.commit()
-            reviewed = self._db.execute(
-                "SELECT * FROM quota_reset_events WHERE id=?", (reset_id,)
-            ).fetchone()
-            return dict(reviewed)
+            placeholders = ",".join("?" * len(reset_ids))
+            rows = self._db.execute(
+                f"SELECT * FROM quota_reset_events WHERE id IN ({placeholders})",  # noqa: S608
+                tuple(reset_ids),
+            ).fetchall()
+            order = {reset_id: index for index, reset_id in enumerate(reset_ids)}
+            return sorted((dict(row) for row in rows), key=lambda item: order[item["id"]])
 
         return await self._run(op)
 

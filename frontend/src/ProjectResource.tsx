@@ -19,6 +19,7 @@ import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
 import { fileSaveTarget, globalNoteSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
+import { resourceSaveIndicator } from './resourceSaveIndicator'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import { currentInsertTarget } from './insertTarget'
 import { isFocusTraversalKey } from './keys'
@@ -1259,6 +1260,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     requestAnimationFrame(()=>editor.setSelectionRange(result.caret,result.caret))
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
+  const saveIndicator=resourceSaveIndicator(stateLabel)
   const unavailableMessage=status==='binary'?'This file is not UTF-8 text and has no safe viewer.'
     :status==='too-large'&&presentation?.kind==='image'?'This image exceeds the 16 MiB viewer limit.'
     :status==='too-large'?'This file exceeds the 2 MiB text and table limit.'
@@ -1268,7 +1270,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='error'?null
     :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div class={isNote?'note-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{isNote?<><span class="note-resource-separator" aria-hidden="true">·</span><span>{isGlobalNote?'Global':project.name}</span><span class="note-resource-separator" aria-hidden="true">·</span><span class="note-resource-state">{stateLabel}</span></>:<span>{project.name} · {stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}

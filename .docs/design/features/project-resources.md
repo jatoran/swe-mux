@@ -28,7 +28,9 @@ The file tree and notes collection are utility-drawer tabs.
 - The default `Ctrl+Alt+N` binding and two-finger swipe-up gesture open the current Project's notes.
 - Stored `project.note` and `session.note` bindings and gestures migrate to `notes.open`.
 - The Notes drawer lists explicit notes even when empty, supports Project/all-Projects scope, searches title/Project/excerpt, and provides create, rename, delete, open-in-drawer, and open-in-pane actions.
-- A note editor header keeps the note title, owning Project, and current save state on one row, separated by centered dots.
+- Autosaved note and Markdown-file headers keep the title and a fixed-size save indicator on one row, without repeating the owning Project.
+  Green means saved, blue means modified or saving, red means an error or unavailable resource, and a neutral light covers transient loading.
+  Scratchpad alone retains a `Global` scope label beside its title.
 - A focused note, Scratchpad, or editable Markdown file publishes a named Conversation text sink.
   Voice Send inserts the editable draft through Continuity's public caret-aware `insertText` operation, so ordinary note autosave and file-draft rules remain the only write path.
   Spoken `open Notes` republishes the selected drawer note as that sink without DOM focus, so the next Voice Send or Append lands there without opening the mobile keyboard.

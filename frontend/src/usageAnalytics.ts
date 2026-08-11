@@ -74,7 +74,7 @@ export type ResetEvent = {
   confirmed:number
   suppression_reason?:string|null
   confirmed_at?:number|null
-  review_status?:'manual_usage'|'discarded'|null
+  review_status?:'seen'|'manual_usage'|'discarded'|null
   reviewed_at?:number|null
 }
 export type QuotaSeries = {
