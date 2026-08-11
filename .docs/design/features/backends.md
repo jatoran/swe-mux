@@ -259,6 +259,15 @@ The descriptor is the source of truth for all generic surfaces.
   pi runs a tool as soon as the model asks for it; gating is something a user extension implements over `tool_call` (pi ships `examples/extensions/permission-gate.ts` doing exactly that).
   Its `normalized_events` therefore omits `approval_needed`, which keeps the replay corpus from demanding a fixture for evidence pi cannot produce.
 - **pi has no MCP client**, so the mux MCP server is not registered for it and its MCP configuration table is empty rather than searched.
+  Exposing mux's tools to pi would mean registering them as extension-provided native tools, which is a different mechanism and is not done.
+- **opencode does have MCP, and mux registers its server in the same per-session config layer that carries the plugin** — `type: remote`, the mux Streamable HTTP url, and an `Authorization` bearer header.
+  The token is written literally into a session-private `chmod 600` file, as omp's extension package carries one: mux mints a distinct token per session, so a shared registration would either fail authentication or hand one session's identity to another.
+  opencode's `{env:VAR}` interpolation is deliberately unused for exactly that reason, since it resolves from whatever environment the process happens to carry.
+  A url without a token writes no `mcp` block at all, because half a registration authenticates on nothing.
+  Verified live 2026-08-10: an opencode agent asked to list its `mux` tools returned all six.
+- **Every per-session artifact root is exported to the shim environment**, not only the adapter path.
+  `MUX_OPENCODE_CONFIG_ROOT` was once read by the launcher and never exported, so an opencode started by typing `opencode` in a shell pane materialized no config — no plugin, no hooks, no state, no MCP — while the same harness from the Run menu worked.
+  A divergence between the two launch paths is the hardest kind to notice, because the path under test is rarely the path in use.
   Extension-registered native tools are the route if that surface is ever wanted.
 - **`PI_CODING_AGENT_DIR` is shared between pi and oh-my-pi and is read by both descriptors.**
   Mirroring the CLI's own resolution is the job of a data-home resolver, so an exported value moves both harnesses exactly as it moves both CLIs.
@@ -288,6 +297,12 @@ The descriptor is the source of truth for all generic surfaces.
 - **opencode reports both halves of an approval** (`permission.updated` raises, `permission.replied` resolves), which is the discriminator Codex still lacks.
   Its one unambiguous root-completion signal is `session.idle`; `session.status` carries `busy`/`idle`/`retry`.
   Its live bus emits more types than the SDK's typed union (measured: `message.part.delta`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`), so the plugin classifies known types and drops the rest rather than guessing.
+- **A first turn on a self-minting harness reads as historical, and that is not a fault.**
+  A harness that mints its own conversation id cannot be bound until it reports one, and by then it has usually written its header and often the whole first turn.
+  Those records dispatch through the catch-up path, which publishes measurements but deliberately emits no events and does not count toward the parser statistics.
+  So a freshly spawned pi pane reports `parser_status: watching` with `parser_events_seen: 0` while already showing correct tokens, cost, and model — measured 2026-08-10: turn one `watching`/0 with 2804 tokens, turn two `ready`/2 with 3064.
+  Schema-drift detection is therefore live from the second turn onward, not the first.
+  Reading the first turn alone makes a working session look broken, which is why it is written down rather than rediscovered.
 - **Neither pi nor opencode declares `pty`.**
   The PTY rule table is backend-scoped and each harness's markers must be pinned to captured screens from the installed build; neither has been captured.
   A screen rule inferred from documentation is the marker-drift problem restated.
