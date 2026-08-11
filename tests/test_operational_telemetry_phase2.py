@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -421,20 +422,142 @@ async def test_quota_reset_user_review_is_durable_and_removes_alert(
         )
     store._db.commit()
 
-    reviewed = await store.review_quota_reset("codex-reset", "manual_usage")
-    assert reviewed["review_status"] == "manual_usage"
-    assert reviewed["reviewed_at"] is not None
+    reviewed = await store.review_quota_resets(["codex-reset"], "manual_usage")
+    assert [item["review_status"] for item in reviewed] == ["manual_usage"]
+    assert reviewed[0]["reviewed_at"] is not None
     with pytest.raises(ValueError, match="only valid for Codex"):
-        await store.review_quota_reset("claude-reset", "manual_usage")
-    discarded = await store.review_quota_reset("claude-reset", "discarded")
-    assert discarded["review_status"] == "discarded"
-    assert (await store.reset_summary()) == {"count": 0, "latest": None}
+        await store.review_quota_resets(["claude-reset"], "manual_usage")
+    # The Codex row is already reviewed, so a mixed group must still refuse wholesale
+    # rather than half-apply and leave the user staring at the remainder.
+    assert (await store.reset_summary())["count"] == 1
+    discarded = await store.review_quota_resets(["claude-reset"], "discarded")
+    assert [item["review_status"] for item in discarded] == ["discarded"]
+    assert (await store.reset_summary()) == {"count": 0, "items": []}
     store.close()
 
     reopened = OperationalTelemetryStore(phase2_path)
     snapshot = await reopened.snapshot()
     statuses = {item["id"]: item["review_status"] for item in snapshot["quota"]["resets"]}
     assert statuses == {"codex-reset": "manual_usage", "claude-reset": "discarded"}
+    reopened.close()
+
+
+async def test_one_provider_rollover_raises_one_coalesced_alert(phase2_path: Path) -> None:
+    history = HistoryIndex(phase2_path)
+    events = EventBus(history.append_event)
+    # Long enough that only the explicit flush emits: the claim under test is the
+    # grouping, not the wall-clock length of the coalescing window.
+    store = OperationalTelemetryStore(phase2_path, reset_alert_coalesce_seconds=30)
+    store.start(events, sessions=SimpleNamespace(sessions={}), history=history)
+    observed: asyncio.Queue[Any] = events.subscribe(name="test-reset-alerts")
+    first = 1_800_000_000.0
+
+    async def sample(provider: str, account_id: str, at: float, weekly: float) -> None:
+        await store.record_quota_sample(
+            provider=provider,
+            account_id=account_id,
+            quota={
+                "session": None,
+                "weekly": {"used_percent": weekly, "resets_at": first + 7 * 86400},
+                "source": "fixture",
+                "status": "ready",
+            },
+            sampled_at=at,
+            account_active=True,
+            auth_state="saved",
+        )
+
+    # The provider rolls the whole plan over at once, so every enabled account of that
+    # provider registers the same rollover inside one sequential refresh pass.
+    slots = (("codex", "codex-a"), ("codex", "codex-b"), ("codex", "codex-c"), ("claude", "cl-a"))
+    for index, (provider, account_id) in enumerate(slots):
+        await sample(provider, account_id, first + index, 71)
+        await sample(provider, account_id, first + 900 + index, 2)
+        await sample(provider, account_id, first + 1800 + index, 2.5)
+
+    await store.flush_reset_alerts()
+    alerts = []
+    while not observed.empty():
+        event = observed.get_nowait()
+        if event.type == "unexpected_quota_reset":
+            alerts.append(event)
+    # One alert per provider, not one per account-window: three Codex accounts observing
+    # the same rollover used to be three chimes and three lock-screen buzzes.
+    assert sorted(event.payload["provider"] for event in alerts) == ["claude", "codex"]
+    codex = next(event for event in alerts if event.payload["provider"] == "codex")
+    assert codex.payload["count"] == 3
+    assert {item["account_id"] for item in codex.payload["resets"]} == {
+        "codex-a",
+        "codex-b",
+        "codex-c",
+    }
+    # The scalar fields stay populated so an automation rule matching them still fires.
+    assert codex.payload["reset_id"] in {item["id"] for item in codex.payload["resets"]}
+    assert codex.payload["window"] == "weekly"
+    claude = next(event for event in alerts if event.payload["provider"] == "claude")
+    assert claude.payload["count"] == 1
+
+    # A flush drains the buffer; shutdown must not replay what was already delivered.
+    await store.stop()
+    replayed = []
+    while not observed.empty():
+        event = observed.get_nowait()
+        if event.type == "unexpected_quota_reset":
+            replayed.append(event)
+    assert replayed == []
+    events.unsubscribe(observed)
+    store.close()
+    history.close()
+
+
+async def test_reset_alert_groups_the_unreviewed_set_and_seen_resolves_it_server_side(
+    phase2_path: Path,
+) -> None:
+    store = OperationalTelemetryStore(phase2_path)
+    now = 1_800_000_000.0
+    ids = ["codex-a", "codex-b", "codex-c"]
+    for index, reset_id in enumerate(ids):
+        store._db.execute(
+            "INSERT INTO quota_reset_events(id,provider,account_id,window,before_sample_id,"
+            "after_sample_id,before_value,after_value,observed_at,classification,confidence,"
+            "confirmed,suppression_reason,created_at,confirmed_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                reset_id,
+                "codex",
+                f"account-{index}",
+                "weekly",
+                1,
+                2,
+                80,
+                2,
+                now,
+                "unexpected",
+                "high",
+                1,
+                None,
+                now,
+                now + index,
+            ),
+        )
+    store._db.commit()
+
+    # The whole group surfaces at once; triaging it one row at a time was N alerts for
+    # what the provider did once.
+    summary = await store.reset_summary()
+    assert summary["count"] == 3
+    assert [item["id"] for item in summary["items"]] == ["codex-c", "codex-b", "codex-a"]
+
+    # `seen` is an acknowledgement, stored server-side so dismissing at the desk also
+    # silences the phone — it used to be a per-browser localStorage marker.
+    await store.review_quota_resets(ids, "seen")
+    assert (await store.reset_summary()) == {"count": 0, "items": []}
+    store.close()
+
+    reopened = OperationalTelemetryStore(phase2_path)
+    snapshot = await reopened.snapshot()
+    assert {item["review_status"] for item in snapshot["quota"]["resets"]} == {"seen"}
+    assert (await reopened.reset_summary())["count"] == 0
     reopened.close()
 
 
@@ -1233,7 +1356,7 @@ def test_operational_telemetry_route_is_registered(phase2_path: Path) -> None:
     routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
     assert ("GET", "/api/telemetry/operational") in routes
     assert ("GET", "/api/telemetry/quota-series") in routes
-    assert ("PATCH", "/api/telemetry/quota-resets/{reset_id}") in routes
+    assert ("POST", "/api/telemetry/quota-resets/review") in routes
 
 
 def test_native_transcript_scanners_count_only_explicit_skills_and_compactions(

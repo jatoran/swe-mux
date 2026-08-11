@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { JSX } from 'preact'
 import { matchesTutorialAction, placeTutorialCard, TUTORIAL_ACTION_EVENT, type TutorialActionDetail, type TutorialActionGate } from './tutorial'
+import { dismissStack } from './dismissStack.ts'
+import { useDismissLevel } from './modalFocus'
 
 export type TutorialStepId='welcome'|'projects'|'project-add'|'project-open'|'project-create'|'accounts'|'run'|'run-choice'|'workspace'|'new-tab'|'tabs'|'splits'|'resources'|'features'|'feature-menu'|'ready'
 
@@ -122,14 +124,18 @@ export function GuidedTutorial({hasProject,onNavigate,onExit,onComplete}:Props){
     return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener('resize',measure);window.removeEventListener('scroll',measure,true)}
   },[dragging,step])
 
+  // The tutorial coaches over the live app rather than covering it, and it opens before
+  // the surfaces it points at, so it correctly sits *under* them: back closes whatever
+  // the tutorial talked you into opening, and exits the tutorial only once that is gone.
+  useDismissLevel(onExit,true,'tutorial')
   useEffect(()=>{
     const key=(event:KeyboardEvent)=>{
-      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();onExit()}
+      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();dismissStack.pop()}
       if(event.key==='ArrowRight'&&!step.action){event.preventDefault();setIndex(value=>Math.min(steps.length-1,value+1))}
     }
     window.addEventListener('keydown',key,true)
     return()=>window.removeEventListener('keydown',key,true)
-  },[onExit,step.action,steps.length])
+  },[step.action,steps.length])
 
   const position=placeTutorialCard(targetRect,{width:innerWidth,height:innerHeight},cardSize)
   const last=index===steps.length-1

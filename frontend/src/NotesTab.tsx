@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api } from './api'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
-import { useModalFocus } from './modalFocus'
+import { useDismissLevel, useModalFocus } from './modalFocus'
+import { dismissStack } from './dismissStack.ts'
 import { OverflowRail } from './RailScroller'
 import {
   SCRATCHPAD_TAB_ID,
@@ -59,6 +60,9 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const [deleteConfirm,setDeleteConfirm]=useState('')
   const [deleting,setDeleting]=useState('')
   const [menu,setMenu]=useState<NoteMenu|null>(null)
+  // The row menu and its inline delete confirmation close together, because the
+  // confirmation has no existence outside the menu that hosts it.
+  useDismissLevel(()=>{setMenu(null);setDeleteConfirm('')},!!menu,'note-row-menu')
   const [titlePrompt,setTitlePrompt]=useState<NoteTitlePrompt|null>(null)
   const [titleBusy,setTitleBusy]=useState(false)
   const [titleError,setTitleError]=useState('')
@@ -124,7 +128,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     }
     const key=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){
-        event.preventDefault();event.stopImmediatePropagation();setMenu(null);setDeleteConfirm('');return
+        event.preventDefault();event.stopImmediatePropagation();dismissStack.pop();return
       }
       if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
       const buttons=[...menuPanel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')||[]]

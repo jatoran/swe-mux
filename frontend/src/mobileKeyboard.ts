@@ -62,6 +62,20 @@ export function raisesSoftKeyboard(element:FocusedField|null|undefined):boolean 
   return !KEYBOARDLESS_TYPES.has((element.type||'text').toLowerCase())
 }
 
+/** Input mode for the terminal IME bridge at a focus boundary.
+ *
+ * A coarse-pointer device must opt into the virtual keyboard only for typing intent.
+ * Keeping `none` while a rail action restores focus lets physical-keyboard input keep
+ * working without turning that synthetic action into a request for the soft keyboard.
+ */
+export function softKeyboardInputMode(
+  usesSoftKeyboard:boolean,
+  keyboardInset:number,
+  typingIntent:boolean,
+):'text'|'none' {
+  return !usesSoftKeyboard||keyboardInset>0||typingIntent?'text':'none'
+}
+
 /**
  * The element the browser really has focus on, descending through open shadow roots.
  *

@@ -263,6 +263,137 @@ def _repaint_test_app(session: Session) -> web.Application:
     return app
 
 
+def _outgrow_replay_budget(session: Session, budget: int = 8) -> None:
+    """Put this session where every long-lived one ends up: retention past the budget.
+
+    An attach then replays a window rather than everything held, which is the condition
+    `Session.replay_window_truncated` reports and the only one that can hand an
+    alternate-screen client a partial frame.
+    """
+    session.attach_replay_bytes = budget
+    session.scrollback.append(b"x" * (budget * 4))
+    assert session.replay_window_truncated() is True
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_windowed_replay_pulses_an_alternate_screen_child_once_per_session() -> None:
+    """The fix for a Claude pane whose statusline is missing until the window is resized.
+
+    Its retained bytes are a differential frame stream, so a windowed replay reconstructs
+    to whichever cells happened to change inside the window — measured on live panes as a
+    screen with no input box border and no prompt. Nothing else repairs it: the
+    client-requested path refuses alternate-screen sessions, so the only repaint they had
+    was a geometry change the user made by hand.
+    """
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    _outgrow_replay_budget(session)
+    app = _repaint_test_app(session)
+    events = app["events"].subscribe(name="test")
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"xxxxxxxx"
+        assert (await ws.receive_json())["type"] == "replay_end"
+
+        event = await _next_event_of(events, "terminal_repaint_requested")
+        assert event.payload["reason"] == "truncated_replay"
+        assert event.payload["applied"] is True
+        # One pulse off the arbitrated width and straight back to it.
+        assert resizes == [(79, 24), (80, 24)]
+        assert session.geometry == (80, 24)
+
+        # A second device arriving on the same session inside the rate window rides the
+        # restatement the first one already paid for.
+        second = await client.ws_connect("/pty/claude-id")
+        assert (await second.receive_json())["type"] == "state"
+        await second.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        await asyncio.sleep(0.1)
+        assert resizes == [(79, 24), (80, 24)]
+        await second.close()
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_windowed_replay_pulses_a_hidden_warm_mounted_pane() -> None:
+    """The path the retired OMP attach pulse never covered.
+
+    Panes mass-mounted after a Reload UI cold-attach hidden and are never re-attached on
+    reveal, so a repair conditioned on visibility would miss exactly the case the user
+    hits. A hidden pane still parses into its buffer — only its rendering is paused — so
+    the reveal it is heading for finds a whole screen.
+    """
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    _outgrow_replay_budget(session)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"xxxxxxxx"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        await asyncio.sleep(0.1)
+
+        # Hidden deregisters the viewport, so the pulse runs on the geometry the
+        # remaining clients arbitrated rather than on this pane's own fit.
+        assert resizes == [(79, 24), (80, 24)]
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_complete_replay_never_pulses() -> None:
+    """A replay of everything retained is self-contained, whatever the harness draws."""
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    assert session.replay_window_truncated() is False
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"bounded replay"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        await asyncio.sleep(0.1)
+
+        assert resizes == []
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_windowed_replay_never_pulses_a_normal_screen_harness() -> None:
+    """Their window is a shorter history, not a partial frame.
+
+    A normal-screen harness truncates to real scrollback lines, so what survives renders
+    correctly. Its own failure — a ring wrapped until the window holds no transcript at
+    all — costs a full transcript restatement to repair, which is why it stays behind a
+    client request that can prove the replay produced nothing.
+    """
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("omp", resizes)
+    _outgrow_replay_budget(session)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/omp-id")
+        assert (await ws.receive_json())["type"] == "state"
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "replay_start"
+        assert await next_bytes(ws) == b"xxxxxxxx"
+        assert (await ws.receive_json())["type"] == "replay_end"
+        await asyncio.sleep(0.1)
+
+        assert resizes == []
+        await ws.close()
+
+
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_client_repaint_request_pulses_one_rate_limited_restatement() -> None:
     resizes: list[tuple[int, int]] = []

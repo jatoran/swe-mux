@@ -3,6 +3,7 @@ import { api } from './api'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, ShellProfile } from './types'
 import { allBackendNames } from './harnessRegistry'
+import { useDismissLevel } from './modalFocus'
 
 // The Projects registry is the ONLY per-Project editor. Settings holds global
 // options exclusively; anything scoped to one Project — its record and its
@@ -165,6 +166,9 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
   const [tab,setTab]=useState<ProjectsManagerTab>(initialTab||'details')
+  // List and detail sit side by side rather than drilling in, so the registry is one
+  // level: back closes it, and there is no inner step to unwind first.
+  useDismissLevel(onClose,true,'projects-manager')
   const [query,setQuery]=useState('')
   const [filter,setFilter]=useState<'all'|'visible'|'hidden'>('all')
   const [name,setName]=useState('')

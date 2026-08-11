@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { harnesses } from './harnessRegistry'
+import { ModelName } from './ModelName'
 import { useModalFocus } from './modalFocus'
 import { QuotaAnalytics } from './QuotaAnalytics'
 import { UsageModelBreakdown } from './UsageModelBreakdown'
@@ -92,7 +93,7 @@ function ToolsView({status}:{status:OperationalStatus|null}) {
     <section class="usage-table"><h3>Cross-project tool metrics</h3>{status?.tools.metrics.length?<div class="usage-table-scroll"><table>
       <thead><tr><th>backend/model</th><th>project/session</th><th>tool to taxonomy</th><th>events</th><th>uses</th><th>errors</th><th>avg duration</th></tr></thead>
       <tbody>{status.tools.metrics.map(item=><tr key={`${item.session_id}-${item.raw_tool}`}>
-        <td>{item.backend} · {item.model}</td><td>{item.project_id?item.project_id.slice(0,8):'unassigned'} · {item.session_id.slice(0,8)}</td>
+        <td>{item.backend} · <ModelName model={item.model}/></td><td>{item.project_id?item.project_id.slice(0,8):'unassigned'} · {item.session_id.slice(0,8)}</td>
         <td>{item.raw_tool} to {item.taxonomy}</td><td>{item.events}</td><td>{item.uses}</td><td>{item.errors}</td>
         <td>{item.average_duration_ms==null?'unavailable':`${Math.round(item.average_duration_ms)}ms`}</td>
       </tr>)}</tbody>

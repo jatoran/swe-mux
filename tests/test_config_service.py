@@ -627,6 +627,37 @@ def test_swipe_away_close_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> N
     assert reloaded.mobile_gesture_swipe_away_close is False
 
 
+def test_overlay_back_defaults_on_and_is_hot_reloadable(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    assert config.mobile_gesture_overlay_back is True
+
+    hot, restart = update_config(config, {"mobile_gesture_overlay_back": False})
+    assert hot == {"mobile_gesture_overlay_back"}
+    assert restart == set()
+    assert config.mobile_gesture_overlay_back is False
+
+    reloaded = load_config(path)
+    assert reloaded.mobile_gesture_overlay_back is False
+
+
+def test_a_config_predating_overlay_back_keeps_the_default_without_a_migration(
+    tmp_path: Path,
+) -> None:
+    # The field was added without a schema bump because there is nothing to migrate:
+    # an absent key falls through to the dataclass default.
+    path = tmp_path / "config.toml"
+    path.write_text("schema_version = 21\n", encoding="utf-8")
+    assert load_config(path).mobile_gesture_overlay_back is True
+
+
+def test_the_back_command_can_be_bound_to_a_gesture_slot(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "config.toml")
+    hot, _ = update_config(config, {"mobile_gestures": {"swipe_right": "nav.back"}})
+    assert hot == {"mobile_gestures"}
+    assert config.mobile_gestures == {"swipe_right": "nav.back"}
+
+
 def test_legacy_note_gestures_migrate_to_project_notes(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text(

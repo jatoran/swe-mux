@@ -111,6 +111,7 @@ Growing is the direction users see, because rewrapping wider changes least in Co
 So a settled arbitrated geometry change schedules one `repaint_current_geometry` pulse on a trailing-edge debounce: a drag emits changes at frame rate and costs exactly one pulse after the pointer stops, on the size the user actually stopped on.
 Every pulse is recorded as `terminal_repaint_requested` with `source=daemon` and `reason=resize_settled`, so its firing rate is measurable rather than assumed.
 Normal-screen harnesses are excluded because they keep repainting their live region and fill any gap within a frame; their opposite problem, a ring wrapped into a scrollback-free replay, stays client-requested under `repaints_scrollback`.
+The same pulse also runs once after an attach whose replay was a bounded window rather than everything retained, which is the other way an alternate-screen pane arrives incomplete (`replay_needs_repaint`, `features/sessions.md`); that one carries `reason=truncated_replay`.
 
 **Desktop agent width policy is applied before viewport registration.**
 Claude's host has a centered column maximum, so making its pane wider adds margin instead of repeatedly resizing the PTY through Claude Code's known stale-cell and duplicate-live-region failure.

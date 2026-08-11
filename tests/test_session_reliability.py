@@ -134,6 +134,25 @@ def test_a_bounded_replay_restates_the_alternate_screen_it_cut_off() -> None:
     assert len(replay) < 64
 
 
+def test_replay_window_truncation_is_reported_without_materializing_the_bytes() -> None:
+    # What decides whether an alternate-screen child is pulsed into restating its screen
+    # after an attach: a window over a differential frame stream is complete only if a
+    # full repaint happened to fall inside it, while a replay of everything retained is
+    # self-contained by construction.
+    fake = _fake_session(4096)
+    fake.scrollback.append(b"x" * 100)
+    assert Session.replay_window_truncated(fake) is False
+
+    fake.attach_replay_bytes = 32
+    assert Session.replay_window_truncated(fake) is True
+    fake.attach_replay_bytes = 100
+    assert Session.replay_window_truncated(fake) is False
+    # A non-positive budget means "replay everything", exactly as `ScrollbackBuffer.tail`
+    # reads it — the two must not disagree about what a client was handed.
+    fake.attach_replay_bytes = 0
+    assert Session.replay_window_truncated(fake) is False
+
+
 def test_a_bounded_replay_restates_the_bracketed_paste_mode_it_cut_off() -> None:
     # Agent CLIs enable bracketed paste once at startup and never restate it, so a
     # window over a long session never carries it. A reconnecting pane resets its

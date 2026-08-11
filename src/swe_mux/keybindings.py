@@ -27,6 +27,7 @@ DEFAULT_KEYBINDINGS = {
 
 KEYBINDING_COMMANDS = (
     ("palette.open", "Open command palette", "view"),
+    ("nav.back", "Back (close one overlay level)", "view"),
     ("history.open", "Browse session history", "view"),
     ("history.openProject", "Browse selected project's session history", "view"),
     ("projects.open", "Browse project registry", "view"),

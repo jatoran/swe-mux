@@ -131,6 +131,16 @@ export function classifyGesture(sample: GestureSample): GestureSlot | null {
 
 export type OverlayPanels = { sidebarOpen: boolean; drawerOpen: boolean }
 
+// The command an in-overlay back swipe runs. Registered like any other command so it is
+// also bindable to a key and reachable from the palette.
+export const BACK_COMMAND = 'nav.back'
+
+// Rightward is "back" for the same reason the button sits at the left of a heading: the
+// motion pushes the current level off to the right and reveals what it covered. Both
+// finger counts, matching the swipe-away-close override. Edge-anchored swipes are not an
+// option here — Android owns them — so this is the mid-screen swipe.
+const BACK_SLOTS = new Set<GestureSlot>(['swipe_right', 'two_finger_swipe_right'])
+
 // While a slide-in panel is open, the horizontal swipe pointing back toward the
 // edge it slid in from means "push it away". With the override enabled, that
 // swipe closes the panel instead of running its normal binding — so dismissing
@@ -144,7 +154,16 @@ export function resolveGestureCommand(
   settings: MobileGestureSettings,
   panels: OverlayPanels,
   swipeAwayClose: boolean,
+  overlay: { depth: number; enabled: boolean } = { depth: 0, enabled: false },
 ): string {
+  // An open overlay level shadows everything below it, panels included: it is painted on
+  // top, so a gesture over it can only mean something about it. The back swipe pops one
+  // level and **every other slot resolves to nothing** — without that, a swipe inside a
+  // modal would run its workspace binding and change tabs invisibly behind the modal,
+  // which is exactly the hijacking the recognizer's target filter used to prevent by
+  // refusing to look at overlays at all. With the config off, that original immunity is
+  // what is restored, rather than the bindings coming back.
+  if (overlay.depth > 0) return overlay.enabled && BACK_SLOTS.has(slot) ? BACK_COMMAND : ''
   if (swipeAwayClose) {
     // The right-edge drawer overlays the sidebar, so it wins when both are open.
     if (panels.drawerOpen && (slot === 'swipe_right' || slot === 'two_finger_swipe_right')) return 'drawer.toggle'
@@ -155,6 +174,10 @@ export function resolveGestureCommand(
 
 export function swipeAwayCloseEnabled(config: Record<string, unknown>): boolean {
   return config.mobile_gesture_swipe_away_close !== false
+}
+
+export function overlayBackEnabled(config: Record<string, unknown>): boolean {
+  return config.mobile_gesture_overlay_back !== false
 }
 
 export function mobileGestureSettings(config: Record<string, unknown>): MobileGestureSettings {

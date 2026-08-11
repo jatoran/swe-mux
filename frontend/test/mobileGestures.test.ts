@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  BACK_COMMAND,
   classifyGesture,
   defaultMobileGestureSettings,
   GESTURE_SLOTS,
   mobileGestureSettings,
+  overlayBackEnabled,
   pathOwnsHorizontalScroll,
   resolveGestureCommand,
   swipeAwayCloseEnabled,
@@ -142,4 +144,49 @@ test('swipe-away close is on unless the config explicitly disables it', () => {
   assert.equal(swipeAwayCloseEnabled({}), true)
   assert.equal(swipeAwayCloseEnabled({ mobile_gesture_swipe_away_close: true }), true)
   assert.equal(swipeAwayCloseEnabled({ mobile_gesture_swipe_away_close: false }), false)
+})
+
+test('overlay back is on unless the config explicitly disables it', () => {
+  assert.equal(overlayBackEnabled({}), true)
+  assert.equal(overlayBackEnabled({ mobile_gesture_overlay_back: true }), true)
+  assert.equal(overlayBackEnabled({ mobile_gesture_overlay_back: false }), false)
+})
+
+test('an open overlay turns the rightward swipe into back', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const layered = { depth: 1, enabled: true }
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true, layered), BACK_COMMAND)
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, closed, true, layered), BACK_COMMAND)
+})
+
+test('an open overlay suppresses every other slot rather than reassigning it', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const layered = { depth: 1, enabled: true }
+  // The danger this prevents: a swipe inside a modal running its workspace binding and
+  // changing tabs invisibly behind the modal.
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, closed, true, layered), '')
+  assert.equal(resolveGestureCommand('two_finger_swipe_left', defaultMobileGestureSettings, closed, true, layered), '')
+  assert.equal(resolveGestureCommand('two_finger_swipe_up', defaultMobileGestureSettings, closed, true, layered), '')
+  assert.equal(resolveGestureCommand('two_finger_swipe_down', defaultMobileGestureSettings, closed, true, layered), '')
+  assert.equal(resolveGestureCommand('two_finger_tap', defaultMobileGestureSettings, closed, true, layered), '')
+})
+
+test('an overlay outranks an open panel, and disabling overlay back restores immunity', () => {
+  const both = { sidebarOpen: true, drawerOpen: true }
+  // A modal is painted over the panels, so the swipe is about the modal, not the drawer.
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, both, true, { depth: 1, enabled: true }), BACK_COMMAND)
+  // Turned off, an overlay goes back to swallowing gestures entirely — it does not fall
+  // through to the panel override or the slot's binding.
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, both, true, { depth: 1, enabled: false }), '')
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, both, true, { depth: 1, enabled: false }), '')
+})
+
+test('with nothing layered the existing resolution is untouched', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const drawer = { sidebarOpen: false, drawerOpen: true }
+  const none = { depth: 0, enabled: true }
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true, none), 'mobileTab.previous')
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, drawer, true, none), 'drawer.toggle')
+  // Callers that predate the overlay argument keep their behaviour.
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true), 'mobileTab.previous')
 })

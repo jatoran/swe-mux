@@ -8,7 +8,8 @@ import { DelimitedTextViewer } from './DelimitedTextViewer'
 import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { ImageViewer } from './ImageViewer'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
-import { useModalFocus } from './modalFocus'
+import { useDismissLevel, useModalFocus } from './modalFocus'
+import { dismissStack } from './dismissStack.ts'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
@@ -18,6 +19,7 @@ import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
 import { projectResourceCreationParent } from './projectResourceCreate'
 import { fileSaveTarget, globalNoteSaveTarget, noteQueueKey, noteSaveQueue, noteSaveTarget, type NoteSaveState, type ResourceSaveTarget } from './noteSaveQueue'
+import { resourceSaveIndicator } from './resourceSaveIndicator'
 import { loadExpandedFolders, saveExpandedFolders } from './deviceSettings'
 import { currentInsertTarget } from './insertTarget'
 import { isFocusTraversalKey } from './keys'
@@ -426,7 +428,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const dismiss=()=>setTreeMenu(null)
     const key=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){
-        event.preventDefault();event.stopImmediatePropagation();dismiss();return
+        event.preventDefault();event.stopImmediatePropagation();dismissStack.pop();return
       }
       if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
       const buttons=[...treeMenuPanel.current?.querySelectorAll<HTMLButtonElement>('button')||[]]
@@ -697,6 +699,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // Jump to a heading. Unlike the find bar this holds no decorations, so there is nothing to
   // keep in step with an edit: the list is re-derived whenever the panel opens.
   const [outlineOpen,setOutlineOpen]=useState(false)
+  // In-pane widgets, not overlays, but they are still things back should close before it
+  // reaches anything behind them. Registering them is also what lets the phone's back
+  // gesture leave a find bar or an outline, which no key is available for on a phone.
+  useDismissLevel(()=>setTreeMenu(null),!!treeMenu,'files-tree-menu')
+  useDismissLevel(closeFind,findOpen,'resource-find')
+  useDismissLevel(()=>{setOutlineOpen(false);editorElement.current?.focus()},outlineOpen,'note-outline')
   const [outline,setOutline]=useState<readonly OutlineHeading[]>([])
   const outlinePanel=useRef<HTMLDivElement>(null)
   const outlineTrigger=useRef<HTMLButtonElement>(null)
@@ -835,8 +843,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const dismiss=()=>setOutlineOpen(false)
     const key=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){
-        event.preventDefault();event.stopImmediatePropagation();dismiss()
-        editorElement.current?.focus()
+        // The level's own dismiss restores editor focus, so popping covers both.
+        event.preventDefault();event.stopImmediatePropagation();dismissStack.pop()
         return
       }
       if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
@@ -1252,6 +1260,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     requestAnimationFrame(()=>editor.setSelectionRange(result.caret,result.caret))
   }
   const stateLabel=autosaved?(noteSave.status==='idle'?status:noteSave.status):(saveState==='idle'?status:saveState)
+  const saveIndicator=resourceSaveIndicator(stateLabel)
   const unavailableMessage=status==='binary'?'This file is not UTF-8 text and has no safe viewer.'
     :status==='too-large'&&presentation?.kind==='image'?'This image exceeds the 16 MiB viewer limit.'
     :status==='too-large'?'This file exceeds the 2 MiB text and table limit.'
@@ -1261,7 +1270,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     :status==='error'?null
     :'This resource is read-only.'
   return <section class="project-resource file-editor" onKeyDown={handleFindKey}>
-    <header><div class={isNote?'note-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{isNote?<><span class="note-resource-separator" aria-hidden="true">·</span><span>{isGlobalNote?'Global':project.name}</span><span class="note-resource-separator" aria-hidden="true">·</span><span class="note-resource-state">{stateLabel}</span></>:<span>{project.name} · {stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
+    <header><div class={autosaved?'autosave-resource-heading':undefined}><strong>{isNote?noteTitle:resource.id}</strong>{autosaved?<>{isGlobalNote&&<><span class="resource-heading-separator" aria-hidden="true">·</span><span class="resource-heading-scope">Global</span></>}<span class={`resource-save-indicator ${saveIndicator.tone}`} aria-label={`Save status: ${saveIndicator.label}`} title={`Save status: ${saveIndicator.label}`}/></>:<span>{stateLabel}</span>}</div>{autosaved||onSendToAgent||isDelimitedFile||(isFile&&!isMarkdownFile&&presentation?.kind==='text')?<div class="resource-actions">
       {/* Continuity-backed views send the live selection (or the document); a plain-text
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
@@ -1277,10 +1286,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <input ref={findInput} value={findQuery} spellcheck={false} placeholder="find in note" aria-label="Find in note"
         onInput={event=>setFindQuery(event.currentTarget.value)}
         onKeyDown={event=>{
-          // Escape is stopped here rather than left to bubble: the app's global handler
-          // treats it as "close every overlay", which would shut the whole pane's menus
-          // when the user only meant to leave the find bar.
-          if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeFind()}
+          // Escape is stopped here rather than left to bubble, so the keypress resolves to
+          // exactly one pop: this handler's, on the find bar's own level.
+          if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismissStack.pop()}
           if(event.key==='Enter'){event.preventDefault();stepFind(event.shiftKey)}
         }}/>
       <button title="Previous match" aria-label="Previous match" onClick={()=>stepFind(true)}>↑</button>

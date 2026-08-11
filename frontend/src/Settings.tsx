@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { displayChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
+import { dismissStack } from './dismissStack.ts'
+import { useDismissLevel } from './modalFocus'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
 import { SessionRowSettings } from './SessionRowSettings'
@@ -48,6 +50,7 @@ type Config = {
   mobile_long_press:'context_menu'|'disabled'
   mobile_gestures:Record<string,string>
   mobile_gesture_swipe_away_close:boolean
+  mobile_gesture_overlay_back:boolean
   terminal_auto_copy_selection:boolean
   clipboard_history_enabled:boolean;clipboard_history_persist:boolean
   clipboard_history_limit:number;clipboard_history_entry_max_chars:number
@@ -334,6 +337,20 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const onOpenUsage=useCallback(()=>requestClose('usage'),[requestClose])
   const onOpenAutomation=useCallback(()=>requestClose('automation'),[requestClose])
 
+  // Settings unwinds one layer at a time, and the layers are independent levels rather
+  // than a fixed ladder: each opens when its own state does, so back undoes them in the
+  // order they were actually opened instead of a hardcoded precedence that could not know
+  // whether the theme picker or the search came first. `requestClose` is deliberately the
+  // panel's dismiss even though it may not close: with unsaved edits it raises the
+  // Save/Discard decision, which registers as a level above it, and back then reaches
+  // that decision rather than closing the panel out from under it.
+  // Every level stands down while a shortcut is being recorded, because Escape then means
+  // "cancel the recording" and belongs to the capture handler.
+  useDismissLevel(()=>requestClose(),!capturingCommand,'settings')
+  useDismissLevel(()=>setQuery(''),!!query&&!capturingCommand,'settings-search')
+  useDismissLevel(()=>setThemePickerOpen(false),themePickerOpen&&!capturingCommand,'settings-theme-picker')
+  useDismissLevel(()=>setCloseIntent(null),!!closeIntent&&!capturingCommand,'settings-close-confirm')
+
   const loadLatency=()=>{void api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
   const resetLatency=()=>{void api<LatencyReportPayload>('DELETE','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
 
@@ -411,12 +428,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       if (event.key === 'Escape'&&!capturingCommand) {
         event.preventDefault()
         event.stopImmediatePropagation()
-        if(closeIntent){setCloseIntent(null);return}
-        if(themePickerOpen){setThemePickerOpen(false);return}
-        // Escape unwinds one layer at a time: an open result list first, the
-        // panel only once search is out of the way.
-        if(query){setQuery('');return}
-        requestClose()
+        dismissStack.pop()
       }
       // Find-in-settings takes over the browser's find while the panel owns the
       // screen; its own find cannot see the tabs that are not mounted anyway.
@@ -437,7 +449,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     window.addEventListener('keydown', close, true)
     return () => window.removeEventListener('keydown', close, true)
-  }, [requestClose,closeIntent,capturingCommand,query,themePickerOpen])
+  }, [closeIntent,capturingCommand])
 
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)
@@ -799,6 +811,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="keybinding-heading"><div><strong>TOUCH::GESTURES</strong><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
           {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<select value={draft.mobile_gestures?.[slot]??''} onChange={e=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:e.currentTarget.value})}><option value="">Disabled</option>{bindingCommands.map(command=><option value={command.id}>{command.label}</option>)}</select></label>)}
           <label class="check"><span>Swipe-away closes an open panel: while the sidebar or side panel is open, swiping back toward the edge it slid in from dismisses it instead of running that swipe's binding</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
+          <label class="check"><span>Swipe back closes an open overlay: while a dialog is open, swiping right closes one level (the transcript inside session history returns to the results). Off restores the older behaviour where a dialog ignored every swipe; the Android back gesture keeps working either way</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
           <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}

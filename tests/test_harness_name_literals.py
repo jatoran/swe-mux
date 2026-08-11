@@ -98,10 +98,10 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     "launchers.py::resolve_codex_pty_command": "resolves one npm package's JS entrypoint",
     "reconcile.py::inspect_claude": "one harness's own discovery header reader",
     "reconcile.py::inspect_codex": "one harness's own discovery header reader",
-    "operational_telemetry.py::OperationalTelemetryStore.review_quota_reset": (
+    "operational_telemetry.py::OperationalTelemetryStore.review_quota_resets": (
         "manual-usage review is a Codex-only evidence kind"
     ),
-    "operational_telemetry.py::OperationalTelemetryStore.review_quota_reset.op": (
+    "operational_telemetry.py::OperationalTelemetryStore.review_quota_resets.op": (
         "manual-usage review is a Codex-only evidence kind"
     ),
     # Dialect comparisons that happen to share a spelling with a harness name.
@@ -119,6 +119,10 @@ _FRONTEND_ALLOWLIST: dict[str, str] = {
     "commandRail.ts": "rail items declare the harnesses they apply to",
     "ProviderAccounts.tsx": "managed-provider branding, matching ManagedProvider",
     "SessionRowSettings.tsx": "static preview fixtures, not runtime behaviour",
+    # A model family that happens to share a spelling with a harness. `openai/codex`
+    # is a model id, not the Codex CLI, and compacting it is a display concern with
+    # no harness capability behind it.
+    "modelDisplay.ts": "model family names, not harnesses",
 }
 
 _NAMES = frozenset(HARNESSES)

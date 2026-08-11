@@ -146,12 +146,16 @@
   than 10%; confirmation then requires a same-account/auth stable-low sample 5–45 minutes later
   while still before that boundary. Missing/ambiguous timers, stale or out-of-order data,
   rebounds, auth transitions, and account changes suppress confirmation.
-- Confirmed unexpected resets expose a purple UI indicator and optional deduplicated
-  per-device sound. Attribution shows estimate ranges, ambiguity, provider lag, and an
+- Confirmed unexpected resets expose a purple UI indicator and an optional sound. A provider
+  rolls its whole plan over at once, so alerts are coalesced per provider before they are
+  raised and the indicator carries the whole unreviewed group rather than its newest row.
+  Attribution shows estimate ranges, ambiguity, provider lag, and an
   explicit external/unassigned remainder; it never claims shared-account identity.
-- The account popover can review a reset as manual Codex usage or discard it as a detection
-  error. Review is server-persisted, removes the row from active notifications, retains it in
-  the evidence log, and rejects manual-usage classification for Claude rows.
+- The account popover reviews the whole group in one action: `seen` acknowledges it,
+  `manual_usage` classifies Codex rows, `discarded` treats it as a detection error. Review is
+  server-persisted, so a dismissal at the desk also clears the phone; it removes the rows from
+  active notifications, retains them in the evidence log, and rejects manual-usage
+  classification for Claude rows.
 - `POST .../select` takes no body; there is no force flag and no confirmation step.
 - The expanded sidebar's status block uses one two-row metric grid per provider.
   The first row shows the provider icon, 5-hour reset countdown, weekly reset countdown, and optional Fable heading.
@@ -183,7 +187,7 @@ POST   /api/provider-accounts/{provider}/{account-id}/select
 POST   /api/provider-accounts/{provider}/{account-id}/adopt
 POST   /api/provider-accounts/{provider}/{account-id}/purge-telemetry
 DELETE /api/provider-accounts/{provider}/{account-id}
-PATCH  /api/telemetry/quota-resets/{reset-id}
+POST   /api/telemetry/quota-resets/review
 GET    /api/telemetry/quota-series?provider=&account=&since=&until=&resolution=raw|daily
 ```
 
