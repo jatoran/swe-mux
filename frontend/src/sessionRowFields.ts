@@ -11,6 +11,7 @@
 
 import { activityBadges, awaitingLabel, type ActivityBadge } from './sessionStatus.ts'
 import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harnessRegistry.ts'
+import { displayModelName } from './modelDisplay.ts'
 import type { Session } from './types'
 import {
   ROW_FIELD_BY_ID, SEPARATORS,
@@ -412,7 +413,7 @@ function candidateFor(
     case 'model': {
       const model = session.model
       if (!model) return null
-      return make({ kind: 'text', text: model, title: `model ${model}` }, model !== context.defaultModel[session.project_id])
+      return make({ kind: 'text', text: displayModelName(model), title: `model ${model}` }, model !== context.defaultModel[session.project_id])
     }
     case 'account': {
       const account = accountToken(session)

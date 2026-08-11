@@ -1,4 +1,5 @@
 import { useMemo } from 'preact/hooks'
+import { ModelName } from './ModelName'
 import { modelPeriodRows, type ProviderUsage, type UsageRow } from './usageAnalytics'
 
 const integer = new Intl.NumberFormat()
@@ -53,7 +54,7 @@ export function UsageModelBreakdown({
       <div class="model-legend">
         {models.map(model=>{
           const [provider,name]=model.split('\0')
-          return <span key={model}><i style={{background:colors.get(model)}}/>{provider} · {name}</span>
+          return <span key={model}><i style={{background:colors.get(model)}}/>{provider} · <ModelName model={name}/></span>
         })}
       </div>
       {[...periods].reverse().map(period=>{
@@ -83,7 +84,7 @@ export function UsageModelBreakdown({
         <th>{resolution==='daily'?'date':'month'}</th><th>provider/model</th><th>tokens</th>
         <th>input</th><th>output</th><th>cache</th><th>cost</th>
       </tr></thead><tbody>{rows.map(row=><tr key={`${row.period}-${row.provider}-${row.model}`}>
-        <td>{row.period}</td><td>{row.provider} · {row.model}</td>
+        <td>{row.period}</td><td>{row.provider} · <ModelName model={row.model}/></td>
         <td>{integer.format(row.total_tokens)}</td><td>{integer.format(row.input_tokens)}</td>
         <td>{integer.format(row.output_tokens)}</td>
         <td>{integer.format(row.cache_read_tokens+row.cache_creation_tokens)}</td>

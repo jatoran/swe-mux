@@ -239,6 +239,23 @@ test('the account token is notable only when more than one account is live', () 
   assert.deepEqual(bottomText(two[0], config, deriveRowContext(two, {}, NOW)), ['aaaaaa'])
 })
 
+test('model labels compact only at render time', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['model'], 'notable')
+  const item = session({ model: 'claude-opus-5' })
+  assert.deepEqual(
+    bottomText(item, config, context({ defaultModel: { p1: 'claude-opus-5' } })),
+    [],
+    'notability still compares the exact model id',
+  )
+  const tokens = buildSessionRowTokens(
+    item,
+    config,
+    context({ defaultModel: { p1: 'claude-sonnet-5' } }),
+  ).bottom.left.tokens
+  assert.equal(tokens[0].text, 'opus-5')
+  assert.equal(tokens[0].title, 'model claude-opus-5')
+})
+
 test('an ended session reports its lifetime and its exit reason', () => {
   const config = withBottom(defaultSessionRowConfig(), ['exit', 'duration'], 'notable')
   const ended = session({ state: 'crashed', state_detail: 'exit 1', created_at: NOW - 7200, state_since: NOW - 60 })

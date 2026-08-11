@@ -43,6 +43,7 @@
   key so range-scoped breakdowns can be derived.
   Tokens in those rows are exact transcript aggregates.
   Source-provided costs are marked `source_estimate`; when a Codex model map omits cost, the adapter allocates the daily cost in proportion to model tokens and marks it `proportional`.
+- Read-only model labels use the frontend's compact display mapping, but grouping, sorting, cache rows, tooltips, accessibility labels, and configuration preserve exact model identifiers.
 - A successful refresh atomically replaces the last-known-good cache. Failure preserves
   cached data and exposes stale/error state.
 - `: menu` and the command palette open the dedicated Usage dashboard. Provider selection

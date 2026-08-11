@@ -1707,6 +1707,7 @@ The layout is user-configurable in Settings → Appearance → Session rows.
 - **Every placed field is `when notable` or `always`.**
   Notability is per field: a branch that differs from the project's most common branch, a diff with changed lines, a queue with items, a model that differs from the project default, an account when more than one is live, a duration past its per-state threshold.
   The default configuration is almost entirely `when notable`, so a quiet fleet shows a title and a duration and anything visible has earned its place.
+- Read-only model labels use the shared compact presentation mapping, while tooltips, accessibility labels, configuration controls, session comparisons, and API values retain the exact provider identifier.
 - **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
 - **Sections meet but never overlap.**
   Neither bottom-line section shrinks; the right one is pushed over only while there is room, and the line clips.

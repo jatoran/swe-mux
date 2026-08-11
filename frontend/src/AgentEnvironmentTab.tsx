@@ -1,6 +1,7 @@
 import { Fragment } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { ModelName } from './ModelName'
 import {
   agentCompletenessLabel,
   agentOwnerLabel,
@@ -103,7 +104,7 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
     {inventory && <>
       <section class="agent-runtime" aria-label="Agent runtime">
         <div><span>Executable</span><b>{inventory.runtime.executable}</b></div>
-        <div><span>Model</span><b>{inventory.runtime.model || 'CLI default'}</b></div>
+        <div><span>Model</span><b><ModelName model={inventory.runtime.model} fallback="CLI default"/></b></div>
         <div><span>Working directory</span><b title={inventory.cwd}>{inventory.cwd}</b></div>
         {inventory.runtime.options.map(option => <div key={`${option.label}:${option.value}`}><span>{option.label}</span><b>{option.value}</b></div>)}
         {!!inventory.runtime.modes.length && <div><span>Modes</span><b>{inventory.runtime.modes.join(', ')}</b></div>}
