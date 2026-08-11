@@ -147,14 +147,62 @@ def test_continuity_find_is_available_from_the_shared_resource_header() -> None:
     assert "<ProjectResource" in drawer
 
 
-def test_note_resource_header_keeps_identity_and_save_state_on_one_row() -> None:
+def test_autosave_resource_header_keeps_identity_and_save_state_on_one_row() -> None:
+    """Identity and save state share one row, and the state is a light with a name.
+
+    Three files have to agree and none of them imports the others: the markup names
+    a class, the stylesheet lays it out, and `resourceSaveIndicator` decides the
+    tone. A change to one is invisible to the other two, which is what this file
+    exists to catch.
+
+    The row is keyed on `autosaved` rather than on being a note, because what earns
+    the compact treatment is having a save state to show at all. A resource that
+    does not autosave keeps its state as plain text.
+    """
     resource = source("ProjectResource.tsx")
     css = source("style.css")
 
-    assert "class={isNote?'note-resource-heading':undefined}" in resource
-    assert resource.count('class="note-resource-separator"') == 2
-    assert 'class="note-resource-state">{stateLabel}</span>' in resource
-    assert ".project-resource>header>.note-resource-heading{display:flex" in css
+    assert "class={autosaved?'autosave-resource-heading':undefined}" in resource
+    # A bare coloured dot has no accessible name, so the tone always ships with one.
+    assert 'aria-label={`Save status: ${saveIndicator.label}`}' in resource
+    assert 'class={`resource-save-indicator ${saveIndicator.tone}`}' in resource
+    # Non-autosaving resources still say their state in words.
+    assert ":<span>{stateLabel}</span>" in resource
+    # One row, and the light keeps its size when the title is long enough to
+    # ellipsize. Matched against the rule's selector list rather than an exact
+    # string, so grouping the selector with its neighbours stays free.
+    assert ".project-resource>header>.autosave-resource-heading{display:flex" in css
+    assert ".autosave-resource-heading>strong{min-width:0}" in css
+    unshrinkable = [
+        selectors
+        for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+        if "flex:none" in body
+    ]
+    assert any(
+        ".autosave-resource-heading>.resource-save-indicator" in group
+        for group in unshrinkable
+    ), "the save light is allowed to shrink, so a long title can squeeze it away"
+
+
+def test_every_save_indicator_tone_has_a_colour() -> None:
+    """A tone with no rule renders as the neutral default and reads as "saved-ish".
+
+    `resourceSaveIndicator` is the only thing that mints tones and the stylesheet is
+    the only thing that colours them, so adding a tone without a rule is a silent
+    downgrade: an error state that looks idle. `pending` is deliberately the base
+    style, which is why it is excluded rather than required to have its own rule.
+    """
+    indicator = source("resourceSaveIndicator.ts")
+    css = source("style.css")
+
+    declared = set(re.findall(r"tone: '([a-z]+)'", indicator))
+    assert declared, "no tones declared; this guard would assert nothing"
+    assert "pending" in declared, "the neutral base tone is expected to exist"
+    assert ".resource-save-indicator{" in css
+    for tone in sorted(declared - {"pending"}):
+        assert f".resource-save-indicator.{tone}{{background:" in css, (
+            f"tone {tone!r} has no colour rule, so it renders as the neutral default"
+        )
 
 
 def test_note_selection_can_be_consumed_only_after_an_accepted_agent_handoff() -> None:
