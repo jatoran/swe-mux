@@ -46,6 +46,13 @@ from .sqlite_store import (
 from .subprocess_flags import background_creation_flags
 from .transcript_view import final_exchange
 
+
+def _last_exchange(
+    path: Path | None, backend: str, native_id: str | None
+) -> tuple[str, str]:
+    """`final_exchange` positionally, for `asyncio.to_thread`, which takes no keywords."""
+    return final_exchange(path, backend, native_id=native_id)
+
 if TYPE_CHECKING:
     from .automation_store import AutomationStore
     from .session import SessionManager
@@ -1098,7 +1105,10 @@ class VoiceService:
         # on screen is how a listener ends up hearing "I'll investigate the
         # sidebar sort" as the answer to a question that was already answered.
         prompt, reply = await asyncio.to_thread(
-            final_exchange, session.transcript_path, session.record.backend
+            _last_exchange,
+            session.transcript_path,
+            session.record.backend,
+            session.record.native_session_id,
         )
         if not reply:
             raise VoiceError("no assistant reply text was found in the last turn")

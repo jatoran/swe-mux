@@ -229,9 +229,15 @@ async def test_reconcile_watermark_skips_unchanged_transcripts(tmp_path: Path, m
     calls = {"n": 0}
     real = reconcile.summarize_transcript
 
-    def counting(path: Path, backend: str):
+    # Signature-agnostic, like the other doubles in this file: pinning the exact
+    # parameter list made this stub raise `TypeError` when a store-backed harness
+    # added a conversation id, and the reconcile loop's deliberate
+    # one-bad-transcript-must-not-abort-everything handler swallowed it into a
+    # "skipped" log, so the failure surfaced as a wrong call count rather than
+    # as the signature mismatch it was.
+    def counting(*args, **kwargs):
         calls["n"] += 1
-        return real(path, backend)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(reconcile, "summarize_transcript", counting)
     try:

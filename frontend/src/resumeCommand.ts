@@ -1,33 +1,36 @@
+import { assignsConversationId, harnessDescriptor } from './harnessRegistry.ts'
 import type { Session } from './types'
 
 type ResumeSource = Pick<Session, 'id' | 'backend' | 'native_session_id'>
 
 /**
  * The clean provider CLI command that resumes this agent conversation in any
- * standalone terminal — deliberately NOT the mux-instrumented argv (no
- * `--settings` hook injection, no `-c notify=…`), because the copied string is
- * for a human to paste outside mux.
+ * standalone terminal. Deliberately NOT the mux-instrumented argv (no `--settings`
+ * hook injection, no `-c notify=...`), because the copied string is for a human to
+ * paste outside mux.
  *
- * Returns null when no resumable id exists yet:
- * - shell sessions have no provider conversation;
- * - Claude sessions are resumable immediately (mux assigns the native id via
- *   `--session-id` at spawn, so it always equals the mux id);
- * - Codex and OMP mint their own session ids, which mux only discovers after
- *   the first transcript write. Until then `native_session_id` is a
- *   placeholder equal to the mux id, which their resume would not recognize.
+ * Composed from the harness's own declared resume grammar (`cli_name` plus
+ * `resume_argv`) rather than from a list of names. The list version knew Claude,
+ * Codex, and OMP, so pi and opencode had no copyable resume command at all even
+ * though both resume by id through `--session`.
  *
- * Claude resolves transcripts by working directory, so its command only
- * resumes when run from the session's cwd — callers should surface that.
+ * Returns null when there is nothing resumable:
+ * - a shell has no provider conversation, and neither has an unknown harness;
+ * - a harness that mints its own conversation id carries a placeholder equal to the
+ *   mux id until the first write is observed, and resuming that would find nothing.
+ *   A harness where mux dictated the id (`assigns_conversation_id`) is resumable
+ *   from its first moment.
  *
- * Per-name branches are correct here: the resume argv is genuinely
- * harness-specific behavior, not a membership test. A harness without a
- * branch has no copyable resume command, which the UI states.
+ * A harness that resolves transcripts by working directory only resumes when the
+ * command runs from the session's cwd, which callers surface separately.
  */
 export function resumeCommand(session: ResumeSource): string | null {
   const id = (session.native_session_id || '').trim()
   if (!id) return null
-  if (session.backend === 'claude') return `claude --resume ${id}`
-  if (session.backend === 'codex') return id === session.id ? null : `codex resume ${id}`
-  if (session.backend === 'omp') return id === session.id ? null : `omp --resume ${id}`
-  return null
+  const harness = harnessDescriptor(session.backend)
+  const cli = harness?.cli_name
+  const argv = harness?.resume_argv
+  if (!cli || !argv?.length) return null
+  if (!assignsConversationId(session.backend) && id === session.id) return null
+  return [cli, ...argv, id].join(' ')
 }

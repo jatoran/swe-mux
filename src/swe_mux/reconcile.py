@@ -4,8 +4,8 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
+import sqlite3
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, assert_never
 
 from .adapters.claude import encode_cwd, is_conversation_transcript
+from .adapters.omp import session_header
 from .git_projects import ProjectIdentity, resolve_project
-from .harness import Backend
+from .harness import HARNESSES, Backend, require_backend, transcript_dialect
 from .history import HistoryIndex
+from .opencode_store import session_measurements
 from .transcript_view import TRANSCRIPT_PARSER_VERSION
 
 log = logging.getLogger(__name__)
@@ -26,11 +28,18 @@ from .claude_models import CLAUDE_CONTEXT_WINDOWS, claude_context_window  # noqa
 
 @dataclass(slots=True)
 class ExternalTranscript:
+    """One conversation discovered outside mux.
+
+    ``path`` is ``None`` for a harness that keeps conversations in a store: there is
+    no file, and ``native_id`` is the whole address. Consumers must therefore treat
+    the path as optional rather than assume a file exists to stat.
+    """
+
     backend: Backend
     native_id: str
     cwd: str
     created_at: float
-    path: Path
+    path: Path | None
     mtime_ns: int = 0
     size: int = 0
 
@@ -113,6 +122,133 @@ def inspect_codex(path: Path) -> ExternalTranscript | None:
     return None
 
 
+def _inspector(backend: Backend) -> Callable[[Path], ExternalTranscript | None]:
+    """The header reader for this harness's record dialect.
+
+    Chosen by dialect, not by name, so two harnesses writing the same records share
+    one inspector: oh-my-pi and pi do, which is why adding pi to discovery needed no
+    new reader at all.
+    """
+    dialect = transcript_dialect(backend)
+    if dialect == "claude":
+        return inspect_claude
+    if dialect == "codex":
+        return inspect_codex
+    if dialect == "pi":
+        return lambda path: inspect_pi_dialect(path, backend)
+    if dialect == "opencode" or dialect is None:
+        # A store-backed or record-free harness never reaches a file inspector; the
+        # caller routes it to `discover_store_conversations` or declines it.
+        return lambda path: None
+    assert_never(dialect)
+
+
+def inspect_pi_dialect(path: Path, backend: Backend) -> ExternalTranscript | None:
+    """Read one oh-my-pi or pi session file's header into a discovery record.
+
+    Both forks write the same `{"type":"session"}` header carrying `id`, `cwd`, and
+    an ISO `timestamp`, which is the whole of what discovery needs, so the reader is
+    shared exactly as their transcript dialect is. The backend has to be passed in
+    because the header does not name which fork wrote it; the directory the file was
+    found under does.
+    """
+    header = session_header(path)
+    if not isinstance(header, dict):
+        return None
+    native_id = str(header.get("id") or "")
+    cwd = str(header.get("cwd") or "")
+    if not native_id or not cwd:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    created = _timestamp(header.get("timestamp"), st.st_mtime)
+    return ExternalTranscript(backend, native_id, cwd, created, path, st.st_mtime_ns, st.st_size)
+
+
+def discover_store_conversations(backend: Backend, home: Path | None = None) -> (
+    list[ExternalTranscript]
+):
+    """Discover a store-backed harness's conversations by querying, not walking.
+
+    Returns records with no ``path``, because there is no file: the conversation is
+    addressed by ``native_id`` in the harness's own database. Root conversations
+    only, because a subagent runs in a child row and is not a conversation of its
+    own for History's purposes.
+    """
+    store = _store_path(backend, home)
+    if store is None or not store.is_file():
+        return []
+    try:
+        connection = sqlite3.connect(f"file:{store.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT id, directory, time_created, time_updated FROM session"
+            " WHERE parent_id IS NULL ORDER BY time_updated DESC"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        connection.close()
+    found: list[ExternalTranscript] = []
+    for row in rows:
+        native_id = str(row["id"] or "")
+        cwd = str(row["directory"] or "")
+        if not native_id or not cwd:
+            continue
+        created = _timestamp(row["time_created"], 0.0)
+        found.append(
+            ExternalTranscript(
+                backend,
+                native_id,
+                cwd,
+                created,
+                None,
+                # The watermark a store conversation is valid for, in the same two
+                # slots a file's stat occupies. `message_count` is filled by the
+                # reader when the row is indexed; discovery only needs the row to be
+                # re-examined when the conversation moves, which `time_updated` says.
+                mtime_ns=int(row["time_updated"] or 0),
+                size=0,
+            )
+        )
+    return found
+
+
+def _store_path(backend: Backend, home: Path | None) -> Path | None:
+    """The store file for ``backend``, honouring an injected home in tests."""
+    harness = HARNESSES.get(backend)
+    if harness is None or harness.conversation_store_file is None:
+        return None
+    if home is None:
+        return harness.data_home() / harness.conversation_store_file
+    # An injected home replaces the user's, which is what keeps a scan in tests off
+    # the real machine. The layout under it is the harness's own.
+    relative = harness.data_home().relative_to(Path.home())
+    return home / relative / harness.conversation_store_file
+
+
+def _discovery_root(backend: Backend, home: Path | None) -> Path | None:
+    """Where this harness's conversations live, under an optionally injected home."""
+    harness = HARNESSES.get(backend)
+    discovery = harness.conversation_discovery if harness else None
+    if harness is None or discovery is None or discovery.subdirectory is None:
+        return None
+    base = harness.data_home()
+    if home is not None:
+        try:
+            base = home / base.relative_to(Path.home())
+        except ValueError:
+            # An env-relocated data home outside the user's home cannot be re-rooted
+            # onto an injected one; a scoped scan simply finds nothing there.
+            return None
+    return base.joinpath(*discovery.subdirectory)
+
+
 def scan_external_transcripts(
     home: Path | None = None,
     *,
@@ -121,36 +257,45 @@ def scan_external_transcripts(
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int], None] | None = None,
 ) -> list[ExternalTranscript]:
-    """Discover native Claude/Codex transcripts.
+    """Discover conversations every registered harness wrote outside mux.
 
-    ``roots`` restricts the Claude scan to project directories whose encoded
-    name matches one of the supplied working-copy roots. Because Claude stores
-    each session under ``projects/<encoded-cwd>/`` and ``encode_cwd`` is
-    prefix-preserving, a project-scoped backfill reads a handful of directories
-    instead of every transcript on the machine (a real user can have tens of
-    thousands). Over-matched siblings are still filtered downstream by the
-    actual cwd, so this only trades reads, never correctness. Codex stores
-    sessions flat by date with no cwd in the path, so it is always scanned in
-    full. ``should_cancel`` is polled per file so a long scan aborts promptly,
-    and ``on_progress`` receives the running count of files examined.
+    The layout is read from each descriptor's `conversation_discovery` rather than
+    from a list here. The list version named Claude and Codex, so omp, pi, and
+    opencode were silently undiscoverable: their conversations existed, were
+    readable, and never reached History, with nothing reporting the gap.
+
+    ``roots`` restricts a `cwd_scoped` scan to directories whose encoded name
+    matches one of the supplied working-copy roots. Claude stores each session under
+    ``projects/<encoded-cwd>/`` and `encode_cwd` is prefix-preserving, so a
+    project-scoped backfill reads a handful of directories instead of every
+    transcript on the machine (a real user can have tens of thousands).
+    Over-matched siblings are still filtered downstream by the actual cwd, so this
+    only trades reads, never correctness. A harness whose bucket names are slugs
+    rather than a prefix-preserving encoding declares `cwd_scoped=False` and is
+    scanned in full, as is Codex, which stores sessions flat by date.
+
+    ``should_cancel`` is polled per file so a long scan aborts promptly, and
+    ``on_progress`` receives the running count of files examined.
     """
-    user_home = home or Path.home()
-    codex_home = (
-        home / ".codex"
-        if home is not None
-        else Path(os.environ.get("CODEX_HOME") or user_home / ".codex").expanduser()
-    )
     encoded_roots = (
         [encode_cwd(root).lower() for root in roots] if roots is not None else None
     )
-    specs = (
-        (user_home / ".claude" / "projects", "*.jsonl", inspect_claude, True),
-        (codex_home / "sessions", "rollout-*.jsonl", inspect_codex, False),
-    )
     found: list[ExternalTranscript] = []
     scanned = 0
-    for root, pattern, inspect, scoped in specs:
-        if not root.exists():
+    for name, harness in HARNESSES.items():
+        discovery = harness.conversation_discovery
+        if discovery is None:
+            # A declared refusal: this harness's past conversations are not indexed.
+            continue
+        backend = require_backend(name)
+        if discovery.store:
+            found.extend(discover_store_conversations(backend, home))
+            continue
+        root = _discovery_root(backend, home)
+        pattern = discovery.pattern or "*.jsonl"
+        inspect = _inspector(backend)
+        scoped = discovery.cwd_scoped
+        if root is None or not root.exists():
             continue
         if scoped and encoded_roots is not None:
             search_dirs = [
@@ -189,7 +334,15 @@ def scan_external_transcripts(
     return found
 
 
-def summarize_transcript(path: Path, backend: Backend) -> dict[str, Any]:
+def summarize_transcript(
+    path: Path | None, backend: Backend, native_id: str = "", home: Path | None = None
+) -> dict[str, Any]:
+    """Measurements for one discovered conversation.
+
+    A file-backed conversation is streamed and its usage records accumulated. A
+    store-backed one is a single indexed read of the harness's own running totals,
+    which is both cheaper and exact, so it never guesses from a parse.
+    """
     summary: dict[str, Any] = {
         "context_window": None,
         "final_context_pct": None,
@@ -206,6 +359,26 @@ def summarize_transcript(path: Path, backend: Backend) -> dict[str, Any]:
     }
     peak = 0.0
     final: float | None = None
+    store = _store_path(backend, home)
+    if store is not None:
+        measured = session_measurements(store, native_id)
+        if measured is None:
+            return summary
+        summary.update(
+            {
+                "tokens_in": measured["tokens_in"],
+                "tokens_out": measured["tokens_out"],
+                "tokens_cache_read": measured["tokens_cache_read"],
+                "tokens_cache_write": measured["tokens_cache_write"],
+                "cost_usd": measured["cost_usd"],
+                "model": measured["model"],
+                "provider": measured["provider"],
+                "measurement_source": f"{backend}-database",
+            }
+        )
+        return summary
+    if path is None:
+        return summary
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
     except OSError:
@@ -321,14 +494,19 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
             and message_watermarks.get(history_id)
             == (item.mtime_ns, item.size, TRANSCRIPT_PARSER_VERSION)
         )
-        if watermarks.get(str(item.path)) == (item.mtime_ns, item.size) and messages_current:
+        # Keyed by the transcript path for a file, and by the conversation id for a
+        # store, because that is what the row records as its source in each case.
+        watermark_key = str(item.path) if item.path else f"{item.backend}:{item.native_id}"
+        if watermarks.get(watermark_key) == (item.mtime_ns, item.size) and messages_current:
             continue
         try:
             if item.cwd not in projects:
                 projects[item.cwd] = await resolve_project(item.cwd)
             project = projects[item.cwd]
             await history.register_project_scope(project)
-            summary = await asyncio.to_thread(summarize_transcript, item.path, item.backend)
+            summary = await asyncio.to_thread(
+                summarize_transcript, item.path, item.backend, item.native_id, home
+            )
             await history.upsert_external(
                 row_id=item.row_id,
                 native_id=item.native_id,
@@ -336,7 +514,9 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
                 name=Path(item.cwd).name or item.backend,
                 cwd=item.cwd,
                 spawned_at=item.created_at,
-                transcript_path=str(item.path),
+                # Empty for a store-backed conversation, which has no file. Readers
+                # take the native id instead; `conversation_is_readable` is the gate.
+                transcript_path=str(item.path) if item.path else "",
                 repository_id=project.id,
                 project_label=project.label,
                 project_root=project.root,
@@ -348,7 +528,9 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
             )
             history_id = (await history.native_history_ids()).get((item.backend, item.native_id))
             if history_id:
-                await history.index_transcript(history_id, item.path, item.backend)
+                await history.index_transcript(
+                    history_id, item.path, item.backend, native_id=item.native_id
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

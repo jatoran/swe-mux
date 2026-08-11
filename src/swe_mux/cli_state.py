@@ -42,9 +42,9 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, assert_never
+from typing import Any
 
-from .harness import Backend
+from .harness import Backend, publishes_cli_state
 from .status_timeline import note_layer_reading
 
 log = logging.getLogger(__name__)
@@ -61,21 +61,18 @@ PARKED_MOVE_ATTEMPTS = 3
 
 
 def _publishes_cli_state(backend: Backend) -> bool:
-    if backend == "claude":
-        return True
-    if backend == "codex":
-        return False
-    if backend == "omp":
-        return False
-    if backend == "pi":
-        return False
-    if backend == "opencode":
-        # opencode does publish live status, but over its server's SSE stream
-        # rather than a state file on disk, which is not what this layer reads.
-        return False
-    if backend == "shell":
-        return False
-    assert_never(backend)
+    """Whether this layer has a state file to read for ``backend``.
+
+    Declared on the descriptor (`publishes_cli_state`) rather than answered here,
+    because the PTY classifier asks the same question when deciding whether a
+    CLI-state reading may veto or override a screen reading, and answering it in two
+    places is how every non-Claude harness silently inherited Claude's semantics.
+
+    opencode is the one harness whose answer is not obvious: it does publish live
+    status, but over its server's SSE stream rather than a state file on disk, which
+    is not what this layer reads. Its descriptor records that.
+    """
+    return publishes_cli_state(backend)
 
 
 @dataclass(frozen=True, slots=True)

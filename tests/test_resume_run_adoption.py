@@ -479,7 +479,7 @@ async def test_the_live_heal_never_quarantines_an_inherited_run(tmp_path: Path) 
     manager._stop_observer = AsyncMock()
     manager._start_observer = lambda session, path: None
 
-    await manager._heal_claude_identity(session, CONVERSATION)
+    await manager._heal_minted_identity(session, CONVERSATION)
 
     assert record.agent_run_id == record.id
     assert record.native_session_id == record.id

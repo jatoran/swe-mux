@@ -31,8 +31,12 @@ from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
     AGENT_BACKENDS,
     Backend,
+    assigns_conversation_id,
     descriptor,
     has_observable_transcript,
+    native_id_from_args,
+    native_id_matches,
+    publishes_cli_state,
     reports_lifecycle_hooks,
     require_backend,
 )
@@ -61,6 +65,7 @@ from .spawn_contract import (
 from .status_timeline import LedgerRing, StatusTimelineStore, note_layer_reading
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
+from .transcript_view import conversation_is_readable
 from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
@@ -399,12 +404,6 @@ def transition_proof(source: str, inferred: bool | None = None) -> str:
     return "inferred" if inferred else "proven"
 
 
-# Claude is spawned with an injected `--session-id <uuid>`, and the transcript
-# stem is that uuid. A native id in this shape is therefore authoritative: no
-# other file in the shared per-cwd directory belongs to this session.
-_CLAUDE_NATIVE_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
-)
 # Allowance between "the agent run began" and "the CLI created its transcript",
 # absorbing clock granularity and CLI startup ordering.
 _TRANSCRIPT_CREATION_SLACK_SECONDS = 5.0
@@ -1177,9 +1176,14 @@ def pty_tail_explain(
             outcome = cast(PtyTailState, rule.state)
     screen_outcome = outcome
     normalized_cli_status = str(cli_state_status or "").strip().lower() or None
-    cli_waiting = backend in {None, "claude"} and normalized_cli_status == "waiting"
+    # A CLI-state reading may only arbitrate for a harness that actually publishes
+    # one, which the descriptor declares (`publishes_cli_state`). `None` is the
+    # caller that did not name a backend while supplying a reading, and only the
+    # readers of such a file do that.
+    cli_state_arbitrates = backend is None or publishes_cli_state(backend)
+    cli_waiting = cli_state_arbitrates and normalized_cli_status == "waiting"
     cli_busy_overrides_idle = (
-        backend in {None, "claude"}
+        cli_state_arbitrates
         and normalized_cli_status == "busy"
         and screen_outcome == "idle"
     )
@@ -2745,19 +2749,11 @@ class SessionManager:
                 record.agent_loaded_at = record.agent_run_started_at or record.created_at
         if record.spawn_native_session_id:
             return
-        native_id: str | None = None
-        args = record.args
-        if record.spawn_backend == "claude":
-            for flag in ("--session-id", "--resume"):
-                if flag in args:
-                    index = args.index(flag) + 1
-                    if index < len(args):
-                        native_id = str(args[index])
-                        break
-        elif record.spawn_backend == "codex" and "resume" in args:
-            index = args.index("resume") + 1
-            if index < len(args):
-                native_id = str(args[index])
+        # Which argv tokens carry a conversation id is the harness's own CLI grammar,
+        # declared once on its descriptor. Matching the strings here recognized only
+        # Claude and Codex, so an omp, pi, or opencode pane spawned as a resume kept
+        # its placeholder id with nothing reporting that it had.
+        native_id = native_id_from_args(record.spawn_backend, record.args)
         record.spawn_native_session_id = native_id or record.id
 
     @staticmethod
@@ -3025,21 +3021,24 @@ class SessionManager:
             # A direct root agent has priority over mutable metadata. For a
             # promoted shell, the active backend/native pair remains authoritative.
             claim_ids: set[str] = set()
+            # Whether mux dictated this pane's conversation id at spawn, which is
+            # what makes the id a standing claim rather than a discovered guess.
+            mux_minted_id = assigns_conversation_id(backend)
             if root_backend in AGENT_BACKENDS:
                 if other.agent_run_seq > 0 and other.backend == backend:
                     # A rolled conversation is no longer the one it spawned with,
-                    # so a borrowed (--resume) spawn id claims nothing and the
+                    # so a borrowed (resume) spawn id claims nothing and the
                     # live id claims the file.
                     claim_ids.add(other.native_session_id)
-                    if backend == "claude":
+                    if mux_minted_id:
                         # But the conversation named by this pane's own mux id was
-                        # minted for this pane (`--session-id`) and can never be
-                        # another live pane's: a sibling holding it after this
-                        # pane rolled can only have been cross-attributed onto
-                        # it. Without this standing claim, the rightful owner's
-                        # own corruption hid the conflict from every sibling.
+                        # minted for this pane and can never be another live pane's:
+                        # a sibling holding it after this pane rolled can only have
+                        # been cross-attributed onto it. Without this standing claim,
+                        # the rightful owner's own corruption hid the conflict from
+                        # every sibling.
                         claim_ids.add(other.id)
-                elif backend == "claude":
+                elif mux_minted_id:
                     claim_ids.add(other.spawn_native_session_id or other.id)
                 elif other.backend == backend:
                     claim_ids.add(other.native_session_id)
@@ -3982,13 +3981,14 @@ class SessionManager:
         record.agent_run_seq += 1
         record.native_session_id = native_id
         # The lifecycle anchor is what Branch forks from and what identity
-        # reconciliation heals back to, so only CLI-confirmed rollovers (hook
-        # ingress) may move it. A heuristic transcript switch is the daemon's
-        # guess; letting it rewrite the anchor is how a single wrong guess became
-        # permanent, unrepairable cross-attribution. Codex keeps the old
-        # behaviour — the anchor doubles as its demotion token and must track
-        # the observed conversation there.
-        if confirmed or backend != "claude":
+        # reconciliation heals back to, so a harness whose CLI reports its own
+        # rollovers only moves the anchor on a confirmed one. A heuristic transcript
+        # switch is the daemon's guess, and letting it rewrite the anchor is how a
+        # single wrong guess became permanent, unrepairable cross-attribution.
+        # A harness that reports no rollover (Codex) has nothing stronger to wait
+        # for: the heuristic is its only signal, and the anchor doubles as its
+        # demotion token, so there the guess must move it.
+        if confirmed or not descriptor(backend).reports_conversation_rollover:
             session.agent_lifecycle_id = native_id
         session.transcript_path = transcript
         # Transcript liveness evidence belongs to the file it was observed on.
@@ -4101,18 +4101,18 @@ class SessionManager:
             session.transcript_provisional = provisional
             native_id = adapter.transcript_native_id(path)
             if native_id and native_id != session.record.native_session_id and not provisional:
-                # Codex binds a placeholder mux id until the rollout file names
-                # the real conversation, so re-deriving from the file is correct
-                # there. For Claude the record identity is authoritative (spawn
-                # `--session-id` or a hook-reported rollover) and every path
-                # handed to the observer was derived from it — a mismatched stem
-                # means the path is wrong, and rekeying the record to match it is
-                # exactly the cross-attribution this design forbids.
+                # A harness that mints its own id binds a placeholder until the
+                # transcript names the real conversation, so re-deriving from the
+                # file is correct there. Where mux dictated the id
+                # (`assigns_conversation_id`), the record identity is authoritative
+                # and every path handed to the observer was derived from it — a
+                # mismatched stem means the path is wrong, and rekeying the record to
+                # match it is exactly the cross-attribution this design forbids.
                 #
                 # A provisional follow never reaches here: the whole point is that
                 # the file was chosen by elimination, so its id is precisely what
                 # has not been established. Identity waits for the hook.
-                if session.record.backend == "claude":
+                if assigns_conversation_id(session.record.backend):
                     log.warning(
                         "observer for session %s handed transcript %s that does not "
                         "match its conversation %s; keeping the record identity",
@@ -4856,12 +4856,16 @@ class SessionManager:
         # allowance for the CLI writing its first record before it repaints.
         return last_output >= created - TRANSCRIPT_SWITCH_QUIET_SECONDS
 
-    def _claude_owns_conversation(self, session: Session, native_id: str) -> bool:
+    def _owns_minted_conversation(self, session: Session, native_id: str) -> bool:
         """Evidence that this pane's claim on the conversation is legitimate.
 
-        Its own mux id (minted via ``--session-id``), a CLI-confirmed lifecycle
-        anchor, or an unrolled resume still sitting on the conversation it was
-        spawned to resume. Anything else claiming a contested conversation is
+        Only meaningful for a harness that lets mux mint the conversation id
+        (`assigns_conversation_id`); a harness whose CLI mints its own has no
+        provable anchor to test against, which is why callers gate on that first.
+
+        The evidence: its own mux id (the one injected at spawn), a CLI-confirmed
+        lifecycle anchor, or an unrolled resume still sitting on the conversation it
+        was spawned to resume. Anything else claiming a contested conversation is
         holding observer output, not identity evidence.
         """
         record = session.record
@@ -4892,7 +4896,9 @@ class SessionManager:
                 or record.native_session_id != native_id
             ):
                 continue
-            if backend == "claude" and not self._claude_owns_conversation(other, native_id):
+            if assigns_conversation_id(backend) and not self._owns_minted_conversation(
+                other, native_id
+            ):
                 continue
             return other
         return None
@@ -4902,11 +4908,14 @@ class SessionManager:
 
         The observer machinery is designed never to create such a claim, so a
         collision means corrupted state (legacy heuristic switches, or an in-CLI
-        resume of a live sibling's conversation). Every group is reported once;
-        Claude members whose claim is unsupported by identity evidence are healed
-        back to their own anchor, because for Claude the anchor is provable —
-        the conversation named by the pane's own mux id, or the last one the CLI
-        itself confirmed over the hook ingress.
+        resume of a live sibling's conversation). Every group is reported once.
+
+        A member whose harness lets mux mint the conversation id, and whose claim is
+        unsupported by identity evidence, is healed back to its own anchor, because
+        there the anchor is provable: the conversation named by the pane's own mux
+        id, or the last one the CLI itself confirmed over the hook ingress. A harness
+        that mints its own id has no such anchor, so its collisions are reported and
+        otherwise left alone.
         """
         groups: dict[tuple[str, str], list[Session]] = {}
         for session in tuple(self.sessions.values()):
@@ -4936,51 +4945,57 @@ class SessionManager:
                     native_session_id=native_id,
                     session_ids=sorted(s.record.id for s in members),
                 )
-            if backend != "claude":
+            if not assigns_conversation_id(backend):
                 continue
             for session in members:
-                if not self._claude_owns_conversation(session, native_id):
-                    await self._heal_claude_identity(session, native_id)
+                if not self._owns_minted_conversation(session, native_id):
+                    await self._heal_minted_identity(session, native_id)
 
     async def maybe_heal_from_own_conversation_hook(
         self, session: Session, payload: dict[str, Any]
     ) -> bool:
         """Heal a session whose own spawn conversation speaks while bound elsewhere.
 
-        Claude is spawned with ``--session-id <mux id>``, so a hook naming exactly
-        ``record.id`` can only come from the conversation this PTY was created to
-        run. If the record is bound to some other conversation at that moment, the
-        binding is corruption — a nested child CLI rolled the identity away — and
-        the pane's own conversation speaking is the strongest possible proof.
+        A harness that lets mux mint the conversation id is spawned carrying the mux
+        id, so a hook naming exactly ``record.id`` can only come from the
+        conversation this PTY was created to run. If the record is bound to some
+        other conversation at that moment, the binding is corruption (a nested child
+        CLI rolled the identity away) and the pane's own conversation speaking is the
+        strongest possible proof. A harness that mints its own id never satisfies the
+        premise, so it is refused up front rather than healed on a coincidence.
 
         The one legitimate way the spawn conversation retires is an in-CLI
         replacement (`/clear`), and a rollover records exactly that in
-        ``ignored_detection_runs`` — so a retired conversation's stale hook can
+        ``ignored_detection_runs``, so a retired conversation's stale hook can
         never un-clear a session. The set is in-memory and dies with the daemon,
         which is correct on both sides: a retired conversation cannot outlive its
         CLI process to speak after a restart, while a corrupted binding adopted
         from the supervisor is healed by the first real hook that arrives.
         """
         record = session.record
-        if record.backend != "claude" or record.state in TERMINAL_STATES or session.stopping:
+        if (
+            not assigns_conversation_id(record.backend)
+            or record.state in TERMINAL_STATES
+            or session.stopping
+        ):
             return False
         native_id = str(payload.get("session_id") or payload.get("sessionId") or "")
-        if not _CLAUDE_NATIVE_ID.fullmatch(native_id) or native_id != record.id:
+        if not native_id_matches(record.backend, native_id) or native_id != record.id:
             return False
         disputed = record.native_session_id or ""
         if not disputed or disputed == native_id:
             return False
-        if ("claude", native_id) in session.ignored_detection_runs:
+        if (record.backend, native_id) in session.ignored_detection_runs:
             return False
-        await self._heal_claude_identity(
+        await self._heal_minted_identity(
             session, disputed, trigger="own_conversation_hook"
         )
         return record.native_session_id == native_id
 
-    async def _heal_claude_identity(
+    async def _heal_minted_identity(
         self, session: Session, disputed: str, *, trigger: str = "live_sweep"
     ) -> None:
-        """Send a Claude session back to its own conversation.
+        """Send a session back to the conversation mux minted for it.
 
         The disputed conversation provably is not this pane's, so keeping the
         observer on it renders a sibling's status and tokens under this
@@ -4994,13 +5009,15 @@ class SessionManager:
         """
         record = session.record
         anchor_candidates: list[str | None] = [session.agent_lifecycle_id]
-        if record.spawn_backend == "claude":
+        if assigns_conversation_id(record.spawn_backend):
             anchor_candidates.extend([record.spawn_native_session_id, record.id])
         anchor = next(
             (
                 candidate
                 for candidate in anchor_candidates
-                if candidate and candidate != disputed and _CLAUDE_NATIVE_ID.fullmatch(candidate)
+                if candidate
+                and candidate != disputed
+                and native_id_matches(record.backend, candidate)
             ),
             None,
         )
@@ -5949,12 +5966,17 @@ class SessionManager:
             reason=final_reason,
             exit_code=exit_code,
         )
-        if session.transcript_path and session.transcript_path.is_file():
+        # Readable rather than "is a file": a store-backed harness has no path, and
+        # the file test skipped indexing every opencode conversation mux ran.
+        if conversation_is_readable(
+            session.transcript_path, session.record.backend, session.record.native_session_id
+        ):
             try:
                 await self.history.index_transcript(
                     session.record.agent_run_id or session.record.id,
                     session.transcript_path,
                     session.record.backend,
+                    native_id=session.record.native_session_id,
                 )
             except (OSError, ValueError, sqlite3.Error):
                 log.warning(

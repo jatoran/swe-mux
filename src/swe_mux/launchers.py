@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from .config import Config
@@ -120,9 +121,25 @@ def resolve_codex_pty_command(
 
 def create_agent_shims(
     config: Config,
-    claude_settings: Path | None,
-    claude_mcp_config: Path | None = None,
+    settings_path: Path | None = None,
+    mcp_config_path: Path | None = None,
+    *,
+    harness_settings: Mapping[str, tuple[Path | None, Path | None]] | None = None,
 ) -> dict[str, str]:
+    """Generate the per-harness shims and the environment a shim-launched CLI reads.
+
+    `harness_settings` maps a harness name to the settings file and MCP config its
+    adapter materialized, published as `MUX_<NAME>_SETTINGS` and
+    `MUX_<NAME>_MCP_CONFIG` - the same per-name variables `agent_launcher` reads for
+    every other adapter fact. The positional pair is the older Claude-only form,
+    retained for callers that only have those two paths; passing both forms lets the
+    mapping win.
+
+    Keyed by name rather than written for one harness because the variables always
+    were per-name: a second harness in the Claude adapter family would read
+    `MUX_<ITS_NAME>_SETTINGS`, which the Claude-only form never wrote, so its
+    shim-launched sessions would silently start with no hook settings at all.
+    """
     bin_dir = config.data_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     for backend in agent_harnesses():
@@ -150,8 +167,16 @@ def create_agent_shims(
         prefix = f"MUX_{backend.upper().replace('-', '_')}"
         result[f"{prefix}_EXE"] = resolve_command(config.harness_exe[backend])
         result[f"{prefix}_ARGS"] = json.dumps(config.harness_args[backend])
-    if claude_settings:
-        result["MUX_CLAUDE_SETTINGS"] = str(claude_settings)
-    if claude_mcp_config:
-        result["MUX_CLAUDE_MCP_CONFIG"] = str(claude_mcp_config)
+    declared: dict[str, tuple[Path | None, Path | None]] = {}
+    if settings_path or mcp_config_path:
+        declared[agent_harnesses()[0]] = (settings_path, mcp_config_path)
+    declared.update(harness_settings or {})
+    for backend, (settings, mcp_config) in declared.items():
+        if backend not in config.harness_exe:
+            continue
+        prefix = f"MUX_{backend.upper().replace('-', '_')}"
+        if settings:
+            result[f"{prefix}_SETTINGS"] = str(settings)
+        if mcp_config:
+            result[f"{prefix}_MCP_CONFIG"] = str(mcp_config)
     return result

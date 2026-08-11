@@ -172,7 +172,7 @@ class HistoryBackfillManager:
                 try:
                     scope = await resolve_project(item.cwd)
                     summary = await asyncio.to_thread(
-                        summarize_transcript, item.path, item.backend
+                        summarize_transcript, item.path, item.backend, item.native_id
                     )
                     await self.history.register_project_scope(scope)
                     await self.history.upsert_external(
@@ -183,7 +183,8 @@ class HistoryBackfillManager:
                         cwd=item.cwd,
                         project_id=project.id,
                         spawned_at=item.created_at,
-                        transcript_path=str(item.path),
+                        # Empty for a store-backed conversation, which has no file.
+                        transcript_path=str(item.path) if item.path else "",
                         repository_id=scope.id,
                         project_label=project.name,
                         project_root=project.root,
@@ -203,7 +204,7 @@ class HistoryBackfillManager:
                     if not history_id:
                         raise RuntimeError("native transcript did not produce a history row")
                     state, message_count = await self.history.index_transcript(
-                        history_id, item.path, item.backend
+                        history_id, item.path, item.backend, native_id=item.native_id
                     )
                     history_ids[(item.backend, item.native_id)] = history_id
                     if not existed:

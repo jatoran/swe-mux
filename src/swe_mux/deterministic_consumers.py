@@ -30,7 +30,16 @@ from pathlib import Path
 from typing import Any
 
 from .background_tasks import background
-from .transcript_view import parse_transcript_cached
+from .transcript_view import conversation_is_readable, parse_transcript_cached
+
+
+def _read_claim_tail(
+    path: Path | None, backend: str, native_id: str | None
+) -> list[dict[str, Any]]:
+    """Positional `parse_transcript_cached`, since `asyncio.to_thread` takes no keywords."""
+    return parse_transcript_cached(
+        path, backend, max_bytes=CLAIM_TRANSCRIPT_BYTES, native_id=native_id
+    )
 
 # A finding fires only after this many identical canonical actions. Matches the
 # production precedent (Wink, ~43k traces) that calibrates a loop at three or
@@ -793,16 +802,16 @@ class DeterministicConsumerService:
 
     async def _last_assistant_text(self, session_id: str) -> str:
         session = self.sessions.sessions.get(session_id)
-        path = getattr(session, "transcript_path", None) if session else None
-        if path is None or not Path(path).is_file():
+        if session is None:
+            return ""
+        path = getattr(session, "transcript_path", None)
+        native_id = session.record.native_session_id
+        if not conversation_is_readable(path, session.record.backend, native_id):
             return ""
         try:
             messages = await asyncio.wait_for(
                 asyncio.to_thread(
-                    parse_transcript_cached,
-                    Path(path),
-                    session.record.backend,
-                    max_bytes=CLAIM_TRANSCRIPT_BYTES,
+                    _read_claim_tail, path, session.record.backend, native_id
                 ),
                 timeout=2,
             )

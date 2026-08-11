@@ -10,7 +10,7 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import type { Session } from './types'
-import { harnessDisplayName, isAgentBackend, repaintsScrollback } from './harnessRegistry.ts'
+import { assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
@@ -3187,15 +3187,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // reachable without scrolling. Copy resume deliberately keeps its label — a copy glyph
       // alone cannot distinguish it from Copy reply, and the two sit side by side.
       case 'copyReply':return isTask?null:<button key={key} class="rail-icon" disabled={!isAgentBackend(session.backend)} aria-label="Copy last reply" title={!isAgentBackend(session.backend)?'Copy reply is available in agent sessions':'Copy the latest assistant reply'} onClick={()=>void copyLastReply()}><CopyIcon/></button>
-      case 'copyResume':return isTask?null:<button key={key} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${session.backend==='claude'?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&session.backend!=='claude'?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
+      case 'copyResume':return isTask?null:<button key={key} disabled={!resumeCmd} title={resumeCmd?`Copy “${resumeCmd}” to resume this conversation in any terminal${resolvesTranscriptByCwd(session.backend)?` (run it from ${session.run_cwd||session.cwd})`:''}`:isAgentBackend(session.backend)&&!assignsConversationId(session.backend)?`${harnessDisplayName(session.backend)} has not reported its session id yet`:'Resume commands are available in agent sessions'} onClick={()=>void copyResumeCommand()}>Copy resume</button>
       case 'branch':{
         if(!onBranch)return null
-        // Mirrors the server's implemented branch strategies (Claude native fork,
-        // Codex resume-child) — harness-specific behavior like resumeCommand, not
-        // a membership test. The server refuses anything else with
-        // `branch_unsupported`; this gate just says so before the click.
-        const branchable=session.backend==='claude'||session.backend==='codex'
-        const ready=session.backend==='claude'||(branchable&&!!session.native_session_id&&session.native_session_id!==session.id)
+        // Reads the daemon's declared strategy rather than restating which harnesses
+        // have one. The server refuses anything else with `branch_unsupported`; this
+        // gate just says so before the click. A harness whose conversation id mux
+        // minted is branchable immediately; the rest wait for a discovered id.
+        const branchable=supportsBranch(session.backend)
+        const ready=branchable&&(assignsConversationId(session.backend)||(!!session.native_session_id&&session.native_session_id!==session.id))
         return <button key={key} class="rail-icon" disabled={!ready} aria-label="Branch this conversation" title={ready?'Fork this conversation into a sibling pane, keeping the original open':branchable?`${harnessDisplayName(session.backend)} has not reported its session id yet — branch is available shortly`:`Branching is not implemented for ${harnessDisplayName(session.backend)} sessions`} onClick={()=>onBranch()}><BranchIcon/></button>
       }
       case 'paste':return <button key={key} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>

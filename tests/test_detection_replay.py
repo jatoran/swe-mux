@@ -246,6 +246,82 @@ async def test_replay_corpus_covers_phase35_status_matrix(tmp_path: Path) -> Non
     assert authority_contract_violations == 0
 
 
+async def test_status_matrix_is_covered_per_harness_not_just_corpus_wide(
+    tmp_path: Path,
+) -> None:
+    """Each observed harness must exercise the status surface it declares.
+
+    The corpus-wide matrix is a union, and Claude's fixtures satisfy most of it on
+    their own. A newly added harness could therefore clear its scenario floor and
+    every existing assertion while never producing an `awaiting` state, a proof
+    class, or a watchdog recovery of its own - which is precisely the coverage a new
+    harness most needs, because its evidence plumbing is the part nobody has
+    exercised yet.
+
+    Every requirement below is derived from what the harness itself declares, so a
+    capability it genuinely lacks costs nothing: pi has no native approval flow, does
+    not declare `approval_needed`, and is therefore never asked for an `awaiting`
+    scenario. Exempting a harness means changing its descriptor, not weakening this.
+    """
+    observed = {
+        name: harness
+        for name, harness in HARNESSES.items()
+        if harness.level >= HarnessLevel.observed
+    }
+    states: dict[str, set[str]] = {name: set() for name in observed}
+    awaiting: dict[str, set[str]] = {name: set() for name in observed}
+    proofs: dict[str, set[str]] = {name: set() for name in observed}
+    watchdog: dict[str, set[str]] = {name: set() for name in observed}
+    events: dict[str, set[str]] = {name: set() for name in observed}
+    for path in sorted(FIXTURES.glob("*.json")):
+        if path.name == INVENTORY.name:
+            continue
+        manifest = load_manifest(path)
+        backend = manifest["backend"]
+        result = await DetectionReplay(backend, tmp_path / path.stem).run(manifest)
+        for item in result["states"]:
+            states[backend].add(item["state"])
+            proofs[backend].add(item["proof"])
+            if "awaiting_reason" in item:
+                awaiting[backend].add(item["awaiting_reason"])
+        watchdog[backend].update(result["health"]["watchdog_recovery_actions"])
+        events[backend].update(item["type"] for item in result["events"])
+
+    for name, harness in observed.items():
+        # The two states every observed harness must be able to reach and leave.
+        # A harness that only ever reports one of them is not being observed, it is
+        # being guessed at.
+        assert {"working", "idle"} <= states[name], f"{name}: no working/idle coverage"
+
+        # Every normalized event the harness declares it can emit must appear
+        # somewhere in its own fixtures. Declaring an event kind the corpus never
+        # produces is a promise nothing keeps.
+        assert set(harness.normalized_events) <= events[name], (
+            f"{name}: declares {sorted(set(harness.normalized_events) - events[name])} "
+            f"but no fixture produces them"
+        )
+
+        # An approval-capable harness owes a scenario that actually blocks on one,
+        # because "awaiting" is the state whose false readings strand a queue.
+        if "approval_needed" in harness.normalized_events:
+            assert "awaiting" in states[name], f"{name}: no awaiting scenario"
+            assert "approval" in awaiting[name], f"{name}: no approval sub-reason"
+
+        # Hook and transcript evidence is direct, so it proves a state. A PTY reading
+        # is a screen classification, so it infers one. A harness declaring a PTY
+        # source owes at least one inferred reading and at least one watchdog
+        # recovery driven by it; a hooks-only harness (opencode) owes neither and is
+        # not asked, because for it every reading is proof.
+        assert "proven" in proofs[name], f"{name}: no proven state reading"
+        if "pty" in harness.state_sources:
+            assert "inferred" in proofs[name], f"{name}: declares pty but infers nothing"
+            assert watchdog[name], f"{name}: declares pty but no watchdog recovery"
+        else:
+            assert proofs[name] == {"proven"}, (
+                f"{name}: declares no pty source yet produced an inferred reading"
+            )
+
+
 async def test_every_fixture_pins_the_status_stream() -> None:
     for path in sorted(FIXTURES.glob("*.json")):
         if path.name == INVENTORY.name:

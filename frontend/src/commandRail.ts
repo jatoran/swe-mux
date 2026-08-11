@@ -26,7 +26,7 @@
 // type-stripping runner (no browser dependencies here).
 
 import { AGENT_NEWLINE } from './terminalKeys.ts'
-import { allBackendNames, isAgentBackend } from './harnessRegistry.ts'
+import { allBackendNames, isAgentBackend, skillInvocationPrefix } from './harnessRegistry.ts'
 
 /** Device classes with independent layouts. Matches `deviceSettings.currentProfile()`. */
 export type RailDevice = 'desktop' | 'mobile'
@@ -508,16 +508,30 @@ export function railHasProjectOverride(blob: RailBlob | undefined, projectId: st
   return blob?.projects?.[projectId] !== undefined
 }
 
-/** Backend-aware injected payload for text/slash/skill items. Claude invokes
- *  skills as `/name`; Codex invokes them as `$name`. Slash commands are literal
- *  `/name` on both; a `text` item is passed through verbatim. A 'prompt' item has
- *  no local payload — its text lives in the library and is fetched on click
- *  (`promptRail.ts`), so this returns '' for it. */
+/** Backend-aware injected payload for text/slash/skill items.
+ *
+ *  A skill's invocation spelling is a per-CLI grammar the daemon declares
+ *  (`skill_invocation_prefix`): Codex uses `$`, oh-my-pi namespaces skills under
+ *  `/skill:`, and the rest use `/`. This used to be re-derived here as
+ *  "`$` for Codex, `/` for everything else", which typed `/name` into an oh-my-pi
+ *  pane whose CLI wanted `/skill:name` - a rail button that ran nothing.
+ *
+ *  Slash commands are a literal `/name` everywhere, and a `text` item is passed
+ *  through verbatim. A 'prompt' item has no local payload: its text lives in the
+ *  library and is fetched on click (`promptRail.ts`), so this returns '' for it. */
 export function railPayload(item: RailItem, backend: RailBackend): string {
   if (item.type === 'text') return item.text || ''
+  const prefix = skillInvocationPrefix(backend)
+  // Strip a leading invocation marker so an item authored as `$commit`, `/commit`,
+  // or a bare `commit` all resolve to this harness's spelling.
   const bare = (item.text || '').trim().replace(/^[/$]/, '')
   if (!bare) return ''
   if (item.type === 'slash') return `/${bare}`
-  if (item.type === 'skill') return backend === 'codex' ? `$${bare}` : `/${bare}`
+  if (item.type === 'skill') {
+    // An item already carrying the harness's own namespace keeps it rather than
+    // gaining a second copy (`/skill:commit` must not become `/skill:skill:commit`).
+    const namespace = prefix.replace(/^[/$]/, '')
+    return namespace && bare.startsWith(namespace) ? `${prefix[0]}${bare}` : `${prefix}${bare}`
+  }
   return ''
 }

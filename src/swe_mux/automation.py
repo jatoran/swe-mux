@@ -23,7 +23,7 @@ from .models import MuxEvent, SessionRecord
 from .openrouter import OpenRouterClient, OpenRouterError, OpenRouterResult
 from .session import SessionManager
 from .text_safety import utf8_safe_value
-from .transcript_view import parse_transcript_cached
+from .transcript_view import conversation_is_readable, parse_transcript_cached
 
 AUTOMATION_INGEST_LOOP = "automation-ingest"
 AUTOMATION_WATCH_LOOP = "automation-watch"
@@ -729,20 +729,28 @@ def _encodable_messages(
     return safe, json.dumps(safe, separators=(",", ":"), ensure_ascii=False).encode()
 
 
+def _read_bounded(
+    path: Path | None, backend: str, max_bytes: int, native_id: str | None
+) -> list[dict[str, Any]]:
+    """Positional `parse_transcript_cached`, since `asyncio.to_thread` takes no keywords."""
+    return parse_transcript_cached(path, backend, max_bytes=max_bytes, native_id=native_id)
+
+
 class TranscriptSliceService:
     async def build(
         self,
-        path: Path,
+        path: Path | None,
         backend: str,
         kind: str,
         *,
         max_messages: int = MAX_SLICE_MESSAGES,
         max_bytes: int = MAX_SLICE_BYTES,
         since_ts: float | None = None,
+        native_id: str | None = None,
     ) -> TranscriptSlice:
         started = time.monotonic()
         messages = await asyncio.wait_for(
-            asyncio.to_thread(parse_transcript_cached, path, backend, max_bytes=max_bytes),
+            asyncio.to_thread(_read_bounded, path, backend, max_bytes, native_id),
             timeout=2,
         )
         if since_ts is not None:
@@ -1806,8 +1814,10 @@ class AutomationEngine:
             str((action.get("input") or {}).get("slice") or "last_turn")
             not in TRANSCRIPT_FREE_SLICES
         )
-        if needs_transcript and (
-            not session.transcript_path or not session.transcript_path.exists()
+        if needs_transcript and not conversation_is_readable(
+            session.transcript_path,
+            session.record.backend,
+            session.record.native_session_id,
         ):
             raise ValueError("normalized transcript is unavailable")
         model_setting = str(action.get("model") or "cheap")
@@ -1874,11 +1884,6 @@ class AutomationEngine:
                 raise ValueError("summary chain is unavailable")
             transcript = self.slices.from_annotations(summaries)
         else:
-            if session.transcript_path is None:
-                # Unreachable: every slice kind that lands here is transcript-backed,
-                # so the availability check above already ran. Stated for the reader
-                # and the type checker rather than left to inference.
-                raise ValueError("normalized transcript is unavailable")
             since_ts: float | None = None
             if slice_kind == "since_event":
                 since_ts = float(input_spec.get("since_ts") or event.ts)
@@ -1893,6 +1898,7 @@ class AutomationEngine:
                 max_messages=min(int(input_spec.get("messages") or 12), MAX_SLICE_MESSAGES),
                 max_bytes=min(self.config.automation_max_input_tokens * 4, MAX_SLICE_BYTES),
                 since_ts=since_ts,
+                native_id=session.record.native_session_id,
             )
         if transcript.estimated_tokens > self.config.automation_max_input_tokens:
             raise ValueError("observer input exceeds the configured token limit")

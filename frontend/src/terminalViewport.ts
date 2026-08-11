@@ -1,3 +1,5 @@
+import { appliesWidthEnvelope, minDesktopColumns, ownsScrollViewport } from './harnessRegistry.ts'
+
 type TerminalDimensions = { cols: number; rows: number; refresh: (start: number, end: number) => void }
 type TerminalRendererOptions = { options: { customGlyphs?: boolean } }
 type TerminalFit = { fit: () => void }
@@ -67,7 +69,10 @@ export function claudeWidthCap(
   compactLayout: boolean,
   maxColumns: number,
 ): number {
-  if (backend !== 'claude' || compactLayout) return CLAUDE_MAX_COLUMNS_OFF
+  // Which harnesses the envelope applies to is declared (`width_envelope`), not
+  // decided here, so a future TUI with the same live-region defect opts in from its
+  // descriptor rather than by editing this module.
+  if (!appliesWidthEnvelope(backend) || compactLayout) return CLAUDE_MAX_COLUMNS_OFF
   if (!Number.isInteger(maxColumns) || maxColumns <= 0) return CLAUDE_MAX_COLUMNS_OFF
   return maxColumns
 }
@@ -106,14 +111,17 @@ export function terminalWidthPolicyFontSize(
   proposedColumns: number,
   baseFontSize: number,
 ): number {
+  // The floor is the vendor's own published minimum, declared per harness. Zero
+  // means the vendor publishes none and the pane accepts whatever grid it is given.
+  const minimum = minDesktopColumns(backend)
   if (
-    backend !== 'codex'
+    minimum <= 0
     || compactLayout
     || !Number.isFinite(proposedColumns)
-    || proposedColumns >= CODEX_MIN_DESKTOP_COLUMNS
+    || proposedColumns >= minimum
     || baseFontSize <= 0
   ) return baseFontSize
-  const scaled = Math.floor(baseFontSize * proposedColumns / CODEX_MIN_DESKTOP_COLUMNS)
+  const scaled = Math.floor(baseFontSize * proposedColumns / minimum)
   const floor = Math.min(baseFontSize, CODEX_MIN_DESKTOP_FONT_PX)
   return Math.max(floor, Math.min(baseFontSize, scaled))
 }
@@ -204,7 +212,7 @@ export const APP_TAIL_KEY = '\x1b[1;5F'
  */
 export function appOwnsTail(backend: string, appReceivesScroll: boolean): boolean {
   if (backend === 'shell') return false
-  return backend === 'claude' || appReceivesScroll
+  return ownsScrollViewport(backend) || appReceivesScroll
 }
 
 /**

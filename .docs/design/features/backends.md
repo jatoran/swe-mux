@@ -36,7 +36,15 @@ Neither axis implies the other.
 | `managed` | Hook state plus transcript measurements | Complete observation and measurement surface |
 
 The daemon publishes the browser-safe projection at `GET /api/harnesses`.
-The frontend replaces its startup compatibility seed with that response and gates transcript, measurement, status, launch, queue, and command surfaces from the published capabilities.
+The frontend replaces its startup seed with that response and gates transcript, measurement, status, launch, queue, terminal, and command surfaces from the published capabilities.
+
+**The browser holds no per-harness fact of its own.**
+Its startup seed is generated from the descriptors into `frontend/src/harnessRegistrySeed.ts` by `packaging/generate_frontend_registry.py`, and `tests/test_harness_registry.py` fails while that file is stale.
+The seed was previously hand-maintained and had drifted: opencode was two capability levels below its descriptor with measurement reported as absent, and pi was missing its `pty` state source, because nothing compared the two.
+A trait the browser needs therefore has to travel in the payload; `test_every_browser_read_trait_travels_in_the_public_payload` asserts the published capability set, and `tests/test_harness_name_literals.py` fails on a harness name compiled into a frontend module outside a small allowlist.
+
+Adding a field to the payload keeps `version` at 1, because consumers read the keys they know and default the rest.
+Removing or re-typing a field is what would require a bump.
 
 ## Capability queries
 
@@ -50,6 +58,18 @@ The frontend replaces its startup compatibility seed with that response and gate
 | Which harnesses expose mux-managed accounts? | `provider_account_harnesses()` | Credential inventory, swapping, and quota polling |
 | Does the TUI rewrite content already in scrollback? | `repaints_scrollback` (backend `repaints_scrollback(name)`; published capability; frontend `repaintsScrollback(name)`) | Terminal renderer selection (repainting harnesses stay on the DOM renderer under `auto`); client-requested transcript restatement after a wrapped-ring replay (`features/sessions.md`) |
 | Can the TUI repair its own screen after a width change? | `needs_resize_repaint(name)`, derived from `screen == "alternate"` | Daemon-driven repaint pulse once an arbitrated resize settles (`features/terminal-input.md`) |
+| Is WebGL unusable for this pane under any preference? | `webgl_unsafe` (frontend `webglUnsafe(name)`) | Renderer selection. Distinct from `repaints_scrollback`, which only excludes `auto` and stays overridable |
+| Does the CLI publish its own liveness to a state file? | `publishes_cli_state(name)` | The CLI-state layer, and whether a CLI-state reading may veto or override a PTY screen reading |
+| Did mux dictate this conversation id? | `assigns_conversation_id(name)` | Identity healing, collision reconciliation, observer transcript rebinding, branch readiness, resume availability |
+| Which argv carries a conversation id? | `conversation_id_argv(name)`, `native_id_from_args(name, args)` | Recovering a pane's conversation from its recorded command line |
+| What resumes this conversation elsewhere? | `resume_command(name, id)`; published `cli_name` + `resume_argv` | The Copy-resume affordance |
+| How is a live conversation forked? | `branch_strategy(name)` | Branch dispatch and its refusal; the browser's branch gate reads the published `branch` capability |
+| What does a user type to invoke a skill? | published `skill_invocation_prefix` | Skill inventories and the command rail's injected payload |
+| Which root instruction file does the CLI read? | `instruction_harnesses()`, `instruction_file_name`, `global_instruction_parts` | Agent Context inventory and sync |
+| Which harness is this command line running? | `harness_for_command(executable, args)` | Recognizing an already-launched agent, including the history backend-mismatch repair |
+| Can this harness be driven by the live canary? | `live_canary_harnesses()`, `live_subagent_harnesses()`, `live_telemetry_harnesses()`, from `headless_probes` | The live conformance tier |
+| Where does this harness keep its conversations? | `conversation_store_file`, `conversation_store_path(name)` | The store reader and the adapter's measurement read |
+| How are its past conversations found? | `conversation_discovery` | `reconcile.scan_external_transcripts`, history backfill |
 
 `AGENT_BACKENDS` is derived once in `harness.py`; session and voice code do not declare local backend sets.
 Provider-account and external-usage iteration derives from independent descriptor capabilities, because a managed harness can report both through its native transcript without exposing mux-managed accounts.
@@ -77,11 +97,19 @@ Collapsing them would force pi to either duplicate a reader it does not need or 
 Every consumer that parses records dispatches on `transcript_dialect` and terminates in `assert_never`.
 Consumers that branch on the harness *name* do so only for behaviour that is genuinely unique to that harness, and those branches also terminate in `assert_never` so a new harness is a type error rather than a silent fall-through.
 
-Two failure modes are specifically guarded, because both produce a plausible wrong answer rather than an error:
+Three failure modes are specifically guarded, because all three produce a plausible wrong answer rather than an error:
 
 - **A missing branch.** `assert_never` in every dispatch makes it a type error.
 - **A branch that exists and returns nothing.** `tests/test_harness_registry.py` requires every declared dialect to parse a representative record of its own shape into a message, and requires a harness declaring no dialect to declare no transcript evidence either.
   The empty Transcript tab pi shipped with was exactly this shape: the reader was reached, produced nothing, and no test, type error, or log line reported it.
+- **An opt-in special case with an implicit `else`.** A consumer written as `if backend == <one harness>` gives every other harness a default written for somebody else, and `assert_never` cannot see it because there is no dispatch to be exhaustive over.
+  This is the expensive shape, and the fix is always the same: declare the fact on `HarnessDescriptor` and read it back.
+  `tests/test_harness_name_literals.py` fails on a harness name outside a small allowlist, so the shape cannot regrow.
+
+  **That allowlist is scoped per function, not per module, and the reason is a caught regression.**
+  Its first version exempted whole files, and `reconcile.py` was exempted as "assert_never anchored" on the strength of one anchored dispatch while `scan_external_transcripts` in the same file hardcoded a two-vendor tuple with no anchor at all.
+  Retroactive discovery therefore existed for two harnesses out of five, silently, and the lint that should have caught it had vouched for the file.
+  A module-wide exemption is only correct when the whole module is about one harness (an adapter) or about a closed set the type system holds (`provider_accounts` and its `ManagedProvider`); everywhere else the unit is the function, and `test_every_allowlist_entry_still_points_at_real_code` fails when an exempted function is renamed or deleted.
 
 ## Supporting a new harness
 
@@ -98,15 +126,42 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares PTY delivery etiquette: `submission`, `root_completion`, and `screen`.
 - Every harness declares `repaints_scrollback`, and a new harness should declare it `true` unless its TUI provably never rewrites scrollback: the flag decides whether `auto` may give the pane the WebGL renderer, and the safe default is the DOM renderer.
   The two repaint traits answer opposite questions and must not be merged: `repaints_scrollback` asks whether a harness floods the retained ring and can replay to an empty-looking screen, while `needs_resize_repaint` asks whether it can repair its own screen after a resize. Claude is `false` for the first and `true` for the second.
-  This capability is not a general WebGL-safety claim: Claude does not repaint scrollback but remains DOM-only because its retained alternate-screen surface has a separate live-context corruption mode.
+  Neither is a general WebGL-safety claim, which is `webgl_unsafe`: Claude does not repaint scrollback but is still WebGL-unsafe, because its retained alternate-screen surface has a separate live-context corruption mode with no override.
   The same flag gates the daemon's answer to a client `repaint` frame, because a harness that floods the ring with live-region repaint traffic is both the only one whose replay can parse to nothing and the only one that restates its transcript when pulsed (`features/sessions.md`).
+- Every harness declares its terminal surface traits: `webgl_unsafe`, `owns_scroll_viewport`, `applies_width_envelope`, `min_desktop_columns`, and `suppresses_late_color_response`.
+  These are published to the browser, because a per-harness fact compiled into a frontend module is a second copy of a daemon-owned fact and drifts from it.
+- Every harness declares its CLI grammar: `spawn_id_argv`, `resume_argv`, `skill_invocation_prefix`, `instruction_file_name` with `global_instruction_parts`, and `npm_entrypoint` when it ships as an npm package.
+  `spawn_id_argv` is non-empty exactly when `assigns_conversation_id` is true, and the descriptor rejects a pair that disagrees.
+- Every harness declares `publishes_cli_state`, `branch_strategy` (or `None`), and `requires_direct_entrypoint`.
 - Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.
+  Its own fixtures must produce every normalized event it declares, reach `working` and `idle`, reach `awaiting` with an `approval` sub-reason when it declares `approval_needed`, and produce an inferred reading plus a watchdog recovery when it declares a `pty` source (`test_status_matrix_is_covered_per_harness_not_just_corpus_wide`).
+  The corpus-wide matrix is a union that Claude's fixtures largely satisfy alone, so per-harness coverage is asserted separately.
 - Every hooked harness declares `native_hooks`, its `hook_events`, a hook installer, and replay hook-step coverage.
-- Every transcript-capable harness declares its transcript semantics and measurement parser.
+- Every transcript-capable harness declares its transcript semantics and measurement parser, and declares `headless_probes.read_only` so the live conformance canary can drive its real CLI.
+  A probe it cannot offer is declared `None`, which excludes it from that tier by derivation rather than by a skip inside the test: pi ships no subagent tool, so it declares no subagent probe.
+- Every harness declares `conversation_discovery`: how mux finds conversations it wrote outside mux, either a filesystem layout under its data home or a store query.
+  `None` is a permitted answer and states that mux does not index its past conversations; what is not permitted is leaving the question unanswered, which is how three harnesses came to be silently undiscoverable.
 - Every harness declares automation evidence, tool-catalog provenance, and whether historical usage needs an external command.
 - Add the harness name to the closed `Backend` literal and handle every new `assert_never` failure explicitly.
-- Add provider-specific branches only for real differences in record schema, auth, argv, resume, or TUI behavior.
-- Verify the public registry payload and the launchable-harness frontend contract before enabling richer levels.
+- Add provider-specific branches only for real differences in record schema, auth, argv, resume, or TUI behavior, and only in a module `tests/test_harness_name_literals.py` allow-lists with the exhaustive dispatch that anchors it.
+- Regenerate the browser seed (`packaging/generate_frontend_registry.py`) and verify the public registry payload and the launchable-harness frontend contract before enabling richer levels.
+
+## What CI enforces for a harness
+
+Parity is enforced by tests that derive their requirements from the descriptor, so a capability a harness genuinely lacks costs nothing while an undeclared gap fails.
+Exempting a harness means changing its descriptor, never weakening a test.
+
+| Tier | Question | Where |
+|---|---|---|
+| Declaration | Is the descriptor complete and self-consistent? | `tests/test_harness_registry.py` |
+| Contract | Do the daemon and the browser hold one registry? | `test_generated_frontend_registry_seed_is_current`, `test_every_browser_read_trait_travels_in_the_public_payload` |
+| Wiring | Does every consumer derive behaviour rather than name a harness? | `tests/test_harness_name_literals.py`, plus `assert_never` in every dispatch |
+| Coverage | Is every declared capability actually reachable for this harness? | `test_conversation_discovery.py`, `test_opencode_transcript.py`, `test_harness_registry.py` |
+| Behaviour | Does the harness exercise the status surface it declares? | `tests/test_detection_replay.py` (per-harness matrix and corpus floors) |
+| Live | Does the real CLI still behave as the observer expects? | `tests/test_live_agent_conformance.py`, marker-gated; `test_every_transcript_harness_is_covered_by_the_live_canary` runs without credentials and fails when a transcript harness has no live coverage |
+
+The live tier is excluded from `.worktree-verify` because it needs an authenticated CLI and consumes quota.
+Run it deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1`, `SWEMUX_RUN_LIVE_SUBAGENT_TESTS=1`, or `SWEMUX_RUN_LIVE_PHASE2_TESTS=1`.
 
 ## Operations
 
@@ -291,12 +346,19 @@ The descriptor is the source of truth for all generic surfaces.
   Overlap is survivable because a pi conversation binds from its extension's reported session file and a live transcript may only be claimed by one session.
   `PI_CONFIG_DIR` is an oh-my-pi addition and is deliberately not read for pi.
   Redirecting either harness to a mux-private agent directory is rejected: credentials, sessions, and the agent database live there, and per-pane redirection strands them.
-- **opencode keeps conversations in SQLite, so it has no transcript to tail.**
+- **opencode keeps conversations in SQLite, so it has no transcript to tail — but it does have one to read.**
   `~/.local/share/opencode/opencode.db` holds `session`, `message`, `part`, `permission`, and an ordered `event(aggregate_id, seq, type, data)` log keyed by session id.
-  The byte-offset transcript tailer has no referent here, so the descriptor declares `transcript=None` and every transcript method on the adapter answers `None`.
-  It needs no tailer: opencode maintains running `cost` and `tokens_*` totals on the `session` row itself, so `measurement_source="database"` reads them with one indexed lookup at the turn boundary.
+  The byte-offset transcript *tailer* has no referent here, so `transcript` is absent from `state_sources` and every path-returning method on the adapter answers `None`.
+  Reading the conversation is a separate question, and the answer is `opencode_store`: it projects `message` and `part` rows into the same record stream the file-backed dialects produce, and the descriptor declares `transcript_dialect="opencode"` with `conversation_store_file="opencode.db"`.
+  Every reader above that boundary (Transcript tab, copy-reply, read-aloud, history indexing and search, MCP `read_transcript`, observer slices, tool telemetry) is unchanged; they take a conversation reference of `(path | None, backend, native_id)` instead of a path, and `conversation_is_readable` replaced every `path.is_file()` gate.
+  Selecting by session id is also what scopes a read to the root conversation: a subagent runs in its own `session` row carrying `parent_id`, so it is excluded by the `WHERE` clause rather than by a filter, which is the rule Claude enforces by hand with `isSidechain`.
+  Its watermark is opencode's own `(time_updated, message_count)` and never a file stat: the database file's mtime describes every conversation at once, and Windows freezes an open file's mtime at creation, so neither could tell whether *this* conversation changed.
+  Both halves are needed — `time_updated` alone misses a second message written inside the same millisecond, and the count alone misses a row edit, which is what a streamed assistant message completing is.
+  Measurement needs no tailer either: opencode maintains running `cost` and `tokens_*` totals on the `session` row itself, so `measurement_source="database"` reads them with one indexed lookup at the turn boundary.
   No parse, no byte offsets, and no exposure to the Windows frozen-mtime hazard, because nothing here derives freshness from a timestamp.
-  That is why opencode reaches `managed` without a transcript: the tier derives from the two capability axes, and neither of them is "has a file".
+  That is why opencode reaches `managed` without a transcript *file*: the tier derives from the two capability axes, and neither of them is "has a file".
+  Retroactive discovery works for it too, by querying `session` rows rather than walking a tree (`discover_store_conversations`), and returns records with no `path` because the conversation id is the whole address.
+  Root rows only: a subagent carries `parent_id`, which is the same rule Claude applies with `isSidechain` and Codex with `parent_thread_id`.
   The database is opened read-only against the live WAL, which neither blocks nor corrupts opencode's writer.
   `immutable` is deliberately not set — it would pin the snapshot and hide every update the session is still making.
   A missing row publishes nothing rather than zeroes, because a published zero is indistinguishable from a genuinely empty conversation.
@@ -598,6 +660,10 @@ this boundary is additionally scrubbed by `text_safety.utf8_safe`; see
 ## Key files
 
 - Harness registry: `src/swe_mux/harness.py`
+- Record readers: `src/swe_mux/transcript_view.py` (dialect dispatch, conversation reference), `src/swe_mux/opencode_store.py` (store-backed records)
+- Generated browser seed: `frontend/src/harnessRegistrySeed.ts`, written by `packaging/generate_frontend_registry.py`
+- Browser registry reader: `frontend/src/harnessRegistry.ts`
+- Parity enforcement: `tests/test_harness_registry.py`, `tests/test_harness_name_literals.py`, `tests/test_detection_replay.py`, `tests/test_live_agent_conformance.py`
 - Adapters: `src/swe_mux/adapters/` (pi: `adapters/pi.py`; opencode: `adapters/opencode.py`)
 - Injected lifecycle reporters: `src/swe_mux/assets/omp_mux_hook.ts`, `src/swe_mux/assets/pi_mux_hook.ts`, `src/swe_mux/assets/opencode_mux_plugin.js`
 - Tailer/parsers: `src/swe_mux/observation.py`

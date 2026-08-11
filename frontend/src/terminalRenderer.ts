@@ -1,4 +1,4 @@
-import { repaintsScrollback } from './harnessRegistry.ts'
+import { repaintsScrollback, webglUnsafe } from './harnessRegistry.ts'
 
 export type TerminalRendererPreference = 'auto' | 'dom' | 'webgl'
 export type ActiveTerminalRenderer = 'dom' | 'webgl'
@@ -13,30 +13,30 @@ export function terminalCursorOptions(mobileInput: boolean) {
 /**
  * Whether this pane may run the WebGL renderer.
  *
- * Claude and OMP are always excluded. Their repainting surfaces can leave a live
+ * Two independent exclusions, both declared on the harness descriptor rather than
+ * decided by name here.
+ *
+ * `webgl_unsafe` is absolute. Such a harness's repainting surface can leave a live
  * WebGL context intermittently mangled after a retained pane returns or a deep
  * session is reconstructed from bounded replay. No context-loss event fires, and
  * invalidating xterm's model does not reliably recover it; a real resize does. The
- * DOM renderer has no corresponding failure.
+ * DOM renderer has no corresponding failure, so there is nothing an override could
+ * usefully mean and none is offered. Claude and OMP declare it today.
  *
- * The `auto` preference also excludes any harness whose TUI rewrites content already
- * in scrollback (`repaints_scrollback` on its descriptor: Codex reflows its
- * normal-screen transcript on resize, OMP repaints its tail continuously),
- * because those full-screen redraws could corrupt WebGL scrollback while the
- * viewport was off-tail. A trait rather than a name check, so a new harness
- * defaults to the safe DOM renderer until its descriptor declares otherwise —
- * shells remain WebGL-eligible.
+ * `repaints_scrollback` excludes the `auto` preference only. Those full-screen
+ * redraws could corrupt WebGL scrollback while the viewport was off-tail, but the
+ * failure is recoverable, so an explicit `webgl` preference still reaches such a
+ * harness (Codex) and shells.
  *
- * An *explicit* `webgl` preference still reaches Codex and shells. OMP's continuous
- * tail repaint makes its failure indistinguishable from incomplete replay, so it
- * does not expose that unsafe override.
+ * A new harness therefore defaults to the safe DOM renderer until its descriptor
+ * says otherwise, and shells remain WebGL-eligible.
  */
 export function shouldLoadWebgl(
   preference: TerminalRendererPreference,
   mobileViewport: boolean,
   backend: TerminalRendererBackend,
 ): boolean {
-  if (mobileViewport || preference === 'dom' || backend === 'claude' || backend === 'omp') return false
+  if (mobileViewport || preference === 'dom' || webglUnsafe(backend)) return false
   return !repaintsScrollback(backend) || preference === 'webgl'
 }
 

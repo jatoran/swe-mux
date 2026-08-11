@@ -10,8 +10,9 @@ import shutil
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, assert_never, cast
 
 import aiohttp
 
@@ -28,14 +29,33 @@ SELECTION_GUARD_LOOP = "provider-selection-guard"
 _REPLACE_RETRIES = 4
 _REPLACE_RETRY_DELAY_SECONDS = 0.05
 
-Provider = str
+# The harnesses whose provider credentials mux manages, as a closed set.
+#
+# Deliberately a `Literal` and not `str`. Every path in this module writes or reads
+# an authentication file, and a name that reached it without a branch would fall
+# into whichever `else` happened to be written first - a Codex-shaped credential
+# write for a harness that is not Codex. Closing the type makes `_provider_profile`
+# a compile-time obligation instead.
+#
+# The set is derived from `provider_account_management` on the descriptors, and
+# `test_provider_accounts` asserts the two agree: declaring that capability on a
+# third harness fails there, and widening this literal to satisfy it then fails
+# `assert_never` until every provider-shaped branch handles it.
+ManagedProvider = Literal["claude", "codex"]
+Provider = ManagedProvider
 CurrentAccountState = Literal["saved", "external", "signed_out", "unreadable"]
 # How an identity was learned, weakest last. Only "token" is derived from the
 # credential itself and may therefore authorize a credential write.
 IdentitySource = Literal["token", "cli", "file"]
 MatchKind = Literal["digest", "verified_identity", "weak_identity"]
 
-PROVIDERS: tuple[Provider, ...] = provider_account_harnesses()
+# Derived from the descriptors so the capability has one home, then narrowed to the
+# closed literal above. The cast is what `test_managed_providers_match_the_registry`
+# checks: if a third harness declares `provider_account_management`, that test fails
+# rather than this cast quietly admitting a name no branch here handles.
+PROVIDERS: tuple[ManagedProvider, ...] = cast(
+    "tuple[ManagedProvider, ...]", provider_account_harnesses()
+)
 MANIFEST_VERSION = 2
 POLL_SECONDS = 15 * 60
 STALE_SECONDS = 30 * 60
@@ -103,6 +123,39 @@ def _merge_identity(*identities: dict[str, Any] | None) -> dict[str, Any]:
         (name for name, rank in IDENTITY_STRENGTH.items() if rank == best), None
     )
     return merged
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderProfile:
+    """The provider-shaped facts every managed-account path needs.
+
+    Gathered into one exhaustive dispatch so they cannot drift apart: the auth file
+    a credential is written to, the argv that signs in, and the endpoint quota is
+    read from all have to describe the same provider.
+    """
+
+    auth_file_name: str
+    system_auth_dir: str
+    login_args: tuple[str, ...]
+    usage_url: str
+
+
+def _provider_profile(provider: ManagedProvider) -> _ProviderProfile:
+    if provider == "claude":
+        return _ProviderProfile(
+            auth_file_name=".credentials.json",
+            system_auth_dir=".claude",
+            login_args=("auth", "login", "--claudeai"),
+            usage_url=CLAUDE_USAGE_URL,
+        )
+    if provider == "codex":
+        return _ProviderProfile(
+            auth_file_name="auth.json",
+            system_auth_dir=".codex",
+            login_args=("login",),
+            usage_url=CODEX_USAGE_URL,
+        )
+    assert_never(provider)
 
 
 def _provider(value: str) -> Provider:
@@ -453,19 +506,12 @@ class ProviderAccountManager:
         return account
 
     def _managed_auth_path(self, provider: Provider, account_id: str) -> Path:
-        return (
-            self.root
-            / provider
-            / account_id
-            / (".credentials.json" if provider == "claude" else "auth.json")
-        )
+        profile = _provider_profile(provider)
+        return self.root / provider / account_id / profile.auth_file_name
 
     def _system_auth_path(self, provider: Provider) -> Path:
-        return (
-            self.home / ".claude" / ".credentials.json"
-            if provider == "claude"
-            else self.home / ".codex" / "auth.json"
-        )
+        profile = _provider_profile(provider)
+        return self.home / profile.system_auth_dir / profile.auth_file_name
 
     def _read_json_auth(self, path: Path) -> tuple[bytes, dict[str, Any]]:
         try:
@@ -1500,7 +1546,7 @@ class ProviderAccountManager:
         self, provider_value: str, *, label: str | None = None, replace_id: str | None = None
     ) -> dict[str, Any]:
         provider = _provider(provider_value)
-        args = ["auth", "login", "--claudeai"] if provider == "claude" else ["login"]
+        args = list(_provider_profile(provider).login_args)
         await self._run_command(provider, args, timeout_seconds=LOGIN_TIMEOUT_SECONDS)
         return await self.capture_current(provider, label=label, replace_id=replace_id)
 

@@ -136,7 +136,7 @@ async def test_a_rollover_onto_a_live_siblings_conversation_is_refused(
     the `/resume` picker, the SessionStart hook reported it as an ordinary rollover,
     and B rekeyed onto A's conversation. `identity_collision_detected` fired in 1.1s
     — but the rollover had also moved B's `agent_lifecycle_id` onto the disputed
-    conversation, so `_claude_owns_conversation` then reported *both* panes as
+    conversation, so `_owns_minted_conversation` then reported *both* panes as
     rightful owners, the sweep healed neither, and both reported A's conversation and
     its tokens indefinitely.
 
@@ -174,7 +174,7 @@ async def test_a_rollover_onto_a_live_siblings_conversation_is_refused(
 
     # The sweep can now act, because the intruder's claim is unsupported.
     intruder.record.native_session_id = OWN  # as legacy corruption would leave it
-    assert SessionManager._claude_owns_conversation(manager, intruder, OWN) is False
+    assert SessionManager._owns_minted_conversation(manager, intruder, OWN) is False
 
 
 def test_a_codex_placeholder_id_counts_as_unbound() -> None:

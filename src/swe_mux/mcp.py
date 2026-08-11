@@ -45,7 +45,11 @@ from typing import Any
 from .clipboard_store import looks_like_secret
 from .harness import agent_harnesses
 from .prompt_queue import QueueError
-from .transcript_view import parse_transcript_cached, searchable_transcript_messages
+from .transcript_view import (
+    conversation_is_readable,
+    parse_transcript_cached,
+    searchable_transcript_messages,
+)
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 _SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
@@ -53,6 +57,20 @@ _SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
 # Bounds. A tool call must never pull an unbounded transcript into an agent's
 # context; these mirror the automation slice service's budget.
 TRANSCRIPT_MAX_BYTES = 512 * 1024
+
+
+def _read_conversation_tail(
+    path: Path | None, backend: str, native_id: str | None
+) -> list[dict[str, Any]]:
+    """The bounded tail of one conversation, however the harness stores it.
+
+    A positional wrapper because `asyncio.to_thread` cannot forward keywords, and
+    the bound has to travel with the call: an unbounded read of a long conversation
+    is exactly what the timeout above exists to avoid.
+    """
+    return parse_transcript_cached(
+        path, backend, max_bytes=TRANSCRIPT_MAX_BYTES, native_id=native_id
+    )
 TRANSCRIPT_MAX_MESSAGES = 200
 TRANSCRIPT_DEFAULT_MESSAGES = 50
 LIST_MAX_SESSIONS = 100
@@ -544,14 +562,16 @@ class McpService:
         if session is not None:
             path = session.transcript_path
             backend = session.record.backend
+            native_id = session.record.native_session_id
             resolved_session_id = session.record.id
         else:
             row, _display_name = await self._resolve_history(caller, identity)
             raw = row.get("transcript_path")
             path = Path(raw) if raw else None
             backend = str(row.get("backend") or "")
+            native_id = str(row.get("native_id") or "") or None
             resolved_session_id = str(row.get("id") or identity)
-        if path is None or not Path(path).is_file():
+        if not conversation_is_readable(path, backend, native_id):
             return {
                 "session_id": resolved_session_id,
                 "messages": [],
@@ -560,10 +580,10 @@ class McpService:
         try:
             messages = await asyncio.wait_for(
                 asyncio.to_thread(
-                    parse_transcript_cached,
-                    Path(path),
+                    _read_conversation_tail,
+                    path,
                     backend,
-                    max_bytes=TRANSCRIPT_MAX_BYTES,
+                    native_id,
                 ),
                 timeout=PARSE_TIMEOUT_SECONDS,
             )

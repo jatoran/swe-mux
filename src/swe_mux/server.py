@@ -69,13 +69,19 @@ from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
     AGENT_BACKENDS,
     HARNESSES,
+    HarnessLevel,
+    agent_harnesses,
+    assigns_conversation_id,
+    branch_strategy,
     delivers_prompts_through_pty,
     descriptor,
+    harnesses_at_least,
     has_observable_transcript,
     is_agent_harness,
     needs_resize_repaint,
     public_harness_registry,
     repaints_scrollback,
+    suppresses_late_color_response,
 )
 from .history import HistoryIndex
 from .history_backfill import HistoryBackfillManager
@@ -225,6 +231,7 @@ from .tier0_store import Tier0Context, Tier0Store
 from .transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
+    conversation_is_readable,
     conversation_view_cached,
     final_reply_text,
     parse_transcript_with_watermark,
@@ -327,9 +334,18 @@ def hook_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return kept
 
 
-def _is_codex_default_color_response(backend: str, data: str) -> bool:
-    """Reject late OSC 10/11 replies before Codex mistakes them for prompt input."""
-    return backend == "codex" and _OSC_DEFAULT_COLOR_RESPONSE.fullmatch(data) is not None
+def _is_suppressed_color_response(backend: str, data: str) -> bool:
+    """Reject a late OSC 10/11 reply before the CLI mistakes it for prompt input.
+
+    Gated on the descriptor rather than the name: a harness whose startup palette
+    probe accepts these replies for only a bounded interval declares
+    `suppresses_late_color_response`, and browser/WS latency can deliver an
+    otherwise valid xterm reply after that probe has ended.
+    """
+    return (
+        suppresses_late_color_response(backend)
+        and _OSC_DEFAULT_COLOR_RESPONSE.fullmatch(data) is not None
+    )
 
 
 def pointer_report_kind(data: str) -> str | None:
@@ -938,19 +954,30 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             args=config.harness_args[name],
             data_dir=config.data_dir,
             mcp_url=mcp_url,
-            # Codex keeps its own resolver: it knows the `@openai/codex`
-            # entrypoint directly and is pinned by its own tests. Every other
-            # npm-shipped harness reads its `.cmd` shim generically.
+            # A harness that declares `requires_direct_entrypoint` has an argument a
+            # `.cmd` shim cannot carry, so its JS entrypoint is launched directly.
+            # Every other npm-shipped harness reads its shim generically, which needs
+            # no knowledge of the package layout.
             command_resolver=(
                 resolve_codex_pty_command
-                if harness.adapter_family == "codex"
+                if harness.requires_direct_entrypoint
                 else resolve_npm_shim_pty_command
             ),
         )
+    # Shim-launched harnesses need the per-session artifacts their adapter would
+    # otherwise materialize. Only an adapter that keeps a settings file has one to
+    # hand over, so the shims take whichever adapters expose the attributes rather
+    # than a named harness.
     child_env = create_agent_shims(
         config,
-        adapters["claude"].settings_path,  # type: ignore[attr-defined]
-        adapters["claude"].mcp_config_path,  # type: ignore[attr-defined]
+        harness_settings={
+            name: (
+                getattr(adapter, "settings_path", None),
+                getattr(adapter, "mcp_config_path", None),
+            )
+            for name, adapter in adapters.items()
+            if name in HARNESSES
+        },
     )
     sessions = SessionManager(
         adapters,
@@ -2438,9 +2465,17 @@ async def second_opinion(request: web.Request) -> web.Response:
     if not source or not has_observable_transcript(source.get("backend")):
         raise KeyError(source_id)
     body = await request.json()
-    backend = str(body.get("backend") or ("codex" if source["backend"] == "claude" else "claude"))
+    # "The other agent" stopped being well defined at two harnesses. The request may
+    # name any observed harness that is not the one under review; with none named,
+    # the default is the first other observed harness in registry order.
+    alternatives = tuple(
+        name
+        for name in harnesses_at_least(HarnessLevel.observed)
+        if name != source["backend"]
+    )
+    backend = str(body.get("backend") or (alternatives[0] if alternatives else ""))
     if not has_observable_transcript(backend) or backend == source["backend"]:
-        raise ValueError("second opinion backend must be the other supported agent")
+        raise ValueError("second opinion backend must be a different observed harness")
     annotations = await request.app["automation_store"].annotations(
         agent_run_id=source_id, limit=50
     )
@@ -2767,13 +2802,14 @@ async def _run_observer_batch(
                 >= config.automation_rule_hourly_call_cap
             ):
                 raise ValueError("batch observer hourly call cap is exhausted")
-            path = Path(str(row["transcript_path"]))
+            raw_path = row["transcript_path"]
             transcript = await app["automation"].slices.build(
-                path,
+                Path(str(raw_path)) if raw_path else None,
                 str(row["backend"]),
                 "last_n_messages",
                 max_messages=24,
                 max_bytes=min(config.automation_max_input_tokens * 4, 512 * 1024),
+                native_id=str(row.get("native_id") or "") or None,
             )
             input_text = transcript.render()
             call_id = await store.observer_started(
@@ -3389,9 +3425,23 @@ async def decide_observation_request(request: web.Request) -> web.Response:
     prompt = str(body.get("prompt") or spawn_request.get("prompt") or "")
     if not prompt.strip():
         raise ValueError("the request has no prompt to seed")
+    # An observation spawn always seeds a prompt, so it needs an agent. It honours a
+    # configured default when that default is one, and otherwise takes the first
+    # registered harness rather than a name written in here. `default_backend` is
+    # allowed to be `shell` and cannot be used unfiltered.
+    config: Config = request.app["config"]
+    configured_default = project.default_backend or config.default_backend
     spawn_body: dict[str, Any] = {
         "project_id": project.id,
-        "backend": str(body.get("backend") or spawn_request.get("backend") or "claude"),
+        "backend": str(
+            body.get("backend")
+            or spawn_request.get("backend")
+            or (
+                configured_default
+                if is_agent_harness(configured_default)
+                else agent_harnesses()[0]
+            )
+        ),
         "seed_text": prompt,
     }
     name = str(body.get("name") or spawn_request.get("name") or "")
@@ -4161,12 +4211,14 @@ async def _bundle_transcript_slices(
             slices.append({"agent_run_id": run_id, "error": "no history row"})
             continue
         transcript = row.get("transcript_path")
-        if not transcript or not Path(transcript).is_file():
+        path = Path(str(transcript)) if transcript else None
+        native_id = str(row.get("native_id") or "") or None
+        if not conversation_is_readable(path, str(row["backend"]), native_id):
             slices.append({"agent_run_id": run_id, "error": "native transcript is unavailable"})
             continue
         try:
             messages, _mtime_ns, _size = await asyncio.to_thread(
-                parse_transcript_with_watermark, Path(transcript), str(row["backend"])
+                _parse_conversation, path, str(row["backend"]), native_id
             )
         except (OSError, ValueError):
             slices.append({"agent_run_id": run_id, "error": "native transcript is unreadable"})
@@ -4549,13 +4601,16 @@ def _branch_source_id(source: Any) -> str | None:
     agents in one cwd it can latch onto a sibling's transcript (see the
     transcript-switch cross-attribution fix), so branching off it would fork the
     wrong conversation. ``agent_lifecycle_id`` is the lifecycle anchor the
-    observer never overwrites. For Claude the mux id is itself a valid transcript
-    stem (spawned via ``--session-id``), so an unchanged native id is fine; for
-    Codex only a detected rollout id is meaningful — the mux id is a placeholder.
+    observer never overwrites.
+
+    Where mux minted the conversation id, the mux id is itself a valid conversation
+    id, so an unchanged native id is fine. Where the CLI mints its own, only a
+    discovered id is meaningful and the mux id is a placeholder that would resume
+    nothing.
     """
     record = source.record
     lifecycle = getattr(source, "agent_lifecycle_id", None)
-    if record.backend == "claude":
+    if assigns_conversation_id(record.backend):
         return str(lifecycle or record.native_session_id or record.id)
     candidate = str(lifecycle or record.native_session_id or "")
     return candidate if candidate and candidate != record.id else None
@@ -4595,13 +4650,6 @@ async def _await_claude_fork(
     return False, None
 
 
-# Harnesses with an implemented branch strategy. Claude forks natively in place;
-# Codex simulates a fork by resuming a child thread. Any other backend is refused
-# in branch_session — see the comment there for why the generic fallback is not
-# safe to reuse.
-_BRANCH_STRATEGY_BACKENDS = frozenset({"claude", "codex"})
-
-
 async def branch_session(request: web.Request) -> web.Response:
     """Fork an agent conversation, keeping the original and the branch both open.
 
@@ -4629,13 +4677,14 @@ async def branch_session(request: web.Request) -> web.Response:
         return json_response(
             {"error": "only observable agent sessions can branch", "code": "not_agent"}, 422
         )
-    if record.backend not in _BRANCH_STRATEGY_BACKENDS:
-        # The fallback below resumes the original conversation id while the
-        # source is still live. Codex tolerates that (resume starts a child
-        # thread with its own rollout); OMP's --resume appends to the *same*
-        # session file, so two live processes would interleave writes into one
-        # JSONL. A harness without an implemented strategy is refused outright
-        # rather than corrupted politely.
+    strategy = branch_strategy(record.backend)
+    if strategy is None:
+        # The resume path below reopens the original conversation id while the
+        # source is still live. A `resume_child_thread` harness tolerates that (its
+        # resume starts a child thread with its own rollout); every other harness
+        # here appends to the *same* session file, so two live processes would
+        # interleave writes into one conversation. A harness with no declared
+        # strategy is refused outright rather than corrupted politely.
         return json_response(
             {
                 "error": f"branching is not implemented for {record.backend} sessions",
@@ -4660,8 +4709,8 @@ async def branch_session(request: web.Request) -> web.Response:
     # conversation's, and the row this sibling continues is the one it holds now.
     original_run_id = record.agent_run_id or record.id
     adopt_run_id: str | None = None
-    if record.backend == "claude":
-        adapter = manager.adapters.get("claude")
+    if strategy == "native_slash_command":
+        adapter = manager.adapters.get(record.backend)
         before = _claude_transcript_stems(adapter, branch_cwd) if adapter else set()
         source.pty.write("/branch\r")
         forked, branch_id = (
@@ -4685,7 +4734,10 @@ async def branch_session(request: web.Request) -> web.Response:
             # The source pane is on its own conversation now, so the original's row
             # is free for the sibling that continues it.
             adopt_run_id = original_run_id
-    suffix = "original" if record.backend == "claude" else "branch"
+    # A native fork leaves the *branch* in the source pane, so the sibling that
+    # reopens the original conversation is the original. A resumed child thread is
+    # the other way round.
+    suffix = "original" if strategy == "native_slash_command" else "branch"
     session = await manager.spawn(
         backend=record.backend,
         name=body.get("name") or f"{record.name} {suffix}",
@@ -6082,22 +6134,36 @@ async def cancel_history_backfill(request: web.Request) -> web.Response:
     )
 
 
+def _parse_conversation(
+    path: Path | None, backend: str, native_id: str | None
+) -> tuple[list[dict[str, Any]], int, int]:
+    """`parse_transcript_with_watermark` with the conversation reference spelled out.
+
+    A one-line wrapper so the two `asyncio.to_thread` call sites pass the same three
+    arguments positionally; `to_thread` cannot forward keywords.
+    """
+    return parse_transcript_with_watermark(path, backend, native_id=native_id)
+
+
 async def history_transcript(request: web.Request) -> web.Response:
     row = await request.app["history"].history_entry(request.match_info["sid"])
     if not row:
         raise KeyError(request.match_info["sid"])
     transcript = row.get("transcript_path")
-    if not transcript or not Path(transcript).is_file():
+    path = Path(str(transcript)) if transcript else None
+    backend = str(row["backend"])
+    native_id = str(row.get("native_id") or "") or None
+    if not conversation_is_readable(path, backend, native_id):
         return json_response(
             {"error": "native transcript is unavailable", "code": "transcript_unavailable"},
             409,
         )
-    # Parse off the event loop and reuse the shared (path, mtime, size, backend,
-    # max_bytes) cache; large transcripts otherwise block the loop on every open.
-    # The watermark comes back from the same call, so it can never claim to cover
-    # bytes this parse did not read.
+    # Parse off the event loop and reuse the shared watermark-keyed cache; large
+    # conversations otherwise block the loop on every open. The watermark comes back
+    # from the same call, so it can never claim to cover content this parse did not
+    # read.
     messages, mtime_ns, size = await asyncio.to_thread(
-        parse_transcript_with_watermark, Path(transcript), str(row["backend"])
+        _parse_conversation, path, backend, native_id
     )
     await request.app["history"].replace_history_messages(
         str(row["id"]), messages, mtime_ns=mtime_ns, size=size
@@ -6707,11 +6773,14 @@ async def session_last_reply(request: web.Request) -> web.Response:
     if not has_observable_transcript(session.record.backend):
         return json_response({"error": "last reply is available only for agent sessions"}, 409)
     path = session.transcript_path
-    if not path or not path.exists():
+    native_id = session.record.native_session_id
+    if not conversation_is_readable(path, session.record.backend, native_id):
         return json_response({"error": "the agent transcript is not available yet"}, 409)
     try:
         text = await asyncio.wait_for(
-            asyncio.to_thread(final_reply_text, path, session.record.backend),
+            asyncio.to_thread(
+                final_reply_text, path, session.record.backend, native_id=native_id
+            ),
             timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
         )
     except (OSError, TimeoutError) as exc:
@@ -6760,11 +6829,20 @@ async def session_transcript(request: web.Request) -> web.Response:
     if not has_observable_transcript(record.backend):
         return json_response({**empty, "reason": "not_agent"})
     path = session.transcript_path
-    if path is None or not path.is_file():
+    # `conversation_is_readable` rather than a file test: a store-backed harness has
+    # no path, and testing one answered "no transcript" for every opencode session.
+    native_id = record.native_session_id
+    if not conversation_is_readable(path, record.backend, native_id):
         return json_response({**empty, "reason": "no_transcript"})
     try:
         view = await asyncio.wait_for(
-            asyncio.to_thread(conversation_view_cached, path, record.backend, limit=limit),
+            asyncio.to_thread(
+                conversation_view_cached,
+                path,
+                record.backend,
+                limit=limit,
+                native_id=native_id,
+            ),
             timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
         )
     except (OSError, TimeoutError):
@@ -8844,7 +8922,7 @@ async def _handle_terminal_input(
         and 0 < raw_input_seq <= 2_147_483_647
         else None
     )
-    if _is_codex_default_color_response(session.record.backend, data):
+    if _is_suppressed_color_response(session.record.backend, data):
         return
     is_terminal_response = frame.get("kind") == "terminal_response"
     if session.input_owner != connection_id:

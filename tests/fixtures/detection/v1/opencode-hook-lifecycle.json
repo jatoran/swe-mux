@@ -75,6 +75,13 @@
         "tool": "bash"
       },
       {
+        "type": "tool_result",
+        "source": "hook",
+        "scope": "root",
+        "tool": "bash",
+        "success": true
+      },
+      {
         "type": "turn_ended",
         "source": "hook",
         "scope": "root",

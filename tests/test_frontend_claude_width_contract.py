@@ -55,18 +55,28 @@ def test_zero_is_the_spelling_for_no_cap() -> None:
     assert "CLAUDE_MAX_COLUMNS_OFF = 0" in source
 
 
-def test_only_claude_panes_carry_the_envelope() -> None:
+def test_only_declared_panes_carry_the_envelope() -> None:
     """Codex and shell panes fill their box, which is the asymmetry users report.
 
     Pinned in the policy function rather than left to the caller: the host style is
     the only place the cap is applied, and a backend check inlined there is one that
     no test can reach without a browser.
+
+    Which panes carry it is read from the registry (`width_envelope`) rather than
+    compiled into the browser, so the daemon and the browser cannot disagree about
+    it. Claude is the only harness declaring it today, and that is asserted on the
+    descriptor rather than on the source text.
     """
+    from swe_mux.harness import HARNESSES
+
     source = (SRC / "terminalViewport.ts").read_text(encoding="utf-8")
     policy = re.search(r"export function claudeWidthCap\((.*?)\n\}", source, re.DOTALL)
     assert policy, "claudeWidthCap must stay the single decision point for the envelope"
-    assert "backend !== 'claude'" in policy.group(1)
+    assert "appliesWidthEnvelope(backend)" in policy.group(1)
     assert "compactLayout" in policy.group(1)
+    assert {
+        name for name, harness in HARNESSES.items() if harness.applies_width_envelope
+    } == {"claude"}
 
 
 def test_the_setting_is_reachable_from_the_terminals_tab() -> None:

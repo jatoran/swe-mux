@@ -84,10 +84,24 @@
         "tool": "bash"
       },
       {
+        "type": "tool_result",
+        "source": "hook",
+        "scope": "root",
+        "tool": "bash",
+        "success": true
+      },
+      {
         "type": "tool_use",
         "source": "hook",
         "scope": "root",
         "tool": "read"
+      },
+      {
+        "type": "tool_result",
+        "source": "hook",
+        "scope": "root",
+        "tool": "read",
+        "success": true
       },
       {
         "type": "turn_ended",

@@ -8,17 +8,23 @@ import time
 import uuid
 from pathlib import Path
 from types import MethodType
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
-from swe_mux.adapters.claude import ClaudeAdapter
-from swe_mux.adapters.codex import CodexAdapter
+from swe_mux.adapters import build_agent_adapter
 from swe_mux.event_bus import EventBus
+from swe_mux.harness import (
+    HARNESSES,
+    descriptor,
+    live_canary_harnesses,
+    live_subagent_harnesses,
+    live_telemetry_harnesses,
+)
 from swe_mux.history import HistoryIndex
 from swe_mux.launchers import resolve_command
 from swe_mux.operational_telemetry import OperationalTelemetryStore, scan_native_telemetry
-from swe_mux.provider_accounts import ProviderAccountError, ProviderAccountManager
+from swe_mux.provider_accounts import PROVIDERS, ProviderAccountError, ProviderAccountManager
 from tests.support.detection_replay import DetectionReplay
 
 RUN_LIVE = os.environ.get("SWEMUX_RUN_LIVE_AGENT_TESTS") == "1"
@@ -26,10 +32,77 @@ RUN_SUBAGENT = os.environ.get("SWEMUX_RUN_LIVE_SUBAGENT_TESTS") == "1"
 RUN_PHASE2 = os.environ.get("SWEMUX_RUN_LIVE_PHASE2_TESTS") == "1"
 
 
+LIVE_HARNESSES = list(live_canary_harnesses())
+LIVE_SUBAGENT_HARNESSES = list(live_subagent_harnesses())
+LIVE_TELEMETRY_HARNESSES = list(live_telemetry_harnesses())
+ProbeMode = Literal["read_only", "read_tool", "subagent"]
+
+
 def _executable(backend: str) -> str:
-    if os.name == "nt" and backend == "codex":
-        return shutil.which("codex.cmd") or resolve_command("codex.exe")
-    return resolve_command(f"{backend}.exe")
+    """The real CLI to invoke, bypassing mux's own generated shim.
+
+    A harness that must be launched through its JS entrypoint cannot be reached by
+    name on Windows, because the name resolves to a batch shim that mangles the argv
+    it needs; its `.cmd` is asked for explicitly so the shell runs the shim rather
+    than the daemon's resolver.
+    """
+    harness = descriptor(backend)
+    if os.name == "nt" and harness.requires_direct_entrypoint:
+        shim = shutil.which(f"{harness.script_base_name}.cmd")
+        if shim:
+            return shim
+    return resolve_command(harness.executable)
+
+
+def _probe_command(
+    backend: str, prompt: str, native_id: str | None, mode: ProbeMode
+) -> list[str]:
+    """The full one-shot invocation for this harness in the requested mode.
+
+    Composed from the descriptor rather than written per vendor: the headless argv
+    and the spawn-id argv are both declared, so a harness added to the registry joins
+    this tier without touching the canary.
+    """
+    harness = descriptor(backend)
+    argv = getattr(harness.headless_probes, mode)
+    assert argv is not None, f"{backend} declares no {mode} probe"
+    command = [_executable(backend), *argv]
+    if native_id and harness.spawn_id_argv:
+        command.extend([*harness.spawn_id_argv, native_id])
+    command.append(prompt)
+    return command
+
+
+async def _probe_transcript(
+    backend: str,
+    cwd: Path,
+    started: float,
+    prompt: str,
+    mode: ProbeMode = "read_only",
+) -> Path:
+    """Run one real prompt and return the transcript the CLI wrote for it.
+
+    Discovery follows the same declared split the daemon uses: where mux dictates the
+    conversation id, the transcript is computed from it; where the CLI mints its own,
+    the run's transcript is the newest one that appeared after it started.
+    """
+    harness = descriptor(backend)
+    adapter = build_agent_adapter(
+        harness,
+        executable=_executable(backend),
+        args=[],
+        data_dir=cwd / "data",
+        mcp_url="",
+    )
+    native_id = str(uuid.uuid4()) if harness.assigns_conversation_id else None
+    _run(_probe_command(backend, prompt, native_id, mode), cwd, timeout=180)
+    if native_id:
+        path = adapter.transcript_path(native_id, cwd)
+        assert path is not None, f"{backend} computed no transcript path"
+        return path
+    candidates = adapter.recent_transcripts(cwd, started)
+    assert candidates, f"{backend} completed without a discoverable root transcript"
+    return max(candidates)[1]
 
 
 def _run(command: list[str], cwd: Path, timeout: int = 120) -> None:
@@ -165,43 +238,46 @@ async def _assert_phase2_telemetry_conformance(
         history.close()
 
 
+def test_every_transcript_harness_is_covered_by_the_live_canary() -> None:
+    """A harness must not reach the live tier by having no live test.
+
+    Runs without an authenticated CLI, because it asserts about the *parametrization*
+    rather than about a provider. The canary used to name two vendors, so three later
+    harnesses had no live coverage and nothing reported the hole; deriving the set
+    means a new harness either joins it or states on its descriptor why it cannot.
+    """
+    for name, harness in HARNESSES.items():
+        if harness.transcript_dialect is None:
+            # No transcript to replay: this canary's assertion does not exist for it.
+            # Its measurement is a database read, covered by its own store tests.
+            assert name not in LIVE_HARNESSES, name
+            continue
+        assert harness.headless_probes.read_only is not None, (
+            f"{name} writes a transcript but declares no headless probe, so the live "
+            f"canary cannot run against its real CLI"
+        )
+        assert name in LIVE_HARNESSES, name
+    assert LIVE_HARNESSES, "the live canary covers no harness at all"
+    # The richer tiers are subsets, and each exclusion is a declared capability gap
+    # rather than a skip: pi ships no subagent tool, so it runs the base canary and
+    # the telemetry canary but is never asked to spawn a child.
+    assert set(LIVE_SUBAGENT_HARNESSES) <= set(LIVE_HARNESSES)
+    assert set(LIVE_TELEMETRY_HARNESSES) <= set(LIVE_HARNESSES)
+    for name in LIVE_HARNESSES:
+        probes = HARNESSES[name].headless_probes
+        assert (probes.subagent is not None) == (name in LIVE_SUBAGENT_HARNESSES), name
+        assert (probes.read_tool is not None) == (name in LIVE_TELEMETRY_HARNESSES), name
+
+
 @pytest.mark.live_agent
 @pytest.mark.skipif(not RUN_LIVE, reason="set SWEMUX_RUN_LIVE_AGENT_TESTS=1")
-@pytest.mark.parametrize("backend", ["claude", "codex"])
+@pytest.mark.parametrize("backend", LIVE_HARNESSES)
 async def test_authenticated_provider_cli_completion_conforms_to_observer(
     backend: str, tmp_path: Path
 ) -> None:
-    started = time.time()
-    if backend == "claude":
-        native_id = str(uuid.uuid4())
-        adapter = ClaudeAdapter()
-        command = [
-            _executable("claude"),
-            "--print",
-            "--safe-mode",
-            "--tools",
-            "",
-            "--session-id",
-            native_id,
-            "Reply with exactly: SWEMUX_CANARY_OK",
-        ]
-        _run(command, tmp_path)
-        transcript = adapter.transcript_path(native_id, tmp_path)
-    else:
-        adapter = CodexAdapter()
-        command = [
-            _executable("codex"),
-            "exec",
-            "--sandbox",
-            "read-only",
-            "--skip-git-repo-check",
-            "--json",
-            "Reply with exactly: SWEMUX_CANARY_OK",
-        ]
-        _run(command, tmp_path)
-        candidates = adapter.recent_transcripts(tmp_path, started)
-        assert candidates, "Codex completed without a discoverable root transcript"
-        transcript = max(candidates)[1]
+    transcript = await _probe_transcript(
+        backend, tmp_path, time.time(), "Reply with exactly: SWEMUX_CANARY_OK"
+    )
     assert transcript.exists()
     await _assert_transcript_conformance(backend, _records(transcript))
 
@@ -209,46 +285,18 @@ async def test_authenticated_provider_cli_completion_conforms_to_observer(
 @pytest.mark.live_agent
 @pytest.mark.live_subagent
 @pytest.mark.skipif(not RUN_SUBAGENT, reason="set SWEMUX_RUN_LIVE_SUBAGENT_TESTS=1")
-@pytest.mark.parametrize("backend", ["claude", "codex"])
+@pytest.mark.parametrize("backend", LIVE_SUBAGENT_HARNESSES)
 async def test_authenticated_provider_subagent_signal_conforms_to_observer(
     backend: str, tmp_path: Path
 ) -> None:
-    started = time.time()
-    prompt = (
+    transcript = await _probe_transcript(
+        backend,
+        tmp_path,
+        time.time(),
         "Spawn exactly one subagent. Ask it to return the word CHILD_OK, wait for it, "
-        "then reply with exactly ROOT_OK. Do not edit files or run shell commands."
+        "then reply with exactly ROOT_OK. Do not edit files or run shell commands.",
+        mode="subagent",
     )
-    if backend == "claude":
-        native_id = str(uuid.uuid4())
-        adapter = ClaudeAdapter()
-        command = [
-            _executable("claude"),
-            "--print",
-            "--allowedTools",
-            "Agent",
-            "--permission-mode",
-            "dontAsk",
-            "--session-id",
-            native_id,
-            prompt,
-        ]
-        _run(command, tmp_path, timeout=180)
-        transcript = adapter.transcript_path(native_id, tmp_path)
-    else:
-        adapter = CodexAdapter()
-        command = [
-            _executable("codex"),
-            "exec",
-            "--sandbox",
-            "read-only",
-            "--skip-git-repo-check",
-            "--json",
-            prompt,
-        ]
-        _run(command, tmp_path, timeout=180)
-        candidates = adapter.recent_transcripts(tmp_path, started)
-        assert candidates, "Codex completed without a discoverable root transcript"
-        transcript = max(candidates)[1]
     assert transcript.exists()
     await _assert_transcript_conformance(
         backend, _records(transcript), require_subagent=True
@@ -258,55 +306,27 @@ async def test_authenticated_provider_subagent_signal_conforms_to_observer(
 @pytest.mark.live_agent
 @pytest.mark.live_telemetry
 @pytest.mark.skipif(not RUN_PHASE2, reason="set SWEMUX_RUN_LIVE_PHASE2_TESTS=1")
-@pytest.mark.parametrize("backend", ["claude", "codex"])
+@pytest.mark.parametrize("backend", LIVE_TELEMETRY_HARNESSES)
 async def test_authenticated_provider_phase2_telemetry_reaches_durable_store(
     backend: str, tmp_path: Path
 ) -> None:
     sentinel = tmp_path / "phase2-canary.txt"
     sentinel.write_text("SWEMUX_PHASE2_SENTINEL\n", encoding="utf-8")
-    started = time.time()
-    prompt = (
+    transcript = await _probe_transcript(
+        backend,
+        tmp_path,
+        time.time(),
         "Use your read-only file or shell tool to read phase2-canary.txt in the current "
-        "working directory. After the tool finishes, reply with exactly PHASE2_CANARY_OK."
+        "working directory. After the tool finishes, reply with exactly PHASE2_CANARY_OK.",
+        mode="read_tool",
     )
-    if backend == "claude":
-        native_id = str(uuid.uuid4())
-        adapter = ClaudeAdapter()
-        command = [
-            _executable("claude"),
-            "--print",
-            "--permission-mode",
-            "dontAsk",
-            "--allowedTools",
-            "Read",
-            "--session-id",
-            native_id,
-            prompt,
-        ]
-        _run(command, tmp_path, timeout=180)
-        transcript = adapter.transcript_path(native_id, tmp_path)
-    else:
-        adapter = CodexAdapter()
-        command = [
-            _executable("codex"),
-            "exec",
-            "--sandbox",
-            "read-only",
-            "--skip-git-repo-check",
-            "--json",
-            prompt,
-        ]
-        _run(command, tmp_path, timeout=180)
-        candidates = adapter.recent_transcripts(tmp_path, started)
-        assert candidates, "Codex canary completed without a discoverable root transcript"
-        transcript = max(candidates)[1]
     assert transcript.exists()
     await _assert_phase2_telemetry_conformance(backend, transcript, tmp_path)
 
 
 @pytest.mark.live_quota
 @pytest.mark.skipif(not RUN_PHASE2, reason="set SWEMUX_RUN_LIVE_PHASE2_TESTS=1")
-@pytest.mark.parametrize("provider", ["claude", "codex"])
+@pytest.mark.parametrize("provider", list(PROVIDERS))
 async def test_authenticated_provider_quota_schema_without_credential_mutation(
     provider: str, tmp_path: Path
 ) -> None:

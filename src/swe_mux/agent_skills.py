@@ -258,14 +258,11 @@ def _scan_skill_root(
     two names differ). Getting this backwards produces a button that types a
     command the agent does not have.
     """
-    # pi prompt templates and opencode commands are both typed as `/<name>`.
-    # Codex keeps `$`; omp namespaces its skills under `/skill:`.
-    if vendor in {"claude", "pi", "opencode"}:
-        prefix = "/"
-    elif vendor == "omp":
-        prefix = "/skill:"
-    else:
-        prefix = "$"
+    # Declared on the descriptor, because the browser needs the same answer: pi
+    # prompt templates and opencode commands are typed as `/<name>`, Codex keeps
+    # `$`, and omp namespaces its skills under `/skill:`. Computing it here as well
+    # is how the command rail came to type `/name` into an omp pane.
+    prefix = descriptor(vendor).skill_invocation_prefix
     found: list[DiscoveredSkill] = []
     try:
         entries = sorted(directory.iterdir(), key=lambda item: item.name.lower())

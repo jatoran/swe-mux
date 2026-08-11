@@ -278,7 +278,11 @@ async def last_reply_response(tmp_path: Path, events: list[dict[str, Any]]) -> d
     )
     session = SimpleNamespace(
         transcript_path=transcript_path,
-        record=SimpleNamespace(backend="claude", agent_run_id="run-1"),
+        # `native_session_id` is what names the conversation for a harness that
+        # keeps one in a store; a file-backed harness carries it and ignores it.
+        record=SimpleNamespace(
+            backend="claude", agent_run_id="run-1", native_session_id="native-1"
+        ),
     )
     request = SimpleNamespace(
         app={"sessions": SimpleNamespace(resolve=lambda _sid: session)},

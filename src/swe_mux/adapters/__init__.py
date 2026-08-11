@@ -2,7 +2,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import assert_never
 
-from ..harness import HarnessDescriptor
+from ..harness import HARNESSES, HarnessDescriptor
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
@@ -11,7 +11,12 @@ from .opencode import OpenCodeAdapter
 from .pi import PiAdapter
 from .shell import ShellAdapter
 
-HOOK_INSTALLER_FAMILIES = frozenset({"claude", "codex", "omp", "pi", "opencode"})
+# Derived, not listed: a family installs hooks exactly when a harness in it declares
+# `native_hooks`. The literal set had to be edited in step with the registry and had
+# no guard that it was.
+HOOK_INSTALLER_FAMILIES = frozenset(
+    harness.adapter_family for harness in HARNESSES.values() if harness.native_hooks
+)
 
 
 def build_agent_adapter(

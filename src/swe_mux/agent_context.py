@@ -24,28 +24,59 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .harness import descriptor, instruction_harnesses
+
 MAX_SOURCE_BYTES = 512 * 1024
 MAX_MEMORY_ITEMS = 128
 MAX_DIFF_CHARS = 256 * 1024
 MAX_BACKUPS_RETURNED = 20
 MAX_BACKUP_SCAN = 2_000
 
-INSTRUCTION_SOURCES = {
-    "instruction:claude": ("claude", "CLAUDE.md"),
-    "instruction:codex": ("codex", "AGENTS.md"),
-}
-GLOBAL_INSTRUCTION_SOURCES = {
-    "instruction:global:claude": (
-        "claude",
-        (".claude", "CLAUDE.md"),
-        "~/.claude/CLAUDE.md",
-    ),
-    "instruction:global:codex": (
-        "codex",
-        (".codex", "AGENTS.md"),
-        "~/.codex/AGENTS.md",
-    ),
-}
+def _project_instruction_sources() -> dict[str, tuple[str, str, tuple[str, ...]]]:
+    """Project-root instruction files, one entry per distinct file.
+
+    Keyed by file rather than by harness, because the file is the artifact and a
+    harness is a reader of it: four of the five harnesses read the same root
+    ``AGENTS.md``, and listing that file four times would be four handles onto one
+    path. The id is minted from the first harness declaring the file, which keeps
+    the two ids this surface has always published (``instruction:claude`` for
+    ``CLAUDE.md``, ``instruction:codex`` for ``AGENTS.md``) while every later
+    harness joins an existing entry instead of adding one.
+    """
+    owner: dict[str, str] = {}
+    readers: dict[str, list[str]] = {}
+    files: dict[str, str] = {}
+    for name in instruction_harnesses():
+        filename = descriptor(name).instruction_file_name
+        if filename is None:  # pragma: no cover - instruction_harnesses filters on it
+            continue
+        source_id = owner.setdefault(filename, f"instruction:{name}")
+        files[source_id] = filename
+        readers.setdefault(source_id, []).append(name)
+    return {
+        source_id: (readers[source_id][0], files[source_id], tuple(readers[source_id]))
+        for source_id in files
+    }
+
+
+def _global_instruction_sources() -> dict[str, tuple[str, tuple[str, ...], str]]:
+    """User-level instruction files, one entry per harness.
+
+    Not collapsed by filename the way project sources are: every harness keeps its
+    global context file somewhere different, so these are genuinely distinct paths
+    that happen to share a name.
+    """
+    sources: dict[str, tuple[str, tuple[str, ...], str]] = {}
+    for name in instruction_harnesses():
+        parts = descriptor(name).global_instruction_parts
+        if parts is None:
+            continue
+        sources[f"instruction:global:{name}"] = (name, parts, "~/" + "/".join(parts))
+    return sources
+
+
+INSTRUCTION_SOURCES = _project_instruction_sources()
+GLOBAL_INSTRUCTION_SOURCES = _global_instruction_sources()
 SYNC_DIRECTIONS = {
     "claude_to_agents": ("CLAUDE.md", "AGENTS.md"),
     "agents_to_claude": ("AGENTS.md", "CLAUDE.md"),
@@ -189,7 +220,7 @@ class AgentContextService:
 
     def _instruction_item(self, root: Path, source_id: str) -> dict[str, Any]:
         if source_id in INSTRUCTION_SOURCES:
-            provider, filename = INSTRUCTION_SOURCES[source_id]
+            provider, filename, readers = INSTRUCTION_SOURCES[source_id]
             path = root / filename
             scope = "project"
             label = filename
@@ -198,9 +229,14 @@ class AgentContextService:
             path = self.home.joinpath(*relative_path)
             filename = path.name
             scope = "global"
+            readers = (provider,)
         item: dict[str, Any] = {
             "id": source_id,
             "provider": provider,
+            # Every harness that reads this file. A project-root instruction file is
+            # shared, so naming only the harness the id was minted from would
+            # under-report who a change reaches.
+            "readers": list(readers),
             "kind": "instructions",
             "scope": scope,
             "label": label,
@@ -418,7 +454,7 @@ class AgentContextService:
     ) -> tuple[Path, str, str, str, str, str]:
         project_root = Path(root).resolve()
         if source_id in INSTRUCTION_SOURCES:
-            provider, filename = INSTRUCTION_SOURCES[source_id]
+            provider, filename, _readers = INSTRUCTION_SOURCES[source_id]
             path = project_root / filename
             kind = "instructions"
             scope = "project"

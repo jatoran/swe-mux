@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .harness import Backend, is_agent_harness
+from .harness import Backend, harness_for_command, is_agent_harness, is_backend
 
 # A spawn may direct a session at a subdirectory of its project (a task that runs
 # in ./frontend), never outside it, and may carry a bounded environment.
@@ -36,20 +36,16 @@ CLAUDE_SESSION_MARKERS = frozenset(
 def infer_agent_executable_backend(
     executable: str | None, arguments: Sequence[str] | None
 ) -> Backend | None:
-    """Identify a direct agent root from its retained executable contract."""
-    executable_name = Path(executable or "").name.casefold()
-    entrypoint = (
-        str(arguments[0]).replace("\\", "/").casefold() if arguments else ""
-    )
-    if executable_name in {"codex", "codex.exe", "codex.cmd", "codex.ps1"} or (
-        "@openai/codex/" in entrypoint and entrypoint.endswith("/codex.js")
-    ):
-        return "codex"
-    if executable_name in {"claude", "claude.exe", "claude.cmd", "claude.ps1"} or (
-        "@anthropic-ai/claude-code/" in entrypoint and entrypoint.endswith("/cli.js")
-    ):
-        return "claude"
-    return None
+    """Identify a direct agent root from its retained executable contract.
+
+    Answered from the registry (`harness_for_command`) rather than from a hardcoded
+    pair of vendors. The hardcoded form recognized only Claude and Codex and returned
+    ``None`` for everything else, which is a silent answer: the history repair that
+    detects a row whose claimed backend disagrees with the executable actually
+    launched simply never fired for omp, pi, or opencode.
+    """
+    name = harness_for_command(executable or "", arguments or ())
+    return name if is_backend(name) else None
 
 
 def scrub_claude_session_markers(environment: Mapping[str, str]) -> dict[str, str]:

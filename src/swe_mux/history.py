@@ -22,6 +22,8 @@ from .sqlite_store import (
 )
 from .transcript_view import (
     TRANSCRIPT_PARSER_VERSION,
+    conversation_is_readable,
+    conversation_watermark,
     parse_transcript,
     searchable_transcript_messages,
     transcript_time_summary,
@@ -1348,23 +1350,29 @@ class HistoryIndex:
         semaphore = asyncio.Semaphore(4)
 
         async def inspect(item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-            transcript = item.get("transcript_path")
-            if not transcript or not has_observable_transcript(item.get("backend")):
+            backend = str(item.get("backend") or "")
+            if not has_observable_transcript(backend):
                 return None
-            path = Path(str(transcript))
+            transcript = item.get("transcript_path")
+            path = Path(str(transcript)) if transcript else None
+            native_id = str(item.get("native_id") or "") or None
+            if not conversation_is_readable(path, backend, native_id):
+                return None
             try:
-                stat = await asyncio.to_thread(path.stat)
+                _identity, first, second = await asyncio.to_thread(
+                    conversation_watermark, path, backend, native_id
+                )
             except OSError:
                 return None
             if (
-                item.get("time_summary_mtime_ns") == stat.st_mtime_ns
-                and item.get("time_summary_size") == stat.st_size
+                item.get("time_summary_mtime_ns") == first
+                and item.get("time_summary_size") == second
             ):
                 return None
             try:
                 async with semaphore:
                     summary = await asyncio.to_thread(
-                        transcript_time_summary, path, str(item["backend"])
+                        transcript_time_summary, path, backend, native_id=native_id
                     )
             except OSError:
                 return None
@@ -1406,12 +1414,27 @@ class HistoryIndex:
         return len(refreshed)
 
     async def index_transcript(
-        self, history_id: str, transcript_path: str | Path, backend: str, *, force: bool = False
+        self,
+        history_id: str,
+        transcript_path: str | Path | None,
+        backend: str,
+        *,
+        force: bool = False,
+        native_id: str | None = None,
     ) -> tuple[str, int]:
-        """Index one native transcript without blocking the event loop."""
-        path = Path(transcript_path)
-        stat = await asyncio.to_thread(path.stat)
-        watermark = (stat.st_mtime_ns, stat.st_size, TRANSCRIPT_PARSER_VERSION)
+        """Index one native conversation without blocking the event loop.
+
+        ``transcript_path`` is ``None`` for a harness that keeps conversations in a
+        store; ``native_id`` names the conversation there. The stored watermark
+        columns keep their names but hold whatever pair identifies that harness's
+        conversation state, which for a store is its own updated-time and message
+        count rather than a file stat (see ``transcript_view.conversation_watermark``).
+        """
+        path = Path(transcript_path) if transcript_path is not None else None
+        _identity, first, second = await asyncio.to_thread(
+            conversation_watermark, path, backend, native_id
+        )
+        watermark = (first, second, TRANSCRIPT_PARSER_VERSION)
 
         def current_watermark() -> tuple[int, int, int] | None:
             row = self._db.execute(
@@ -1427,12 +1450,12 @@ class HistoryIndex:
 
         if not force and await self._run(current_watermark) == watermark:
             return "unchanged", 0
-        messages = await asyncio.to_thread(parse_transcript, path, backend)
+        messages = await asyncio.to_thread(parse_transcript, path, backend, native_id=native_id)
         count = await self.replace_history_messages(
             history_id,
             messages,
-            mtime_ns=stat.st_mtime_ns,
-            size=stat.st_size,
+            mtime_ns=first,
+            size=second,
         )
         return "indexed", count
 

@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import server as server_module
 from swe_mux.agent_context import AgentContextConflict, AgentContextService
 from swe_mux.event_bus import EventBus
+from swe_mux.harness import descriptor, instruction_harnesses
 from swe_mux.server import (
     error_middleware,
     get_agent_context,
@@ -61,7 +62,14 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
     ]
     assert not any(item["changed_since_start"] for item in inventory["instructions"]["items"])
     assert all(item["revealable"] for item in inventory["instructions"]["items"])
+    # Derived from the registry, not pinned to a pair: every harness declaring an
+    # instruction file owes a global entry, and a new one joins this list by
+    # declaring `global_instruction_parts` rather than by editing this test.
     assert [item["label"] for item in inventory["global_instructions"]["items"]] == [
+        "~/" + "/".join(descriptor(name).global_instruction_parts or ())
+        for name in instruction_harnesses()
+    ]
+    assert [item["label"] for item in inventory["global_instructions"]["items"]][:2] == [
         "~/.claude/CLAUDE.md",
         "~/.codex/AGENTS.md",
     ]
@@ -69,7 +77,28 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
         item["scope"] == "global"
         for item in inventory["global_instructions"]["items"]
     )
-    assert all(item["revealable"] for item in inventory["global_instructions"]["items"])
+    # A project-root instruction file is shared, so its readers are named in full:
+    # AGENTS.md is read by every harness that is not Claude.
+    project_readers = {
+        item["label"]: item["readers"] for item in inventory["instructions"]["items"]
+    }
+    assert project_readers["CLAUDE.md"] == ["claude"]
+    assert project_readers["AGENTS.md"] == [
+        name for name in instruction_harnesses() if name != "claude"
+    ]
+    # Only the two globals this fixture created exist; the rest are reported as a
+    # stated absence rather than omitted, which is what makes a missing harness
+    # instruction file visible instead of invisible.
+    global_items = {
+        item["label"]: item for item in inventory["global_instructions"]["items"]
+    }
+    assert global_items["~/.claude/CLAUDE.md"]["revealable"] is True
+    assert global_items["~/.codex/AGENTS.md"]["revealable"] is True
+    assert all(
+        item["status"] == "missing" and item["revealable"] is False
+        for label, item in global_items.items()
+        if label not in {"~/.claude/CLAUDE.md", "~/.codex/AGENTS.md"}
+    )
     claude, codex = inventory["providers"]
     assert claude["status"] == "available"
     assert [item["label"] for item in claude["items"]] == ["MEMORY.md", "testing.md"]
@@ -287,9 +316,11 @@ async def test_agent_context_http_contract(tmp_path: Path, monkeypatch: pytest.M
 
     assert inventory_response.status == 200
     assert inventory_payload["instructions"]["comparison"] == "missing"
+    # One global file exists in this fixture; every other declaring harness reports a
+    # stated absence. The count follows the registry rather than a pinned pair.
     assert [item["status"] for item in inventory_payload["global_instructions"]["items"]] == [
         "available",
-        "missing",
+        *["missing"] * (len(instruction_harnesses()) - 1),
     ]
     assert read_response.status == 200
     assert read_payload["text"].replace("\r\n", "\n") == "shared\n"

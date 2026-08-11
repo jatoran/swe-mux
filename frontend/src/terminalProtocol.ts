@@ -1,3 +1,5 @@
+import { suppressesLateColorResponse } from './harnessRegistry.ts'
+
 const CSI_TERMINAL_RESPONSE = String.raw`\x1b\[[?>]?[0-9;]*(?:\$y|[cRntIO])`
 const OSC_COLOR_RESPONSE = String.raw`\x1b\](?:1[0-2]|4;[0-9]{1,3});(?:rgb:[0-9a-f]{1,4}(?:\/[0-9a-f]{1,4}){2}|rgba:[0-9a-f]{1,4}(?:\/[0-9a-f]{1,4}){3})(?:\x07|\x1b\\)`
 const OSC_DEFAULT_COLOR_RESPONSE = new RegExp(
@@ -19,14 +21,19 @@ export function isTerminalProtocolResponse(data: string): boolean {
 }
 
 /**
- * Codex's native-Windows startup palette probe accepts OSC 10/11 replies for
- * only a short bounded interval. Browser/WS latency can deliver an otherwise
- * valid xterm reply after that probe has ended, at which point Codex treats the
- * reply as composer input. Codex has a console-palette fallback, so dropping
- * this optional response is safer than injecting a late one.
+ * Whether a terminal-protocol reply must be dropped instead of delivered.
+ *
+ * Some CLIs run a startup palette probe that accepts OSC 10/11 replies for only a
+ * short bounded interval. Browser/WS latency can deliver an otherwise valid xterm
+ * reply after that probe has ended, at which point the CLI treats the reply as
+ * composer input. Such a CLI has a console-palette fallback, so dropping the
+ * optional response is safer than injecting a late one.
+ *
+ * Declared per harness (`suppresses_late_color_response`) and matched by the daemon
+ * on the same trait, so the two ends cannot disagree about which panes are filtered.
  */
 export function shouldSuppressTerminalProtocolResponse(data: string, backend: string): boolean {
-  return backend === 'codex'
+  return suppressesLateColorResponse(backend)
     && TERMINAL_PROTOCOL_RESPONSE.test(data)
     && OSC_DEFAULT_COLOR_RESPONSE.test(data)
 }

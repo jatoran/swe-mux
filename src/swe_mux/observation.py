@@ -2917,6 +2917,21 @@ async def apply_hook_observation(
             f"activity:hook:{event_type}",
             tool_use_id=tool_use_id,
         )
+        # A harness with no transcript source has hooks as its only evidence, so this
+        # is the only place its tool completions can be reported. Harnesses that do
+        # read a transcript emit `tool_result` from the record instead, which carries
+        # the result payload this hook does not; emitting here as well would double
+        # count them.
+        if "transcript" not in descriptor(session.record.backend).state_sources:
+            await events.emit(
+                "tool_result",
+                session_id=session.record.id,
+                source="hook",
+                scope="root",
+                tool=str(payload.get("tool_name") or payload.get("name") or "tool"),
+                call_id=tool_use_id,
+                success=event_type != "PostToolUseFailure",
+            )
         if _transcript_authoritative(session):
             return
         state = _observation_state(session)

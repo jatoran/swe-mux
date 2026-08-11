@@ -6,6 +6,7 @@ import json
 import re
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any
 
 from .automation_store import AutomationStore
@@ -16,7 +17,20 @@ from .event_bus import EventBus
 from .models import MuxEvent
 from .processes import OwnedProcess, PreviewRegistry, ProcessInspector
 from .session import Session, SessionManager
-from .transcript_view import parse_transcript_cached
+from .transcript_view import conversation_is_readable, parse_transcript_cached
+
+# The claim check only reads the tail of a turn, so it never needs the whole
+# conversation and must not pay for one on a long-running session.
+_CLAIM_CHECK_MAX_BYTES = 256 * 1024
+
+
+def _read_recent(
+    path: Path | None, backend: str, native_id: str | None
+) -> list[dict[str, Any]]:
+    """Positional `parse_transcript_cached`, since `asyncio.to_thread` takes no keywords."""
+    return parse_transcript_cached(
+        path, backend, max_bytes=_CLAIM_CHECK_MAX_BYTES, native_id=native_id
+    )
 
 STALL_SECONDS = 300
 UNATTENDED_SECONDS = 15
@@ -218,15 +232,20 @@ class FleetIntelligence:
 
     async def _claim_check(self, session_id: str, ended_at: float) -> None:
         session = self.sessions.sessions.get(session_id)
-        if not session or not session.transcript_path or not session.transcript_path.is_file():
+        if not session:
+            return
+        native_id = session.record.native_session_id
+        if not conversation_is_readable(
+            session.transcript_path, session.record.backend, native_id
+        ):
             return
         try:
             messages = await asyncio.wait_for(
                 asyncio.to_thread(
-                    parse_transcript_cached,
+                    _read_recent,
                     session.transcript_path,
                     session.record.backend,
-                    max_bytes=256 * 1024,
+                    native_id,
                 ),
                 timeout=2,
             )

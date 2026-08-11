@@ -16,8 +16,16 @@ from typing import Any, TypeVar, assert_never
 
 from .background_tasks import background
 from .event_bus import EventBus
-from .harness import Backend, require_backend
+from .harness import (
+    HARNESSES,
+    Backend,
+    TranscriptDialect,
+    conversation_store_path,
+    require_backend,
+)
 from .models import MuxEvent
+from .opencode_store import conversation_records
+from .opencode_store import conversation_watermark as store_watermark
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -34,12 +42,30 @@ TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
 TELEMETRY_SCHEMA_VERSION = 5
 TOOL_PARSER_VERSION = "phase2-v1"
-TOOL_PARSER_VERSIONS = {
+# Parser revisions, keyed by transcript *dialect* rather than by harness.
+#
+# The version's job is cache invalidation: a stored coverage row is reusable only
+# while the parser that produced it is unchanged. That parser is chosen by dialect,
+# so two harnesses sharing a dialect necessarily share a revision, and keying by
+# harness let them disagree. pi ran omp's `phase2-v2` extractor while versioned
+# `pi-phase2-v1` through a name-keyed fallback, which would have left its rows
+# uninvalidated the next time that extractor changed.
+#
+# The pi-dialect revision is independent of the other two because its support
+# arrived after the original phase2 parser shipped, and bumping it must not
+# invalidate Claude and Codex coverage.
+_DIALECT_PARSER_VERSIONS: dict[TranscriptDialect, str] = {
     "claude": f"claude-{TOOL_PARSER_VERSION}",
     "codex": f"codex-{TOOL_PARSER_VERSION}",
-    # OMP support was added after the original phase2 parser shipped.
-    # Keep its revision independent so existing Claude/Codex coverage remains current.
-    "omp": "omp-phase2-v2",
+    "pi": "pi-phase2-v2",
+    # Its extractor arrived with the store reader, after the others, so its
+    # revision is independent for the same reason pi's is.
+    "opencode": "opencode-phase2-v3",
+}
+TOOL_PARSER_VERSIONS = {
+    name: _DIALECT_PARSER_VERSIONS[harness.transcript_dialect]
+    for name, harness in HARNESSES.items()
+    if harness.transcript_dialect is not None
 }
 CODEX_KNOWN_OUTER_RECORDS = {
     "compacted",
@@ -619,29 +645,48 @@ class OperationalTelemetryStore:
         rows = await self.history.telemetry_history_rows(limit)
         summary = {"scanned": 0, "skipped": 0, "errors": 0}
         for row in rows:
-            path = Path(str(row.get("transcript_path") or ""))
+            raw_path = row.get("transcript_path")
+            path = Path(str(raw_path)) if raw_path else None
+            backend_name = str(row["backend"])
+            native_id = str(row.get("native_id") or "") or None
+            store = conversation_store_path(backend_name)
             try:
-                stat = await asyncio.to_thread(path.stat)
+                if store is not None:
+                    # A store-backed conversation has no file to stat. Its watermark
+                    # is the harness's own updated-time and message count, which is
+                    # what makes "unchanged" answerable per conversation rather than
+                    # per database file.
+                    pair = await asyncio.to_thread(store_watermark, store, native_id or "")
+                    if pair is None:
+                        raise OSError("conversation is not in the store")
+                    first, second = pair
+                    source: Path | list[dict[str, Any]] = await asyncio.to_thread(
+                        conversation_records, store, native_id or ""
+                    )
+                else:
+                    if path is None:
+                        raise OSError("no transcript path")
+                    stat = await asyncio.to_thread(path.stat)
+                    first, second = stat.st_mtime_ns, stat.st_size
+                    source = path
             except OSError:
                 await self._record_coverage_error(row, "transcript_unavailable")
                 summary["errors"] += 1
                 continue
-            if await self._coverage_current(
-                str(row["id"]), str(row["backend"]), stat.st_mtime_ns, stat.st_size
-            ):
+            if await self._coverage_current(str(row["id"]), backend_name, first, second):
                 summary["skipped"] += 1
                 continue
             try:
-                backend = require_backend(str(row["backend"]))
+                backend = require_backend(backend_name)
                 scan = await asyncio.to_thread(
                     scan_native_telemetry,
-                    path,
+                    source,
                     backend,
                     str(row["id"]),
                     row.get("project_id"),
                     row.get("model"),
                 )
-                await self._persist_transcript_scan(row, stat.st_mtime_ns, stat.st_size, scan)
+                await self._persist_transcript_scan(row, first, second, scan)
                 summary["scanned"] += 1
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 await self._record_coverage_error(row, str(exc)[:500])
@@ -1943,41 +1988,50 @@ class OperationalTelemetryStore:
 
 
 def scan_native_telemetry(
-    path: Path,
+    path: Path | list[dict[str, Any]],
     backend: Backend,
     session_id: str,
     project_id: str | None,
     model: str | None,
 ) -> dict[str, Any]:
-    """Parse explicit telemetry from a bounded native JSONL transcript.
+    """Parse explicit telemetry from one conversation's records.
+
+    ``path`` is a native JSONL transcript, or an already-projected record list for a
+    harness that keeps its conversation in a store and therefore has no file to
+    bound by bytes (`opencode_store.conversation_records`).
 
     Prompt and result bodies are never retained. Files above 32 MiB are scanned from
     the tail so startup work stays bounded; coverage reports that limitation.
     """
     del project_id, model
-    size = path.stat().st_size
-    tail_bytes = 32 * 1024 * 1024
-    truncated = size > tail_bytes
     records: list[tuple[int, dict[str, Any]]] = []
-    with path.open("rb") as handle:
-        if truncated:
-            handle.seek(size - tail_bytes)
-            handle.readline()
-        for index, raw_line in enumerate(handle):
-            if not raw_line.strip():
-                continue
-            try:
-                item = json.loads(raw_line.decode("utf-8", "replace"))
-            except json.JSONDecodeError:
-                continue
-            if isinstance(item, dict):
-                records.append((index, item))
+    if isinstance(path, list):
+        truncated = False
+        records = list(enumerate(path))
+        base_time = time.time()
+    else:
+        size = path.stat().st_size
+        tail_bytes = 32 * 1024 * 1024
+        truncated = size > tail_bytes
+        with path.open("rb") as handle:
+            if truncated:
+                handle.seek(size - tail_bytes)
+                handle.readline()
+            for index, raw_line in enumerate(handle):
+                if not raw_line.strip():
+                    continue
+                try:
+                    item = json.loads(raw_line.decode("utf-8", "replace"))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    records.append((index, item))
+        base_time = path.stat().st_mtime
     tools: list[dict[str, Any]] = []
     compactions: list[dict[str, Any]] = []
     recognized = 0
     unknown = 0
     names: dict[str, str] = {}
-    base_time = path.stat().st_mtime
 
     def observed(record: dict[str, Any], index: int) -> float:
         value = record.get("timestamp") or record.get("created_at")
@@ -2148,8 +2202,59 @@ def scan_native_telemetry(
         elif backend == "shell":
             unknown += 1
         elif backend == "opencode":
-            # No transcript records exist to derive telemetry from.
-            unknown += 1
+            # Records projected from `opencode.db` (`opencode_store`): one per
+            # message, with its tool calls as parts rather than as separate records.
+            # A tool part carries its own completion, so a single part yields both
+            # the use and the result and there is no id to carry between records.
+            if str(record.get("type") or "") != "message":
+                unknown += 1
+                continue
+            recognized += 1
+            opencode_message = record.get("message")
+            if not isinstance(opencode_message, dict):
+                continue
+            if str(opencode_message.get("role") or "") != "assistant":
+                continue
+            parts = record.get("parts")
+            for part_index, part in enumerate(parts if isinstance(parts, list) else []):
+                if not isinstance(part, dict) or part.get("type") != "tool":
+                    continue
+                call_id = str(part.get("callID") or f"line-{index}-{part_index}")
+                name = str(part.get("tool") or "tool")
+                state = part.get("state")
+                state = state if isinstance(state, dict) else {}
+                tools.append(
+                    {
+                        "source_identity": f"native:{session_id}:tool_use:{call_id}",
+                        "observed_at": when,
+                        "kind": "tool_use",
+                        "raw_tool": name,
+                        "explicit_skill": None,
+                    }
+                )
+                status = str(state.get("status") or "")
+                if status not in {"completed", "error"}:
+                    # Still running, or abandoned mid-turn. A result that has not
+                    # happened is not recorded as one.
+                    continue
+                timing = state.get("time")
+                timing = timing if isinstance(timing, dict) else {}
+                start = _finite(timing.get("start"))
+                end = _finite(timing.get("end"))
+                tools.append(
+                    {
+                        "source_identity": f"native:{session_id}:tool_result:{call_id}",
+                        "observed_at": when,
+                        "kind": "tool_result",
+                        "raw_tool": name,
+                        "success": int(status == "completed"),
+                        # opencode stamps milliseconds on both ends, so the
+                        # difference is already the unit this column holds.
+                        "duration_ms": (
+                            end - start if start is not None and end is not None else None
+                        ),
+                    }
+                )
         elif backend == "omp" or backend == "pi":
             outer = str(record.get("type") or "")
             known_records = OMP_KNOWN_RECORDS if backend == "omp" else PI_KNOWN_RECORDS

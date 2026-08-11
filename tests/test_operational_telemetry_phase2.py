@@ -895,10 +895,15 @@ async def test_explicit_compaction_tool_and_skill_events_are_durable(
     snapshot = await store.snapshot()
     assert snapshot["tools"]["metrics"][0]["raw_tool"] in {"Bash", "Skill"}
     assert snapshot["tools"]["metrics"][0]["session_id"] == "session-a"
+    # Keyed by harness, valued by dialect: omp and pi share one extractor, so they
+    # must share one revision or a future bump would leave the other's cached
+    # coverage rows uninvalidated.
     assert snapshot["tools"]["parser_versions"] == {
         "claude": "claude-phase2-v1",
         "codex": "codex-phase2-v1",
-        "omp": "omp-phase2-v2",
+        "omp": "pi-phase2-v2",
+        "pi": "pi-phase2-v2",
+        "opencode": "opencode-phase2-v3",
     }
     assert snapshot["tools"]["skills"][0]["explicit_skill"] == "review-code"
     assert snapshot["compactions"][0]["count"] == 1

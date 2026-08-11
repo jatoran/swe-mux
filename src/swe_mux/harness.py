@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -31,10 +32,84 @@ MeasurementSource = Literal["transcript", "database", "none"]
 #
 # `None` means the harness writes no parseable conversation records at all
 # (opencode keeps its conversations as rows in `opencode.db`).
-TranscriptDialect = Literal["claude", "codex", "pi"]
+TranscriptDialect = Literal["claude", "codex", "pi", "opencode"]
 ToolCatalogSource = Literal["documented_catalog", "runtime_dependent"]
 Backend = Literal["shell", "claude", "codex", "omp", "pi", "opencode"]
 AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
+# How a harness forks a live conversation, for the harnesses that can.
+#
+# `native_slash_command` drives the CLI's own fork command over the PTY and lets
+# it mint the new conversation. `resume_child_thread` spawns a resume of the
+# parent, which the CLI opens as a child thread. `None` means mux has no
+# implemented strategy and the server refuses the request rather than reaching
+# for a generic one: resuming a live conversation whose writer is still attached
+# would interleave two writers into one session file.
+BranchStrategy = Literal["native_slash_command", "resume_child_thread"]
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationDiscovery:
+    """How mux finds conversations this harness wrote that mux did not run.
+
+    Retroactive discovery is what puts a CLI's own past sessions into History, so it
+    can be searched and resumed alongside the ones mux launched. It is a capability
+    every harness has to answer, and answering it accidentally is the failure this
+    declaration exists to stop: the scanner used to hold a hardcoded two-vendor
+    tuple, so omp, pi, and opencode were silently undiscoverable with nothing saying
+    so, in prose or in a test.
+
+    `subdirectory` is relative to the harness's `data_home`, and `pattern` is the
+    glob that matches one conversation inside it. `cwd_scoped` marks a layout that
+    stores each conversation under a directory encoding its working directory, which
+    lets a project-scoped backfill read a handful of directories instead of every
+    conversation on the machine.
+
+    `store` means the conversations are rows, found by querying rather than walking;
+    the harness's `conversation_store_file` names the database.
+
+    `None` on the whole field is a *declared* refusal: mux does not discover this
+    harness's past conversations, and the reason belongs beside the declaration.
+    """
+
+    subdirectory: tuple[str, ...] | None = None
+    pattern: str | None = None
+    cwd_scoped: bool = False
+    store: bool = False
+
+    def __post_init__(self) -> None:
+        if self.store:
+            if self.subdirectory is not None or self.pattern is not None:
+                raise ValueError("a store discovery declares no filesystem layout")
+        elif not self.subdirectory or not self.pattern:
+            raise ValueError("a filesystem discovery must declare a subdirectory and pattern")
+
+
+@dataclass(frozen=True, slots=True)
+class HeadlessProbes:
+    """Non-interactive invocations the live conformance canary drives.
+
+    Each is argv after the executable, with the prompt appended last. The canary runs
+    a real authenticated CLI and replays what it wrote through the observer, so a CLI
+    that changes its record shape or stops emitting a terminal signal is caught
+    against the actual binary rather than against a fixture.
+
+    Declared per harness because every CLI spells these differently, and declared
+    *here* so the canary parametrizes from the registry: it used to name two vendors,
+    which left three later harnesses with no live tier and nothing reporting the hole.
+
+    `None` on a probe means the harness cannot be asked for that shape. That is a
+    capability statement, not a deferral: pi ships no subagent tool, so a subagent
+    canary for it would be asserting on behaviour that does not exist.
+    """
+
+    # One prompt, no tools at all. The baseline conformance run.
+    read_only: tuple[str, ...] | None = None
+    # One prompt with a read-only file or shell tool permitted, so the run produces
+    # tool_use/tool_result records for the telemetry canary.
+    read_tool: tuple[str, ...] | None = None
+    # One prompt permitted to spawn a subagent, for the subagent-signal canary.
+    subagent: tuple[str, ...] | None = None
+
 
 DataHomeResolver = Callable[[], Path]
 ToolCatalog = tuple[tuple[str, str], ...]
@@ -79,6 +154,17 @@ class HarnessDescriptor:
     config_dir_name: str
     script_base_name: str
     rollout_file_prefix: str | None
+    # The file under `data_home` holding conversations, for a harness that keeps
+    # them in a store rather than one file per conversation. `None` for the
+    # file-per-conversation harnesses, whose location is an adapter computation from
+    # the conversation id and (sometimes) the working directory.
+    #
+    # Declared because two independent readers need it: the adapter, for exact token
+    # and cost figures off the session row, and the transcript reader, for the
+    # messages themselves.
+    conversation_store_file: str | None
+    # How mux finds this harness's past conversations. See :class:`ConversationDiscovery`.
+    conversation_discovery: ConversationDiscovery | None
     reports_transcript_path: bool
     external_usage_command: bool
     provider_account_management: bool
@@ -99,9 +185,93 @@ class HarnessDescriptor:
     assigns_conversation_id: bool
     resolves_transcript_by_cwd: bool
 
+    # Argv tokens that immediately precede a conversation id, as the harness's own
+    # CLI spells them. `spawn_id_argv` is how mux *dictates* an id at spawn (only a
+    # harness with `assigns_conversation_id` has one); `resume_argv` is how the CLI
+    # is asked to reopen an existing conversation.
+    #
+    # Declared rather than pattern-matched because three consumers need the same
+    # answer and each used to re-derive it from strings: recovering a pane's
+    # conversation id from its recorded argv, refusing a resume whose id is still a
+    # placeholder, and rendering the human-pasteable resume command. The string
+    # matching recognized Claude and Codex only, so the other three harnesses fell
+    # into an `else` that quietly did nothing.
+    spawn_id_argv: tuple[str, ...]
+    resume_argv: tuple[str, ...]
+    # How a live conversation is forked, or `None` when mux implements no strategy.
+    branch_strategy: BranchStrategy | None
+    # The root instruction file this CLI reads from a project, and the directory
+    # holding its user-level counterpart. `None` on both when mux has measured none,
+    # which is a declared absence rather than an oversight: Agent Context lists no
+    # instruction source for such a harness instead of guessing a filename.
+    #
+    # The user-level counterpart is its own home-relative path because no existing
+    # field predicts it and every harness answers differently: Claude and Codex keep
+    # it under `config_dir_name`, pi under its agent directory, oh-my-pi under
+    # `~/.agent`, and opencode under `~/.config/opencode`.
+    #
+    # Home-relative rather than a resolver, because the reader of these files is
+    # given the home to look under: tests point it at a temporary directory, which a
+    # resolver reading the real environment would silently defeat. An env-relocated
+    # data home is therefore not followed here, which is the behaviour Claude and
+    # Codex already had.
+    instruction_file_name: str | None
+    global_instruction_parts: tuple[str, ...] | None
+    # What a user types to invoke an authored skill. Published to the browser so the
+    # command rail stops re-deriving it: the rail's own copy knew `$` for Codex and
+    # `/` for everything else, which types `/name` on oh-my-pi where the CLI wants
+    # `/skill:name`.
+    skill_invocation_prefix: str
+    # npm package prefix and entrypoint suffix, when the CLI ships as an npm package
+    # whose `.cmd` shim resolves to a JS entrypoint. Used to recognize a harness from
+    # an already-launched command line. `None` when unmeasured; recognition then falls
+    # back to the executable name, which every harness declares.
+    npm_entrypoint: tuple[str, str] | None
+    # The PTY must launch this CLI's JS entrypoint directly instead of its `.cmd`
+    # shim, because an argument it needs cannot survive cmd.exe. Codex passes a
+    # JSON-valued `-c notify=...` that npm's batch shim mangles; every other
+    # npm-shipped harness reads its shim generically, which is cheaper and needs no
+    # knowledge of the package layout.
+    requires_direct_entrypoint: bool
+    # Non-interactive invocations the live conformance canary drives against the real
+    # CLI. See :class:`HeadlessProbes`.
+    headless_probes: HeadlessProbes
+
     submission: str
     root_completion: str
     screen: str
+
+    # Whether this CLI publishes its own liveness to a state file mux reads. The
+    # single home for that question: a consumer that hardcoded the Claude answer
+    # gave every other harness Claude's veto semantics without saying so.
+    publishes_cli_state: bool
+
+    # --- Terminal surface traits -------------------------------------------------
+    # Each answers a question the browser must ask before it can render a pane, and
+    # each was previously a harness name compiled into the frontend. A new harness
+    # declares them here and the browser reads them off the registry payload.
+    #
+    # `webgl_unsafe` is *not* `repaints_scrollback` and must not be merged with it.
+    # `repaints_scrollback` excludes a harness from WebGL under the `auto` preference
+    # and an explicit `webgl` preference overrides it. `webgl_unsafe` is absolute:
+    # Claude's retained alternate screen and OMP's continuous tail repaint both leave
+    # a live WebGL context intermittently mangled with no context-loss event to
+    # recover from, so neither exposes the override.
+    webgl_unsafe: bool
+    # The TUI keeps its own scroll viewport, so reaching the newest output has to be
+    # asked of the application as well as of xterm. False does not mean "never": a
+    # pane that has negotiated mouse tracking is handed scroll gestures dynamically
+    # and answers the same way at runtime.
+    owns_scroll_viewport: bool
+    # The desktop column envelope (`claude_max_columns`) applies to this harness.
+    applies_width_envelope: bool
+    # A published minimum column count below which desktop panes reduce the font
+    # rather than accept a narrower grid. `None` when the vendor publishes none.
+    min_desktop_columns: int | None
+    # The CLI's startup palette probe accepts OSC 10/11 replies for a bounded
+    # interval and treats a late reply as composer input, so such replies are dropped
+    # rather than delivered.
+    suppresses_late_color_response: bool
 
     native_hooks: bool
     transcript: str | None
@@ -117,6 +287,19 @@ class HarnessDescriptor:
             raise ValueError("harness identity fields must not be empty")
         if len(set(self.state_sources)) != len(self.state_sources):
             raise ValueError(f"duplicate state source for harness {self.name}")
+        if not self.resume_argv:
+            raise ValueError(f"harness {self.name} must declare how its CLI resumes")
+        if not self.skill_invocation_prefix:
+            raise ValueError(f"harness {self.name} must declare a skill invocation prefix")
+        if bool(self.spawn_id_argv) != self.assigns_conversation_id:
+            # The two say the same thing from opposite ends. A harness that dictates
+            # its conversation id has argv that carries it, and a harness with such
+            # argv is dictating one; letting them disagree is how a placeholder id
+            # gets treated as authoritative.
+            raise ValueError(
+                f"harness {self.name} must declare spawn id argv exactly when it "
+                f"assigns the conversation id"
+            )
 
     @property
     def level(self) -> HarnessLevel:
@@ -203,6 +386,25 @@ def _opencode_data_home() -> Path:
         if first:
             return Path(first).expanduser()
     return Path.home() / ".local" / "share" / "opencode"
+
+
+# Where each CLI looks for its user-level context file, relative to the user's home.
+# Measured 2026-08-11 against the installed CLIs rather than inferred from their
+# config directories, because none of them agrees with the others:
+#
+# - pi's usage documentation states the load order as `~/.pi/agent/AGENTS.md` first,
+#   then a walk up from the working directory.
+# - oh-my-pi enumerates user paths as `~/.agent/<segment>` and `~/.agents/<segment>`
+#   (`AGENT_DIR_CANDIDATES` in its `discovery/agents.ts`) and loads `AGENTS.md` from
+#   each. The first candidate is the one mux reports, because a reader needs one
+#   canonical path rather than a search order.
+# - opencode documents `~/.config/opencode/AGENTS.md`, alongside its `opencode.json`.
+#   It splits config from data, and a context file is config.
+_CLAUDE_GLOBAL_INSTRUCTIONS = (".claude", "CLAUDE.md")
+_CODEX_GLOBAL_INSTRUCTIONS = (".codex", "AGENTS.md")
+_OMP_GLOBAL_INSTRUCTIONS = (".agent", "AGENTS.md")
+_PI_GLOBAL_INSTRUCTIONS = (".pi", "agent", "AGENTS.md")
+_OPENCODE_GLOBAL_INSTRUCTIONS = (".config", "opencode", "AGENTS.md")
 
 
 _NORMALIZED_AGENT_EVENTS = (
@@ -406,6 +608,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         config_dir_name=".claude",
         script_base_name="claude",
         rollout_file_prefix=None,
+        conversation_store_file=None,
+        conversation_discovery=ConversationDiscovery(
+            subdirectory=("projects",), pattern="*.jsonl", cwd_scoped=True
+        ),
         reports_transcript_path=True,
         external_usage_command=True,
         provider_account_management=True,
@@ -416,9 +622,32 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         reports_conversation_rollover=True,
         assigns_conversation_id=True,
         resolves_transcript_by_cwd=True,
+        spawn_id_argv=("--session-id",),
+        resume_argv=("--resume",),
+        branch_strategy="native_slash_command",
+        instruction_file_name="CLAUDE.md",
+        global_instruction_parts=_CLAUDE_GLOBAL_INSTRUCTIONS,
+        skill_invocation_prefix="/",
+        npm_entrypoint=("@anthropic-ai/claude-code/", "/cli.js"),
+        requires_direct_entrypoint=False,
+        headless_probes=HeadlessProbes(
+            read_only=("--print", "--safe-mode", "--tools", ""),
+            read_tool=("--print", "--permission-mode", "dontAsk", "--allowedTools", "Read"),
+            subagent=("--print", "--allowedTools", "Agent", "--permission-mode", "dontAsk"),
+        ),
         submission="terminal_line",
         root_completion="stop_or_transcript",
         screen="alternate",
+        publishes_cli_state=True,
+        # Absolute, not the `repaints_scrollback` exclusion: Claude's retained
+        # alternate screen mangles a live WebGL context after a hidden pane returns
+        # or a deep session is rebuilt from bounded replay, with no context-loss
+        # event and no recovery short of a real resize.
+        webgl_unsafe=True,
+        owns_scroll_viewport=True,
+        applies_width_envelope=True,
+        min_desktop_columns=None,
+        suppresses_late_color_response=False,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -439,6 +668,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         config_dir_name=".codex",
         script_base_name="codex",
         rollout_file_prefix="rollout-",
+        conversation_store_file=None,
+        conversation_discovery=ConversationDiscovery(
+            subdirectory=("sessions",), pattern="rollout-*.jsonl"
+        ),
         reports_transcript_path=True,
         external_usage_command=True,
         provider_account_management=True,
@@ -449,9 +682,32 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         reports_conversation_rollover=False,
         assigns_conversation_id=False,
         resolves_transcript_by_cwd=False,
+        spawn_id_argv=(),
+        resume_argv=("resume",),
+        branch_strategy="resume_child_thread",
+        instruction_file_name="AGENTS.md",
+        global_instruction_parts=_CODEX_GLOBAL_INSTRUCTIONS,
+        skill_invocation_prefix="$",
+        npm_entrypoint=("@openai/codex/", "/codex.js"),
+        requires_direct_entrypoint=True,
+        # One invocation covers all three: `exec` is already non-interactive and the
+        # read-only sandbox still permits reads and subagent threads.
+        headless_probes=HeadlessProbes(
+            read_only=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
+            read_tool=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
+            subagent=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
+        ),
         submission="terminal_line",
         root_completion="task_complete",
         screen="normal",
+        publishes_cli_state=False,
+        webgl_unsafe=False,
+        owns_scroll_viewport=False,
+        applies_width_envelope=False,
+        # Codex publishes an 80-column floor in its own terminal diagnostics; below
+        # it the composer wraps through visually blank rows.
+        min_desktop_columns=80,
+        suppresses_late_color_response=True,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -472,6 +728,13 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         config_dir_name=".omp",
         script_base_name="omp",
         rollout_file_prefix=None,
+        conversation_store_file=None,
+        # `<data_home>/sessions/<cwd-bucket>/*.jsonl`. Not `cwd_scoped`: the bucket
+        # name is a slug rather than a prefix-preserving encoding, so a project scan
+        # cannot select directories by prefix and reads them all.
+        conversation_discovery=ConversationDiscovery(
+            subdirectory=("sessions",), pattern="*.jsonl"
+        ),
         reports_transcript_path=True,
         external_usage_command=False,
         provider_account_management=False,
@@ -482,9 +745,35 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         reports_conversation_rollover=True,
         assigns_conversation_id=False,
         resolves_transcript_by_cwd=True,
+        spawn_id_argv=(),
+        resume_argv=("--resume",),
+        # No strategy: `--resume` reopens the same session file, so forking a live
+        # OMP conversation would put two writers on one file.
+        branch_strategy=None,
+        instruction_file_name="AGENTS.md",
+        global_instruction_parts=_OMP_GLOBAL_INSTRUCTIONS,
+        skill_invocation_prefix="/skill:",
+        npm_entrypoint=None,
+        requires_direct_entrypoint=False,
+        # `-p` is print mode; `--no-tools` is the read-only guarantee. Its `task`
+        # tool is what makes a subagent probe meaningful, so the default tool set is
+        # left in place for that one.
+        headless_probes=HeadlessProbes(
+            read_only=("-p", "--no-tools"),
+            read_tool=("-p",),
+            subagent=("-p",),
+        ),
         submission="terminal_line",
         root_completion="assistant_stop",
         screen="normal",
+        publishes_cli_state=False,
+        # Its tail repaints continuously, so a mangled WebGL context is
+        # indistinguishable from incomplete replay and the override is not offered.
+        webgl_unsafe=True,
+        owns_scroll_viewport=False,
+        applies_width_envelope=False,
+        min_desktop_columns=None,
+        suppresses_late_color_response=False,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -505,6 +794,12 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         config_dir_name=".pi",
         script_base_name="pi",
         rollout_file_prefix=None,
+        conversation_store_file=None,
+        # Same layout as oh-my-pi, which is unsurprising for a fork: sessions live
+        # under `<data_home>/sessions/<cwd-bucket>/*.jsonl`.
+        conversation_discovery=ConversationDiscovery(
+            subdirectory=("sessions",), pattern="*.jsonl"
+        ),
         # The mux extension reports `ctx.sessionManager.getSessionFile()` on
         # `session_start`. That is pi's only strong pane-to-conversation link:
         # unlike oh-my-pi it writes no `terminal-sessions/<terminal-id>`
@@ -524,9 +819,36 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         reports_conversation_rollover=True,
         assigns_conversation_id=False,
         resolves_transcript_by_cwd=True,
+        spawn_id_argv=(),
+        # `--session` and not `--resume`: pi's `--resume` is an interactive picker
+        # that sits waiting for a keystroke, while `--session <id-or-path>` reopens
+        # the named conversation directly.
+        resume_argv=("--session",),
+        # `--session` appends to the same file wherever pi stands, so a fork would
+        # put two writers on one conversation.
+        branch_strategy=None,
+        instruction_file_name="AGENTS.md",
+        global_instruction_parts=_PI_GLOBAL_INSTRUCTIONS,
+        skill_invocation_prefix="/",
+        npm_entrypoint=None,
+        requires_direct_entrypoint=False,
+        # No subagent probe: pi's documented tool set is read/write/edit/bash/glob/
+        # grep/list with no task tool, so there is no subagent for a canary to
+        # observe. Declaring one would demand evidence the CLI cannot produce.
+        headless_probes=HeadlessProbes(
+            read_only=("-p", "--no-tools"),
+            read_tool=("-p",),
+            subagent=None,
+        ),
         submission="terminal_line",
         root_completion="assistant_stop",
         screen="normal",
+        publishes_cli_state=False,
+        webgl_unsafe=False,
+        owns_scroll_viewport=False,
+        applies_width_envelope=False,
+        min_desktop_columns=None,
+        suppresses_late_color_response=False,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -542,11 +864,19 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         default_args=(),
         data_home=_opencode_data_home,
         adapter_family="opencode",
-        transcript_dialect=None,
+        # A dialect of its own, read from `opencode.db` rather than from a file.
+        # `transcript_dialect` names the record *shape* and the reader that parses
+        # it, which is a separate question from whether those records arrive as
+        # lines in a file: `opencode_store` projects its `message` and `part` rows
+        # into records, and `transcript_view` reads them like any other dialect.
+        transcript_dialect="opencode",
         native_id_pattern=r"ses_[A-Za-z0-9]{8,64}",
         config_dir_name=".opencode",
         script_base_name="opencode",
         rollout_file_prefix=None,
+        conversation_store_file="opencode.db",
+        # Rows, not files: discovery queries `session` instead of walking a tree.
+        conversation_discovery=ConversationDiscovery(store=True),
         # There is no transcript file to report; conversations live as rows in
         # `opencode.db`, addressed by session id.
         reports_transcript_path=False,
@@ -584,11 +914,41 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # A session row is keyed by id and carries its own `directory`; the
         # conversation never moves when the CLI's working directory changes.
         resolves_transcript_by_cwd=False,
+        spawn_id_argv=(),
+        resume_argv=("--session",),
+        # `--session` reopens the same row, so a fork would put two writers on one
+        # conversation.
+        branch_strategy=None,
+        instruction_file_name="AGENTS.md",
+        global_instruction_parts=_OPENCODE_GLOBAL_INSTRUCTIONS,
+        skill_invocation_prefix="/",
+        npm_entrypoint=None,
+        requires_direct_entrypoint=False,
+        # `opencode run` is the non-interactive form. Its read-only guarantee is
+        # configuration (`permission` in opencode.json) rather than a flag, so a
+        # probe that needs one writes it; the argv is the same either way. Excluded
+        # from the transcript canary regardless, because it writes no transcript.
+        headless_probes=HeadlessProbes(
+            read_only=("run",),
+            read_tool=("run",),
+            subagent=("run",),
+        ),
         submission="terminal_line",
         root_completion="session_idle",
         screen="alternate",
+        publishes_cli_state=False,
+        webgl_unsafe=False,
+        owns_scroll_viewport=False,
+        applies_width_envelope=False,
+        min_desktop_columns=None,
+        suppresses_late_color_response=False,
         native_hooks=True,
-        transcript=None,
+        # Semantic records, read from the store rather than tailed from a file.
+        # This is the automation-evidence label, not a claim that a byte-offset
+        # tailer follows it: `transcript` is absent from `state_sources` above
+        # because nothing here moves lifecycle state, while the records themselves
+        # are readable on demand for the Transcript tab and history search.
+        transcript="semantic",
         pty=None,
         normalized_events=_NORMALIZED_AGENT_EVENTS,
         tool_catalog=_OPENCODE_TOOLS,
@@ -628,6 +988,12 @@ def transcript_dialect(name: object) -> TranscriptDialect | None:
 
 
 def agent_harnesses() -> tuple[str, ...]:
+    """Every registered harness, in declaration order.
+
+    Declaration order is the product's own ordering, so the first entry is the
+    reasonable default for a caller that must pick an agent and was given nothing to
+    go on. Callers should prefer a configured default and fall back here.
+    """
     return tuple(HARNESSES)
 
 
@@ -709,6 +1075,184 @@ def needs_resize_repaint(name: object) -> bool:
     return isinstance(name, str) and name in HARNESSES and HARNESSES[name].screen == "alternate"
 
 
+def publishes_cli_state(name: object) -> bool:
+    """Whether this CLI writes its own liveness to a state file mux reads.
+
+    The single home for the question. Both the layer that reads those files and the
+    PTY classifier that lets a CLI-state reading veto or override a screen reading
+    must agree, and the classifier used to answer it with a hardcoded ``"claude"``.
+    """
+    return isinstance(name, str) and name in HARNESSES and HARNESSES[name].publishes_cli_state
+
+
+def assigns_conversation_id(name: object) -> bool:
+    """Whether mux dictates this harness's conversation id at spawn.
+
+    True makes ``record.native_session_id`` authoritative from the first moment, so
+    only an exact id match may bind a transcript and a mismatched file is the wrong
+    file rather than a newer identity. False means the CLI mints its own and the
+    record carries a placeholder until discovery. Fails closed for a shell or an
+    unknown name, because treating a placeholder as authoritative leaves a session
+    permanently unobserved.
+    """
+    return isinstance(name, str) and name in HARNESSES and HARNESSES[name].assigns_conversation_id
+
+
+def conversation_id_argv(name: object) -> tuple[str, ...]:
+    """Argv tokens after which this harness's argv carries a conversation id.
+
+    Spawn and resume tokens together, because the caller recovering an id from a
+    recorded command line does not know which kind of launch produced it.
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return ()
+    harness = HARNESSES[name]
+    return (*harness.spawn_id_argv, *harness.resume_argv)
+
+
+def native_id_from_args(name: object, args: Sequence[str]) -> str | None:
+    """The conversation id a recorded command line names, if it names one.
+
+    Returns ``None`` when the argv carries no id, which is the ordinary case for a
+    harness that mints its own: the id is discovered later rather than dictated.
+    """
+    tokens = conversation_id_argv(name)
+    if not tokens:
+        return None
+    for token in tokens:
+        if token not in args:
+            continue
+        index = list(args).index(token) + 1
+        if index < len(args):
+            return str(args[index])
+    return None
+
+
+def resume_command(name: object, native_id: str) -> str | None:
+    """The plain vendor CLI command that reopens this conversation elsewhere.
+
+    Deliberately the clean command rather than mux's instrumented argv: it exists to
+    be pasted into an ordinary terminal, so it carries no hook settings, no notify
+    override, and no per-session extension. ``None`` for a non-harness.
+    """
+    if not isinstance(name, str) or name not in HARNESSES or not native_id:
+        return None
+    harness = HARNESSES[name]
+    return " ".join((harness.script_base_name, *harness.resume_argv, native_id))
+
+
+def suppresses_late_color_response(name: object) -> bool:
+    """Whether a late OSC 10/11 reply must be dropped rather than delivered.
+
+    True for a CLI whose startup palette probe accepts such replies for a bounded
+    interval and treats a later one as composer input. Dropping an optional response
+    is safer than injecting one the CLI will type.
+    """
+    return (
+        isinstance(name, str)
+        and name in HARNESSES
+        and HARNESSES[name].suppresses_late_color_response
+    )
+
+
+def branch_strategy(name: object) -> BranchStrategy | None:
+    """How a live conversation is forked for this harness, or ``None`` for no strategy."""
+    if not isinstance(name, str) or name not in HARNESSES:
+        return None
+    return HARNESSES[name].branch_strategy
+
+
+def branchable_harnesses() -> tuple[str, ...]:
+    return tuple(name for name, harness in HARNESSES.items() if harness.branch_strategy)
+
+
+def live_canary_harnesses() -> tuple[str, ...]:
+    """Harnesses the live conformance canary can drive against a real CLI.
+
+    Two declarations have to hold. The harness must declare a headless probe, so
+    there is a non-interactive read-only invocation to run, and it must declare a
+    transcript dialect, because the canary's assertion is that the observer parses
+    what the real binary just wrote. A harness that keeps its conversation in its own
+    database (opencode) is excluded here by derivation rather than by a skip: there
+    is no transcript for this canary to replay, and pretending otherwise would make
+    the tier report a pass it never ran.
+    """
+    return tuple(
+        name
+        for name, harness in HARNESSES.items()
+        if harness.headless_probes.read_only is not None
+        and harness.transcript_dialect is not None
+    )
+
+
+def live_subagent_harnesses() -> tuple[str, ...]:
+    """Harnesses whose live canary can be asked to spawn a subagent.
+
+    A harness with no subagent tool declares no subagent probe, and is excluded here
+    rather than skipped inside the test: skipping reports a pass for a run that never
+    happened, while a derived exclusion states that the capability is absent.
+    """
+    return tuple(
+        name
+        for name in live_canary_harnesses()
+        if HARNESSES[name].headless_probes.subagent is not None
+    )
+
+
+def live_telemetry_harnesses() -> tuple[str, ...]:
+    """Harnesses whose live canary can drive a read-only tool and produce telemetry."""
+    return tuple(
+        name
+        for name in live_canary_harnesses()
+        if HARNESSES[name].headless_probes.read_tool is not None
+    )
+
+
+def conversation_store_path(name: object) -> Path | None:
+    """The store file holding this harness's conversations, if it keeps one.
+
+    ``None`` for a harness with one file per conversation, whose location an adapter
+    computes from the conversation id. Registry-derived so the two independent
+    readers of that store - the adapter for token and cost figures, and the
+    transcript reader for the messages - resolve the same file.
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return None
+    harness = HARNESSES[name]
+    if harness.conversation_store_file is None:
+        return None
+    return harness.data_home() / harness.conversation_store_file
+
+
+def instruction_harnesses() -> tuple[str, ...]:
+    """Harnesses that read a measured root instruction file."""
+    return tuple(name for name, harness in HARNESSES.items() if harness.instruction_file_name)
+
+
+def harness_for_command(executable: str, arguments: Sequence[str]) -> str | None:
+    """Which harness an already-launched command line is running, if any.
+
+    Answers from the registry rather than from a hardcoded pair of vendors. The
+    executable name is the primary signal and every harness declares one; the npm
+    entrypoint is the fallback for a CLI launched through its JS entry rather than
+    its shim, and only the harnesses that ship that way declare one.
+
+    ``None`` for a shell or anything unrecognized, which callers must treat as "no
+    claim" rather than as a default harness.
+    """
+    name = Path(executable or "").name.casefold()
+    entrypoint = str(arguments[0]).replace("\\", "/").casefold() if arguments else ""
+    for harness in HARNESSES.values():
+        base = harness.script_base_name.casefold()
+        if name in {base, f"{base}.exe", f"{base}.cmd", f"{base}.ps1"}:
+            return harness.name
+        if harness.npm_entrypoint is not None:
+            package, suffix = harness.npm_entrypoint
+            if package.casefold() in entrypoint and entrypoint.endswith(suffix.casefold()):
+                return harness.name
+    return None
+
+
 def external_usage_harnesses() -> tuple[str, ...]:
     return tuple(name for name, harness in HARNESSES.items() if harness.external_usage_command)
 
@@ -719,8 +1263,46 @@ def provider_account_harnesses() -> tuple[str, ...]:
     )
 
 
+FRONTEND_REGISTRY_SEED_PATH = ("frontend", "src", "harnessRegistrySeed.ts")
+
+
+def frontend_registry_seed_source() -> str:
+    """The generated TypeScript seed the browser renders with before its first snapshot.
+
+    Generated rather than hand-written because a hand-written copy is a second
+    registry: the previous one had opencode two capability levels below its
+    descriptor and pi missing a state source, and nothing compared them. The daemon
+    replaces this seed atomically on the first application refresh, so its only job
+    is to keep that first render coherent - but "coherent" means agreeing with the
+    daemon, which only generation guarantees.
+
+    Emitted as TypeScript rather than JSON so it type-checks against the payload
+    interface and needs no import attributes in any of the three runtimes that read
+    it (Vite, `tsc`, and `node --experimental-strip-types`).
+    """
+    payload = json.dumps(public_harness_registry(), indent=2, sort_keys=False)
+    return (
+        "// GENERATED FILE - do not edit by hand.\n"
+        "// Regenerate: uv run python packaging/generate_frontend_registry.py\n"
+        "// Source of truth: src/swe_mux/harness.py (public_harness_registry).\n"
+        "// tests/test_harness_registry.py fails when this file drifts from it.\n"
+        "import type { HarnessRegistryPayload } from './harnessRegistry.ts'\n"
+        "\n"
+        f"export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {payload}\n"
+    )
+
+
 def public_harness_registry() -> dict[str, object]:
-    """Browser-safe registry projection used to gate frontend surfaces."""
+    """Browser-safe registry projection used to gate frontend surfaces.
+
+    Every per-harness fact the browser needs travels here. A trait absent from this
+    payload is one the frontend has to hardcode, which is how a harness name ends up
+    compiled into a terminal module and drifts from the descriptor that owns it.
+
+    `version` stays at 1 while fields are only added: consumers read the keys they
+    know and default the rest, so a browser older than the daemon keeps working.
+    Removing or re-typing a field is what would require a bump.
+    """
     return {
         "version": 1,
         "harnesses": [
@@ -730,6 +1312,11 @@ def public_harness_registry() -> dict[str, object]:
                 "level": harness.level.name,
                 "state_sources": list(harness.state_sources),
                 "measurement_source": harness.measurement_source,
+                # The clean vendor CLI name and the tokens preceding a conversation
+                # id, so the browser composes a resume command instead of knowing one.
+                "cli_name": harness.script_base_name,
+                "resume_argv": list(harness.resume_argv),
+                "skill_invocation_prefix": harness.skill_invocation_prefix,
                 "capabilities": {
                     "observed": harness.level >= HarnessLevel.observed,
                     "transcript": bool(harness.transcript),
@@ -739,6 +1326,17 @@ def public_harness_registry() -> dict[str, object]:
                     "external_usage": harness.external_usage_command,
                     "provider_accounts": harness.provider_account_management,
                     "repaints_scrollback": harness.repaints_scrollback,
+                    "assigns_conversation_id": harness.assigns_conversation_id,
+                    # The CLI resolves a conversation's directory from its working
+                    # directory, so a copied resume command only works from the
+                    # session's cwd and the browser has to say so.
+                    "resolves_transcript_by_cwd": harness.resolves_transcript_by_cwd,
+                    "branch": harness.branch_strategy is not None,
+                    "webgl_unsafe": harness.webgl_unsafe,
+                    "owns_scroll_viewport": harness.owns_scroll_viewport,
+                    "width_envelope": harness.applies_width_envelope,
+                    "min_desktop_columns": harness.min_desktop_columns,
+                    "suppresses_late_color_response": harness.suppresses_late_color_response,
                 },
             }
             for harness in HARNESSES.values()
