@@ -279,16 +279,29 @@ responsive controls.
   dialog from Projects must place it above the manager, never beneath it.
 - **"Back" is one concept with one implementation.**
   Every dismissable level registers with the dismiss stack (`dismissStack.ts`) while it is open, and Escape, the platform back gesture, and the mobile back swipe all resolve to a single `pop()` that closes exactly one level.
-  Registration happens through `useModalFocus`, so declaring a focus-trapped modal is also how it declares what back means for it; a drill-down that is not its own modal uses `useDismissLevel`.
-  Three surfaces had already grown private versions of this ladder — the paired `useModalFocus` gates in `AutomationDashboard.tsx`, the nested Escape ternary in `ProjectRunMenu.tsx`, and the eighteen-setter Escape handler in `App.tsx` — which is the evidence that it is one behavior rather than a per-dialog decision.
-- Stack order is **temporal, not structural**: the most recently registered active level pops first.
-  A drill-down therefore needs no knowledge of its own depth, and nesting is expressed by mounting its registration after its parent's.
-  The `enabled` gate never re-registers a level, because re-registering would move a parent above levels that opened after it.
+  Registration happens through `useModalFocus`, so declaring a focus-trapped modal is also how it declares what back means for it; anything that is not its own focus-trapped modal — a drill-down, a menu, a slide-in panel, an in-pane find bar — uses `useDismissLevel`.
+  Coverage is total rather than partial: modals, the nine context menus, the mobile slide-in panels, the palette, the quick launcher, every root-owned dialog, and the in-pane widgets (terminal find, resource find, note outline, files tree menu, note row menu) are all levels.
+  Four surfaces had grown private versions of this ladder before it existed — the paired `useModalFocus` gates in `AutomationDashboard.tsx`, the nested Escape ternary in `ProjectRunMenu.tsx`, the four-rung unwind in `Settings.tsx`, and two flat Escape handlers in `App.tsx` closing nine and eighteen things at once — which is the evidence that it is one behavior rather than a per-dialog decision.
+- Stack order is **temporal, and specifically opening time rather than registration time**: the level that most recently became active pops first.
+  The distinction is load-bearing rather than pedantic.
+  A conditionally rendered component registers when it opens, so for it the two coincide.
+  The composition root is always mounted and registers every one of its own dialogs and menus up front, in source order, so ordering on registration would pop them in the order they appear in `App.tsx` instead of the order the user opened them.
+  A drill-down therefore needs no knowledge of its own depth, and a level that closes and reopens correctly returns to the top.
+- A hand-written precedence ladder is the wrong shape for the same reason.
+  `Settings.tsx` unwinds a close confirmation, the theme picker, and the search query before the panel itself, and those are now four independent levels rather than a fixed order, so back undoes them as they were actually opened instead of by a precedence that cannot know whether the theme picker or the search came first.
+  Every one of them stands down while a shortcut is being recorded, because Escape then means "cancel the recording" and belongs to the capture handler.
 - A level is gated off only to stop being the dismiss *target*, never to give up focus containment.
   The transcript inside session history registers **above** the browser rather than gating it off, so back returns to the results while the modal keeps its focus trap for the whole time the transcript is open.
   Before that level existed, Escape in a transcript closed the entire browser and discarded the search while the visible `← Results` button went back one step, so keyboard and pointer disagreed about what back meant.
 - A level may declare itself **blocking**, which absorbs a back instead of letting it fall through to whatever is behind it.
   The daemon-reload and redeploy overlays use this: they are `alertdialog` waits with nothing reachable behind them, and back must not walk out of the app while the daemon is mid-restart.
+- **The slide-in panels are levels on mobile only**, because only there are they overlays.
+  On desktop the sidebar and the utility drawer are docked chrome, and `clipboardOpen` is a persisted expansion that is routinely true for a whole session; registering it would hold the stack permanently non-empty, arm the history sentinel forever, and stop the browser's Back button from working at all.
+  The docked drawer keeps its own element-scoped Escape (`UtilityDrawer.tsx`), so Escape still closes it while focus is inside it.
+  That is a deliberate narrowing: the flat handler it replaced fired on Escape from anywhere, so pressing Escape inside an agent's TUI collapsed the drawer and the sidebar as a side effect.
+- Escape reaching a terminal is now the ordinary case rather than a hazard.
+  With nothing open, `pop()` reports an empty stack and does nothing, so the key belongs to the terminal.
+  Surfaces that own Escape for themselves — the shortcut recorder, the utility drawer, the find bars — stop propagation, which is why the composition root's handler stays on the bubble phase where that shielding works.
 - Every full-screen dialog layer stacks above all persistent chrome: the mobile toolbar, mobile
   nav toggle, desktop top bar, and context menus. Chrome painting over a dialog does not merely
   look wrong, it silently swallows taps on the dialog's own header, which is where close and
@@ -716,7 +729,10 @@ responsive controls.
 - The one back press this deliberately does not see is the one that dismisses the Android soft keyboard: the platform consumes it and never tells the page, so an overlay behind the keyboard survives the first press.
   That matches how the keyboard shadows back everywhere else on the platform and is not special-cased.
 - The same motion is available in-app as a **rightward swipe** while any level is open, since Android owns the edge-anchored swipes and only a mid-screen one is available.
-  `.modal-layer` is in the recognizer's target allowlist solely to carry it.
+  The overlay wrappers are in the recognizer's target allowlist solely to carry it, and the list is every wrapper rather than the most common one: `.modal-layer`, `.settings-layer`, `.usage-layer` (usage, automation, fleet queue, observations, bandwidth), `.process-layer`, `.folder-picker-layer`, and `.palette-layer`.
+  Listing only `.modal-layer` left the swipe silently dead on most of the app's large surfaces.
+  Every class in that list belongs to a surface that registers a dismiss level, which is the condition for adding one: a listed surface that registered nothing would let a swipe run its workspace binding behind the overlay.
+  The floating voice overlay is deliberately excluded on exactly that ground.
   Overlays remain immune to gesture *hijacking* by a stronger rule than the old one: whenever the dismiss stack is non-empty, `resolveGestureCommand` resolves the back slots to `nav.back` and **every other slot to nothing**, so no binding can run behind a modal.
   Turning off the hot-reloadable `mobile_gesture_overlay_back` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour of an overlay swallowing every gesture, rather than letting the old bindings back through.
   The platform back gesture is unaffected by that switch.
@@ -1598,7 +1614,8 @@ responsive controls.
 - The drawer is deliberately *not* a modal layer. Inserting targets the surface that was focused
   before it opened — terminal or Continuity note, whichever was last focused (`insertTarget.ts`;
   a detached editor loses the routing to the focused terminal) — so the workspace has to stay
-  visible behind it. Desktop therefore gets no scrim (Escape, ×, or the toggle closes it) while
+  visible behind it. Desktop therefore gets no scrim (Escape *while focus is inside it*, ×, or
+  the toggle closes it; the docked drawer is not a dismiss level, so back does not reach it) while
   mobile dims, and the drawer and its scrim are in the gesture recognizer's allowlist so the same
   swipe that pulled it in pushes it back out. Clipboard rows carry previews only; full text is
   fetched per entry on use. Row actions are insert (primary), copy to the system clipboard, pin,

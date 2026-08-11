@@ -5,6 +5,8 @@ import type { Project, ProjectAction, ProjectActionCatalog, ProjectBackend, Sess
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import { isAbsolutePath } from './gitWorktrees'
 import { normalizeWorktreeBranchInput, worktreePathForBranch } from './worktreeLaunch'
+import { dismissStack } from './dismissStack.ts'
+import { useDismissLevel } from './modalFocus'
 
 type Anchor={x:number;y:number}
 type Props={
@@ -62,11 +64,17 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
     })
     return()=>{active=false}
   },[project.id,project.name])
+  // Was a three-rung Escape ternary. The rungs are now independent levels, so back
+  // unwinds them in the order they were opened and the same rungs answer the platform
+  // back gesture and the mobile back swipe.
+  useDismissLevel(onClose,true,'run-menu')
+  useDismissLevel(()=>setWorktreeOpen(false),worktreeOpen,'run-menu-worktree')
+  useDismissLevel(()=>setPending(null),!!pending,'run-menu-trust')
   useEffect(()=>{
-    const close=(event:KeyboardEvent)=>event.key==='Escape'&&(pending?setPending(null):worktreeOpen?setWorktreeOpen(false):onClose())
+    const close=(event:KeyboardEvent)=>{if(event.key==='Escape')dismissStack.pop()}
     window.addEventListener('keydown',close)
     return()=>window.removeEventListener('keydown',close)
-  },[pending,worktreeOpen,onClose])
+  },[])
   // Rotating the phone (or a soft keyboard opening) changes the viewport under a
   // menu that was already fitted to the old one, so re-fit on resize as well.
   useEffect(()=>{

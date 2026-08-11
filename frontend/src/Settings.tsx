@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { displayChord, type Command } from './commands'
 import { isFocusTraversalKey, keyChord } from './keys'
+import { dismissStack } from './dismissStack.ts'
+import { useDismissLevel } from './modalFocus'
 import { AccountSettings } from './ProviderAccounts'
 import { NotificationAlertSettings } from './NotificationPushSettings'
 import { SessionRowSettings } from './SessionRowSettings'
@@ -335,6 +337,20 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const onOpenUsage=useCallback(()=>requestClose('usage'),[requestClose])
   const onOpenAutomation=useCallback(()=>requestClose('automation'),[requestClose])
 
+  // Settings unwinds one layer at a time, and the layers are independent levels rather
+  // than a fixed ladder: each opens when its own state does, so back undoes them in the
+  // order they were actually opened instead of a hardcoded precedence that could not know
+  // whether the theme picker or the search came first. `requestClose` is deliberately the
+  // panel's dismiss even though it may not close: with unsaved edits it raises the
+  // Save/Discard decision, which registers as a level above it, and back then reaches
+  // that decision rather than closing the panel out from under it.
+  // Every level stands down while a shortcut is being recorded, because Escape then means
+  // "cancel the recording" and belongs to the capture handler.
+  useDismissLevel(()=>requestClose(),!capturingCommand,'settings')
+  useDismissLevel(()=>setQuery(''),!!query&&!capturingCommand,'settings-search')
+  useDismissLevel(()=>setThemePickerOpen(false),themePickerOpen&&!capturingCommand,'settings-theme-picker')
+  useDismissLevel(()=>setCloseIntent(null),!!closeIntent&&!capturingCommand,'settings-close-confirm')
+
   const loadLatency=()=>{void api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
   const resetLatency=()=>{void api<LatencyReportPayload>('DELETE','/api/voice/stt-latency').then(setLatencyReport).catch(()=>{})}
 
@@ -412,12 +428,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       if (event.key === 'Escape'&&!capturingCommand) {
         event.preventDefault()
         event.stopImmediatePropagation()
-        if(closeIntent){setCloseIntent(null);return}
-        if(themePickerOpen){setThemePickerOpen(false);return}
-        // Escape unwinds one layer at a time: an open result list first, the
-        // panel only once search is out of the way.
-        if(query){setQuery('');return}
-        requestClose()
+        dismissStack.pop()
       }
       // Find-in-settings takes over the browser's find while the panel owns the
       // screen; its own find cannot see the tabs that are not mounted anyway.
@@ -438,7 +449,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     window.addEventListener('keydown', close, true)
     return () => window.removeEventListener('keydown', close, true)
-  }, [requestClose,closeIntent,capturingCommand,query,themePickerOpen])
+  }, [closeIntent,capturingCommand])
 
   async function captureBinding(event:KeyboardEvent,commandId:string) {
     const chord=keyChord(event)

@@ -10,8 +10,9 @@ function useStackLevel(dismiss:()=>void,enabled:boolean,resolveLabel:()=>string)
   const dismissRef=useRef(dismiss)
   dismissRef.current=dismiss
   const idRef=useRef<number|null>(null)
-  // Registration is mount-scoped on purpose: re-registering on the `enabled` gate would
-  // move the level to the top of the stack, above levels that opened after it.
+  // Registration is mount-scoped, but stack *position* comes from the `enabled` gate, so
+  // a host that is always mounted (the composition root) still orders its levels by when
+  // the user opened them rather than by where they sit in the source.
   useEffect(()=>{
     const id=dismissStack.register({label:resolveLabel(),active:enabled,dismiss:()=>dismissRef.current()})
     idRef.current=id
@@ -26,11 +27,10 @@ function useStackLevel(dismiss:()=>void,enabled:boolean,resolveLabel:()=>string)
  * Register a dismissable level that is not its own focus-trapped modal — a drill-down
  * inside one, such as the transcript inside the history browser.
  *
- * Mount this *after* the surrounding modal's `useModalFocus`, which is what puts it above
- * that modal in the stack: back then closes the drill-down first and the modal second,
- * while the modal keeps its focus trap the whole time. Gating the parent's `enabled`
- * instead would hand the level ordering over at the cost of dropping Tab containment for
- * as long as the drill-down is open.
+ * It lands above its surrounding modal because it opens later, so back closes the
+ * drill-down first and the modal second while the modal keeps its focus trap the whole
+ * time. Gating the parent's `enabled` instead would reach the same ordering at the cost
+ * of dropping Tab containment for as long as the drill-down is open.
  */
 export function useDismissLevel(dismiss:()=>void,enabled=true,label='level') {
   useStackLevel(dismiss,enabled,()=>label)
@@ -43,8 +43,7 @@ export function useDismissLevel(dismiss:()=>void,enabled=true,label='level') {
  * which is what gives it the platform back gesture and the mobile back swipe alongside
  * Escape. `enabled` gates whether this level is currently the dismiss target *and*
  * whether the focus trap is installed, so a surface that wants to keep containment while
- * a drill-down is open should leave it alone and let the drill-down register above it.
- * Registration is tied to mount, so a gated level keeps its position in the stack.
+ * a drill-down is open should leave it alone and let the drill-down open above it.
  */
 export function useModalFocus(ref:RefObject<HTMLElement>,onClose:()=>void,enabled=true,label?:string) {
   const closeRef=useRef(onClose)

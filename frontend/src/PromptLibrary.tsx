@@ -4,6 +4,7 @@ import { notifyPromptLibraryChanged } from './promptLibraryEvents'
 import { renderPromptTemplate } from './promptTemplates'
 import type { Project, ProjectBackend } from './types'
 import { allBackendNames } from './harnessRegistry'
+import { useDismissLevel } from './modalFocus'
 
 export type PromptTemplate={
   id:string;key:string;scope:'global'|'project';title:string;body:string;tags:string[];variables:string[]
@@ -32,6 +33,12 @@ export function PromptLibrary({project,backend,onInsert,onClose}:{project?:Proje
   useEffect(()=>setVariables(current=>Object.fromEntries((selected?.variables||[]).map(name=>[name,current[name]||'']))),[selected?.key])
   const dirty=Boolean(draft&&savedDraft&&JSON.stringify(draft)!==JSON.stringify(savedDraft))
   const close=()=>{if(dirty){setConfirmClose(true);return}onClose()}
+  // `close` is the panel's dismiss even though a dirty draft makes it raise the unsaved
+  // decision instead of closing: that decision opens as a level above, so the next back
+  // answers it rather than closing the panel underneath it.
+  useDismissLevel(close,true,'prompt-library')
+  useDismissLevel(()=>setConfirmClose(false),confirmClose,'prompt-close-confirm')
+  useDismissLevel(()=>setConfirmDelete(false),confirmDelete,'prompt-delete-confirm')
   const filtered=useMemo(()=>{
     const needle=query.trim().toLocaleLowerCase()
     return (library?.items||[]).filter(item=>(!backend||item.backends.includes(backend))&&(!needle||`${item.title} ${item.tags.join(' ')} ${item.body}`.toLocaleLowerCase().includes(needle)))

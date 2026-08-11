@@ -35,6 +35,7 @@ export const DISMISS_TRACE_LIMIT = 64
 
 type Registered = {
   id: number
+  /** Order among active levels, stamped when the level opens. 0 while inactive. */
   seq: number
   active: boolean
   blocking: boolean
@@ -66,16 +67,21 @@ export function createDismissStack(now: () => number = () => Date.now()) {
   /**
    * Push a level. Returns the id used to unregister or gate it.
    *
-   * Position is temporal: the most recently registered active level pops first. A
-   * drill-down inside a modal therefore needs no knowledge of its own depth — it
-   * registers after its parent and so sits above it.
+   * Position is temporal, and specifically **opening** time rather than registration
+   * time: the level that most recently became active pops first. That distinction is
+   * load-bearing. A component that is conditionally rendered registers when it opens, so
+   * the two coincide — but the composition root is always mounted and registers every one
+   * of its own dialogs and menus up front, in source order. Ordering on registration
+   * there would pop them in the order they appear in `App.tsx` instead of the order the
+   * user opened them, which is not a stack at all.
    */
   const register = (entry: DismissEntry): number => {
     const id = nextId++
+    const active = entry.active !== false
     entries.set(id, {
       id,
-      seq: nextSeq++,
-      active: entry.active !== false,
+      seq: active ? nextSeq++ : 0,
+      active,
       blocking: entry.blocking === true,
       label: entry.label || 'unnamed',
       dismiss: entry.dismiss,
@@ -96,16 +102,17 @@ export function createDismissStack(now: () => number = () => Date.now()) {
   }
 
   /**
-   * Gate a level without moving it.
+   * Open or close a level in place.
    *
-   * Deliberately not "unregister then re-register": `AutomationDashboard` toggles its
-   * parent gate off while a child is open, and a re-register would land the parent
-   * back on top of the stack — above levels that opened after it.
+   * Activating stamps a fresh order, because becoming active *is* opening. Deactivating
+   * keeps the entry registered so its owner still holds a valid handle; it simply stops
+   * being a dismiss target and stops counting toward depth.
    */
   const setActive = (id: number, active: boolean): void => {
     const entry = entries.get(id)
     if (!entry || entry.active === active) return
     entry.active = active
+    entry.seq = active ? nextSeq++ : 0
     pending = null
     record(active ? 'activate' : 'deactivate', entry.label)
     notify()

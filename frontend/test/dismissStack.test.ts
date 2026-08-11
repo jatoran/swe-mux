@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createDismissStack, DISMISS_TRACE_LIMIT } from '../src/dismissStack.ts'
 
-test('pop dismisses the most recently registered level, not the first', () => {
+test('pop dismisses the most recently opened level, not the first', () => {
   const stack = createDismissStack()
   const closed: string[] = []
   stack.register({ label: 'history', dismiss: () => closed.push('history') })
@@ -26,27 +26,60 @@ test('an empty stack reports empty so callers can fall through to platform back'
   assert.equal(stack.topLabel(), null)
 })
 
-test('deactivating a level keeps its position instead of moving it to the top', () => {
+test('a level gated off for a child comes back as the dismiss target when the child closes', () => {
   const stack = createDismissStack()
   const order: string[] = []
   // AutomationDashboard's shape: the parent gates itself off while its help panel is up.
   const parent = stack.register({ label: 'automation', dismiss: () => order.push('automation') })
   stack.setActive(parent, false)
   const help = stack.register({ label: 'help', dismiss: () => order.push('help') })
-  assert.equal(stack.depth(), 1)
+  assert.equal(stack.depth(), 1, 'a gated level is not a dismiss target and does not count')
 
   stack.pop()
   stack.unregister(help)
   stack.setActive(parent, true)
-
-  // A re-register would have put the parent above a sibling opened after it. Reactivation
-  // restores it in place, so the next pop is still the parent.
-  const sibling = stack.register({ label: 'sibling', dismiss: () => order.push('sibling') })
-  assert.equal(stack.topLabel(), 'sibling')
-  stack.unregister(sibling)
   assert.equal(stack.topLabel(), 'automation')
   stack.pop()
   assert.deepEqual(order, ['help', 'automation'])
+})
+
+test('order follows opening, not registration, so a root that registers up front still stacks correctly', () => {
+  const stack = createDismissStack()
+  const closed: string[] = []
+  // The composition root's shape: every dialog registers at mount, in source order,
+  // inactive. Registration order here is the reverse of the order they get opened in.
+  const settings = stack.register({ label: 'settings', active: false, dismiss: () => closed.push('settings') })
+  const menu = stack.register({ label: 'menu', active: false, dismiss: () => closed.push('menu') })
+  const sidebar = stack.register({ label: 'sidebar', active: false, dismiss: () => closed.push('sidebar') })
+
+  stack.setActive(sidebar, true)
+  stack.setActive(settings, true)
+  stack.setActive(menu, true)
+
+  // Registration order would have popped settings first. Opening order pops the menu.
+  assert.equal(stack.topLabel(), 'menu')
+  stack.pop()
+  stack.setActive(menu, false)
+  assert.equal(stack.topLabel(), 'settings')
+  stack.pop()
+  stack.setActive(settings, false)
+  assert.equal(stack.topLabel(), 'sidebar')
+  stack.pop()
+  assert.deepEqual(closed, ['menu', 'settings', 'sidebar'])
+})
+
+test('reopening a level moves it back to the top', () => {
+  const stack = createDismissStack()
+  const closed: string[] = []
+  const first = stack.register({ label: 'first', dismiss: () => closed.push('first') })
+  stack.register({ label: 'second', dismiss: () => closed.push('second') })
+
+  // Closing and reopening the older level makes it the newer one.
+  stack.setActive(first, false)
+  stack.setActive(first, true)
+  assert.equal(stack.topLabel(), 'first')
+  stack.pop()
+  assert.deepEqual(closed, ['first'])
 })
 
 test('an inactive level is neither counted nor dismissed', () => {

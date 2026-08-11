@@ -8,7 +8,8 @@ import { DelimitedTextViewer } from './DelimitedTextViewer'
 import { absoluteProjectPath, copySummary, FILE_COPY_MAX_LINES, truncateForClipboard } from './fileClipboard'
 import { ImageViewer } from './ImageViewer'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
-import { useModalFocus } from './modalFocus'
+import { useDismissLevel, useModalFocus } from './modalFocus'
+import { dismissStack } from './dismissStack.ts'
 import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
@@ -426,7 +427,7 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const dismiss=()=>setTreeMenu(null)
     const key=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){
-        event.preventDefault();event.stopImmediatePropagation();dismiss();return
+        event.preventDefault();event.stopImmediatePropagation();dismissStack.pop();return
       }
       if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
       const buttons=[...treeMenuPanel.current?.querySelectorAll<HTMLButtonElement>('button')||[]]
@@ -697,6 +698,12 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   // Jump to a heading. Unlike the find bar this holds no decorations, so there is nothing to
   // keep in step with an edit: the list is re-derived whenever the panel opens.
   const [outlineOpen,setOutlineOpen]=useState(false)
+  // In-pane widgets, not overlays, but they are still things back should close before it
+  // reaches anything behind them. Registering them is also what lets the phone's back
+  // gesture leave a find bar or an outline, which no key is available for on a phone.
+  useDismissLevel(()=>setTreeMenu(null),!!treeMenu,'files-tree-menu')
+  useDismissLevel(closeFind,findOpen,'resource-find')
+  useDismissLevel(()=>{setOutlineOpen(false);editorElement.current?.focus()},outlineOpen,'note-outline')
   const [outline,setOutline]=useState<readonly OutlineHeading[]>([])
   const outlinePanel=useRef<HTMLDivElement>(null)
   const outlineTrigger=useRef<HTMLButtonElement>(null)
@@ -835,8 +842,8 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     const dismiss=()=>setOutlineOpen(false)
     const key=(event:KeyboardEvent)=>{
       if(event.key==='Escape'){
-        event.preventDefault();event.stopImmediatePropagation();dismiss()
-        editorElement.current?.focus()
+        // The level's own dismiss restores editor focus, so popping covers both.
+        event.preventDefault();event.stopImmediatePropagation();dismissStack.pop()
         return
       }
       if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return
@@ -1277,10 +1284,9 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
       <input ref={findInput} value={findQuery} spellcheck={false} placeholder="find in note" aria-label="Find in note"
         onInput={event=>setFindQuery(event.currentTarget.value)}
         onKeyDown={event=>{
-          // Escape is stopped here rather than left to bubble: the app's global handler
-          // treats it as "close every overlay", which would shut the whole pane's menus
-          // when the user only meant to leave the find bar.
-          if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeFind()}
+          // Escape is stopped here rather than left to bubble, so the keypress resolves to
+          // exactly one pop: this handler's, on the find bar's own level.
+          if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismissStack.pop()}
           if(event.key==='Enter'){event.preventDefault();stepFind(event.shiftKey)}
         }}/>
       <button title="Previous match" aria-label="Previous match" onClick={()=>stepFind(true)}>↑</button>

@@ -92,6 +92,8 @@ import {
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
 import { SOFT_KEYBOARD_EVENT, clampPeekOffset, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, type PeekTrigger } from './mobileKeyboard'
+import { dismissStack } from './dismissStack.ts'
+import { useDismissLevel } from './modalFocus'
 import { nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
 import { MobileTerminalDraft } from './TerminalDraftComposer'
 import {
@@ -2936,6 +2938,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setFindResult('')
     focusTerminalInputRef.current()
   }
+  // The find bar is the pane's only dismissable state. It matters most on a phone, where
+  // there is no Escape key at all and the platform back gesture is the way out of it.
+  useDismissLevel(closeFind, findOpen, 'terminal-find')
 
   useEffect(() => {
     const onAction = (event: Event) => {
@@ -3265,7 +3270,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   } as Record<string,string>
   return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={session.name||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}<div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailScroller key={row.id}>{row.nodes}{index===renderedRailRows.length-1&&<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>}{index===renderedRailRows.length-1&&onConfigureRail&&<button class="rail-config" title="Configure command rail (buttons, rows, skills)" aria-label="Configure command rail" onClick={onConfigureRail}>⚙</button>}</RailScroller>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen — the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() }
+      // Stopped here so the keypress is one pop, on this bar's own level.
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }
       if (event.key === 'Enter') { event.preventDefault(); search(event.shiftKey) }
     }} placeholder="find in terminal" aria-label="Find in terminal" autofocus />
     <button title="Previous match" onClick={() => search(true)}>↑</button>

@@ -101,6 +101,7 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   // it instead of discarding the search. Registered after the modal and therefore above
   // it: `← Results` and back now agree, where Escape used to close the whole browser.
   useDismissLevel(()=>setTranscript(null),!!transcript,'history-transcript')
+  useDismissLevel(()=>setConfirmDelete(null),!!confirmDelete,'history-delete-confirm')
 
   const parameters=(cursor?:string)=>{
     const value=new URLSearchParams({limit:'50',scope})

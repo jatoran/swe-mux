@@ -131,6 +131,7 @@ import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, so
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { dismissStack } from './dismissStack.ts'
+import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import {
@@ -2279,26 +2280,9 @@ export function App() {
   useEffect(() => { if (!mainMenuOpen) setMenuGroup(null) }, [mainMenuOpen])
   useEffect(() => { if (!sortMenu) setMenuGroup(null) }, [sortMenu])
 
-  useEffect(() => {
-    if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen && !renameTarget) return
-    const dismissEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      event.preventDefault()
-      event.stopPropagation()
-      setContextMenu(null)
-      setProjectMenu(null)
-      setSidebarMenu(null)
-      setSortMenu(null)
-      setNoteMenu(null)
-      setTabMenu(null)
-      setEmptyMenu(null)
-      setDrawerDisplayMenu(null)
-      setMainMenuOpen(false)
-      setRenameTarget(null)
-    }
-    window.addEventListener('keydown', dismissEscape, true)
-    return () => window.removeEventListener('keydown', dismissEscape, true)
-  }, [contextMenu, projectMenu, sidebarMenu, sortMenu, noteMenu, tabMenu, emptyMenu, drawerDisplayMenu, mainMenuOpen, renameTarget])
+  // The menu- and modal-closing Escape handlers that used to live here (one closing nine
+  // menus at once, one closing eighteen things at once) are gone: each surface registers a
+  // dismiss level, and the single Escape branch in the `mux:command` effect pops one.
 
   useEffect(() => {
     if (!contextMenu && !projectMenu && !sidebarMenu && !sortMenu && !noteMenu && !tabMenu && !emptyMenu && !drawerDisplayMenu && !mainMenuOpen) return
@@ -4085,9 +4069,10 @@ export function App() {
     const onKey = (event: KeyboardEvent) => {
       const command = keybindings[keyChord(event)]
       if (command && runNamedCommand(command)) event.preventDefault()
-      if (event.key === 'Escape') {
-        setPaletteOpen(false); setLauncherOpen(false); setContextMenu(null); setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null); setEmptyMenu(null);setDrawerDisplayMenu(null); setMainMenuOpen(false); setSidebarOpen(false); setRenameTarget(null); setProcessSession(null);setProcessViewerOpen(false); setSettingsOpen(false); setProjectsManagerOpen(false); setReviewState(null);setHandoffState(null);setClipboardOpen(false)
-      }
+      // One level, not everything on screen. This handler stays bubble-phase on window so
+      // a surface that owns Escape for itself — the utility drawer's focus-scoped handler,
+      // the shortcut recorder in Settings — still shields it by stopping propagation.
+      if (event.key === 'Escape') dismissStack.pop()
     }
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target
@@ -4132,6 +4117,41 @@ export function App() {
     window.addEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
     return () => window.removeEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
   })
+
+  // Everything the composition root itself can put on screen, as dismiss levels. These all
+  // register at mount because the root is always mounted, so their stack position comes
+  // from when each one opens rather than from the order they appear here.
+  //
+  // The slide-in panels are mobile-only levels on purpose. On desktop the sidebar and the
+  // utility drawer are docked chrome, not overlays: `clipboardOpen` there is a persisted
+  // expansion that is routinely true for the whole session, and registering it would keep
+  // the stack permanently non-empty, arm the history sentinel forever, and make the
+  // browser's Back button stop working. The drawer keeps its own element-scoped Escape
+  // (`UtilityDrawer.tsx`) for the docked case, which is focus-scoped and shielded from
+  // this handler by its `stopPropagation`.
+  useDismissLevel(() => setSidebarOpen(false), mobileWorkspace && sidebarOpen, 'sidebar')
+  useDismissLevel(() => setClipboardOpen(false), mobileWorkspace && clipboardOpen, 'utility-drawer')
+  // Menus. Each is its own level so back closes the one that is open rather than all nine.
+  useDismissLevel(() => setContextMenu(null), !!contextMenu, 'session-menu')
+  useDismissLevel(() => setProjectMenu(null), !!projectMenu, 'project-menu')
+  useDismissLevel(() => setSidebarMenu(null), !!sidebarMenu, 'sidebar-menu')
+  useDismissLevel(() => setSortMenu(null), !!sortMenu, 'sort-menu')
+  useDismissLevel(() => setNoteMenu(null), !!noteMenu, 'note-menu')
+  useDismissLevel(() => setTabMenu(null), !!tabMenu, 'tab-menu')
+  useDismissLevel(() => setEmptyMenu(null), !!emptyMenu, 'empty-menu')
+  useDismissLevel(() => setDrawerDisplayMenu(null), !!drawerDisplayMenu, 'drawer-display-menu')
+  useDismissLevel(() => setMainMenuOpen(false), mainMenuOpen, 'app-menu')
+  // Root-owned dialogs and pickers.
+  useDismissLevel(() => setPaletteOpen(false), paletteOpen, 'palette')
+  useDismissLevel(() => setLauncherOpen(false), launcherOpen, 'quick-launcher')
+  useDismissLevel(() => setRenameTarget(null), !!renameTarget, 'rename')
+  useDismissLevel(() => setProjectCreateOpen(false), projectCreateOpen, 'project-create')
+  // Opened from inside project create, so it opens later and correctly closes first.
+  useDismissLevel(() => setFolderPickerOpen(false), folderPickerOpen, 'folder-picker')
+  useDismissLevel(() => setGroupEdit(null), !!groupEdit, 'group-edit')
+  useDismissLevel(() => setRedeployConfirmOpen(false), redeployConfirmOpen, 'redeploy-confirm')
+  useDismissLevel(() => setReviewState(null), !!reviewState, 'second-opinion')
+  useDismissLevel(() => setHandoffState(null), !!handoffState, 'handoff-export')
 
   // The platform back gesture closes one overlay level. Installed for every device, not
   // just the mobile workspace: a desktop browser's Back button and mouse-4 reach the same
@@ -4180,12 +4200,19 @@ export function App() {
       // area toggles the open sidebar shut). The utility drawer and its scrim are included
       // so the leftward two-finger swipe that pulls the drawer in can also push it back
       // out from over it.
-      // `.modal-layer` is the shared wrapper every full-screen dialog renders, and it is
-      // here only so the back swipe can reach an open overlay. Overlays are still immune
-      // to gesture *hijacking*: `resolveGestureCommand` resolves every non-back slot to
-      // nothing whenever the dismiss stack is non-empty, so no binding runs behind a
-      // modal. Menus and the palette remain outside the recognizer entirely.
-      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)) { state = null; detachMove(); return }
+      // The overlay wrappers are listed only so the back swipe can reach an open overlay.
+      // `.modal-layer` is the most common one but not the only one: Settings, the
+      // dashboards (usage, automation, fleet queue, observations, bandwidth), Processes,
+      // the folder picker, and the palette each render their own, and listing only
+      // `.modal-layer` left the swipe silently dead on most of the app's big surfaces.
+      // Every class here belongs to a surface that registers a dismiss level. Adding one
+      // that does not would let a swipe run its workspace binding behind the overlay,
+      // which is the hijacking this filter exists to prevent — so the floating voice
+      // overlay is deliberately absent, being chrome rather than a dismissable level.
+      // Overlays stay immune to that hijacking by a stronger rule than exclusion:
+      // `resolveGestureCommand` resolves every non-back slot to nothing whenever the
+      // dismiss stack is non-empty.
+      if (!(target instanceof Element) || !target.closest('.mobile-unified-workspace, .sidebar, .sidebar-scrim, .utility-drawer, .utility-drawer-scrim, .modal-layer, .settings-layer, .usage-layer, .process-layer, .folder-picker-layer, .palette-layer') || pathOwnsHorizontalScroll(path, node => getComputedStyle(node).overflowX)) { state = null; detachMove(); return }
       // A drag that has claimed the pointer owns it outright (`pointerDragClaim.ts`); a
       // second finger landing mid-drag does not get to start a gesture behind it.
       if (pointerDragOwnsPointer()) { state = null; detachMove(); return }
@@ -5047,7 +5074,8 @@ export function App() {
 
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {
-        if (event.key === 'Escape') setPaletteOpen(false)
+        // Stops here rather than also reaching the window handler, so one keypress is one pop.
+        if (event.key === 'Escape') { event.stopPropagation(); dismissStack.pop() }
         if (event.key === 'ArrowDown') { event.preventDefault(); setPaletteIndex(index => Math.min(index + 1, Math.max(0, shownCommands.length - 1))) }
         if (event.key === 'ArrowUp') { event.preventDefault(); setPaletteIndex(index => Math.max(0, index - 1)) }
         if (event.key === 'Enter') {
