@@ -50,15 +50,24 @@ worse than none.
 A still primary tap or click in the live agent composer places the editing caret at the nearest reachable terminal cell.
 Selection drags, long-press selection, modified clicks, read/select mode, scrollback, and targets outside the current composer do nothing.
 
-Claude owns a real terminal mouse protocol.
-Desktop mouse events already enter xterm directly; touch release synthesizes the matching `mousedown`/`mouseup` pair so xterm encodes the coordinates in the protocol Claude negotiated.
-The later browser compatibility mouse event remains suppressed, so one tap produces one press/release pair.
+Routing is decided by the terminal's measured mouse mode, not by which harness is running.
+An application that turned mouse reporting on asked for clicks and positions its own caret from them, so a still touch release in such a pane is forwarded and nothing harness-specific is involved.
+Claude and opencode both negotiate tracking and both behave this way; a shell application that enables reporting gets the same treatment for free.
+Desktop mouse events already enter xterm directly - measured against a live opencode pane, a plain click moves its caret with no help from this layer - so only touch needs the synthesized `mousedown`/`mouseup` pair, because a touch's own compatibility mouse event is the one the pane suppresses.
+That suppression is also why one tap produces exactly one press/release pair.
 
-Codex and OMP enable no terminal mouse mode, so their path is bounded cursor steering rather than a fabricated mouse sequence, dispatched per backend by `caretResolverForBackend`.
+Everything else enables no terminal mouse mode, so its path is bounded cursor steering rather than a fabricated mouse sequence.
+`caretResolverForBackend` is the single declared home for those per-harness deviations: a harness either appears in that registry or gets no tap behaviour, and adding one means measuring its composer rather than adding a name check anywhere else.
+Codex, OMP, and pi are the three entries.
 The client recognizes the Codex composer from its `›`/`!`/`»` prefix, two-column text inset, visible hardware cursor, tail position, and either its background block or its blank-row textarea frame, then sends unicast Left/Right batches through xterm's ordinary input path.
 The frame fallback is required because Codex deliberately uses the terminal's default background when its palette probe is unavailable.
 The OMP composer is its measured 17.2.10 box: a top border embedding the status line that reads `╭── π` at columns 0-4, `│` interior draft rows, the final draft line fused into the `╰─ … ─╯` bottom border, and text starting at column 3 on every draft row.
 The `π` brand cell is the discriminator against OMP's other bordered surfaces - a model picker or dialog carries a title there instead, and refusing those matters because arrows sent into a picker move its selection.
+The pi composer is its measured 0.84.1 shape: two rules of `─` spanning every column bracket the draft, text starts at column 0 with no gutter or border, and the rows between the rules are exactly the wrapped draft, with an empty draft rendering as one blank row.
+pi hides the hardware cursor and paints its own reverse-video caret, so the caret's written blank is excluded from a row's reachable end - counting it would leave the loop pushing an arrow key pi has nowhere to apply.
+pi's own pickers (`/model`, `/settings`) reuse the same bracketing rules, and two positive detections refuse them: a picker lays a blank row directly under the top rule with its content below that, and marks its selected row with `→` in column 0.
+`/settings` additionally parks the hardware cursor at the bottom-right corner, outside the rules entirely.
+Neither refusal is a contiguity test, because Ctrl+J inserts a newline and a draft may legitimately contain blank rows further down.
 Each batch waits for the CLI's redraw and re-reads the hardware cursor before continuing.
 If the movement crosses the target it switches to single-key precision; popup height changes are handled by anchoring the target row to the composer's own anchor row.
 The operation stops on user input, selection, resize, replay, ownership loss, buffer changes, hidden panes, missing progress, or a changed composer.
@@ -235,7 +244,7 @@ work, while a claim that changes owners must use the freshly registered viewport
 - Synthetic paste-and-submit actions append through the mounted pane, wait 180 ms for an interactive TUI to commit bracketed paste, and only then send carriage return.
   Append-only actions do not wait or submit.
   The action acknowledgement follows the carriage return, so a caller cannot clear its source draft before submission was actually attempted.
-- Pointer-generated mouse reports and caret-steering keys (Codex, OMP) are unicast regardless of broadcast membership.
+- Pointer-generated mouse reports and caret-steering keys (Codex, OMP, pi) are unicast regardless of broadcast membership.
   A pointer target belongs only to the pane in which it was chosen.
 
 ## API surface
@@ -285,7 +294,7 @@ None user-facing.
 - Wheel-report pacing to an application-owned viewport (pure): `frontend/src/terminalWheelPacing.ts`
 - Viewport pass scheduling and the resize-sending cost charge (pure): `frontend/src/terminalViewport.ts`
 - Socket, DOM, take-over strip: `frontend/src/TerminalPane.tsx`
-- Provider-aware pointer targeting and steering math: `frontend/src/terminalCaretPlacement.ts`
+- Mouse-mode tap routing, the per-harness caret resolver registry, and steering math (pure): `frontend/src/terminalCaretPlacement.ts`
 
 ## Relates to
 

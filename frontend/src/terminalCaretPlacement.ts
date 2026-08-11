@@ -301,11 +301,129 @@ export function resolveOmpCaretTarget(
   }
 }
 
+// Measured against installed pi 0.84.1 (2026-08-10, live panes at 100x30 and
+// 64x24): the composer is bracketed by two rules of `─` spanning every column,
+// draft text starts at column 0 with no gutter, prompt glyph, or right border,
+// and the rows between the rules are exactly the wrapped draft — an empty draft
+// is a single blank row, and the bottom rule sits directly under the last draft
+// row. `/` and `!` are ordinary draft characters, and a `/` completion list
+// renders *below* the bottom rule. A turn in progress leaves the composer in
+// place with the spinner above the top rule.
+const PI_RULE = '─'
+const PI_LIST_MARKER = '→'
+const PI_TEXT_START = 0
+
+function rowIsPiRule(snapshot: TerminalCaretSnapshot, row: number): boolean {
+  for (let column = 0; column < snapshot.cols; column += 1) {
+    if (cellAt(snapshot, row, column)?.chars !== PI_RULE) return false
+  }
+  return true
+}
+
+/**
+ * The reachable end of one pi draft row.
+ *
+ * pi hides the hardware cursor (`?25l`) and paints its own reverse-video caret,
+ * which writes a blank cell at the caret. `contentBoundary` counts any written
+ * cell, so it would report one column past the real end of the line and leave the
+ * steering loop pushing an arrow key pi has nowhere to apply. The reachable end is
+ * therefore one past the last *visible* character, widened on the caret's own row
+ * to the caret itself — reachable by definition, and what keeps a draft ending in
+ * spaces tappable.
+ */
+function piRowEnd(
+  snapshot: TerminalCaretSnapshot,
+  row: number,
+  current: TerminalCaretPosition,
+): number {
+  let end = PI_TEXT_START
+  for (let column = PI_TEXT_START; column < snapshot.cols; column += 1) {
+    const cell = cellAt(snapshot, row, column)
+    if (!cellHasVisibleText(cell)) continue
+    end = column + Math.max(1, cell?.width ?? 1)
+  }
+  return row === current.row ? Math.max(end, current.column) : end
+}
+
+/**
+ * Resolve a click/tap to a reachable cursor position inside pi's composer.
+ *
+ * pi negotiates no terminal mouse protocol (measured: only `?2004h` bracketed
+ * paste and `?25l`), so like Codex and OMP its caret is steered with arrow keys
+ * against the observable contract above. The pair of full-width rules is the
+ * anchor, and two refusals carry the weight because pi's own pickers (`/model`,
+ * `/settings`) reuse exactly that bracketing:
+ *
+ * - A picker lays a blank row directly under the top rule and its content below
+ *   that, so a blank first row means the whole block is blank — an empty draft.
+ *   A draft may still hold blank rows further down, because Ctrl+J inserts a
+ *   newline, which is why this is not a contiguity test.
+ * - A picker marks its selected row with `→` in column 0. `/settings` also parks
+ *   the hardware cursor at the bottom-right corner, outside the rules entirely.
+ *
+ * Both refusals are cheap and both are positive detections of a picker rather
+ * than assertions about the composer, because arrow keys sent into a list are a
+ * real user-visible mutation instead of a harmlessly missed click.
+ */
+export function resolvePiCaretTarget(
+  snapshot: TerminalCaretSnapshot,
+  requested: TerminalCaretPosition,
+): ResolvedCaretTarget | null {
+  if (snapshot.cols < 4 || snapshot.rows < 3 || snapshot.viewportY !== snapshot.baseY) return null
+  const viewportEnd = snapshot.viewportY + snapshot.rows
+  const cursorRow = snapshot.baseY + snapshot.cursorY
+  if (cursorRow < snapshot.viewportY || cursorRow >= viewportEnd) return null
+  const current = { column: clamp(snapshot.cursorX, 0, snapshot.cols), row: cursorRow }
+
+  let topRule = -1
+  for (let row = cursorRow - 1; row >= snapshot.viewportY; row -= 1) {
+    if (rowIsPiRule(snapshot, row)) { topRule = row; break }
+  }
+  if (topRule < 0) return null
+  let bottomRule = -1
+  for (let row = cursorRow + 1; row < viewportEnd; row += 1) {
+    if (rowIsPiRule(snapshot, row)) { bottomRule = row; break }
+  }
+  if (bottomRule < 0) return null
+
+  const firstDraftRow = topRule + 1
+  const emptyDraft = rowIsBlank(snapshot, firstDraftRow)
+  for (let row = firstDraftRow; row < bottomRule; row += 1) {
+    if (cellAt(snapshot, row, 0)?.chars === PI_LIST_MARKER) return null
+    if (emptyDraft && row > firstDraftRow && !rowIsBlank(snapshot, row)) return null
+  }
+
+  const targetRow = requested.row
+  if (targetRow < firstDraftRow || targetRow >= bottomRule) return null
+  let targetColumn = clamp(requested.column, PI_TEXT_START, piRowEnd(snapshot, targetRow, current))
+  const targetCell = cellAt(snapshot, targetRow, targetColumn)
+  if (targetCell?.width === 0) targetColumn = Math.max(PI_TEXT_START, targetColumn - 1)
+
+  return {
+    current,
+    target: { column: targetColumn, row: targetRow },
+    promptRow: topRule,
+    textStart: PI_TEXT_START,
+  }
+}
+
+/**
+ * The single declared home for per-harness caret deviations.
+ *
+ * Tap routing itself carries no harness name: a harness that negotiates mouse
+ * tracking is handed the tap and positions its own caret, and a harness that does
+ * not appears here or gets no tap behaviour at all. Adding a harness means
+ * measuring its composer and adding one entry — never a name check elsewhere.
+ */
+const CARET_RESOLVERS = new Map<string, CaretTargetResolver>([
+  ['codex', resolveCodexCaretTarget],
+  ['omp', resolveOmpCaretTarget],
+  ['pi', resolvePiCaretTarget],
+])
+
 /** The caret resolver a backend steers with, or null when taps must not send keys. */
 export function caretResolverForBackend(backend: string): CaretTargetResolver | null {
-  if (backend === 'codex') return resolveCodexCaretTarget
-  if (backend === 'omp') return resolveOmpCaretTarget
-  return null
+  return CARET_RESOLVERS.get(backend) ?? null
 }
 
 /** Resolve a target that stays attached to the composer when popup height moves it. */
@@ -339,11 +457,25 @@ export function terminalCaretAtPoint(
   return { column, row: viewportY + viewportRow }
 }
 
+/**
+ * Route one settled tap, on the measured mouse mode rather than on a harness name.
+ *
+ * `mouseTracking` is a runtime fact read off the terminal (`mouseTrackingMode`),
+ * not a declaration, and it is the whole question: an application that enabled
+ * mouse reporting asked for clicks and positions its own caret from them, exactly
+ * as Claude and opencode do. Forwarding sends a click to a TUI that requested
+ * clicks, so whatever it does with one is its own UI and the risk is bounded to
+ * what Claude has always run. Only touch needs forwarding — a real mouse press
+ * reaches xterm's own reporting directly, and the pane only intercepts the
+ * compatibility mouse event a touch synthesizes.
+ *
+ * Everything else is mouse-less, and its caret is steered against the composer
+ * contract its resolver encodes. The two branches cannot both fire: the tracking
+ * fact separates them.
+ */
 export function terminalTapAction(decision: TerminalTapDecision): TerminalTapAction {
   if (!decision.still || !decision.primary || decision.modified || decision.readMode || decision.hasSelection) return 'none'
-  if (decision.backend === 'claude' && decision.pointerType === 'touch' && decision.mouseTracking) return 'forward-mouse'
-  // Codex and OMP negotiate no mouse protocol; their caret is steered against
-  // the measured composer contract each backend's resolver encodes.
+  if (decision.pointerType === 'touch' && decision.mouseTracking) return 'forward-mouse'
   if (caretResolverForBackend(decision.backend) && !decision.mouseTracking) return 'steer-caret'
   return 'none'
 }

@@ -844,9 +844,10 @@ responsive controls.
   field. Closing it needs an `inputmode` gate rather than focus bookkeeping. The keyboard toggle
   (`terminal.keyboardToggle`) is unaffected: it blurs, so the pane and the platform agree.
 - A still primary tap or click inside the currently editable agent composer moves its caret.
-  Claude's desktop path remains xterm's native mouse handling; on touch the pane synthesizes the mouse pair xterm expects, and xterm encodes the coordinates using Claude's negotiated mode.
-  Codex has no mouse mode, so the pane recognizes its live `›`/`!` composer and converges on the tapped terminal cell with redraw-verified, unicast Left/Right input.
-  It refuses selections, drags, modifiers, read/select mode, scrollback, stale geometry, and anything outside the detected composer.
+  Which path a pane takes follows the terminal's measured mouse mode rather than which harness is running.
+  A pane whose application negotiated mouse reporting (Claude, opencode) already receives desktop clicks through xterm's native handling; on touch the pane synthesizes the mouse pair xterm expects, because a touch's own compatibility mouse event is the one it suppresses, and xterm encodes the coordinates in the mode the application asked for.
+  A pane with no mouse mode (Codex, OMP, pi) is steered instead: the pane recognizes that harness's composer from its measured shape and converges on the tapped terminal cell with redraw-verified, unicast Left/Right input.
+  It refuses selections, drags, modifiers, read/select mode, scrollback, stale geometry, anything outside the detected composer, and that harness's own pickers, where arrows would move a list rather than a caret.
   New input or any loss of a stable target cancels the move rather than letting delayed arrows mutate a different screen.
 - Narrow and coarse-pointer terminals focus a dedicated native IME bridge. Android composition
   replacements are converted to incremental terminal text and DEL input as they happen, so Gboard
