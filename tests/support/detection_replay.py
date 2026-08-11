@@ -187,6 +187,9 @@ class ReplaySession:
         self.classifier_blind_since: float | None = None
         self.classifier_blind_counted = False
         self.cli_state: dict[str, Any] | None = None
+        # Mirrors Session: conversations this pane itself retired, which are
+        # neither detection evidence nor nested children of it.
+        self.ignored_detection_runs: set[tuple[str, str]] = set()
         # Mirrors Session: last observed reading per detection-ladder layer
         # (`note_layer_reading` tracks flips here) and the replay gate the
         # manager-side watchdog pass consults.

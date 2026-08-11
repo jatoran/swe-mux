@@ -36,9 +36,10 @@ Per signal class, every layer feeds the same ledger with its own `source` string
 
 **The `cli-state` layer** (`src/swe_mux/cli_state.py`, polled on the 5 s watchdog cadence,
 stat-then-parse-on-change): Claude publishes per-process state files carrying
-`{sessionId, cwd, pid, procStart, status, statusUpdatedAt, updatedAt, version}` (verified
-2.1.220; observed `status` values `busy`, `idle`, and `waiting` — measured 2026-08-01, the
-file reads `waiting` for the duration of a permission dialog). Files map to sessions by
+`{sessionId, cwd, pid, procStart, kind, status, statusUpdatedAt, updatedAt, version}`
+(verified 2.1.220), plus `parkedJobId` and `entrypoint` from 2.1.227.
+Observed `status` values are `busy`, `idle`, and `waiting` — measured 2026-08-01, the
+file reads `waiting` for the duration of a permission dialog. Files map to sessions by
 conversation id.
 What it feeds:
 
@@ -54,6 +55,24 @@ What it feeds:
   child CLI observed deterministically — the signal the `bb81463` incident had to infer
   from hook `source` fields. Counts `nested_children_observed`, once per foreign
   conversation. Ambiguity (two live sessions in one cwd) stands down.
+- **Backgrounded conversations**: `parkedJobId` names the job in
+  `~/.claude/jobs/<id>/state.json` that a pane's conversation has moved into, and that
+  job file publishes the conversation (`sessionId`) and the transcript (`linkScanPath`)
+  it writes. The pane keeps its spawn conversation id and its own transcript stops
+  growing, so without following the move the pane is observationally dead: measured
+  2026-08-10, one sat displayed idle and nameless for 42 minutes while its job ran a
+  full task. No hook can report this — the background CLI runs under a shared
+  `claude daemon run` tree, so it is not a child of the PTY and speaks for neither this
+  pane's conversation nor its hook credentials. The move is therefore applied as a
+  **rollover on the CLI's own authority** (`SessionManager._follow_parked_conversation`,
+  reason `conversation_backgrounded`), the same standing as a SessionStart-reported
+  `/clear` and explicitly not the transcript-switch heuristic a Claude pane forbids.
+  Guarded on the state file being the pane's own *and* `interactive`, the job naming a
+  different conversation, and the job standing in the pane's own cwd; a move the pane
+  refuses is retried `PARKED_MOVE_ATTEMPTS` times and then left alone, because each
+  attempt stops and restarts the observer. Once the roll lands, the pane's retired
+  conversation is excluded from the nested-child count: the interactive CLI's file still
+  names it, and it is the pane's past rather than a child of it.
 - The session's own file snapshot is surfaced as `cli_state` on the state-log endpoint.
 - **Deliberately absent**: a staleness alarm. `updatedAt` is a status-change timestamp,
   not a heartbeat — measured live: a legitimately busy session's file sat 51 minutes

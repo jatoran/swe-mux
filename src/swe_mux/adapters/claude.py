@@ -49,17 +49,27 @@ def _bash_executable_path(executable: str) -> str:
     return normalized
 
 
-def _hook_command(event: str, executable: str | None = None) -> str:
+def _hook_command(event: str, executable: str | None = None, identity: Path | None = None) -> str:
     python = _bash_executable_path(executable or sys.executable)
-    return shlex.join([python, "-m", "swe_mux.hook_client", event])
+    argv = [python, "-m", "swe_mux.hook_client", event]
+    if identity is not None:
+        # Native path, deliberately not translated for the Bash hook runner:
+        # `shlex.join` single-quotes it, POSIX single quotes keep the backslashes
+        # literal, and the reader is Python on Windows — which cannot open the
+        # `/c/...` form the interpreter path needs.
+        argv.extend(["--identity", str(identity)])
+    return shlex.join(argv)
 
 
 class ClaudeAdapter(BackendAdapter):
     name = "claude"
     # Spawned with an injected `--session-id` and per-session hook settings, so
     # every conversation replacement (`/clear`, in-CLI `/resume`) is reported by
-    # the CLI itself via the SessionStart ingress. Rollovers are hook-driven;
-    # the transcript-switch heuristic must never move a Claude session.
+    # the CLI itself via the SessionStart ingress. A conversation parked into a
+    # background job is reported by the CLI too, through `parkedJobId` in its
+    # per-process state file, because no hook can speak for it (`cli_state.py`).
+    # Both are the CLI's own report; the transcript-switch heuristic must never
+    # move a Claude session.
     reports_conversation_rollover = descriptor(name).reports_conversation_rollover
     # mux spawns with `--session-id <mux id>`, so the CLI writes exactly that
     # conversation and native_session_id is authoritative from the first moment.
@@ -127,28 +137,53 @@ class ClaudeAdapter(BackendAdapter):
         temporary.replace(path)
         return path
 
-    def _write_hook_settings(self, data_dir: Path) -> Path:
+    def _write_hook_settings(self, data_dir: Path, identity: Path | None = None) -> Path:
         path = data_dir / f"{self.script_base_name}-hooks.json"
         hooks: dict[str, list[dict[str, object]]] = {}
         family = descriptor(self.name) if self.name in HARNESSES else descriptor("claude")
         for event in family.hook_events:
-            command = _hook_command(event)
+            command = _hook_command(event, identity=identity)
             hooks[event] = [{"hooks": [{"type": "command", "command": command}]}]
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps({"hooks": hooks}, indent=2), encoding="utf-8")
         temporary.replace(path)
         return path
 
-    def _session_settings(self, session_id: str | None) -> Path | None:
-        if not self.data_dir or not session_id:
-            return self.settings_path
-        path = self.data_dir / "sessions" / session_id / f"{self.script_base_name}-hooks.json"
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            generated = self._write_hook_settings(path.parent)
-            if generated != path:
-                generated.replace(path)
+    @staticmethod
+    def _write_hook_identity(directory: Path, opts: SpawnOptions) -> Path | None:
+        """Materialize this pane's hook credentials beside its settings file.
+
+        On disk rather than in the environment because the environment does not
+        survive Claude's background-job hand-off: a parked conversation is run by
+        a shared `claude daemon run` process whose environment belongs to
+        whichever CLI first started it, while `--settings` is passed per request
+        and always names the requesting pane. Rewritten on every spawn so the
+        file can never hold a superseded secret.
+        """
+        if not opts.hook_url or not opts.hook_secret:
+            return None
+        path = directory / "hook-identity.json"
+        payload = {"url": opts.hook_url, "secret": opts.hook_secret}
+        if opts.hook_spool:
+            payload["spool"] = opts.hook_spool
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(path)
+        path.chmod(0o600)
         return path
+
+    def _session_settings_dir(self, session_id: str | None) -> Path | None:
+        if not self.data_dir or not session_id:
+            return None
+        return self.data_dir / "sessions" / session_id
+
+    def _session_settings(self, opts: SpawnOptions) -> Path | None:
+        """Write this pane's settings and hook identity; return the settings path."""
+        directory = self._session_settings_dir(opts.session_id)
+        if directory is None:
+            return self.settings_path
+        directory.mkdir(parents=True, exist_ok=True)
+        return self._write_hook_settings(directory, self._write_hook_identity(directory, opts))
 
     def _args(self, action: str, native_id: str, opts: SpawnOptions) -> list[str]:
         # `--mcp-config` is a VARIADIC option in the Claude CLI: it keeps
@@ -160,7 +195,7 @@ class ClaudeAdapter(BackendAdapter):
         args = [action, native_id]
         if self.mcp_config_path:
             args.extend(["--mcp-config", str(self.mcp_config_path)])
-        settings = self._session_settings(opts.session_id)
+        settings = self._session_settings(opts)
         if settings:
             args.extend(["--settings", str(settings)])
         worktree_args = (
@@ -385,7 +420,18 @@ class ClaudeAdapter(BackendAdapter):
             shutil.rmtree(self.data_dir / "sessions" / session_id, ignore_errors=True)
 
     def session_env(self, session_id: str) -> dict[str, str]:
-        settings = self._session_settings(session_id)
+        # Path only, with a bare file materialized when none exists yet. The
+        # pane's own spawn already wrote the identity-bearing settings file and
+        # rewriting it here would strip `--identity` back out of it; a pane of
+        # another backend has no such file, and the bare one it gets is what any
+        # nested Claude it launches itself runs with.
+        directory = self._session_settings_dir(session_id)
+        settings = self.settings_path
+        if directory is not None:
+            settings = directory / f"{self.script_base_name}-hooks.json"
+            if not settings.exists():
+                directory.mkdir(parents=True, exist_ok=True)
+                self._write_hook_settings(directory)
         key = f"MUX_{self.name.upper().replace('-', '_')}_SETTINGS"
         return {key: str(settings)} if settings else {}
 

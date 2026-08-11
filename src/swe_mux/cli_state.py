@@ -11,7 +11,7 @@ hook-free and CLI-authoritative. It feeds counters and the ledger, and its
 hide an approval, while ``busy`` vetoes a transient idle repaint during parallel
 tool completion. It does not initiate a SessionState transition by itself.
 
-Two measured caveats shape what this module does *not* do:
+Three measured caveats shape what this module does *not* do:
 
 - ``updatedAt`` is a status-change timestamp, not a heartbeat. A legitimately
   busy session's file was observed 51 minutes stale mid-turn, so "file stale
@@ -23,6 +23,15 @@ Two measured caveats shape what this module does *not* do:
   conversation no live session owns is a nested child CLI observed
   deterministically — the signal the 2026-07-31 incident had to infer from hook
   ``source`` fields.
+- ``parkedJobId`` (added by 2.1.227) is the CLI's report that this pane's
+  conversation has moved into a background job, and it is the *only* report of
+  that move: the background CLI runs under a shared ``claude daemon run`` tree,
+  so it neither carries this pane's hook credentials nor speaks for this pane's
+  conversation, and no hook ever reaches the pane. Measured 2026-08-10, a pane
+  whose conversation was parked this way sat nameless and displayed idle for 42
+  minutes while its background job ran a full task. Following the move is
+  therefore a rollover on the CLI's own authority, not the transcript-switch
+  heuristic a Claude pane forbids (``adapters/base.py``).
 """
 
 from __future__ import annotations
@@ -44,6 +53,11 @@ log = logging.getLogger(__name__)
 # flip and mux's own transition race each other at boundaries, and a comparison
 # inside that window measures the race, not a defect.
 CLI_STATE_SETTLE_SECONDS = 10.0
+# A move the pane refuses to adopt is retried a bounded number of times and then
+# left alone. Retrying forever is not free: `roll_agent_conversation` stops and
+# restarts the observer on every attempt, so an unadoptable move would thrash
+# observation once per poll for the pane's whole life.
+PARKED_MOVE_ATTEMPTS = 3
 
 
 def _publishes_cli_state(backend: Backend) -> bool:
@@ -64,6 +78,32 @@ def _publishes_cli_state(backend: Backend) -> bool:
     assert_never(backend)
 
 
+@dataclass(frozen=True, slots=True)
+class ParkedConversation:
+    """A background job holding a pane's conversation (`~/.claude/jobs/<id>/state.json`).
+
+    ``session_id`` is the conversation the job runs and ``transcript`` is the file
+    it writes; the CLI publishes both, so neither is guessed from cwd.
+    """
+
+    job_id: str
+    session_id: str
+    cwd: str
+    state: str
+    transcript: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParkedMove:
+    """A pane whose conversation must be rolled onto its background job."""
+
+    session_id: str
+    native_session_id: str
+    transcript: str
+    job_id: str
+    job_state: str
+
+
 @dataclass(slots=True)
 class CliSessionState:
     path: str
@@ -77,6 +117,8 @@ class CliSessionState:
     updated_at: float
     version: str
     mtime: float
+    parked_job_id: str = ""
+    parked: ParkedConversation | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -94,6 +136,8 @@ class CliSessionState:
             "status_updated_at": self.status_updated_at,
             "updated_at": self.updated_at,
             "version": self.version,
+            "parked_job_id": self.parked_job_id,
+            "parked_session_id": self.parked.session_id if self.parked else "",
         }
 
 
@@ -128,6 +172,26 @@ def _parse_state(path: Path, mtime: float) -> CliSessionState | None:
         updated_at=_millis("updatedAt"),
         version=str(data.get("version") or ""),
         mtime=mtime,
+        parked_job_id=str(data.get("parkedJobId") or ""),
+    )
+
+
+def _parse_job(root: Path, job_id: str) -> ParkedConversation | None:
+    try:
+        data = json.loads((root / job_id / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    session_id = str(data.get("sessionId") or "")
+    if not session_id:
+        return None
+    return ParkedConversation(
+        job_id=job_id,
+        session_id=session_id,
+        cwd=str(data.get("cwd") or ""),
+        state=str(data.get("state") or ""),
+        transcript=str(data.get("linkScanPath") or ""),
     )
 
 
@@ -139,13 +203,18 @@ class CliStateMonitor:
     counters and ledgers).
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, jobs_root: Path | None = None) -> None:
         self.root = root
+        # Sibling of the per-process state directory in the CLI's data home.
+        self.jobs_root = jobs_root if jobs_root is not None else root.parent / "jobs"
         self._cache: dict[str, tuple[float, int, CliSessionState | None]] = {}
         # One count per standing fact, not per 5 s poll: the key that was last
         # counted per session, for disagreements and for nested children.
         self._counted_disagreements: dict[str, tuple[str, str, float]] = {}
         self._nested_counted: dict[str, set[str]] = {}
+        # Attempts already yielded per (mux session, backgrounded conversation).
+        self._parked_attempts: dict[tuple[str, str], int] = {}
+        self._parked_noted: dict[str, str] = {}
 
     def poll(self) -> list[CliSessionState]:
         try:
@@ -154,6 +223,9 @@ class CliStateMonitor:
             return []
         seen: set[str] = set()
         states: list[CliSessionState] = []
+        # Jobs are resolved once per poll rather than once per state: several
+        # panes can point at one job, and this is the threaded half of the loop.
+        jobs: dict[str, ParkedConversation | None] = {}
         for path in paths:
             key = str(path)
             seen.add(key)
@@ -167,8 +239,16 @@ class CliStateMonitor:
             else:
                 state = _parse_state(path, stat.st_mtime)
                 self._cache[key] = (stat.st_mtime, stat.st_size, state)
-            if state is not None:
-                states.append(state)
+            if state is None:
+                continue
+            if state.parked_job_id:
+                # Never cached with the state file: the pane's file stops changing
+                # the moment its conversation is parked, while the job it points
+                # at is the thing still moving.
+                if state.parked_job_id not in jobs:
+                    jobs[state.parked_job_id] = _parse_job(self.jobs_root, state.parked_job_id)
+                state.parked = jobs[state.parked_job_id]
+            states.append(state)
         for key in tuple(self._cache):
             if key not in seen:
                 del self._cache[key]
@@ -176,8 +256,15 @@ class CliStateMonitor:
 
     def observe(
         self, states: list[CliSessionState], sessions: Iterable[Any], now: float | None = None
-    ) -> None:
+    ) -> list[ParkedMove]:
+        """Apply the poll to live sessions and report conversations to follow.
+
+        The returned moves are the caller's work, not this method's: adopting one
+        is an async rollover that stops and restarts the observer, and this runs
+        on the loop purely to mutate counters and ledgers.
+        """
         now = time.time() if now is None else now
+        moves: list[ParkedMove] = []
         by_conversation = {state.session_id: state for state in states}
         live: list[Any] = [
             session
@@ -211,6 +298,9 @@ class CliStateMonitor:
             )
             if own is not None:
                 self._corroborate_status(session, own, now)
+                move = self._parked_move(session, own, now)
+                if move is not None:
+                    moves.append(move)
         for state in states:
             if state.session_id in live_conversations or state.session_id in live_ids:
                 continue
@@ -220,11 +310,19 @@ class CliStateMonitor:
                 # a wrong nested-child count is worse than a missed one.
                 continue
             session = owners[0]
+            if (session.record.backend, state.session_id) in getattr(
+                session, "ignored_detection_runs", ()
+            ):
+                # A conversation this pane itself retired — the interactive CLI's
+                # own file after its conversation was parked into a background
+                # job — is the pane's past, not a child of it.
+                continue
             started = session.record.agent_run_started_at or session.record.created_at
             if state.updated_at and state.updated_at < started:
                 # A leftover file from before this run is not this run's child.
                 continue
             self._note_nested_child(session, state, now)
+        return moves
 
     def _corroborate_status(self, session: Any, state: CliSessionState, now: float) -> None:
         """Count a settled contradiction between the CLI's status and mux's.
@@ -269,6 +367,77 @@ class CliStateMonitor:
                     "status_updated_at": state.status_updated_at,
                 }
             )
+
+    def _parked_move(
+        self, session: Any, state: CliSessionState, now: float
+    ) -> ParkedMove | None:
+        """The conversation this pane must follow into a background job, if any.
+
+        Every guard here answers "is this pane's own conversation demonstrably
+        somewhere else now":
+
+        - the state file is the pane's own (the caller matched it by conversation
+          id) and belongs to an ``interactive`` CLI, so a background CLI's file
+          can never move the pane that requested it;
+        - the job resolves and names a *different* conversation, which is also
+          what makes this idempotent — once the rollover lands, the record's
+          conversation equals the job's and no further move is produced;
+        - the job stands in the pane's own working directory, so a job belonging
+          to another Project is never adopted.
+        """
+        parked = state.parked
+        record = session.record
+        if parked is None or state.kind != "interactive":
+            return None
+        if not parked.session_id or parked.session_id == record.native_session_id:
+            return None
+        if _normalized_cwd(parked.cwd) != _normalized_cwd(record.run_cwd or record.cwd):
+            return None
+        key = (record.id, parked.session_id)
+        attempts = self._parked_attempts.get(key, 0)
+        if attempts >= PARKED_MOVE_ATTEMPTS:
+            return None
+        self._parked_attempts[key] = attempts + 1
+        if self._parked_noted.get(record.id) != parked.session_id:
+            self._parked_noted[record.id] = parked.session_id
+            ledger = getattr(session, "state_transitions", None)
+            if ledger is not None:
+                ledger.append(
+                    {
+                        "ts": now,
+                        "kind": "cli_state",
+                        "action": "conversation_parked",
+                        "native_session_id": parked.session_id,
+                        "job_id": parked.job_id,
+                        "job_state": parked.state,
+                        "pid": state.pid,
+                    }
+                )
+            log.info(
+                "cli-state: session %s conversation parked into background job %s "
+                "(conversation %s, job state %s, pid %s)",
+                record.id,
+                parked.job_id,
+                parked.session_id,
+                parked.state or "unknown",
+                state.pid,
+            )
+        elif attempts + 1 >= PARKED_MOVE_ATTEMPTS:
+            log.warning(
+                "cli-state: session %s did not adopt backgrounded conversation %s "
+                "after %d attempts; leaving it bound to %s",
+                record.id,
+                parked.session_id,
+                PARKED_MOVE_ATTEMPTS,
+                record.native_session_id,
+            )
+        return ParkedMove(
+            session_id=record.id,
+            native_session_id=parked.session_id,
+            transcript=parked.transcript,
+            job_id=parked.job_id,
+            job_state=parked.state,
+        )
 
     def _note_nested_child(self, session: Any, state: CliSessionState, now: float) -> None:
         counted = self._nested_counted.setdefault(session.record.id, set())

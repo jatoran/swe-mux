@@ -28,6 +28,16 @@ class SpawnOptions:
     session_id: str | None = None
     mcp_token: str | None = None
     worktree_project_root: Path | None = None
+    # Hook ingress credentials for this pane. Adapters that materialize a
+    # per-session harness settings file write them into it so the harness carries
+    # them by path rather than by inherited environment: a harness that hands the
+    # conversation to a shared daemon (Claude's background jobs) propagates
+    # `--settings` faithfully while the child's environment belongs to whichever
+    # session started that daemon. Absent for adapters with no settings file, and
+    # in tests that only exercise argv.
+    hook_url: str | None = None
+    hook_secret: str | None = None
+    hook_spool: str | None = None
 
 
 class BackendAdapter(Protocol):

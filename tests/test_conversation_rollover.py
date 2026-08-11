@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from swe_mux.cli_state import ParkedMove
 from swe_mux.delivery_readiness import DeliveryReadinessTracker
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.observation import (
@@ -443,6 +444,58 @@ async def test_the_public_entry_point_restarts_observation_on_the_new_file(
     # native id from the file it is tailing and would put the retired id back.
     manager._stop_observer.assert_awaited_once()
     assert started == [tmp_path / f"{CLEARED}.jsonl"]
+
+
+async def test_a_backgrounded_conversation_is_followed_onto_the_jobs_transcript(
+    tmp_path: Path,
+) -> None:
+    """Claude parks a pane's conversation into a job and no hook reports it.
+
+    The CLI's own `parkedJobId` is the only report of the move, so the pane is
+    rolled from it exactly as a SessionStart-reported `/clear` rolls it — onto
+    the transcript the job publishes, not one re-derived from the pane's cwd.
+    """
+    record = agent_record(cwd=str(tmp_path))
+    manager, session = rollover_manager(record)
+    manager._stop_observer = AsyncMock()
+    manager._start_observer = lambda _session, _path: None
+    parked_transcript = tmp_path / "elsewhere" / f"{CLEARED}.jsonl"
+
+    await manager._follow_parked_conversation(
+        ParkedMove(
+            session_id=record.id,
+            native_session_id=CLEARED,
+            transcript=str(parked_transcript),
+            job_id="job1",
+            job_state="working",
+        )
+    )
+
+    assert record.native_session_id == CLEARED
+    assert session.transcript_path == parked_transcript
+    # A retired run, so the titler names the conversation the work is actually in.
+    assert record.agent_run_seq == 1
+    manager.history.agent_run_ended.assert_awaited_once()
+    assert manager.history.agent_run_ended.await_args.args[1] == "conversation_backgrounded"
+
+
+async def test_a_parked_move_for_an_unknown_session_is_ignored(tmp_path: Path) -> None:
+    """Panes close between the threaded poll and the loop that applies its moves."""
+    record = agent_record(cwd=str(tmp_path))
+    manager, _ = rollover_manager(record)
+    manager._stop_observer = AsyncMock()
+
+    await manager._follow_parked_conversation(
+        ParkedMove(
+            session_id="gone",
+            native_session_id=CLEARED,
+            transcript="",
+            job_id="job1",
+            job_state="done",
+        )
+    )
+
+    manager._stop_observer.assert_not_awaited()
 
 
 # ------------------------------------------------------- the sibling-gate tightening

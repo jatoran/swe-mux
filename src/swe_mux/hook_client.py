@@ -55,8 +55,62 @@ def _post(url: str, secret: str, body: bytes) -> bool:
     return False
 
 
-def _spool(event: str, payload: object) -> None:
-    spool = os.environ.get("MUX_HOOK_SPOOL")
+# The hook credentials this process must use, named by `--identity <path>` in the
+# command the harness settings file carries. It exists because the environment is
+# not a trustworthy channel for them.
+#
+# Measured 2026-08-10: Claude Code 2.1.227 parks a pane's conversation into a
+# background job hosted by a shared, long-lived `claude daemon run` process. That
+# daemon is spawned once per machine by whichever CLI happened to need it first,
+# and every background agent it later starts inherits *that* process's
+# environment — including `MUX_HOOK_URL`/`MUX_HOOK_SECRET` belonging to a pane
+# that has since exited. One such daemon posted 744 hook events to
+# `/api/hooks/<retired session>` and got 744 HTTP 404s while the pane the work
+# actually belonged to received exactly one hook in its lifetime.
+#
+# `--settings` is propagated per request and always names the requesting pane's
+# file, so the settings file is the one channel that stays correct across that
+# hand-off. The identity file therefore wins over the environment; the
+# environment remains the fallback for harnesses with no per-session settings
+# file of their own.
+_IDENTITY_FLAG = "--identity"
+
+
+def _identity(path: str) -> dict[str, str]:
+    try:
+        with open(path, "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8", errors="replace"))
+    except (OSError, ValueError) as error:
+        sys.stderr.write(f"swe-mux hook identity {path} unreadable: {error}\n")
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {key: value for key, value in data.items() if isinstance(value, str) and value}
+
+
+def _parse_argv(argv: list[str]) -> tuple[str, dict[str, str], str]:
+    """Split ``<event> [--identity PATH] [inline payload]``.
+
+    The inline payload is the legacy fallback for a harness that passes the hook
+    body as an argument instead of on stdin, so the flag has to be consumed
+    before the first remaining positional is read as that body.
+    """
+    event = argv[1] if len(argv) > 1 else "hook"
+    identity: dict[str, str] = {}
+    positional: list[str] = []
+    rest = argv[2:]
+    index = 0
+    while index < len(rest):
+        if rest[index] == _IDENTITY_FLAG and index + 1 < len(rest):
+            identity = _identity(rest[index + 1])
+            index += 2
+            continue
+        positional.append(rest[index])
+        index += 1
+    return event, identity, positional[0] if positional else ""
+
+
+def _spool(spool: str | None, event: str, payload: object) -> None:
     if not spool:
         return
     # The wall-clock stamp is what lets the daemon tell a genuinely-missed
@@ -100,12 +154,13 @@ def _read_payload() -> str:
 
 
 def main() -> None:
-    event = sys.argv[1] if len(sys.argv) > 1 else "hook"
-    url = os.environ.get("MUX_HOOK_URL")
-    secret = os.environ.get("MUX_HOOK_SECRET")
+    event, identity, inline_payload = _parse_argv(sys.argv)
+    url = identity.get("url") or os.environ.get("MUX_HOOK_URL")
+    secret = identity.get("secret") or os.environ.get("MUX_HOOK_SECRET")
+    spool = identity.get("spool") or os.environ.get("MUX_HOOK_SPOOL")
     if not url or not secret:
         return
-    raw = _read_payload() or (sys.argv[2] if len(sys.argv) > 2 else "")
+    raw = _read_payload() or inline_payload
     try:
         payload = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError:
@@ -114,7 +169,7 @@ def main() -> None:
         event = str(payload["type"])
     body = json.dumps({"event": event, "payload": payload}).encode()
     if not _post(url, secret, body) and event in _DURABLE_EVENTS:
-        _spool(event, payload)
+        _spool(spool, event, payload)
 
 
 if __name__ == "__main__":

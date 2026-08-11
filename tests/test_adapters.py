@@ -484,6 +484,78 @@ def test_claude_session_hook_settings_are_isolated_and_cleaned(tmp_path: Path) -
     assert not path.parent.exists()
 
 
+def test_claude_hook_identity_travels_with_the_settings_file(tmp_path: Path) -> None:
+    """Hook credentials must reach a background job the environment cannot.
+
+    Claude parks a pane's conversation into a job run by a shared daemon whose
+    environment belongs to whichever CLI started it, while `--settings` is passed
+    per request and always names the requesting pane. The identity therefore has
+    to be reachable from the settings file alone.
+    """
+    adapter = ClaudeAdapter(data_dir=tmp_path)
+    spec = adapter.spawn_spec(
+        "native",
+        SpawnOptions(
+            tmp_path,
+            session_id="mux-session",
+            hook_url="http://127.0.0.1:8765/api/hooks/mux-session",
+            hook_secret="pane-secret",
+            hook_spool=str(tmp_path / "spool" / "mux-session.jsonl"),
+        ),
+    )
+    settings = Path(spec.argv[spec.argv.index("--settings") + 1])
+    identity = tmp_path / "sessions" / "mux-session" / "hook-identity.json"
+
+    assert json.loads(identity.read_text(encoding="utf-8")) == {
+        "url": "http://127.0.0.1:8765/api/hooks/mux-session",
+        "secret": "pane-secret",
+        "spool": str(tmp_path / "spool" / "mux-session.jsonl"),
+    }
+    hooks = json.loads(settings.read_text(encoding="utf-8"))["hooks"]
+    for event, entries in hooks.items():
+        argv = shlex.split(entries[0]["hooks"][0]["command"])
+        assert argv[1:] == [
+            "-m",
+            "swe_mux.hook_client",
+            event,
+            "--identity",
+            str(identity),
+        ]
+
+
+def test_claude_session_env_never_strips_the_identity_it_did_not_write(
+    tmp_path: Path,
+) -> None:
+    """`session_env` runs after the spawn spec and must not rewrite its file."""
+    adapter = ClaudeAdapter(data_dir=tmp_path)
+    adapter.spawn_spec(
+        "native",
+        SpawnOptions(
+            tmp_path,
+            session_id="mux-session",
+            hook_url="http://127.0.0.1:8765/api/hooks/mux-session",
+            hook_secret="pane-secret",
+        ),
+    )
+
+    settings = Path(adapter.session_env("mux-session")["MUX_CLAUDE_SETTINGS"])
+
+    assert "--identity" in settings.read_text(encoding="utf-8")
+
+
+def test_claude_settings_without_an_identity_stay_environment_driven(
+    tmp_path: Path,
+) -> None:
+    """A pane of another backend has no identity file, and must still get hooks."""
+    adapter = ClaudeAdapter(data_dir=tmp_path)
+
+    settings = Path(adapter.session_env("codex-pane")["MUX_CLAUDE_SETTINGS"])
+
+    assert settings.is_file()
+    assert "--identity" not in settings.read_text(encoding="utf-8")
+    assert not (tmp_path / "sessions" / "codex-pane" / "hook-identity.json").exists()
+
+
 def test_claude_hook_command_is_bash_safe_for_windows_venv(tmp_path: Path) -> None:
     command = _hook_command("SessionStart", r"D:\PROJECTS\swe-mux\.venv\Scripts\python.exe")
     argv = shlex.split(command)

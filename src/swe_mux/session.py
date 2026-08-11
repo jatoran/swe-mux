@@ -25,7 +25,7 @@ from typing import Any, Literal, cast
 from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
 from .background_tasks import background
-from .cli_state import CliStateMonitor
+from .cli_state import CliStateMonitor, ParkedMove
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
@@ -2321,6 +2321,13 @@ class SessionManager:
         if not resolved_cwd.is_dir():
             raise ValueError(f"cwd does not exist: {resolved_cwd}")
         adapter = self.adapters[backend]
+        # One source of truth for the pane's hook identity: the child environment
+        # below and the per-session harness settings file the adapter writes must
+        # never disagree about which session a hook speaks for.
+        hook_url = f"{self.ingress_url}/api/hooks/{sid}"
+        hook_spool = (
+            str(self.hook_spool_dir / f"{sid}.jsonl") if self.hook_spool_dir is not None else None
+        )
         opts = SpawnOptions(
             resolved_cwd,
             exe,
@@ -2328,6 +2335,9 @@ class SessionManager:
             sid,
             mcp_token,
             worktree_project_root,
+            hook_url=hook_url,
+            hook_secret=hook_secret,
+            hook_spool=hook_spool,
         )
         spawn_spec = (
             adapter.resume_spec(native_id, opts)
@@ -2403,17 +2413,13 @@ class SessionManager:
             # both so a task shell can never spoof another session's hooks.
             **(extra_env or {}),
             "MUX_SESSION_ID": sid,
-            "MUX_HOOK_URL": f"{self.ingress_url}/api/hooks/{sid}",
+            "MUX_HOOK_URL": hook_url,
             "MUX_PROMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/promote",
             "MUX_DEMOTE_URL": f"{self.ingress_url}/api/sessions/{sid}/demote",
             "MUX_HOOK_SECRET": hook_secret,
             "MUX_MCP_URL": f"{self.ingress_url}/mcp",
             "MUX_MCP_TOKEN": mcp_token,
-            **(
-                {"MUX_HOOK_SPOOL": str(self.hook_spool_dir / f"{sid}.jsonl")}
-                if self.hook_spool_dir is not None
-                else {}
-            ),
+            **({"MUX_HOOK_SPOOL": hook_spool} if hook_spool is not None else {}),
         }
         pty_started_at = time.perf_counter()
         # Scrubbed base environment: a daemon (re)launched from inside an agent
@@ -5083,11 +5089,63 @@ class SessionManager:
                 now = time.time()
                 # File I/O off the loop; counter/ledger application on it.
                 cli_states = await asyncio.to_thread(self.cli_state_monitor.poll)
-                self.cli_state_monitor.observe(
+                parked_moves = self.cli_state_monitor.observe(
                     cli_states, tuple(self.sessions.values()), now
                 )
+                for move in parked_moves:
+                    await self._follow_parked_conversation(move)
                 for session in tuple(self.sessions.values()):
                     await self._watchdog_check_session(session, now)
+
+    async def _follow_parked_conversation(self, move: ParkedMove) -> None:
+        """Roll a pane onto the background job its conversation moved into.
+
+        Claude Code 2.1.227 can park a pane's conversation into a job hosted by a
+        shared ``claude daemon run`` process ("Your conversation moved to the
+        background"). The pane keeps its spawn conversation id and its transcript
+        stops growing while every record lands in the job's own conversation, and
+        no hook reports the move: the background CLI is not a child of this PTY,
+        so it carries neither this pane's hook credentials nor its conversation.
+        Without this the pane is observationally dead — measured 2026-08-10, one
+        sat displayed idle and nameless for 42 minutes while its job ran.
+
+        Safe to call here and nowhere inside the observer: the rollover stops and
+        restarts observation, which would cancel an observer that called it.
+        """
+        session = self.sessions.get(move.session_id)
+        if session is None:
+            return
+        log.info(
+            "session %s following backgrounded conversation %s (job %s, state %s)",
+            move.session_id,
+            move.native_session_id,
+            move.job_id,
+            move.job_state or "unknown",
+        )
+        try:
+            rolled = await self.roll_agent_conversation(
+                move.session_id,
+                native_id=move.native_session_id,
+                reason="conversation_backgrounded",
+                source="cli_state",
+                # The job names the file it writes; deriving it from the pane's
+                # cwd instead re-guesses what the CLI already published.
+                transcript=Path(move.transcript) if move.transcript else None,
+            )
+        except Exception:
+            log.exception(
+                "session %s could not follow backgrounded conversation %s",
+                move.session_id,
+                move.native_session_id,
+            )
+            return
+        if not rolled:
+            log.warning(
+                "session %s refused the backgrounded conversation %s from job %s",
+                move.session_id,
+                move.native_session_id,
+                move.job_id,
+            )
 
     async def _watchdog_check_session(self, session: Session, now: float) -> None:
         """Re-derive one session's true state and force idle if its turn is over.

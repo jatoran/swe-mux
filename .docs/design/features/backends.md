@@ -114,6 +114,23 @@ The descriptor is the source of truth for all generic surfaces.
   selection swaps only the system auth file, so adapters, shims, configuration, skills,
   transcript discovery, and live-process behavior require no account-specific launch path.
 - Claude explicit spawn uses `--session-id`; resume uses `--resume`.
+- **A Claude pane's hook credentials travel with its `--settings` file, not its environment.**
+  Each pane gets `<data_dir>/sessions/<mux id>/claude-hooks.json` whose hook commands carry
+  `--identity <data_dir>/sessions/<mux id>/hook-identity.json`, and that file holds the pane's
+  ingress URL, hook secret, and spool path. `hook_client` prefers it and falls back to
+  `MUX_HOOK_URL`/`MUX_HOOK_SECRET`/`MUX_HOOK_SPOOL` for harnesses with no per-session settings
+  file.
+  The environment alone is not sufficient because Claude 2.1.227 can hand a pane's conversation
+  to a background job run by a shared, long-lived `claude daemon run` process. That daemon is
+  started once by whichever CLI first needs it and every background agent it later spawns
+  inherits *that* process's environment, while `--settings`, `--mcp-config`, and `--add-dir` are
+  passed per request and name the requesting pane. Measured 2026-08-10: one such daemon held a
+  pane that had exited at 20:19:37 and posted 744 hook events to `/api/hooks/<retired id>`, every
+  one HTTP 404, while the pane the work belonged to received a single `SessionStart` in its
+  lifetime and its spool accumulated under the retired pane's key where nothing drains it.
+  The identity file is rewritten on every spawn so it can never hold a superseded secret, and
+  `session_env` only materializes a bare settings file when none exists — rewriting the pane's
+  own would strip `--identity` back out of it.
 - Worktree startup policy belongs to adapters because trust artifacts and primary-checkout access differ by harness.
   The base adapter has no-op `preflight_worktree` and `worktree_spawn_args` hooks, so future harnesses opt in without provider branches in worktree orchestration.
   Claude preflight clones the canonical primary trust entry into `~/.claude.json`, carries `.claude/settings.local.json`, and contributes `--add-dir`.
@@ -384,8 +401,9 @@ The descriptor is the source of truth for all generic surfaces.
 - While a session is promoted, a rendered shell prompt (OSC 7) means the nested CLI exited;
   after a short post-promotion grace and a transcript-quiescence check the daemon demotes the
   session even when no shim demotion arrives. This fallback requires a cwd-integration shell.
-- **An in-CLI conversation replacement is a new agent run, not a retarget.** `/clear` (Claude)
-  and `/new` (Codex) mint a new native session id and a new transcript file under the same PTY,
+- **An in-CLI conversation replacement is a new agent run, not a retarget.** `/clear` (Claude),
+  `/new` (Codex), and a Claude pane whose conversation is parked into a background job
+  mint a new native session id and a new transcript file under the same PTY,
   mux session, hook secret, and MCP token. The daemon *rolls the run*: it closes the outgoing
   one exactly as an agent exit does (final token/context figures, its own history row, its own
   transcript path, its own indexed messages), mints a fresh `agent_run_id`, bumps
@@ -416,7 +434,10 @@ The descriptor is the source of truth for all generic surfaces.
   identity was stolen, and it heals the binding back (`session_identity_reconciled`,
   trigger `own_conversation_hook`); the retired-conversation set guards the heal, so a
   stale hook spooled before a legitimate `/clear` can never un-clear it. This path
-  is unaffected by sibling sessions, and it is Claude's *only* rollover path: adapters declare
+  is unaffected by sibling sessions. It is one of Claude's *two* rollover paths, and both are
+  the CLI's own report of where it is now writing: the other is the `parkedJobId` its
+  per-process state file publishes when a pane's conversation is parked into a background job
+  no hook can speak for (`status-detection.md`). Adapters declare
   `reports_conversation_rollover` (and, separately, `assigns_conversation_id` — whether mux
   named the conversation at spawn, which decides whether the transcript is *derived* from the
   native id or has to be learned from the CLI's own authenticated hook), and for backends that do, the transcript-switch heuristic is

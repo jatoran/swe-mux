@@ -12,7 +12,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from swe_mux.cli_state import CLI_STATE_SETTLE_SECONDS, CliStateMonitor
+from swe_mux.cli_state import (
+    CLI_STATE_SETTLE_SECONDS,
+    PARKED_MOVE_ATTEMPTS,
+    CliStateMonitor,
+)
 from tests.support.detection_replay import ReplaySession
 
 OWN = "11111111-2222-4333-8444-555566667777"
@@ -27,25 +31,51 @@ def write_state(
     cwd: str,
     status: str = "idle",
     status_updated_at_ms: float = 0.0,
+    kind: str = "interactive",
+    parked_job_id: str | None = None,
 ) -> Path:
     path = root / f"{pid}.json"
-    path.write_text(
-        json.dumps(
-            {
-                "sessionId": session_id,
-                "cwd": cwd,
-                "pid": pid,
-                "procStart": "639211298070889210",
-                "kind": "interactive",
-                "name": "test",
-                "status": status,
-                "statusUpdatedAt": status_updated_at_ms,
-                "updatedAt": status_updated_at_ms,
-                "version": "2.1.220",
-            }
-        ),
-        encoding="utf-8",
-    )
+    payload: dict[str, Any] = {
+        "sessionId": session_id,
+        "cwd": cwd,
+        "pid": pid,
+        "procStart": "639211298070889210",
+        "kind": kind,
+        "name": "test",
+        "status": status,
+        "statusUpdatedAt": status_updated_at_ms,
+        "updatedAt": status_updated_at_ms,
+        "version": "2.1.220",
+    }
+    if parked_job_id is not None:
+        payload["parkedJobId"] = parked_job_id
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def write_job(
+    root: Path,
+    job_id: str,
+    session_id: str,
+    *,
+    cwd: str,
+    state: str = "working",
+    transcript: str | None = None,
+) -> Path:
+    """A background job as Claude 2.1.227 publishes it (`jobs/<id>/state.json`)."""
+    path = root / job_id / "state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "sessionId": session_id,
+        "resumeSessionId": session_id,
+        "cwd": cwd,
+        "state": state,
+        "template": "bg",
+        "name": "parked work",
+    }
+    if transcript is not None:
+        payload["linkScanPath"] = transcript
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -188,4 +218,117 @@ def test_a_leftover_file_from_before_this_run_is_not_this_runs_child(tmp_path: P
         status_updated_at_ms=(now - 3600) * 1000,
     )
     monitor.observe(monitor.poll(), [session], now)
+    assert "nested_children_observed" not in session.status_health_counters
+
+
+# --- backgrounded conversations (Claude 2.1.227 `parkedJobId`) ----------------
+#
+# The pane keeps its spawn conversation id while every record lands in the job's
+# own conversation, and no hook ever reports the move, so this layer is the only
+# thing that can keep such a pane observable.
+PARKED = "44444444-3333-4222-8111-000099998888"
+
+
+def parked_monitor(tmp_path: Path) -> tuple[CliStateMonitor, Path, Path]:
+    sessions_root = tmp_path / "sessions"
+    jobs_root = tmp_path / "jobs"
+    sessions_root.mkdir()
+    jobs_root.mkdir()
+    return CliStateMonitor(sessions_root, jobs_root), sessions_root, jobs_root
+
+
+def test_a_parked_conversation_is_reported_as_a_move_to_follow(tmp_path: Path) -> None:
+    session = claude_session(str(tmp_path))
+    monitor, sessions_root, jobs_root = parked_monitor(tmp_path)
+    write_state(sessions_root, 100, OWN, cwd=str(tmp_path), parked_job_id="job1")
+    transcript = str(tmp_path / "parked.jsonl")
+    write_job(jobs_root, "job1", PARKED, cwd=str(tmp_path), transcript=transcript)
+
+    (move,) = monitor.observe(monitor.poll(), [session], session.clock.wall())
+
+    assert (move.session_id, move.native_session_id) == (session.record.id, PARKED)
+    # The job names the file it writes; the pane's cwd must not be re-guessed.
+    assert move.transcript == transcript
+    assert move.job_id == "job1"
+    (entry,) = [
+        item
+        for item in ledger(session, "cli_state")
+        if item["action"] == "conversation_parked"
+    ]
+    assert entry["native_session_id"] == PARKED
+
+
+def test_following_the_move_stops_it_being_reported_again(tmp_path: Path) -> None:
+    """Idempotence is the record itself, not bookkeeping that can drift."""
+    session = claude_session(str(tmp_path))
+    monitor, sessions_root, jobs_root = parked_monitor(tmp_path)
+    write_state(sessions_root, 100, OWN, cwd=str(tmp_path), parked_job_id="job1")
+    write_job(jobs_root, "job1", PARKED, cwd=str(tmp_path))
+    assert monitor.observe(monitor.poll(), [session], session.clock.wall())
+
+    session.record.native_session_id = PARKED
+
+    assert monitor.observe(monitor.poll(), [session], session.clock.wall()) == []
+
+
+def test_an_unadopted_move_is_retried_but_bounded(tmp_path: Path) -> None:
+    """An unadoptable move must not thrash the observer once per poll forever."""
+    session = claude_session(str(tmp_path))
+    monitor, sessions_root, jobs_root = parked_monitor(tmp_path)
+    write_state(sessions_root, 100, OWN, cwd=str(tmp_path), parked_job_id="job1")
+    write_job(jobs_root, "job1", PARKED, cwd=str(tmp_path))
+
+    yielded = [
+        bool(monitor.observe(monitor.poll(), [session], session.clock.wall()))
+        for _ in range(PARKED_MOVE_ATTEMPTS + 2)
+    ]
+
+    assert yielded == [True] * PARKED_MOVE_ATTEMPTS + [False, False]
+
+
+def test_a_background_clis_own_file_never_moves_a_pane(tmp_path: Path) -> None:
+    """Only the interactive CLI speaks for where the pane's conversation went."""
+    session = claude_session(str(tmp_path))
+    monitor, sessions_root, jobs_root = parked_monitor(tmp_path)
+    write_state(sessions_root, 100, OWN, cwd=str(tmp_path), kind="bg", parked_job_id="job1")
+    write_job(jobs_root, "job1", PARKED, cwd=str(tmp_path))
+
+    assert monitor.observe(monitor.poll(), [session], session.clock.wall()) == []
+
+
+def test_a_job_in_another_directory_is_not_this_panes_conversation(tmp_path: Path) -> None:
+    session = claude_session(str(tmp_path))
+    monitor, sessions_root, jobs_root = parked_monitor(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    write_state(sessions_root, 100, OWN, cwd=str(tmp_path), parked_job_id="job1")
+    write_job(jobs_root, "job1", PARKED, cwd=str(elsewhere))
+
+    assert monitor.observe(monitor.poll(), [session], session.clock.wall()) == []
+
+
+def test_a_missing_job_leaves_the_pane_where_it_is(tmp_path: Path) -> None:
+    session = claude_session(str(tmp_path))
+    monitor, sessions_root, _ = parked_monitor(tmp_path)
+    write_state(sessions_root, 100, OWN, cwd=str(tmp_path), parked_job_id="gone")
+
+    assert monitor.observe(monitor.poll(), [session], session.clock.wall()) == []
+    assert session.cli_state is not None
+
+
+def test_a_conversation_this_pane_retired_is_not_a_nested_child(tmp_path: Path) -> None:
+    """After the move the interactive CLI's file still names the retired id."""
+    session = claude_session(str(tmp_path))
+    now = session.clock.wall()
+    session.record.agent_run_started_at = now - 300
+    monitor, sessions_root, _ = parked_monitor(tmp_path)
+    write_state(
+        sessions_root, 100, OWN, cwd=str(tmp_path), status="idle",
+        status_updated_at_ms=(now - 10) * 1000,
+    )
+    session.record.native_session_id = PARKED
+    session.ignored_detection_runs.add(("claude", OWN))
+
+    monitor.observe(monitor.poll(), [session], now)
+
     assert "nested_children_observed" not in session.status_health_counters
