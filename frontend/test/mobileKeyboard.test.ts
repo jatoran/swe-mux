@@ -7,6 +7,7 @@ import {
   nextPeekOffset,
   peekToggleVisible,
   raisesSoftKeyboard,
+  softKeyboardInputMode,
   softKeyboardInset,
   softKeyboardLost,
 } from '../src/mobileKeyboard.ts'
@@ -46,6 +47,14 @@ test('readonly fields and inputMode="none" opt out', () => {
   assert.equal(raisesSoftKeyboard({ tagName: 'TEXTAREA', readOnly: true }), false)
   assert.equal(raisesSoftKeyboard({ tagName: 'TEXTAREA', inputMode: 'none' }), false)
   assert.equal(raisesSoftKeyboard({ tagName: 'DIV', isContentEditable: true, inputMode: 'none' }), false)
+})
+
+test('terminal action focus preserves keyboard visibility on coarse pointers', () => {
+  assert.equal(softKeyboardInputMode(true, 0, false), 'none')
+  assert.equal(softKeyboardInputMode(true, 415, false), 'text')
+  assert.equal(softKeyboardInputMode(true, 0, true), 'text')
+  // Desktop focus restoration remains ordinary text input regardless of viewport state.
+  assert.equal(softKeyboardInputMode(false, 0, false), 'text')
 })
 
 test('tag matching is case-insensitive, as DOM tagName is uppercase', () => {

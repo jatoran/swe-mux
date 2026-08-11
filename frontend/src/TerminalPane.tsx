@@ -91,7 +91,7 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, clampPeekOffset, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, type PeekTrigger } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, type PeekTrigger } from './mobileKeyboard'
 import { nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
 import { MobileTerminalDraft } from './TerminalDraftComposer'
 import {
@@ -311,7 +311,6 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (
     }
   }
   pasteIntoTerminal(term, session, await navigator.clipboard.readText())
-  term.focus()
   return 'text'
 }
 
@@ -497,6 +496,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   const attachmentInputRef=useRef<HTMLInputElement>(null)
   const mobileLiveInputRef=useRef<HTMLTextAreaElement>(null)
   const focusTerminalInputRef=useRef<()=>void>(()=>{})
+  const focusAfterTerminalActionRef=useRef<()=>void>(()=>{})
   const pasteAttachmentRef=useRef<(text:string,nativeImage:boolean)=>void>(()=>{})
   const attachFilesRef=useRef<(files:Blob[])=>Promise<void>>(async()=>{})
   const attachmentBusyRef=useRef(false)
@@ -518,6 +518,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // to look at the top of the grid instead of the composer. Only meaningful while the
   // keyboard is up: with it down the whole grid fits and there is no slice to move.
   const [keyboardInset,setKeyboardInset]=useState(0)
+  const keyboardInsetRef=useRef(0)
+  // Android Back hides the IME without blurring its textarea. Track whether focus still
+  // represents typing intent separately, so a later rail action can restore focus with
+  // `inputmode="none"` instead of treating stale focus as a request to reopen the keyboard.
+  const mobileTypingIntentRef=useRef(false)
   // Whether this pane is holding the keyboard's height back out of its own grid, so the
   // keyboard covers dead space instead of conversation (see keyboardReserve.ts). A reserved
   // pane has nothing hidden to peek at, which is why every peek path below reads
@@ -577,7 +582,16 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   useEffect(()=>{
     const onKeyboard=(event:Event)=>{
       const inset=(event as CustomEvent<number>).detail
+      keyboardInsetRef.current=inset
       setKeyboardInset(inset)
+      const bridge=mobileLiveInputRef.current
+      if(inset<=0){
+        mobileTypingIntentRef.current=false
+        if(bridge&&typesWithSoftKeyboard())bridge.inputMode='none'
+      }else if(bridge&&!keyboardOffRef.current&&!mobileDraftOpenRef.current){
+        mobileTypingIntentRef.current=true
+        bridge.inputMode='text'
+      }
       if(inset<=0)applyPeekRef.current('keyboardClosed')
       scheduleKeyboardSettleRef.current()
     }
@@ -863,22 +877,31 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // starts empty on every run, so any text left in the element would be re-sent in
     // full on the next keystroke — duplicating the composer contents, or leaking the
     // previous tab's text into this session. Element and baseline must start in sync.
-    if(mobileLiveInput)mobileLiveInput.value=''
+    if(mobileLiveInput){
+      mobileLiveInput.value=''
+      mobileLiveInput.inputMode=softKeyboardInputMode(typesWithSoftKeyboard(),keyboardInsetRef.current,mobileTypingIntentRef.current)
+    }
     let mobileCursorInitialized=false
-    const focusTerminalInput=()=>{
+    const focusTerminalInput=(typingIntent=true)=>{
       if(keyboardOffRef.current||mobileDraftOpenRef.current)return
       if(mobileLiveInput){
+        mobileTypingIntentRef.current=typingIntent
+        mobileLiveInput.inputMode=softKeyboardInputMode(typesWithSoftKeyboard(),keyboardInsetRef.current,typingIntent)
         // xterm does not render any cursor until its own textarea has received focus
         // once. Claude normally initializes it by entering the alternate screen, but
         // Codex stays on the normal screen. Briefly focus xterm on the first user
         // focus, then hand focus to the native IME bridge that actually receives input.
-        if(!mobileCursorInitialized){term.focus();mobileCursorInitialized=true}
+        if(typingIntent&&!mobileCursorInitialized){term.focus();mobileCursorInitialized=true}
         mobileLiveInput.focus({preventScroll:true})
         const end=mobileLiveInput.value.length
         mobileLiveInput.setSelectionRange(end,end)
       }else term.focus()
     }
-    focusTerminalInputRef.current=focusTerminalInput
+    focusTerminalInputRef.current=()=>focusTerminalInput(true)
+    // Synthetic terminal actions preserve the keyboard state they found. Refocusing with
+    // `inputmode="none"` is intentional: unlike a blur-only fix it keeps physical-keyboard
+    // input routed to the terminal and also covers Android Back's focused-but-hidden IME.
+    focusAfterTerminalActionRef.current=()=>focusTerminalInput(mobileTypingIntentRef.current||keyboardInsetRef.current>0)
     // Attachment paths are always unicast. xterm fires onData synchronously from
     // paste/input, so this depth marker reaches the ordinary input path without
     // bypassing its replay guard or bracketed-paste handling.
@@ -898,7 +921,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }finally{
         attachmentPasteDepth-=1
       }
-      focusTerminalInput()
+      focusAfterTerminalActionRef.current()
     }
     const onTheme = (event: Event) => {
       const name = (event as CustomEvent<Exclude<ThemeName,'system'>>).detail
@@ -2855,6 +2878,19 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     return () => { disposed=true;finishCaretPlacement('disposed');stopSelectionScroll();stopLivenessWatch();stopInputStallWatch();clearHandshakeWatchdog();reconnectNowRef.current=()=>{};if(reconnectTimer!==undefined)clearTimeout(reconnectTimer);if(replyRefreshTimer!==undefined)clearTimeout(replyRefreshTimer);if(lineBreakResetTimer!==undefined)clearTimeout(lineBreakResetTimer);if(outputAckTimer!==undefined)clearTimeout(outputAckTimer);window.clearInterval(terminalStateTimer);if(keyboardSettleTimer!==undefined)window.clearTimeout(keyboardSettleTimer);scheduleKeyboardSettleRef.current=()=>{};bufferChange.dispose();tailScroll.dispose();tailRender.dispose();writeParsed.dispose();renderDiagnostic?.dispose();input.dispose();wheelPacer.dispose();selectionChange.dispose();caretCursorMove.dispose();caretWriteParsed.dispose();caretResize.dispose();cancelLongPress();observer.disconnect();trackObserver.disconnect();intersection?.disconnect();window.cancelAnimationFrame(fitFrame);window.cancelAnimationFrame(redrawFrame);surfaceRepair?.cancel();window.cancelAnimationFrame(visibilityFrame);window.clearTimeout(surfaceConfirmTimer);window.removeEventListener('resize',scheduleBurstFit);window.visualViewport?.removeEventListener('resize',scheduleBurstFit);viewportScheduler.cancel();document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('pageshow',onPageShow);window.removeEventListener('focus',onWindowFocus);window.removeEventListener('error',onRenderError);window.removeEventListener('pointermove',pointerMove);window.removeEventListener('pointerup',pointerEnd);window.removeEventListener('pointercancel',pointerCancel);window.removeEventListener('mux:theme',onTheme);window.removeEventListener(PRESENCE_REPORTED_EVENT,onPresenceReported);mobileLiveInput?.removeEventListener('beforeinput',mobileBeforeInput);mobileLiveInput?.removeEventListener('input',mobileTextInput);mobileLiveInput?.removeEventListener('keydown',mobileKeyDown);mobileLiveInput?.removeEventListener('paste',mobilePaste);if(mobileLiveInput)mobileLiveInput.value='';host.current?.removeEventListener('pointerdown',pointerClaim);host.current?.removeEventListener('mousedown',mobileMouseClaim,true);host.current?.removeEventListener('keydown',terminalKeyCapture,true);host.current?.removeEventListener('beforeinput',terminalBeforeInputCapture,true);host.current?.removeEventListener('focusin',claimOnFocus);host.current?.removeEventListener('contextmenu',openMenu);host.current?.removeEventListener('paste',pasteEvent,true);host.current?.removeEventListener('dragenter',dragEnter);host.current?.removeEventListener('dragover',dragOver);host.current?.removeEventListener('dragleave',dragLeave);host.current?.removeEventListener('drop',drop);if(socket){socket.onclose=null;socket.close()}term.dispose();termRef.current=null;searchRef.current=null;focusTerminalInputRef.current=()=>{};pasteAttachmentRef.current=()=>{};claimInputRef.current=()=>{};resizeToPaneRef.current=()=>{};applyBaseFontRef.current=()=>{} }
   }, [session.id, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, remountEpoch])
 
+  // Every command-rail button, including the fixed mobile Send end-cap, preserves an
+  // already-open keyboard through its press. RailScroller owns the same guard for its
+  // scrolling rows; handling the full toolbar here closes the sibling end-cap gap.
+  useEffect(()=>{
+    const surface=host.current?.closest<HTMLElement>('.terminal-surface')
+    if(!surface)return
+    const preserveRailKeyboard=(event:MouseEvent)=>{
+      if(event.target instanceof Element&&event.target.closest('.terminal-action-rail'))holdSoftKeyboard(event)
+    }
+    surface.addEventListener('mousedown',preserveRailKeyboard)
+    return()=>surface.removeEventListener('mousedown',preserveRailKeyboard)
+  },[session.id])
+
   // Its own effect on purpose: the one above owns the terminal's whole lifetime, so
   // listing the scale in its deps would dispose the terminal, drop the socket and
   // replay the entire buffer to change a number xterm takes directly.
@@ -2890,7 +2926,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const pasted=textOnly
         ?(pasteIntoTerminal(term,session,await navigator.clipboard.readText()),'text' as const)
         :await pasteBrowserClipboard(term, session, files=>attachFilesRef.current(files))
-      focusTerminalInputRef.current()
+      focusAfterTerminalActionRef.current()
       if(pasted==='text')showClipboardStatus('Pasted')
     } catch {
       setManualPaste(true)
@@ -2983,8 +3019,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
 
 
   // Rail key buttons inject raw bytes on the normal onData path (broadcast + replay aware).
-  // In read/select mode we deliberately do not refocus, so sending a key never raises the
-  // soft keyboard back up.
+  // Their focus restoration preserves a visible keyboard and leaves a dismissed one down;
+  // read/select and Draft modes do not refocus at all.
   // xterm already means to put the viewport back on the tail here (`scrollOnUserInput`), but
   // its own attempt is the single clamped call `scrollTerminalToTail` exists to finish.
   const sendKey=(sequence:string)=>{
@@ -2993,7 +3029,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     // The rail's own `^End` reaches the same place the chip does, so it takes the chip down
     // with it. Only this one sequence: typing does not move an application's viewport.
     if(sequence===APP_TAIL_KEY)clearAppTail('rail_tail_key')
-    if(!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusTerminalInputRef.current()
+    if(!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }
   const railKeySendRef=useRef(sendKey)
   railKeySendRef.current=sendKey
@@ -3041,6 +3077,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     setMobileDraftOpen(draftOpen)
     keyboardOffRef.current=keyboardOff
     setKeyboardOff(keyboardOff)
+    if(mode==='read'||mode==='draft'){
+      mobileTypingIntentRef.current=false
+      if(mobileLiveInputRef.current)mobileLiveInputRef.current.inputMode='none'
+    }
     if(mode==='read')mobileLiveInputRef.current?.blur()
     if(mode==='draft')setMobileDraftError('')
     if(mode==='live')requestAnimationFrame(()=>focusTerminalInputRef.current())
@@ -3096,7 +3136,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         sendKey('\r')
       },
     )
-    if(!submit&&!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusTerminalInputRef.current()
+    if(!submit&&!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }
 
   const insertMobileDraft=async()=>{

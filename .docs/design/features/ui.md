@@ -945,6 +945,11 @@ responsive controls.
   The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the
   resulting click; repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps
   priority when a gesture starts on an arrow.
+- Activating a command-rail item preserves the mobile soft keyboard state it found.
+  Keys, Send, Paste, prompt templates, skills, slash commands, and literal text execute with the keyboard down when it was down, while an already-open keyboard remains open.
+  Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.
+  A terminal typing tap, returning explicitly to Live mode, opening Draft, and the manual Paste fallback remain the paths that intentionally request a soft keyboard.
+  The fixed Send end-cap carries the same focus-preserving press guard as the scrolling rail.
 - The rail configuration separates **what a command is** from **where it appears**, and the second half is per device.
   The *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
   The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` (under the terminal) and the `panel` (the utility drawer's Commands tab).
@@ -1083,7 +1088,7 @@ responsive controls.
   with no terminal mode behind it, for binding a slot that should only ever hide the keyboard.
 - The touch-only keyboard control cycles agent terminals through three exclusive modes: live input (`⌨`), read/select (`↕`), and Draft (`✎`).
   Shell terminals retain the original live/read two-state cycle because they have no agent composer.
-  Read/select keeps taps, selection auto-copy, scrolling, and Paste keyboard-down, and sending a rail key in this mode never raises the keyboard.
+  Read/select keeps terminal-body taps keyboard-down persistently; ordinary Live mode now also leaves a dismissed keyboard down across command-rail actions.
   Draft opens a native multiline composer as a floating surface in the terminal cell, so its appearance does not resize the terminal or reflow the running TUI.
   There is no separate Draft rail action; the single keyboard control owns the whole mode cycle.
 - Draft text is device-local and keyed by session rather than pane, so hiding the composer, changing workspace tabs, remounting the pane, reloading, or browser suspension does not discard it.
