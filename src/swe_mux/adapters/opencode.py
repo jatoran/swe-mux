@@ -46,7 +46,13 @@ def opencode_plugin_path() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "opencode_mux_plugin.js"
 
 
-def materialize_mux_config(root: Path, plugin_source: Path) -> Path:
+def materialize_mux_config(
+    root: Path,
+    plugin_source: Path,
+    *,
+    mcp_url: str | None = None,
+    mcp_token: str | None = None,
+) -> Path:
     """Write the per-session opencode config that loads the mux plugin.
 
     opencode merges its configuration layers rather than replacing them, and
@@ -69,16 +75,35 @@ def materialize_mux_config(root: Path, plugin_source: Path) -> Path:
     staged_plugin.write_bytes(plugin_source.read_bytes())
     staged_plugin.replace(plugin)
 
-    payload = {
+    payload: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
         # Forward slashes: the value is read as a module specifier, and a
         # Windows backslash would be consumed as a JSON escape.
         "plugin": [plugin.as_posix()],
     }
+    if mcp_url and mcp_token:
+        # A literal token, in a session-private file, exactly as the omp
+        # extension package carries one: mux mints a distinct MCP token per
+        # session, so a shared registration would either fail authentication or
+        # hand one session's identity to another. opencode's `{env:VAR}`
+        # interpolation is deliberately not used for the same reason — the value
+        # would resolve from whatever environment the process happens to carry.
+        payload["mcp"] = {
+            "mux": {
+                "type": "remote",
+                "url": mcp_url,
+                "enabled": True,
+                "headers": {"Authorization": f"Bearer {mcp_token}"},
+            }
+        }
     config = root / "opencode.json"
     staged_config = root / "opencode.json.tmp"
     staged_config.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     staged_config.replace(config)
+    try:
+        config.chmod(0o600)
+    except OSError:
+        pass
     return config
 
 
@@ -123,12 +148,14 @@ class OpenCodeAdapter(BackendAdapter):
         *,
         data_home: Path | None = None,
         data_dir: Path | None = None,
+        mcp_url: str | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
         self._config_root = data_dir / "opencode-configs" if data_dir else None
+        self._mcp_url = mcp_url
         self._context_windows: dict[tuple[str, str], int] | None = None
         # npm installs opencode as a `.cmd` batch shim wrapping the real
         # platform binary, and ConPTY cannot execute a batch shim.
@@ -200,12 +227,15 @@ class OpenCodeAdapter(BackendAdapter):
 
     # ------------------------------------------------------------------ launch
 
-    def _session_config(self, session_id: str) -> Path | None:
+    def _session_config(self, session_id: str, mcp_token: str | None = None) -> Path | None:
         if self._config_root is None:
             return None
         try:
             return materialize_mux_config(
-                self._config_root / session_id, opencode_plugin_path()
+                self._config_root / session_id,
+                opencode_plugin_path(),
+                mcp_url=self._mcp_url,
+                mcp_token=mcp_token,
             )
         except OSError:
             # Forfeit the plugin rather than the pane. Without the config the
@@ -213,8 +243,8 @@ class OpenCodeAdapter(BackendAdapter):
             # simply reports no lifecycle hooks.
             return None
 
-    def _env(self, session_id: str) -> dict[str, str]:
-        config = self._session_config(session_id)
+    def _env(self, session_id: str, mcp_token: str | None = None) -> dict[str, str]:
+        config = self._session_config(session_id, mcp_token)
         return {"OPENCODE_CONFIG": str(config)} if config is not None else {}
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
@@ -222,7 +252,7 @@ class OpenCodeAdapter(BackendAdapter):
         return SpawnSpec(
             executable,
             (*prefix, *self.default_args, *opts.args),
-            self._env(opts.session_id or sid),
+            self._env(opts.session_id or sid, opts.mcp_token),
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
@@ -230,7 +260,7 @@ class OpenCodeAdapter(BackendAdapter):
         return SpawnSpec(
             executable,
             (*prefix, "--session", native_id, *self.default_args, *opts.args),
-            self._env(opts.session_id or native_id),
+            self._env(opts.session_id or native_id, opts.mcp_token),
         )
 
     def resume_continues_conversation(self, recorded_cwd: str, target_cwd: str) -> bool:

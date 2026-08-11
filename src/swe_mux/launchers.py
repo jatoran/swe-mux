@@ -136,7 +136,15 @@ def create_agent_shims(
         # prepending, so sessions see exactly one shim dir at the front.
         "PATH": f"{bin_dir}{os.pathsep}{path_without_shim_dirs()}",
         "MUX_SHIM_DIR": str(bin_dir),
+        # Roots for the per-session artifacts a shim-launched harness has to
+        # materialize itself, because a shell promotion has no adapter to do it.
+        # Missing `MUX_OPENCODE_CONFIG_ROOT` meant `agent_launcher._opencode`
+        # read an unset variable and silently skipped the whole config: an
+        # opencode started by typing `opencode` in a shell pane got no plugin, so
+        # no hooks, no state, and no MCP — while the same harness launched from
+        # the Run menu worked, which is the hardest shape of bug to notice.
         "MUX_OMP_EXTENSION_ROOT": str(config.data_dir / "omp-extensions"),
+        "MUX_OPENCODE_CONFIG_ROOT": str(config.data_dir / "opencode-configs"),
     }
     for backend in agent_harnesses():
         prefix = f"MUX_{backend.upper().replace('-', '_')}"

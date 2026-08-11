@@ -178,7 +178,10 @@ def _opencode(args: list[str]) -> tuple[str, list[str], str]:
     if root and session_id:
         try:
             config = materialize_mux_config(
-                Path(root) / session_id, opencode_plugin_path()
+                Path(root) / session_id,
+                opencode_plugin_path(),
+                mcp_url=os.environ.get("MUX_MCP_URL"),
+                mcp_token=os.environ.get("MUX_MCP_TOKEN"),
             )
         except OSError:
             # Forfeit the plugin, never the pane.

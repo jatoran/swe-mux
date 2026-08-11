@@ -66,13 +66,12 @@ def build_agent_adapter(
             command_resolver=command_resolver,
         )
     if harness.adapter_family == "opencode":
-        # No `mcp_url` yet either: opencode does have MCP, but registering it
-        # belongs with the observation work rather than the launch path.
         return OpenCodeAdapter(
             executable,
             args,
             data_home=harness.data_home(),
             data_dir=data_dir,
+            mcp_url=mcp_url,
             command_resolver=command_resolver,
         )
     assert_never(harness.adapter_family)

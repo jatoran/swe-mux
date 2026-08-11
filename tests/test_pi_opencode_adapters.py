@@ -208,6 +208,71 @@ def test_opencode_config_adds_a_layer_and_never_replaces_the_config_dir(
     assert "OPENCODE_CONFIG_DIR" not in env
 
 
+def test_opencode_registers_the_mux_mcp_server_with_a_session_token(tmp_path: Path) -> None:
+    """A literal token in a session-private file, as the omp package carries one.
+
+    mux mints a distinct MCP token per session, so a shared registration would
+    either fail authentication or hand one session's identity to another.
+    opencode's `{env:VAR}` interpolation is not used for the same reason.
+    """
+    plugin = tmp_path / "plugin.js"
+    plugin.write_text("export const MuxHook = async () => ({})\n", encoding="utf-8")
+    config = materialize_mux_config(
+        tmp_path / "session",
+        plugin,
+        mcp_url="http://127.0.0.1:8765/mcp",
+        mcp_token="tok-abc",
+    )
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    assert payload["mcp"]["mux"] == {
+        "type": "remote",
+        "url": "http://127.0.0.1:8765/mcp",
+        "enabled": True,
+        "headers": {"Authorization": "Bearer tok-abc"},
+    }
+
+
+def test_opencode_omits_mcp_when_there_is_no_token(tmp_path: Path) -> None:
+    """Half a registration would fail authentication on every call."""
+    plugin = tmp_path / "plugin.js"
+    plugin.write_text("export const MuxHook = async () => ({})\n", encoding="utf-8")
+    config = materialize_mux_config(
+        tmp_path / "session", plugin, mcp_url="http://127.0.0.1:8765/mcp"
+    )
+    assert "mcp" not in json.loads(config.read_text(encoding="utf-8"))
+
+
+def test_opencode_spawn_threads_the_per_session_mcp_token(tmp_path: Path) -> None:
+    adapter = OpenCodeAdapter(
+        data_home=tmp_path, data_dir=tmp_path, mcp_url="http://127.0.0.1:8765/mcp"
+    )
+    spec = adapter.spawn_spec(
+        "sid", SpawnOptions(cwd=tmp_path, session_id="sid", mcp_token="tok-xyz")
+    )
+    payload = json.loads(Path(spec.env["OPENCODE_CONFIG"]).read_text(encoding="utf-8"))
+    assert payload["mcp"]["mux"]["headers"]["Authorization"] == "Bearer tok-xyz"
+
+
+def test_shim_env_exports_every_per_session_artifact_root() -> None:
+    """A shim-launched harness materializes its own artifacts from these roots.
+
+    MUX_OPENCODE_CONFIG_ROOT was read by the launcher but never exported, so an
+    opencode started by typing `opencode` in a shell pane silently got no plugin
+    - no hooks, no state, no MCP - while the same harness from the Run menu
+    worked.
+    """
+    import tempfile
+
+    from swe_mux.config import Config
+    from swe_mux.launchers import create_agent_shims
+
+    with tempfile.TemporaryDirectory() as raw:
+        config = Config(data_dir=Path(raw))
+        env = create_agent_shims(config, None, None)
+    assert env["MUX_OMP_EXTENSION_ROOT"].endswith("omp-extensions")
+    assert env["MUX_OPENCODE_CONFIG_ROOT"].endswith("opencode-configs")
+
+
 def test_opencode_forfeits_the_plugin_rather_than_the_pane(tmp_path: Path) -> None:
     """With nowhere to write a config, the session must still launch."""
     adapter = OpenCodeAdapter(data_home=tmp_path, data_dir=None)
