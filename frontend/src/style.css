@@ -1078,10 +1078,10 @@ body {
    shallow wash makes the rail feel attached to the block without turning it into a card.
    A focused session gets a compact neutral plate inside that scope. Its status dot and
    status copy keep their semantic colours, so focus never has to compete with them. */
-.project-group{position:relative;padding-bottom:5px}
+.project-group{position:relative}
 .project-group.active{background:linear-gradient(90deg,color-mix(in srgb,var(--text) 7%,transparent),transparent 48px)}
 .project-group.active:before{content:"";position:absolute;z-index:4;top:0;bottom:0;left:0;width:3px;background:color-mix(in srgb,var(--text) 88%,transparent);box-shadow:1px 0 8px color-mix(in srgb,var(--text) 18%,transparent);pointer-events:none}
-.project-group+.project-group{margin-top:4px;padding-top:4px;border-top:1px dotted var(--line)}
+.project-group+.project-group{border-top:1px dotted var(--line)}
 .project-row{position:relative}
 .project-chevron{position:relative;z-index:2;color:var(--muted);font-size:8px}
 .project-group.active>.project-row strong{color:var(--text);font-weight:650}
