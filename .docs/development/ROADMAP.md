@@ -197,7 +197,7 @@ document and are not duplicated here.
 |---|---|---|
 | 0 · Enablement framework | shipped (Implemented baseline) | — |
 | 1 · Tier 0 + raw store | shipped | write/read hashes are not equality-joinable; §6.1's edge is restated as `target` + time order (CP §9 step 1) |
-| 2 · Helps-today siblings | shipped (Implemented baseline) | observation inbox is where `requestSpawn` drafts land |
+| 2 · Helps-today siblings | shipped (Implemented baseline) | `requestSpawn` drafts land in the observation inbox today; **Phase 5.6 moves them into the fleet queue** and retires the inbox as a surface a human monitors |
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
 | 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, and now runs **before** Phase 5.5 so its usage can justify or retire the timeline |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
@@ -1302,8 +1302,7 @@ or ask the human. It adds no authority: every item is a read, Project-scoped, th
 same token, allowlist, redaction, and rate limit Phase 4.5 established.
 
 Depends on Phase 5.4 (a read that crosses a conversation rollover must name the run it came
-from) and on the shipped observation inbox and queue services. It does **not** depend on
-Phase 5.5.
+from) and on the shipped queue and notes services. It does **not** depend on Phase 5.5.
 
 **Resequenced 2026-08-10 to run before Phase 5.5.** This phase costs no new substrate and no
 model tokens, while Phase 5.5 is the first continuously-costing feature.
@@ -1372,12 +1371,37 @@ inventory would be harness-general in name only.
   drafted, armed, delivered, stranded, expired, or refused. Today the write is
   fire-and-forget from the sender's side, which forces an agent to either assume delivery or
   re-send; both are worse than a read.
-- [ ] Expose the Project's observation inbox read-only, including the state of the caller's
-  own `request_spawn` drafts. This is the human-to-agent channel with no new trust boundary:
-  notes a human captured while testing are exactly the context the agent lacks.
+- [ ] Expose the Project's **notes** read-only, and the state of the caller's own
+  `request_spawn` drafts. This is the human-to-agent channel with no new trust boundary: notes a
+  human captured while testing are exactly the context the agent lacks.
+  Retargeted from the observation inbox to Project notes, because that is where humans actually
+  write (see the consolidation item).
 - [ ] Decide the cross-Project read question (CP §18) explicitly rather than by default. "What
   else am I working on right now" is inherently cross-Project; the default stays own-Project
   only, and any widening is a named grant with its own surface, not a quiet scope change.
+
+### Consolidate the observation inbox out of existence
+
+The inbox exists because `request_spawn` needed somewhere inert to land; capturing human notes
+was retrofitted onto it.
+That leaves a third place to monitor, next to the per-session queue and the fleet queue, which
+notifies nothing and which nobody types into because Project notes and the Scratchpad are better
+editors that are already open.
+A surface you must remember to check is worse than no surface, because entries rot and you stop
+trusting it.
+
+- [ ] Land pending `request_spawn` drafts in the **fleet queue** as an approval row, so one
+  surface holds everything an agent wants from a human.
+  A spawn request names no target session because the session does not exist yet; that is a
+  grouping problem in a view that already renders sender provenance, not a reason for a second
+  surface.
+- [ ] Drop the human-notes half and point at Project notes and the Scratchpad, which are
+  Project-scoped, searchable, editable, and already carry "send to agent".
+- [ ] Retire the inbox as a place a human goes. `.swe-mux/observations.json` may survive as
+  storage if that is cheaper than migrating; the `observations.open` command and the standalone
+  view do not.
+- [ ] Keep approval an explicit human act with the once-only decision and the `seed_text` spawn
+  path unchanged. This moves where a request appears, never what approving it means.
 
 ### Construction rules
 

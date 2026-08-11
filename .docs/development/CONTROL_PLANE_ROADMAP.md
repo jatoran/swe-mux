@@ -909,18 +909,18 @@ very different dependency profiles:
   prove the transport, identity, and restart-tolerance decisions above.
 - **v0.5, the gap between them, buildable now.** Bidirectional transcript paging (the
   *beginning* of a conversation, not only its tail), reads of the caller's **own superseded
-  runs**, the run brief on `get_session`, the shipped project card, a bounded ground-truth Git
-  read, `message_status` for a `notify` sender, and the observation inbox read-only. Every one
+  runs**, the run brief on `get_session`, `message_status` for a `notify` sender, Project notes
+  read-only, and the `memorySources` / `readMemory` pair pulled forward from v1. Every one
   is a read over a service that already shipped, so this is a tool-surface phase and not a
   substrate phase. It needs Phase 5.4's run boundary, because reading across a rollover
   without naming the run is the precise failure the retrieval gate exists to prevent. Ships as
   `ROADMAP.md` Phase 5.6 / step 2.6.
-- **v1 — genuinely late.** `provenance`, `priorResolutions`, `deadEnds`,
-  `verifiedStatus`, plus Project-scoped `memorySources` / exact `readMemory` over the
-  provider sources the Phase 6 Agent Context drawer can already inspect. The semantic
-  tools need substrate that steps 1–5 produce and cannot ship earlier; exact provider
-  reads reuse the same typed daemon inventory but land here so MCP remains a client of
-  the Phase 7 operations rather than a second filesystem implementation.
+  Dropped from v0.5 on 2026-08-10: `project_card()` and the bounded Git read, because a caller
+  with shell access answers both itself.
+- **v1, genuinely late.** `provenance`, `priorResolutions`, `deadEnds`, and
+  `verifiedStatus`. These need substrate that steps 1–5 produce and cannot ship earlier, and
+  they split again by dependency: `provenance` and `verifiedStatus` read Tier 0 and the shipped
+  step 3 detectors, while only `priorResolutions` and `deadEnds` need the step 5 timeline.
 
 Ship v0 as its own small phase, add `notify`/`requestSpawn` when the Phase 5 queue
 lands, ship the v0.5 reads once the run boundary exists, and keep v1 in step 8 where it
@@ -1122,8 +1122,17 @@ another agent can pick up mid-plan. Section links point to the design detail.
     rather than blended into the present: §7's attribution rule applied where it matters most.
   - [ ] Run brief on `get_session`: the run's pinned title and opening request, so "what is
     that session working on" costs one small call instead of a paged transcript read.
-  - [ ] `message_status(id)` closes the `notify` loop for the sender, and the observation inbox
-    becomes readable, which is the human-to-agent channel with no new trust boundary.
+  - [ ] `message_status(id)` closes the `notify` loop for the sender, and the Project's **notes**
+    become readable, which is the human-to-agent channel with no new trust boundary. Retargeted
+    2026-08-10 from the observation inbox to notes, because notes are where humans actually
+    write: Project-scoped, searchable, editable, already carrying "send to agent".
+  - [ ] **Consolidate the observation inbox out of existence.** It exists because `requestSpawn`
+    needed somewhere inert to land, and note capture was retrofitted onto it, leaving a third
+    surface to monitor beside the per-session queue and the fleet queue that notifies nothing.
+    Pending spawn drafts move into the fleet queue as an approval row, so one place holds
+    everything an agent wants from a human; a spawn request naming no target session is a
+    grouping problem in a view that already renders sender provenance, not a second surface.
+    Approval stays an explicit once-only human act over the unchanged `seed_text` spawn path.
   - [ ] `memory_sources()` and `read_memory(source_id)` over the Phase 6 Agent Context
     inventory, pulled forward from step 8 (2026-08-10) because they are thin callers over a
     shipped read and do not need this step's semantic substrate. Blocked on Agent Context
