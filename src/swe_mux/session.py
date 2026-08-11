@@ -1673,7 +1673,9 @@ class Session:
         # Monotonic stamps bounding client-requested work: a `repaint` frame makes the
         # child restate its whole transcript, and `client_diagnostic` frames are
         # persisted to the durable event log, so neither may be driven at frame rate
-        # by a misbehaving or malicious page.
+        # by a misbehaving or malicious page. The repaint stamp also covers the pulse
+        # an alternate-screen session takes after a windowed replay, so a reconnect
+        # storm across devices costs the session one restatement rather than one each.
         self.last_client_repaint_ts = 0.0
         self.client_diagnostic_timestamps: dict[str, float] = {}
         # A drag emits geometry changes continuously, and an alternate-screen child
@@ -1940,6 +1942,18 @@ class Session:
         if self.screen.mode == "alternate" and not SCREEN_TOGGLE.search(replay):
             preamble += b"\x1b[?1049h"
         return preamble + replay + suffix
+
+    def replay_window_truncated(self) -> bool:
+        """Whether retention outgrew the replay budget, so an attach gets a window.
+
+        The mirror of the `len(replay) == self.scrollback.size` branch above, asked
+        without materializing the bytes. `False` means an attach replays everything the
+        daemon holds, which is self-contained by construction; `True` means the client
+        is handed a slice, which for an alternate-screen child is a slice of a
+        differential frame stream (`harness.replay_needs_repaint`).
+        """
+        limit = self.attach_replay_bytes
+        return limit is not None and limit > 0 and self.scrollback.size > limit
 
     def _schedule_resync(self, subscriber: PtySubscriber, rejected: bytes | None = None) -> None:
         if rejected is not None:

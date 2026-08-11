@@ -74,6 +74,14 @@ and reattachable browser viewports.
   Recovery is client-requested, because only the client can see what its replay parsed to.
   A pane whose finished replay left less than one screen of scrollback on a normal-screen `repaints_scrollback` harness sends a `repaint` frame; the daemon pulses the PTY one column and restores it (`Session.repaint_current_geometry`), and the child answers by restating its transcript (measured: one pulse elicited a ~460-line re-render), which also repopulates the ring for every later attach.
   The request fires when replay completes on a visible pane and at first reveal for a warm pane that attached hidden, at most once per parsed buffer, and the daemon rate-limits it per session and ignores it for alternate-screen harnesses, whose buffers never hold scrollback.
+  An alternate-screen harness has the mirror-image failure and it is repaired without asking the client anything (`replay_needs_repaint`, `_schedule_attach_repaint`).
+  Its retained bytes are a differential frame stream rather than a transcript: measured 2026-08-11 across eight live Claude panes, steady-state output addresses only the five rows that change (spinner, context meter, status), while the input box border and prompt are drawn once and then left alone.
+  `Session.replay_bytes` restates `?1049h` for a window carrying no toggle of its own, and that sequence clears the alternate buffer, so a bounded window starts the client from a blank screen and can only fill the cells it happens to contain.
+  Whether that reconstructs to a whole screen is luck — it holds only when a full repaint landed inside the window — and the same sweep, run twice, found one pane of eight rendering with no border and no prompt, a different pane each run.
+  So an attach that served a window rather than everything retained (`Session.replay_window_truncated`) schedules one pulse, unconditionally: a slice of a differential stream carries no evidence of what it is missing, so there is nothing for either end to judge.
+  It is deliberately not conditioned on `hidden`, because a warm pane mass-mounted after a Reload UI parses into its buffer while its rendering is paused and is never re-attached on reveal.
+  The pulse shares the client-repaint rate window, so a reconnect storm across devices costs the session one restatement rather than one per socket, and is recorded as `terminal_repaint_requested` with `source=daemon` and `reason=truncated_replay`.
+  Until this existed, the only repaint path an alternate-screen pane had was a geometry change, which is why the user's workaround was resizing the window by hand.
   A concurrent client resize during the pulse wins: the pulse never restores a stale size over newly arbitrated geometry.
   The pinned xterm 6 WebGL addon carries the upstream missing-buffer-line guard in its runtime bundles, preventing a resize/trim race from aborting a model update and leaving stale glyphs.
   Mobile remains DOM-only.

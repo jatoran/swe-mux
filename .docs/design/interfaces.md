@@ -579,7 +579,10 @@ viewport from geometry arbitration.
 Any client may send `{type:"repaint"}` after judging its parsed replay scrollback-free
 (`features/sessions.md`); the daemon honors it only for `repaints_scrollback` harnesses,
 rate-limited per session, by pulsing the PTY one column and back so the child restates its
-transcript. `{type:"client_diagnostic", phase, detail}` persists a client-side terminal repair
+transcript. An alternate-screen harness needs no such frame: whenever its replay was a bounded
+window rather than everything retained, the daemon runs the same pulse itself once the attach
+completes, because a slice of a differential frame stream carries no evidence of what it is
+missing for either end to judge (`replay_needs_repaint`, `features/sessions.md`). `{type:"client_diagnostic", phase, detail}` persists a client-side terminal repair
 to the durable event log as `terminal_client_repair`; phases outside the server's allowlist are
 dropped, `detail` is clamped, and emission is rate-limited per session.
 Physical keyboard, IME, and paste input may add `{input_seq, client_sent_at_ms, client_event_delay_ms, client_queue_delay_ms, input_source, ws_buffered_bytes}` to the ordinary `input` frame.

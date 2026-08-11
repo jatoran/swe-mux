@@ -17,6 +17,7 @@ from swe_mux.harness import (
     needs_resize_repaint,
     provider_account_harnesses,
     public_harness_registry,
+    replay_needs_repaint,
     reports_lifecycle_hooks,
 )
 
@@ -255,6 +256,23 @@ def test_only_alternate_screen_harnesses_need_a_repaint_after_a_resize() -> None
     assert needs_resize_repaint("shell") is False
     assert needs_resize_repaint(None) is False
     assert {name for name in HARNESSES if needs_resize_repaint(name)} == {
+        name for name, harness in HARNESSES.items() if harness.screen == "alternate"
+    }
+
+
+def test_only_alternate_screen_harnesses_need_a_repaint_after_a_windowed_replay() -> None:
+    """The third repaint question, and the one the other two both answered wrongly.
+
+    `repaints_scrollback` is False for Claude and `needs_resize_repaint` only fires on a
+    geometry change, so a Claude pane whose bounded replay reconstructed to a partial
+    frame had no repair at all until the user resized the window by hand.
+    """
+    assert replay_needs_repaint("claude") is True
+    assert replay_needs_repaint("codex") is False
+    assert replay_needs_repaint("omp") is False
+    assert replay_needs_repaint("shell") is False
+    assert replay_needs_repaint(None) is False
+    assert {name for name in HARNESSES if replay_needs_repaint(name)} == {
         name for name, harness in HARNESSES.items() if harness.screen == "alternate"
     }
 
