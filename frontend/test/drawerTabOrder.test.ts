@@ -9,7 +9,7 @@ test('the default order is the registry order', () => {
 })
 
 test('a stored arrangement round-trips', () => {
-  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'agent', 'notifications']
+  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent', 'notifications']
   assert.deepEqual(normalizeDrawerTabOrder(custom), custom)
 })
 
@@ -49,7 +49,7 @@ test('a tab the stored order predates lands beside its default neighbour, not at
   const custom = ['notifications', 'files', 'clipboard']
   assert.deepEqual(
     normalizeDrawerTabOrder(custom),
-    ['notifications', 'files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'agent'],
+    ['notifications', 'files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent'],
   )
 
   // A first tab the order predates goes to the front rather than after everything.

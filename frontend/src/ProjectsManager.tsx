@@ -45,6 +45,7 @@ type AutomationState = {
   enabled: string[]
   blocked: Record<string, string[]>
   automations: AutomationEntry[]
+  scan_timeline_daily_budget_usd: number
 }
 
 /**
@@ -65,23 +66,24 @@ function AutomationOptIns({ project, busy, onError }: {
 }) {
   const [state, setState] = useState<AutomationState | null>(null)
   const [saving, setSaving] = useState(false)
+  const [scanBudget, setScanBudget] = useState(0.10)
   useEffect(() => {
     let stale = false
     setState(null)
     api<AutomationState>('GET', `/api/projects/${project.id}/automations`)
-      .then(result => { if (!stale) setState(result) })
+      .then(result => { if (!stale) { setState(result); setScanBudget(result.scan_timeline_daily_budget_usd) } })
       .catch(cause => { if (!stale) onError(cause instanceof Error ? cause.message : String(cause)) })
     return () => { stale = true }
   }, [project.id])
 
-  const write = async (next: Record<string, boolean>) => {
+  const write = async (next: Record<string, boolean>, budget = scanBudget) => {
     if (!state) return
     setSaving(true)
     try {
       const result = await api<AutomationState>('PUT', `/api/projects/${project.id}/automations`, {
-        automations: next, revision: state.revision,
+        automations: next, scan_timeline_daily_budget_usd: budget, revision: state.revision,
       })
-      setState(result)
+      setState(result); setScanBudget(result.scan_timeline_daily_budget_usd)
     } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setSaving(false) }
   }
@@ -130,7 +132,11 @@ function AutomationOptIns({ project, busy, onError }: {
   const consumers = state.automations.filter(item => item.kind === 'consumer')
   return <div class="project-automations">
     <h4>Control-plane automations<em class="project-setting-chip">repo</em></h4>
-    <p>Per-project opt-in. Substrate records facts and never acts or spends; a consumer reads substrate and needs it enabled to do anything. Nothing here runs on a project that did not opt in.</p>
+    <p>Per-project opt-in. Substrate records facts and never acts. Project card and Scan timeline can spend only within their displayed budgets. Nothing here runs on a project that did not opt in.</p>
+    <div class="project-automation-budget">
+      <label>Scan timeline daily budget (USD)<input type="number" min="0" max="100" step="0.01" value={scanBudget} disabled={busy||saving} onInput={event=>setScanBudget(Number(event.currentTarget.value))}/></label>
+      <button disabled={busy||saving||!Number.isFinite(scanBudget)||scanBudget<0||scanBudget>100||scanBudget===state.scan_timeline_daily_budget_usd} onClick={()=>void write(state.requested,scanBudget)}>Save budget</button>
+    </div>
     <ul class="project-automation-list">{substrate.map(row)}</ul>
     <ul class="project-automation-list">{consumers.map(row)}</ul>
   </div>

@@ -30,7 +30,7 @@
 // and the app menu, the same watch-here/act-there split Processes has with the process
 // fleet. Two queue-shaped tabs in one rail also read as a duplicate of each other.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'timeline' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -55,6 +55,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'prompts', label: 'Prompts', heading: 'Prompt Library', title: 'Prompts - insert a saved template into the focused terminal', scope: 'session' },
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
+  { id: 'timeline', label: 'Timeline', heading: 'Scan Timeline', title: 'Timeline - read this conversation’s compact behavioral history', scope: 'session' },
   { id: 'agent', label: 'Agent', heading: 'Agent Environment', title: 'Agent - inspect tools, extensions, policies, and configuration for this session', scope: 'session' },
   { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },

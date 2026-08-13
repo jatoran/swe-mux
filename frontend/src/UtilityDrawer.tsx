@@ -8,6 +8,7 @@ import { PromptsTab } from './PromptsTab'
 import { NotesTab } from './NotesTab'
 import { QueuePane } from './QueuePane'
 import { TranscriptTab } from './TranscriptTab'
+import { ScanTimelineTab } from './ScanTimelineTab'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
@@ -190,7 +191,7 @@ export function UtilityDrawer(props: Props) {
   const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
   // Mobile flattens the tree to one stack, so that stack is trivially its own top-right.
   const collapseHostId = mobile ? mobileStack.id : drawerCollapseHostStack(layout.root).id
-  const tabAvailable = (id: DrawerTabId) => id !== 'transcript' || hasHarnessTranscript(session?.backend)
+  const tabAvailable = (id: DrawerTabId) => !['transcript','timeline'].includes(id) || hasHarnessTranscript(session?.backend)
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
@@ -292,6 +293,8 @@ export function UtilityDrawer(props: Props) {
         // it has acted, because it acted on the terminal underneath; this one is
         // read there, and closing it after each copy would end the reading.
         return <TranscriptTab session={session} />
+      case 'timeline':
+        return <ScanTimelineTab session={session} />
       case 'agent':
         return <AgentEnvironmentTab session={session} />
       case 'files':

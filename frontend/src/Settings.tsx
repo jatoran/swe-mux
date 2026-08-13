@@ -78,6 +78,7 @@ type Config = {
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
+  scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
   observer_titler_enabled:boolean;observer_summarizer_enabled:boolean
   phase7_observers_enabled:boolean
@@ -829,6 +830,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>Observers watch Claude and Codex out of band. The Automation dashboard shows every system observer and custom rule together; these settings are global shortcuts for the same system observers.</p>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation dashboard</button></div>
           <label class="check"><span>Automation enabled</span><input type="checkbox" checked={draft.automation_enabled} onChange={e=>change('automation_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Scan timeline master switch</span><input type="checkbox" checked={draft.scan_timeline_enabled} onChange={e=>change('scan_timeline_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Session titler</span><input type="checkbox" checked={draft.observer_titler_enabled} onChange={e=>change('observer_titler_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Turn summarizer</span><input type="checkbox" checked={draft.observer_summarizer_enabled} onChange={e=>change('observer_summarizer_enabled',e.currentTarget.checked)} /></label>
           <label class="check"><span>Attention observers (stalls, approvals, context)</span><input type="checkbox" checked={draft.phase7_observers_enabled} onChange={e=>change('phase7_observers_enabled',e.currentTarget.checked)} /></label>
@@ -841,11 +843,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
           <label for="cheap-model-picker">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/></label>
           <label for="standard-model-picker">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
+          <label>Scan timeline model<input value={draft.scan_timeline_model} readOnly /><small>Fixed default: OpenRouter DeepSeek V4 Flash latest alias.</small></label>
           <h3>Budgets + execution</h3>
           <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily tokens<input type="number" value={draft.automation_rule_daily_token_budget} onInput={event=>change('automation_rule_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily dollars<input type="number" step="0.01" value={draft.automation_rule_daily_budget_usd} onInput={event=>change('automation_rule_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          <label>Scan tokens per run<input type="number" min="512" max="1000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Per-rule hourly calls<input type="number" value={draft.automation_rule_hourly_call_cap} onInput={event=>change('automation_rule_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
