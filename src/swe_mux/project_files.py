@@ -24,6 +24,7 @@ from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
 
 PROJECT_CONFIG_VERSION = 1
+LEGACY_AUTOMATION_IDS = frozenset({"project_card"})
 PROJECT_CONFIG_FIELDS = {
     "default_shell_profile",
     "preferred_backend",
@@ -989,9 +990,14 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
             isinstance(value, bool) for value in automations.values()
         ):
             raise ValueError("automations must be a table of boolean opt-ins")
-        unknown_automations = sorted(set(automations) - set(AUTOMATION_REGISTRY))
+        unknown_automations = sorted(
+            set(automations) - set(AUTOMATION_REGISTRY) - LEGACY_AUTOMATION_IDS
+        )
         if unknown_automations:
             raise ValueError(f"unknown automations: {', '.join(unknown_automations)}")
+        parsed["automations"] = {
+            key: value for key, value in automations.items() if key in AUTOMATION_REGISTRY
+        }
     if "scan_timeline_daily_budget_usd" in parsed:
         budget = parsed["scan_timeline_daily_budget_usd"]
         if (

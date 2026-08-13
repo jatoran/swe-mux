@@ -23,7 +23,12 @@ from swe_mux.scan_timeline import (
 
 class FakeTier0:
     async def facts_for_run(
-        self, agent_run_id: str, *, since: float | None = None, limit: int = 2000
+        self,
+        agent_run_id: str,
+        *,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 2000,
     ) -> list[dict[str, Any]]:
         return [
             {
@@ -139,7 +144,7 @@ async def build_service(
         events=EventBus(),
         config=config(tmp_path),
         provider=provider,
-        project_cards=FakeCards(),
+        project_contexts=FakeCards(),
         resolve_context=resolve,
     )
 
@@ -338,6 +343,47 @@ async def test_old_run_rehydration_uses_its_historical_transcript(tmp_path: Path
             "backend": "claude",
             "native_id": "native-old",
         }
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_full_session_scan_chunks_oldest_first_and_reports_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, store, provider, _sessions = await build_service(tmp_path)
+    messages = [
+        {
+            "role": "user" if index % 2 == 0 else "assistant",
+            "ts": 101.0 + index,
+            "content": [{"type": "text", "text": f"message {index}"}],
+        }
+        for index in range(40)
+    ]
+    monkeypatch.setattr(
+        "swe_mux.scan_timeline.parse_transcript_cached",
+        lambda *args, **kwargs: messages,
+    )
+    try:
+        await store.set_scan_run_enabled(
+            agent_run_id="run-1",
+            session_id="session-1",
+            project_id="project-1",
+            enabled=True,
+        )
+        started = await service.start_backfill("session-1")
+        assert started["state"] == "running"
+        await service._backfill_tasks["run-1"]
+        completed = (await service.snapshot("session-1"))["backfill"]
+        assert completed["state"] == "completed"
+        assert completed["processed_chunks"] == 2
+        assert completed["created_records"] == 2
+        assert len(provider.calls) == 2
+        records = await store.scan_records(agent_run_id="run-1")
+        assert [record["trigger"] for record in records] == ["full_session", "full_session"]
+        assert records[0]["t0"] == 101.0
+        assert records[-1]["t1"] == 140.0
     finally:
         await service.stop()
         store.close()
