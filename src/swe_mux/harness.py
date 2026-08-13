@@ -291,13 +291,11 @@ class HarnessDescriptor:
     # interval and treats a late reply as composer input, so such replies are dropped
     # rather than delivered.
     suppresses_late_color_response: bool
-    # A touch drag forwarded to the TUI is measured in finger rows per emitted
-    # wheel report, with this minimum interval between reports. Most TUIs consume
-    # one row per report with no delay. A larger multiplier or interval is a
-    # measured application-input trait, not something the browser may infer from
-    # the harness name.
+    # Rows this TUI scrolls for one wheel report, which is the unit a touch drag
+    # forwarded to it has to be measured in. Most TUIs move one row per report;
+    # Claude Code moves three. A larger multiplier is a measured application-input
+    # trait, not something the browser may infer from the harness name.
     touch_scroll_rows_per_report: int
-    touch_scroll_report_interval_ms: int
 
     native_hooks: bool
     transcript: str | None
@@ -315,8 +313,6 @@ class HarnessDescriptor:
             raise ValueError(f"duplicate state source for harness {self.name}")
         if self.touch_scroll_rows_per_report < 1:
             raise ValueError(f"touch scroll rows must be positive for harness {self.name}")
-        if self.touch_scroll_report_interval_ms < 0:
-            raise ValueError(f"touch scroll interval cannot be negative for harness {self.name}")
         if not self.resume_argv:
             raise ValueError(f"harness {self.name} must declare how its CLI resumes")
         if not self.skill_invocation_prefix:
@@ -683,7 +679,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=3,
-        touch_scroll_report_interval_ms=120,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -749,7 +744,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=80,
         suppresses_late_color_response=True,
         touch_scroll_rows_per_report=1,
-        touch_scroll_report_interval_ms=0,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -818,7 +812,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
-        touch_scroll_report_interval_ms=0,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -896,7 +889,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
-        touch_scroll_report_interval_ms=0,
         native_hooks=True,
         transcript="semantic",
         pty="telemetry",
@@ -992,7 +984,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         min_desktop_columns=None,
         suppresses_late_color_response=False,
         touch_scroll_rows_per_report=1,
-        touch_scroll_report_interval_ms=0,
         native_hooks=True,
         # Semantic records, read from the store rather than tailed from a file.
         # This is the automation-evidence label, not a claim that a byte-offset
@@ -1414,9 +1405,6 @@ def public_harness_registry() -> dict[str, object]:
                     "min_desktop_columns": harness.min_desktop_columns,
                     "suppresses_late_color_response": harness.suppresses_late_color_response,
                     "touch_scroll_rows_per_report": harness.touch_scroll_rows_per_report,
-                    "touch_scroll_report_interval_ms": (
-                        harness.touch_scroll_report_interval_ms
-                    ),
                 },
             }
             for harness in HARNESSES.values()

@@ -2513,10 +2513,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       moved:boolean
       /** Sub-row scroll travel carried between move events. */
       pixels:number
-      applicationLastReportAt:number
       applicationInputPixels:number
       applicationReports:number
-      applicationDroppedPixels:number
       selecting:{start:TerminalCell;length:number}|null
     }|null=null
     // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
@@ -2626,8 +2624,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         softKeyboardDismissalsBeforeGesture=softKeyboardDismissals()
         touch={
           pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,
-          px:event.clientX,py:event.clientY,moved:false,pixels:0,applicationLastReportAt:Number.NEGATIVE_INFINITY,
-          applicationInputPixels:0,applicationReports:0,applicationDroppedPixels:0,selecting:null,
+          px:event.clientX,py:event.clientY,moved:false,pixels:0,
+          applicationInputPixels:0,applicationReports:0,selecting:null,
         }
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
@@ -2702,14 +2700,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         return
       }
       const budget=applicationTouchScroll(
-        {pixels:touch.pixels,lastReportAt:touch.applicationLastReportAt},
-        delta,rowHeight,applicationTouchScrollProfile(backendRef.current),event.timeStamp,
+        {pixels:touch.pixels},delta,rowHeight,applicationTouchScrollProfile(backendRef.current),
       )
       touch.pixels=budget.remainder
-      touch.applicationLastReportAt=budget.lastReportAt
       touch.applicationInputPixels+=Math.abs(delta)
       touch.applicationReports+=Math.abs(budget.steps)
-      touch.applicationDroppedPixels+=budget.droppedPixels
       if(!budget.steps)return
       // This scroll belongs to the application, so nothing in xterm's buffer will ever record
       // it. The drags this pane forwards are its only evidence of where that viewport is, so
@@ -2776,7 +2771,6 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           backend:backendRef.current,
           inputPixels:Math.round(touch.applicationInputPixels),
           reports:touch.applicationReports,
-          droppedPixels:Math.round(touch.applicationDroppedPixels),
         })
       }
       stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()

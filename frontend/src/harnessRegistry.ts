@@ -52,8 +52,6 @@ export interface HarnessCapabilities {
   suppresses_late_color_response?: boolean
   /** Finger rows represented by one wheel report forwarded during a touch drag. */
   touch_scroll_rows_per_report?: number
-  /** Minimum delay between forwarded touch-drag wheel reports. */
-  touch_scroll_report_interval_ms?: number
 }
 
 export interface HarnessDescriptor {
@@ -181,12 +179,10 @@ export const suppressesLateColorResponse = (name: string | undefined): boolean =
 
 export function applicationTouchScrollProfile(name: string | undefined): {
   rowsPerReport: number
-  reportIntervalMs: number
 } {
   const capabilities = harnessDescriptor(name)?.capabilities
   return {
     rowsPerReport: Math.max(1, Math.trunc(capabilities?.touch_scroll_rows_per_report ?? 1)),
-    reportIntervalMs: Math.max(0, Math.trunc(capabilities?.touch_scroll_report_interval_ms ?? 0)),
   }
 }
 

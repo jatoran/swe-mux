@@ -12,54 +12,46 @@ import {
   touchWheelDelta,
 } from '../src/mobileInput.ts'
 
-const MULTIPLIED_SCROLL = { rowsPerReport: 3, reportIntervalMs: 120 }
-const LINEAR_SCROLL = { rowsPerReport: 1, reportIntervalMs: 0 }
+const MULTIPLIED_SCROLL = { rowsPerReport: 3 }
+const LINEAR_SCROLL = { rowsPerReport: 1 }
 
-test('Claude application scrolling compensates for its wheel multiplier', () => {
-  let state = { pixels: 0, lastReportAt: Number.NEGATIVE_INFINITY }
+test('application scrolling measures travel in the rows a report is worth', () => {
+  let state = { pixels: 0 }
 
-  // Claude moves three rows for its first wheel report, so two rows of finger travel
-  // remain banked and the third produces exactly one report.
-  let result = applicationTouchScroll(state, 24, 12, MULTIPLIED_SCROLL, 0)
-  assert.deepEqual(result, {
-    steps: 0,
-    remainder: 24,
-    lastReportAt: Number.NEGATIVE_INFINITY,
-    distance: 0,
-    droppedPixels: 0,
+  // Claude moves three rows for one wheel report, so two rows of finger travel are
+  // carried and the third row is what produces the report.
+  let result = applicationTouchScroll(state, 24, 12, MULTIPLIED_SCROLL)
+  assert.deepEqual(result, { steps: 0, remainder: 24, distance: 0 })
+  state = { pixels: result.remainder }
+  result = applicationTouchScroll(state, 12, 12, MULTIPLIED_SCROLL)
+  assert.deepEqual(result, { steps: 1, remainder: 0, distance: 36 })
+
+  // Other mouse-aware TUIs move one row per report.
+  assert.deepEqual(applicationTouchScroll({ pixels: 0 }, 120, 12, LINEAR_SCROLL), {
+    steps: 10, remainder: 0, distance: 120,
   })
-  state = { pixels: result.remainder, lastReportAt: result.lastReportAt }
-  result = applicationTouchScroll(state, 12, 12, MULTIPLIED_SCROLL, 10)
-  assert.equal(result.steps, 1)
-  assert.equal(result.distance, 36)
-  assert.equal(result.remainder, 0)
 })
 
-test('Claude fast touch scroll is rate capped without delayed backlog', () => {
-  let state = { pixels: 0, lastReportAt: Number.NEGATIVE_INFINITY }
-  const first = applicationTouchScroll(state, 120, 12, MULTIPLIED_SCROLL, 0)
-  assert.equal(first.steps, 1)
-  assert.equal(first.droppedPixels, 84)
+test('a fast application drag tracks the finger rather than a report rate', () => {
+  // Nothing here throttles: a move event carrying nine rows of travel forwards all
+  // three reports it is worth. Rate limiting on this side could only discard travel
+  // the drag asked for; shedding a flick's excess is the wheel pacer's job.
+  const fast = applicationTouchScroll({ pixels: 0 }, 108, 12, MULTIPLIED_SCROLL)
+  assert.deepEqual(fast, { steps: 3, remainder: 0, distance: 108 })
 
-  state = { pixels: first.remainder, lastReportAt: first.lastReportAt }
-  const gated = applicationTouchScroll(state, 120, 12, MULTIPLIED_SCROLL, 119)
-  assert.equal(gated.steps, 0)
-  assert.equal(gated.remainder, 36)
-  assert.equal(gated.droppedPixels, 84)
+  // Sub-report travel is carried, not truncated, so a slow drag still tracks 1:1.
+  let state = { pixels: 0 }
+  let steps = 0
+  for (let move = 0; move < 12; move++) {
+    const budget = applicationTouchScroll(state, 6, 12, MULTIPLIED_SCROLL)
+    state = { pixels: budget.remainder }
+    steps += budget.steps
+  }
+  assert.equal(steps, 2)
 
-  state = { pixels: gated.remainder, lastReportAt: gated.lastReportAt }
-  const released = applicationTouchScroll(state, 1, 12, MULTIPLIED_SCROLL, 120)
-  assert.equal(released.steps, 1)
-  assert.equal(released.remainder, 0)
-  assert.equal(released.droppedPixels, 1)
-
-  // Other mouse-aware TUIs keep the existing one-report-per-row behavior.
-  const generic = applicationTouchScroll(
-    { pixels: 0, lastReportAt: Number.NEGATIVE_INFINITY },
-    120, 12, LINEAR_SCROLL, 0,
-  )
-  assert.equal(generic.steps, 10)
-  assert.equal(generic.distance, 120)
+  // Reversing direction abandons the pending travel instead of scrolling backwards.
+  const reversed = applicationTouchScroll({ pixels: 30 }, -6, 12, MULTIPLIED_SCROLL)
+  assert.deepEqual(reversed, { steps: 0, remainder: -6, distance: 0 })
 })
 
 test('mobile input defaults favor smart natural scrolling', () => {

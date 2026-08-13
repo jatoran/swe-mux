@@ -51,38 +51,39 @@ export type TerminalScrollSteps = {
 export type ApplicationTouchScrollState = {
   /** Finger travel not yet converted into an application wheel report. */
   pixels: number
-  /** Pointer-event timestamp of the last report sent during this gesture. */
-  lastReportAt: number
 }
 
 export type ApplicationTouchScrollResult = TerminalScrollSteps & {
-  lastReportAt: number
   /** Pixel distance the application is expected to move for the emitted reports. */
   distance: number
-  /** Excess high-velocity travel intentionally not banked for delayed scrolling. */
-  droppedPixels: number
 }
 
 export type ApplicationTouchScrollProfile = {
   rowsPerReport: number
-  reportIntervalMs: number
 }
 
 /**
- * Some application-owned viewports consume several rows per wheel report or accelerate
- * reports that arrive too close together. The harness registry publishes that measured
- * profile. Excess fast-flick travel is shed instead of queued, because replaying it later
- * is the runaway-scroll failure.
+ * Convert finger travel into wheel reports for a viewport the application owns.
+ *
+ * The unit is the application's, not the terminal's. A report is worth `rowsPerReport`
+ * rows to the CLI that receives it — Claude Code moves three — so tracking the finger
+ * means sending a third as many reports as the scrollback path would for the same
+ * travel. Getting that unit wrong is what made a drag scroll at three times the finger.
+ *
+ * Nothing is rate limited or discarded here, and the sub-report remainder carries the
+ * same way `terminalScrollSteps` carries a sub-row one. Shedding a fast flick's excess
+ * belongs to `terminalWheelPacing`, which bounds it against the CLI's real repaint rate
+ * and a capped queue; a second limiter on this side can only throw away travel a drag
+ * asked for, which reads as a viewport that ignores the finger.
  */
 export function applicationTouchScroll(
   state: ApplicationTouchScrollState,
   deltaPixels: number,
   rowHeight: number,
   profile: ApplicationTouchScrollProfile,
-  now: number,
 ): ApplicationTouchScrollResult {
   if (rowHeight <= 0 || !deltaPixels) {
-    return { steps: 0, remainder: rowHeight > 0 ? state.pixels : 0, lastReportAt: state.lastReportAt, distance: 0, droppedPixels: 0 }
+    return { steps: 0, remainder: rowHeight > 0 ? state.pixels : 0, distance: 0 }
   }
 
   // Reversing direction abandons a pending report from the old direction. A wheel tick
@@ -91,34 +92,9 @@ export function applicationTouchScroll(
     ? deltaPixels
     : state.pixels + deltaPixels
 
-  const rowsPerReport = Math.max(1, Math.trunc(profile.rowsPerReport))
-  const reportIntervalMs = Math.max(0, Math.trunc(profile.reportIntervalMs))
-  if (rowsPerReport === 1 && reportIntervalMs === 0) {
-    const budget = terminalScrollSteps(carried, rowHeight)
-    return {
-      ...budget,
-      lastReportAt: budget.steps ? now : state.lastReportAt,
-      distance: budget.steps * rowHeight,
-      droppedPixels: 0,
-    }
-  }
-
-  const reportDistance = rowHeight * rowsPerReport
-  const bounded = Math.max(-reportDistance, Math.min(reportDistance, carried))
-  const droppedPixels = Math.max(0, Math.abs(carried) - Math.abs(bounded))
-  const intervalElapsed = now < state.lastReportAt || now - state.lastReportAt >= reportIntervalMs
-  if (Math.abs(bounded) < reportDistance || !intervalElapsed) {
-    return { steps: 0, remainder: bounded, lastReportAt: state.lastReportAt, distance: 0, droppedPixels }
-  }
-
-  const steps = Math.sign(bounded)
-  return {
-    steps,
-    remainder: bounded - steps * reportDistance,
-    lastReportAt: now,
-    distance: steps * reportDistance,
-    droppedPixels,
-  }
+  const reportDistance = rowHeight * Math.max(1, Math.trunc(profile.rowsPerReport))
+  const budget = terminalScrollSteps(carried, reportDistance)
+  return { ...budget, distance: budget.steps * reportDistance }
 }
 
 /**
@@ -131,7 +107,9 @@ export function applicationTouchScroll(
  */
 export function terminalScrollSteps(pixels: number, rowHeight: number): TerminalScrollSteps {
   if (rowHeight <= 0) return { steps: 0, remainder: 0 }
-  const steps = Math.trunc(pixels / rowHeight)
+  // `|| 0` only to fold the negative zero `Math.trunc` returns for sub-row upward
+  // travel, which is a scroll of nothing that still carries a direction downstream.
+  const steps = Math.trunc(pixels / rowHeight) || 0
   return { steps, remainder: pixels - steps * rowHeight }
 }
 
