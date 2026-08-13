@@ -1769,10 +1769,16 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The separator invariant is a property of the token list, so the list is what sheds; the width is measured with a `ResizeObserver`.
 - **The empty bottom line is kept on desktop and dropped on mobile.**
   Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
-- **One duration field, whose meaning shifts with state.**
-  A working session is aged from its **turn**, not its state: a turn survives every tool call and every approval inside it, while `state_since` restarts on each of them, so a busy agent's timer reset every few seconds and never reported the length of the actual work.
-  An awaiting session is aged from the block instead, because there the question really is "how long has it been waiting on me".
+- **One duration field, and within a turn it measures one thing.**
+  Every live session is aged from its **turn**, not its state: a turn survives every tool call and every approval inside it, while `state_since` restarts on each of them, so a busy agent's timer reset every few seconds and never reported the length of the actual work.
+  `awaiting` used to be the exception, aged from the block on the reasoning that the live question there is "how long has it been waiting on me".
+  That answer is worth having, but not at the cost of the number changing what it measures underneath the reader: a session with several subagents raising permission prompts made the figure collapse to seconds and spring back to the turn length each time one appeared and was answered, which reads as a timer resetting at random.
+  How long the block has stood now rides the **detail** text, where it is labelled (`awaiting approval 5m`) and can disagree with the turn without either looking broken.
   `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
+- **`Since your prompt` answers what the turn cannot.**
+  A turn is one request-to-completion cycle, and auto-delivery or an injected teammate message opens turns nobody asked for, so a busy session can be minutes into a fresh turn and an hour past anything its operator said.
+  The field reads `last_human_prompt_at` and carries a `⌨` mark, which is load-bearing rather than decorative on the same grounds as the branch scope mark: two bare durations in one section are indistinguishable, and these two are exactly the pair a reader is trying to tell apart.
+  Notable only when it exceeds the turn by `PROMPT_GAP_NOTABLE_SECONDS`, and never on an `idle` session — where the two numbers track each other the second one is one fact twice, and where nothing is running "you asked an hour ago" describes no outstanding work.
   Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
   A ready session's number is static, so a settled fleet re-renders on no clock at all.
 - **The duration renders nothing rather than a placeholder when it cannot answer.**

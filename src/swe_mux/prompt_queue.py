@@ -1832,6 +1832,15 @@ class PromptQueueService:
             if session.record.state in {"exited", "crashed"}:
                 raise RuntimeError("the target session ended during delivery")
             self._write(session, SUBMIT_SEQUENCE)
+            # Who asked, recorded at the only moment it is knowable. The CLI is
+            # about to fire a submit hook indistinguishable from one a person
+            # typed, and the transcript will record the prompt identically —
+            # authorship exists here and nowhere downstream. The observer reads
+            # this to decide whether the submit refreshes `last_human_prompt_at`.
+            session.queue_delivery_mark = (
+                time.time(),
+                str(message["sender_kind"]) in HUMAN_SENDER_KINDS,
+            )
         except Exception as exc:
             await self.store.finalize_delivery(
                 delivery_id,

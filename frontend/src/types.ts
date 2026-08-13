@@ -36,6 +36,10 @@ export interface Session {
   last_turn_ms?: number | null
   /** Epoch seconds the current root turn began; absent while no turn is open. */
   turn_started_at?: number | null
+  /** Epoch seconds a human last submitted a request here; absent when unknown.
+   *  Not the same question as `turn_started_at`: auto-delivery and injected
+   *  teammate messages open turns nobody asked for. Run-scoped. */
+  last_human_prompt_at?: number | null
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]

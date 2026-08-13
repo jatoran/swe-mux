@@ -23,7 +23,7 @@
 /** Every field the row can draw. Order here is the settings-UI catalog order. */
 export type RowFieldId =
   | 'glyph' | 'title' | 'broadcast' | 'badges'
-  | 'state' | 'detail' | 'duration' | 'idleFor' | 'context'
+  | 'state' | 'detail' | 'duration' | 'sincePrompt' | 'idleFor' | 'context'
   | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
 
@@ -135,6 +135,12 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'broadcast', label: 'Broadcast flag', notable: 'session is in the broadcast set', priority: 88, identity: true },
   { id: 'detail', label: 'What it is doing', notable: 'the harness reported a tool or a question', priority: 70 },
   { id: 'duration', label: 'Time', notable: 'past the per-state threshold', priority: 80 },
+  {
+    id: 'sincePrompt',
+    label: 'Since your prompt',
+    notable: 'the session is busy with something you asked for long ago',
+    priority: 78,
+  },
   { id: 'context', label: 'Context used', notable: 'past 60%', priority: 75 },
   { id: 'branch', label: 'Git branch', notable: 'differs from the project default', priority: 60 },
   { id: 'worktree', label: 'Worktree', notable: 'the checkout is a linked worktree', priority: 62 },
@@ -188,6 +194,10 @@ export function defaultSessionRowConfig(): SessionRowConfig {
       right: [
         { id: 'model', mode: 'notable' },
         { id: 'account', mode: 'notable' },
+        // Silent until the turn stops being a fair answer to "how long has this
+        // been going" — see `sessionRowFields.ts`. A fleet nobody is feeding
+        // never draws it.
+        { id: 'sincePrompt', mode: 'notable' },
         { id: 'duration', mode: 'always' },
         // Placed but silent while `context` is drawn on the indicator, so
         // switching the rendering to a gauge or a percentage puts it where it
@@ -237,7 +247,7 @@ export function presetConfig(id: RowPresetId): SessionRowConfig {
         ],
         right: [
           { id: 'model', mode: 'always' }, { id: 'account', mode: 'always' },
-          { id: 'duration', mode: 'always' },
+          { id: 'sincePrompt', mode: 'always' }, { id: 'duration', mode: 'always' },
         ],
         separator: 'dot',
       },

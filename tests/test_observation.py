@@ -1360,6 +1360,99 @@ async def test_instantaneous_turn_is_discarded_rather_than_reported() -> None:
     assert session.record.last_turn_ms == 31_000.0
 
 
+async def test_a_refused_close_leaves_the_turn_running() -> None:
+    """Closing a turn is the arbiter's call, so nothing may be dismantled first.
+
+    A `Stop` hook arbitrated away while the transcript owns boundaries used to
+    take the turn down anyway: the session stayed `working` with no turn, the row
+    fell back to ageing the state (which restarts on every tool call), and the
+    next tool call reopened the turn and restamped its start — a timer reset with
+    no state change to explain it.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    started = session.record.turn_started_at
+    session.clock.advance(240.0)
+
+    # Refuse whatever the close proposes, the way arbitration does for a hook
+    # that has lost to the ordered transcript.
+    session.transition = lambda *args, **kwargs: False
+    await _finish_root_turn(session, events, source="hook", evidence="hook:Stop")
+
+    assert session.record.state == "working"
+    assert session.record.turn_started_at == started
+    assert session.observation_state["root_turn_active"] is True
+    assert session.record.last_turn_ms is None
+
+
+async def test_a_human_submit_dates_the_last_prompt() -> None:
+    from swe_mux.observation import apply_hook_observation
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    events = EventBus()
+    assert session.record.last_human_prompt_at is None
+
+    await apply_hook_observation(session, "UserPromptSubmit", {"prompt": "do it"}, events)
+    assert session.record.last_human_prompt_at == session.clock.wall()
+
+
+async def test_an_agent_authored_delivery_does_not_count_as_you_asking() -> None:
+    """A teammate's message opens a turn; it does not reset "since you asked".
+
+    This is the whole point of the field: a session fed by siblings is minutes
+    into a fresh turn and an hour past anything its operator said.
+    """
+    from swe_mux.observation import apply_hook_observation
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    events = EventBus()
+    await apply_hook_observation(session, "UserPromptSubmit", {"prompt": "do it"}, events)
+    asked_at = session.record.last_human_prompt_at
+
+    session.clock.advance(600.0)
+    session.queue_delivery_mark = (session.clock.wall(), False)
+    await apply_hook_observation(
+        session, "UserPromptSubmit", {"prompt": "teammate says hello"}, events
+    )
+    assert session.record.last_human_prompt_at == asked_at
+
+
+async def test_a_queued_message_you_wrote_still_counts_as_you_asking() -> None:
+    """Authorship, not delivery mechanism: your queued message is you speaking."""
+    from swe_mux.observation import apply_hook_observation
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    events = EventBus()
+    session.clock.advance(600.0)
+    session.queue_delivery_mark = (session.clock.wall(), True)
+    await apply_hook_observation(session, "UserPromptSubmit", {"prompt": "queued"}, events)
+    assert session.record.last_human_prompt_at == session.clock.wall()
+
+
+async def test_a_stale_delivery_mark_cannot_disown_a_typed_prompt() -> None:
+    """A delivery whose hook never arrived must not silence the next real one."""
+    from swe_mux.observation import (
+        QUEUE_DELIVERY_ATTRIBUTION_SECONDS,
+        apply_hook_observation,
+    )
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    events = EventBus()
+    session.queue_delivery_mark = (session.clock.wall(), False)
+    session.clock.advance(QUEUE_DELIVERY_ATTRIBUTION_SECONDS + 1.0)
+    await apply_hook_observation(session, "UserPromptSubmit", {"prompt": "typed"}, events)
+    assert session.record.last_human_prompt_at == session.clock.wall()
+
+
 def _iso(ts: float) -> str:
     """A transcript record's own stamp, in the shape every harness writes it."""
     from datetime import UTC, datetime

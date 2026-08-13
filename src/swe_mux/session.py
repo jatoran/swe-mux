@@ -1954,6 +1954,11 @@ class Session:
         # to one dispatch and restored on the way out, so it is never persisted and
         # never describes anything but the record in flight; `None` outside one.
         self.observation_record_ts: float | None = None
+        # `(delivered_at, authored_by_a_human)` for the most recent prompt mux
+        # typed into this pane itself. The submit hook it is about to provoke is
+        # indistinguishable from one a person typed, so the queue leaves this
+        # behind for the observer to consume and expire.
+        self.queue_delivery_mark: tuple[float, bool] | None = None
         # Set when this PTY was promoted around a nested agent CLI; used to
         # ignore shell-prompt echoes from just before/around the promotion.
         self.agent_promoted_at: float | None = None
@@ -3276,6 +3281,10 @@ class SessionManager:
         # first idle with the old run's last turn.
         record.last_turn_ms = None
         record.turn_started_at = None
+        # Same scope: a prompt addressed to the conversation being replaced was
+        # not addressed to this one, and carrying it over would report the new
+        # run as hours into work nobody has asked it for yet.
+        record.last_human_prompt_at = None
         # Annotations describe the observation identity being reset here. This is
         # a silent record-level clear for the adoption-repair paths (no Session,
         # no ledger yet); live callers ledger via clear_all_standing_activity

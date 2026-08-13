@@ -316,6 +316,31 @@ async def test_delivery_writes_paste_then_submit_and_audits_without_body(
 
 
 @pytest.mark.asyncio
+async def test_delivery_leaves_the_authorship_mark_the_observer_reads(
+    harness: Harness,
+) -> None:
+    """The CLI is about to fire a submit hook that looks exactly like typing.
+
+    Authorship exists at delivery and nowhere downstream, so the observer needs
+    it left behind here to decide whether the prompt refreshes
+    `last_human_prompt_at` (`observation._note_prompt_authorship`).
+    """
+    session = harness.manager.sessions["s1"]
+
+    human = await harness.service.enqueue(target_session_id="s1", body="mine")
+    await harness.service.send_next(human["id"], revision=1)
+    assert session.queue_delivery_mark is not None
+    assert session.queue_delivery_mark[1] is True
+
+    agent = await harness.service.enqueue(
+        target_session_id="s1", body="theirs", sender_kind="agent", sender_id="peer",
+    )
+    await harness.service.send_next(agent["id"], revision=1)
+    assert session.queue_delivery_mark is not None
+    assert session.queue_delivery_mark[1] is False
+
+
+@pytest.mark.asyncio
 async def test_idempotency_key_never_delivers_twice(harness: Harness) -> None:
     message = await harness.service.enqueue(target_session_id="s1", body="once")
     first = await harness.service.send_next(

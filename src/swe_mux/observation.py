@@ -1601,6 +1601,34 @@ def _record_turn_duration(
     payload["duration_ms"] = session.record.last_turn_ms
 
 
+def _turn_close_landed(session: Session, accepted: bool) -> bool:
+    """Whether a refused `_transition` means this close did not actually happen.
+
+    `_transition` also returns `False` for the whole of historical replay, where
+    the turn genuinely ended and only the fanout is suppressed — discarding those
+    would throw away exactly the record-derived durations catch-up exists to
+    recompute. Arbitration is the one refusal that means "this close lost to
+    better evidence".
+    """
+    return accepted or bool(getattr(session, "observation_replay", False))
+
+
+def _restore_refused_turn(
+    state: dict[str, Any], was_active: bool, was_completion_seen: bool
+) -> None:
+    """Put back the turn bookkeeping a refused close had already taken down.
+
+    Closing a turn is the arbiter's call, so nothing about the turn may be
+    dismantled before it rules. Leaving it dismantled stranded the session as
+    `working` with no turn: the row fell back to ageing the *state*, which
+    restarts on every tool call, and the next tool call reopened the turn and
+    restamped its start — a timer reset with no state change to explain it, and
+    a `last_turn_ms` measured for a turn that was still running.
+    """
+    state["root_turn_active"] = was_active
+    state["root_completion_seen"] = was_completion_seen
+
+
 async def _finish_root_turn(
     session: Session,
     events: EventBus,
@@ -1627,9 +1655,12 @@ async def _finish_root_turn(
         source == "transcript"
         and (bool(state["root_turn_active"]) or session.record.state in {"working", "awaiting"})
     )
+    # Taken down provisionally. The arbiter below decides whether this close is
+    # the one that lands, so the previous values are kept to put back if it is not.
+    was_active = bool(state["root_turn_active"])
+    was_completion_seen = bool(state.get("root_completion_seen"))
     state["root_turn_active"] = False
     state["root_completion_seen"] = True
-    _record_turn_duration(session, state, payload)
     if transition_proof(source, inferred) == "inferred":
         # Recovery inferences stay visible in the event stream, not only the ledger.
         payload.setdefault("inferred", True)
@@ -1670,10 +1701,14 @@ async def _finish_root_turn(
             or any(a.kind == "background_tasks" for a in session.record.standing_activity)
             else None
         )
-        await _transition(
+        accepted = await _transition(
             session, events, "idle", source=source, force=force,
             evidence=evidence, inferred=inferred, idle_reason=idle_reason,
         )
+        if not _turn_close_landed(session, accepted):
+            _restore_refused_turn(state, was_active, was_completion_seen)
+            return
+        _record_turn_duration(session, state, payload)
         await events.emit(
             "turn_ended",
             session_id=session.record.id,
@@ -1687,10 +1722,14 @@ async def _finish_root_turn(
             **payload,
         )
     else:
-        await _transition(
+        accepted = await _transition(
             session, events, "idle", outcome, source=source, force=force,
             evidence=evidence, inferred=inferred,
         )
+        if not _turn_close_landed(session, accepted):
+            _restore_refused_turn(state, was_active, was_completion_seen)
+            return
+        _record_turn_duration(session, state, payload)
         await events.emit(
             "turn_aborted",
             session_id=session.record.id,
@@ -2124,6 +2163,39 @@ async def restore_pending_approval(session: Session, events: EventBus) -> bool:
         tool_use_id=str(candidate.get("tool_use_id") or "") or None,
     )
     return True
+
+
+#: How long a queue delivery's authorship mark can explain a submit hook.
+#:
+#: The hook normally follows the submit keystroke within milliseconds, so this is
+#: slack for a busy CLI rather than a real window. It expires rather than being
+#: cleared unconditionally so that a delivery whose hook never arrives cannot
+#: silently disown the next prompt a person actually types.
+QUEUE_DELIVERY_ATTRIBUTION_SECONDS = 30.0
+
+
+def _note_prompt_authorship(session: Session) -> None:
+    """Refresh `last_human_prompt_at` unless mux delivered this prompt itself.
+
+    Called for every root submit, before the transcript-authority check, because
+    this is the one moment authorship is knowable: the prompt reaches the CLI the
+    same way whoever wrote it, and by the time it is a transcript record a
+    teammate's message and a typed one are the same shape.
+
+    An unmarked submit is a person: typing in the pane, the web terminal, and the
+    mobile composer all reach the PTY without passing the queue. Only a delivery
+    mux performed can claim otherwise, and only an agent-authored one disowns the
+    prompt — a human's queued message is still the human speaking.
+    """
+    mark = getattr(session, "queue_delivery_mark", None)
+    now = _session_now(session)
+    if isinstance(mark, tuple) and len(mark) == 2:
+        delivered_at, human_authored = mark
+        if now - float(delivered_at) <= QUEUE_DELIVERY_ATTRIBUTION_SECONDS:
+            session.queue_delivery_mark = None
+            if not human_authored:
+                return
+    session.record.last_human_prompt_at = now
 
 
 def _remember_user_prompt(session: Session, payload: dict[str, Any]) -> None:
@@ -3010,6 +3082,10 @@ async def apply_hook_observation(
         # reading the transcript, and titling from it is what gives a pane a name
         # before its first turn finishes.
         _remember_user_prompt(session, payload)
+        if hook_event_scope(event_type, payload) == "root":
+            # Same reason as the prompt capture above: this runs ahead of the
+            # authority check, which returns early for every healthy session.
+            _note_prompt_authorship(session)
         if _transcript_authoritative(session):
             return
         await _begin_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")

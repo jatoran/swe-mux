@@ -139,6 +139,28 @@ const MIN_REPORTABLE_TURN_MS = 250
 const CLOCK_SKEW_TOLERANCE_SECONDS = 5
 
 /**
+ * How far the current turn's age may fall short of the time since you last
+ * spoke before the gap is worth its own token.
+ *
+ * The two are the same number on a session nobody is feeding, and drawing both
+ * there would be one fact twice. They come apart when something other than a
+ * person keeps opening turns — auto-delivery, a teammate message injected the
+ * instant the previous turn ends — and then the turn is a true answer to the
+ * wrong question: measured live at "3m22" on a session thirteen minutes into
+ * work its operator had asked for once.
+ */
+const PROMPT_GAP_NOTABLE_SECONDS = 90
+
+/**
+ * Mark on the since-your-prompt token.
+ *
+ * Load-bearing rather than decorative, on the same grounds as the branch scope
+ * mark: two bare durations in one section are indistinguishable, and these two
+ * are specifically the pair a reader is trying to tell apart.
+ */
+const HUMAN_PROMPT_MARK = '⌨'
+
+/**
  * Compact duration, never wider than four characters.
  *
  * Fixed width is what lets the right section be a column instead of a ragged
@@ -190,8 +212,15 @@ const isEnded = (session: Session) => session.state === 'exited' || session.stat
  * `state_since` restarts on each of them — so a busy agent's timer reset every
  * few seconds and never once reported the length of the actual work.
  *
- * An awaiting session is the exception, and deliberately so: there the question
- * is "how long has it been blocked on me", which is time in *that* state.
+ * An awaiting session is aged from its turn too. It did not used to be: the
+ * column switched to time-in-state, on the reasoning that the live question
+ * there is "how long has it been blocked on me". That answer is worth having,
+ * but not at the cost of the number changing what it measures underneath the
+ * reader — a session with several subagents raising permission prompts made the
+ * figure collapse to seconds and spring back to the turn length every time one
+ * appeared and was answered, which reads as a timer resetting at random. The
+ * blocked time now rides `detailText`, where it is labelled, and the number
+ * stays one quantity for the whole turn.
  *
  * A ready session reports how long its last turn took rather than how long it
  * has been ready — that number is static, which also means a settled fleet
@@ -215,7 +244,7 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
     const seconds = session.last_turn_ms / 1000
     return { text: formatRowDuration(seconds), title: `last turn took ${formatRowDuration(seconds)}`, seconds }
   }
-  if (session.state !== 'awaiting' && session.turn_started_at) {
+  if (session.turn_started_at) {
     const seconds = ageOf(session.turn_started_at, context.now)
     if (seconds === null) return null
     return { text: formatRowDuration(seconds), title: `this turn has run ${formatRowDuration(seconds)}`, seconds }
@@ -229,18 +258,30 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
 function durationIsNotable(session: Session, seconds: number): boolean {
   if (isEnded(session)) return true
   if (session.state === 'idle') return seconds >= LAST_TURN_NOTABLE_SECONDS
-  if (session.state === 'awaiting') return seconds >= AWAITING_NOTABLE_SECONDS
+  // `awaiting` shares the working threshold because it now reports the same
+  // quantity — the turn. How long the block itself has stood is `detailText`'s.
   return seconds >= WORKING_NOTABLE_SECONDS
 }
 
 /** What the session is doing, minus the state word the indicator already carries. */
-function detailText(session: Session): { text: string; tone: RowTone } | null {
+function detailText(session: Session, context: SessionRowContext): { text: string; tone: RowTone } | null {
   if (isAgentBackend(session.backend) && !isObservedHarness(session.backend)) {
     return { text: 'not observed by mux', tone: 'muted' }
   }
   if (session.state === 'awaiting') {
+    // How long it has been blocked on you, which the duration column used to
+    // carry by silently becoming a different measurement. Here it is labelled by
+    // the thing it sits beside, so it can be read without being mistaken for the
+    // turn length, and the two can disagree without either looking broken.
     const base = awaitingLabel(session)
-    return { text: session.state_detail ? `${base}: ${session.state_detail}` : base, tone: 'warn' }
+    const blocked = session.state_since ? ageOf(session.state_since, context.now) : null
+    const held = blocked !== null && blocked >= AWAITING_NOTABLE_SECONDS
+      ? ` ${formatRowDuration(blocked)}`
+      : ''
+    return {
+      text: session.state_detail ? `${base}: ${session.state_detail}${held}` : `${base}${held}`,
+      tone: 'warn',
+    }
   }
   if (session.state === 'working') {
     return session.state_detail ? { text: session.state_detail, tone: 'default' } : null
@@ -338,7 +379,7 @@ function candidateFor(
       // Never notable on purpose: the indicator says it. Reachable only in `always`.
       return make({ kind: 'text', text: session.state, tone: 'muted' }, false)
     case 'detail': {
-      const detail = detailText(session)
+      const detail = detailText(session, context)
       return detail ? make({ kind: 'text', text: detail.text, tone: detail.tone, title: detail.text }, true) : null
     }
     case 'duration': {
@@ -346,6 +387,32 @@ function candidateFor(
       return duration
         ? make({ kind: 'text', text: duration.text, title: duration.title }, durationIsNotable(session, duration.seconds))
         : null
+    }
+    case 'sincePrompt': {
+      // Ended sessions are excluded: the question is about work in flight, and
+      // an exited row already reports its lifetime.
+      if (isEnded(session) || !session.last_human_prompt_at) return null
+      const seconds = ageOf(session.last_human_prompt_at, context.now)
+      if (seconds === null) return null
+      const label = formatRowDuration(seconds)
+      // Notable only when it disagrees with the turn — on a session whose turns
+      // you open yourself, the two numbers track each other and the second one
+      // is noise. An idle session is never notable here: nothing is running, so
+      // "you asked an hour ago" describes no outstanding work.
+      const turn = session.turn_started_at ? ageOf(session.turn_started_at, context.now) : null
+      const notable = session.state !== 'idle'
+        && turn !== null
+        && seconds - turn >= PROMPT_GAP_NOTABLE_SECONDS
+      return make(
+        {
+          kind: 'text',
+          text: label,
+          prefix: HUMAN_PROMPT_MARK,
+          tone: 'muted',
+          title: `you last prompted this session ${label} ago`,
+        },
+        notable,
+      )
     }
     case 'idleFor': {
       if (session.state !== 'idle') return null

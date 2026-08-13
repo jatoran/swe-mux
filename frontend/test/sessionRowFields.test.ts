@@ -70,17 +70,66 @@ test('a working session is aged from its turn, so tool calls do not reset it', (
   assert.deepEqual(bottomText(midTurn, config), ['22m'])
 })
 
-test('an awaiting session is aged from the block, not from the turn', () => {
-  // Here the question really is "how long has it been waiting on me".
+test('an awaiting session is aged from the turn, like every other live state', () => {
+  // It used to report time in state here, so a permission prompt collapsed the
+  // number to seconds and answering it sprang the number back to the turn
+  // length. With several subagents raising prompts that reads as a timer
+  // resetting at random, which is what this pins shut: one turn, one number.
   const config = withBottom(defaultSessionRowConfig(), ['duration'])
   const blocked = session({ state: 'awaiting', state_since: NOW - 300, turn_started_at: NOW - 3600 })
-  assert.deepEqual(bottomText(blocked, config), ['5m'])
+  assert.deepEqual(bottomText(blocked, config), ['1h'])
+})
+
+test('how long a block has stood moves into the detail, where it is labelled', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['detail'])
+  const blocked = session({
+    state: 'awaiting', awaiting_reason: 'approval', state_since: NOW - 300,
+    turn_started_at: NOW - 3600,
+  })
+  assert.deepEqual(bottomText(blocked, config), ['awaiting approval 5m'])
+})
+
+test('a block too short to matter does not put a duration in the detail', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['detail'])
+  const fresh = session({
+    state: 'awaiting', awaiting_reason: 'approval', state_since: NOW - 3,
+    turn_started_at: NOW - 3600,
+  })
+  assert.deepEqual(bottomText(fresh, config), ['awaiting approval'])
 })
 
 test('a working session with no open turn falls back to time in state', () => {
   const config = withBottom(defaultSessionRowConfig(), ['duration'])
   const working = session({ state: 'working', state_since: NOW - 600, turn_started_at: null })
   assert.deepEqual(bottomText(working, config), ['10m'])
+})
+
+test('since-your-prompt answers the question the turn cannot', () => {
+  // The measured case: a session thirteen minutes into work its operator asked
+  // for once, whose turn had been reopened by an injected teammate message and
+  // so read "3m22". Both numbers are true; only together are they an answer.
+  const config = withBottom(defaultSessionRowConfig(), ['duration', 'sincePrompt'])
+  const fed = session({
+    state: 'working', turn_started_at: NOW - 202, last_human_prompt_at: NOW - 824,
+  })
+  assert.deepEqual(bottomText(fed, config), ['3m22', '13m'])
+})
+
+test('since-your-prompt stays quiet when it would repeat the turn', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['sincePrompt'], 'notable')
+  // Your own prompt opened this turn, so the two numbers are one fact.
+  const own = session({
+    state: 'working', turn_started_at: NOW - 600, last_human_prompt_at: NOW - 603,
+  })
+  assert.deepEqual(bottomText(own, config), [])
+  // Nothing is running, so "you asked an hour ago" describes no outstanding work.
+  const done = session({ state: 'idle', turn_started_at: null, last_human_prompt_at: NOW - 3600 })
+  assert.deepEqual(bottomText(done, config), [])
+})
+
+test('a session no human has prompted on this run shows nothing', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['sincePrompt'])
+  assert.deepEqual(bottomText(session({ state: 'working', last_human_prompt_at: null }), config), [])
 })
 
 test('a ready session with no completed turn shows no duration at all', () => {

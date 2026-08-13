@@ -586,6 +586,22 @@ Two timings cross the API boundary so a client can age a session without a secon
   Negative is the same rejection and reaches it the same way, rather than clamping to zero and publishing the clamp as a real measurement of no time.
   The field is run-scoped and cleared wherever observation identity resets, because a duration
   measured in a replaced conversation is not this conversation's.
+- `last_human_prompt_at` is when a **person** last submitted a request here, and is deliberately a different question from `turn_started_at`.
+  Plenty of turns are opened by something other than a person: mux delivering an agent-authored queued message, or a Stop hook injecting a teammate message the instant the previous turn ends.
+  A session can therefore be minutes into a fresh turn and an hour past anything its operator said — measured live at a `3m22` turn on a session thirteen minutes into work asked for once.
+  Run-scoped like the turn fields, and `None` rather than guessed when unknown.
+
+### Prompt authorship is captured at delivery or not at all
+
+`_note_prompt_authorship` runs on every root submit hook, ahead of the transcript-authority check that returns early for healthy sessions.
+An unmarked submit is a person: typing in the pane, the web terminal, and the mobile composer all reach the PTY without passing the queue.
+Only a delivery mux performed itself can claim otherwise, and it says so by leaving `Session.queue_delivery_mark` — `(delivered_at, authored_by_a_human)` — which the observer consumes and expires after `QUEUE_DELIVERY_ATTRIBUTION_SECONDS`, so a delivery whose hook never arrived cannot silently disown the next prompt a person types.
+
+The test is authorship, not delivery mechanism: a human's queued message is still the human speaking, so only `sender_kind` outside `HUMAN_SENDER_KINDS` disowns the prompt.
+
+This cannot be recovered from the transcript, which is why it is stamped here.
+By the time a prompt is a transcript record, a teammate's injected message and a typed one are the same shape.
+The field therefore survives a session-preserving restart on the snapshot and stays `None` on a cold adoption.
 
 ### Turn boundaries are dated by the records that carry them
 
@@ -602,6 +618,11 @@ Arbitrarily old is admissible because replaying history is the point of the fiel
 A rejected stamp falls back to `_session_now`, so a corrupt line degrades to the previous behavior instead of poisoning the measurement.
 
 Under the replay harness both ends still agree, because its fixture records are stamped from the same virtual clock (`VirtualClock` via `_stamp`); a virtual start can no more pair with a real end than before.
+
+A turn is closed only once the arbiter accepts the close.
+`_finish_root_turn` takes the turn bookkeeping down provisionally and restores it through `_restore_refused_turn` when `_transition` refuses, and records the duration only after.
+Dismantling it first stranded the session as `working` with no turn: the row fell back to ageing the state, which restarts on every tool call, the next tool call reopened the turn and restamped its start, and `last_turn_ms` was measured for a turn that was still running.
+`_turn_close_landed` distinguishes the one refusal that means "this close lost to better evidence" from the blanket `False` `_transition` returns throughout replay, where the turn genuinely ended and only the fanout is suppressed.
 
 `_finish_transcript_catchup` carries an open turn's replay-derived start into `_begin_root_turn` through `started_at`.
 Without it, re-adopting a turn that history left open restamped it as beginning now, and every working row in the fleet read `0s` the moment the daemon came back and then aged from the restart rather than from the work.

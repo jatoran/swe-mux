@@ -136,6 +136,23 @@ class SessionRecord:
     #: ``state_since`` restarts on each of them, so a busy agent's timer reset
     #: every few seconds and never reported the length of the actual work.
     turn_started_at: float | None = None
+    #: Epoch seconds a **human** last submitted a request to this session; None
+    #: when none has been observed on this run.
+    #:
+    #: Deliberately not the same question as ``turn_started_at``. A turn is one
+    #: request-to-completion cycle, and plenty of them are opened by something
+    #: other than a person: mux delivering an agent-authored queued message, or a
+    #: Stop hook injecting a teammate message the instant the previous turn ends.
+    #: A session can therefore be minutes into a fresh turn and an hour past
+    #: anything its operator said, which is exactly the gap that made "how long
+    #: has this been going" unanswerable from the turn alone.
+    #:
+    #: Stamped from the submit hook, because authorship is only knowable at the
+    #: moment of delivery — the transcript records an injected prompt and a typed
+    #: one identically. It survives a session-preserving restart on the snapshot
+    #: and is left None on a cold adoption rather than guessed. Reset with
+    #: observation identity, like the turn fields.
+    last_human_prompt_at: float | None = None
     # Set whenever state == "awaiting"; cleared by every transition elsewhere.
     awaiting_reason: str | None = None
     # The idle-axis sibling of `awaiting_reason`. `waiting_on_background` means
