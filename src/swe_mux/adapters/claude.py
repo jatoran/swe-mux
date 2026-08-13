@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..harness import HARNESSES, descriptor
+from ..mcp_contract import claude_read_permissions
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
 
 log = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ class ClaudeAdapter(BackendAdapter):
         self.default_exe = default_exe
         self.default_args = default_args or []
         self.data_dir = data_dir
+        self._mux_read_permissions = claude_read_permissions() if mcp_url else []
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = self._write_hook_settings(data_dir) if data_dir else None
@@ -145,7 +147,10 @@ class ClaudeAdapter(BackendAdapter):
             command = _hook_command(event, identity=identity)
             hooks[event] = [{"hooks": [{"type": "command", "command": command}]}]
         temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps({"hooks": hooks}, indent=2), encoding="utf-8")
+        payload: dict[str, object] = {"hooks": hooks}
+        if self._mux_read_permissions:
+            payload["permissions"] = {"allow": self._mux_read_permissions}
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         temporary.replace(path)
         return path
 

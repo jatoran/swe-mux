@@ -1177,10 +1177,14 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
 The Project-scoped tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `message_status`, `spawn_requests`, `notify`, and `request_spawn`.
 Session results expose the stable id, backend-generated `name`, and UI-equivalent `display_name`; an exact unique display name is accepted wherever a tool targets a session.
+`list_sessions` filters by query and pages a combined live/ended result capped at 25 compact rows and 32 KiB per call.
 `read_transcript` pages from either end through an opaque cursor bound to one `agent_run_id`, labels every message with run id/sequence, and includes system/meta records only by explicit opt-in.
-`get_session` includes the run's pinned title and opening request, and exposes the caller's own superseded run ids.
+An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
+`get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
 All reads remain own-Project only; v0.5 defines no cross-Project grant.
-`notify` only stages a queue message and `request_spawn` only creates an inert Fleet Queue approval row.
+Claude's generated settings allow the ten declared read tools without a prompt, while both write tools remain permission-gated.
+Tool annotations declare the same read/write split.
+`notify` only stages a queue message with a visible sender/message/correlation envelope and `request_spawn` only creates an inert Fleet Queue approval row.
 The full contract is `features/mux-mcp.md`.
 An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.
 

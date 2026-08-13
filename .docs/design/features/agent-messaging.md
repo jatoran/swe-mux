@@ -53,6 +53,9 @@ session outside its Project, and cannot claim to be anyone else.
   would otherwise burn a plan's worth of tokens talking to each other.
 - **Retry-safe correlation.** An optional `correlation_id` is unique per sender; a retry
   returns the original message instead of a duplicate in the target's queue.
+- **The receiver sees provenance in the prompt.** The stored queue body begins with a bounded `[mux notification]` envelope naming message id, correlation id, sender session, sender run, sender name, sender backend, and optional reason.
+  The daemon generates message and correlation ids before enqueue, so the visible values match the durable row and the result returned to the sender.
+  The original caller body follows the envelope unchanged.
 - **One audit trail.** An MCP-originated message is an ordinary queue item: same states,
   same head-of-line rule, same `queue_deliveries` rows, distinguishable only by
   `sender_kind` and its provenance. Events (`queue_message_received`) carry ids and counts,

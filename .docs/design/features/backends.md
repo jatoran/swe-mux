@@ -220,6 +220,8 @@ Run it deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1`, `SWEMUX_RUN_LIVE_SUBAG
   `PermissionRequest`, `Notification`, `SubagentStart`, `SubagentStop`, `Stop`, and
   `SessionEnd`. The subagent pair drives the `subagents` standing-activity count
   (`status-detection.md`). The settings directory is removed when its owning terminal ends.
+- When mux MCP is registered, the same generated Claude settings allow only the closed read-tool set without a permission prompt.
+  `notify` and `request_spawn` are deliberately absent from that allowlist and retain Claude's normal tool approval.
 - Claude executes hook commands through Bash even on Windows. Generated commands use
   Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
   written by atomic replacement, and must never use raw Windows `list2cmdline` output.

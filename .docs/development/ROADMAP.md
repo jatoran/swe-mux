@@ -1422,6 +1422,18 @@ Tools are listed even when disabled and answer with a typed refusal, because cli
 `tools/list` at session start and a vanished tool is indistinguishable from a broken server.
 Scope misses and true misses stay indistinguishable, and empty beats a weak match.
 
+### Post-completion live-audit hardening
+
+The 2026-08-13 frozen-app audit proved the read substrate but found five contract defects that made the free reads insufficient in practice.
+
+- [x] Add `self` and omitted-session defaults to `get_session` and `read_transcript`.
+- [x] Add an explicit `agent_run_id` selector for the caller's superseded runs, resolved ahead of live ids so the initial run-id/logical-session-id collision cannot redirect the read to the successor.
+- [x] Make `list_sessions` compact, queryable, and cursor-pageable, with one combined 25-row and 32 KiB budget across live and ended results.
+- [x] Generate a Claude allowlist for exactly the ten read tools and advertise the same split through MCP read-only annotations; `notify` and `request_spawn` remain permission-gated.
+- [x] Store the notification provenance envelope in the queue body itself so the receiver sees sender, run, message id, and correlation id without relying on hidden metadata.
+- [x] Repeat the frozen-app Codex/Claude audit after redeploy and record the observed result here.
+  Verified 2026-08-13 against fresh Claude and Codex sessions on the frozen app: Claude executed the full read inventory without a permission prompt; both harnesses received a 25-row combined session page with `has_more` and a cursor; omitted session ids resolved to self; Codex's notification arrived after the receiver became ready with the visible message/correlation/sender/run envelope intact; and a post-`/clear` Claude successor read its exact seq-0 run by the colliding old id with `own_superseded_run: true` and no cross-run messages.
+
 ### Phase 5.6 exit criteria
 
 - [x] An agent can read the first messages of a sibling's conversation and of its own

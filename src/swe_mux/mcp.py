@@ -46,6 +46,7 @@ from typing import Any
 from .clipboard_store import looks_like_secret
 from .git_projects import ProjectIdentity
 from .harness import agent_harnesses
+from .mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
 from .project_files import (
     DEFAULT_NOTE_STORAGE_ID,
     project_note_summaries,
@@ -69,7 +70,9 @@ TRANSCRIPT_MAX_BYTES = 512 * 1024
 
 TRANSCRIPT_MAX_MESSAGES = 200
 TRANSCRIPT_DEFAULT_MESSAGES = 50
-LIST_MAX_SESSIONS = 100
+LIST_MAX_SESSIONS = 25
+LIST_HISTORY_SCAN_LIMIT = 100
+LIST_MAX_BYTES = 32 * 1024
 SEARCH_MAX_LIMIT = 50
 PARSE_TIMEOUT_SECONDS = 2.0
 NOTE_MAX_BYTES = 512 * 1024
@@ -152,6 +155,44 @@ def _history_summary(
     }
 
 
+def _session_list_summary(
+    record: Any, *, display_name: str | None = None
+) -> dict[str, Any]:
+    """Compact fleet entry; callers use get_session for full metadata."""
+    return {
+        "session_id": record.id,
+        "name": record.name,
+        "display_name": display_name or record.name,
+        "backend": record.backend,
+        "state": record.state,
+        "state_detail": record.state_detail,
+        "awaiting_reason": record.awaiting_reason,
+        "model": record.model,
+        "agent_run_id": record.agent_run_id,
+        "agent_run_seq": record.agent_run_seq,
+        "last_activity_ts": record.last_activity_ts,
+        "runtime_boundary": getattr(record, "runtime_boundary", "local"),
+        "ended": False,
+    }
+
+
+def _history_list_summary(
+    row: dict[str, Any], *, display_name: str | None = None
+) -> dict[str, Any]:
+    return {
+        "session_id": row.get("id"),
+        "name": row.get("name"),
+        "display_name": display_name or row.get("name"),
+        "backend": row.get("backend"),
+        "state": row.get("final_state"),
+        "model": row.get("model"),
+        "agent_run_id": row.get("id"),
+        "agent_run_seq": int(row.get("agent_run_seq") or 0),
+        "last_activity_ts": row.get("last_message_at") or row.get("exited_at"),
+        "ended": True,
+    }
+
+
 def _redact(text: str) -> str:
     return _REDACTED if text and looks_like_secret(text) else text
 
@@ -161,14 +202,14 @@ def _encode_cursor(payload: dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _decode_cursor(value: str) -> dict[str, Any]:
+def _decode_cursor(value: str, *, label: str = "transcript") -> dict[str, Any]:
     try:
         raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
         payload = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("invalid transcript cursor") from exc
+        raise ValueError(f"invalid {label} cursor") from exc
     if not isinstance(payload, dict) or payload.get("v") != 1:
-        raise ValueError("invalid transcript cursor")
+        raise ValueError(f"invalid {label} cursor")
     return payload
 
 
@@ -184,8 +225,8 @@ TOOLS: list[dict[str, Any]] = [
         "name": "list_sessions",
         "description": (
             "List sessions in your Project: every live one (any backend), and "
-            "optionally recently ended agent sessions. Status fields are the "
-            "same ones the mux UI shows."
+            "optionally recently ended agent sessions. Results are compact, "
+            "bounded, searchable, and pageable; use get_session for details."
         ),
         "inputSchema": {
             "type": "object",
@@ -200,6 +241,14 @@ TOOLS: list[dict[str, Any]] = [
                         f"Maximum sessions returned (default 25, max {LIST_MAX_SESSIONS})"
                     ),
                 },
+                "query": {
+                    "type": "string",
+                    "description": "Case-insensitive id, name, backend, model, or run filter",
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Opaque continuation cursor from a previous result",
+                },
             },
             "additionalProperties": False,
         },
@@ -208,8 +257,8 @@ TOOLS: list[dict[str, Any]] = [
         "name": "get_session",
         "description": (
             "Status and metadata for one session in your Project, by session id "
-            "or exact backend/display name. Live sessions report current state; ended ones "
-            "report their final state."
+            "or exact backend/display name. Omit session_id or use 'self' for "
+            "the caller. Live sessions report current state; ended ones report their final state."
         ),
         "inputSchema": {
             "type": "object",
@@ -219,7 +268,6 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "Session id or exact backend/display name",
                 },
             },
-            "required": ["session_id"],
             "additionalProperties": False,
         },
     },
@@ -227,6 +275,8 @@ TOOLS: list[dict[str, Any]] = [
         "name": "read_transcript",
         "description": (
             "A bounded, pageable head or tail of one agent run's conversation. "
+            "Omit session_id or use 'self' for the caller. Supply agent_run_id "
+            "to read one of the caller's superseded runs unambiguously. "
             "Every message names its agent_run_id and sequence; cursors cannot "
             "cross a conversation rollover. System/meta records are excluded "
             "unless explicitly requested."
@@ -237,6 +287,12 @@ TOOLS: list[dict[str, Any]] = [
                 "session_id": {
                     "type": "string",
                     "description": "Session id or exact backend/display name",
+                },
+                "agent_run_id": {
+                    "type": "string",
+                    "description": (
+                        "Exact current run id, or one of the caller's superseded run ids"
+                    ),
                 },
                 "max_messages": {
                     "type": "integer",
@@ -259,7 +315,6 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "Include system/meta records (default false)",
                 },
             },
-            "required": ["session_id"],
             "additionalProperties": False,
         },
     },
@@ -444,6 +499,17 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+_DECLARED_TOOL_NAMES = {str(tool["name"]) for tool in TOOLS}
+assert _DECLARED_TOOL_NAMES == set(READ_TOOL_NAMES) | set(WRITE_TOOL_NAMES)
+for _tool in TOOLS:
+    _read_only = str(_tool["name"]) in READ_TOOL_NAMES
+    _tool["annotations"] = {
+        "readOnlyHint": _read_only,
+        "destructiveHint": False,
+        "idempotentHint": _read_only,
+        "openWorldHint": False,
+    }
+
 
 class McpAuthError(Exception):
     """Raised when no live session owns the presented bearer token."""
@@ -554,6 +620,12 @@ class McpService:
             for session in self.sessions.sessions.values()
             if self._in_scope(caller, session.record)
         ]
+        if identity == "self":
+            matches = [session for session in scoped if session.record.id == caller.record.id]
+            if len(matches) != 1:
+                raise KeyError(identity)
+            names = await self._live_display_names(matches)
+            return matches[0], names[matches[0].record.id]
         by_id = [
             session
             for session in scoped
@@ -593,7 +665,7 @@ class McpService:
         project_id, _scope_id = self._scope(caller)
         page = await self.history.history_page(
             project_id=project_id or "__ungrouped__",
-            limit=LIST_MAX_SESSIONS,
+            limit=LIST_HISTORY_SCAN_LIMIT,
         )
         rows = [
             item
@@ -616,50 +688,140 @@ class McpService:
 
     async def list_sessions(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         limit = max(1, min(int(args.get("limit") or 25), LIST_MAX_SESSIONS))
+        include_ended = bool(args.get("include_ended"))
+        query = str(args.get("query") or "").strip().casefold()
+        after: tuple[int, str, str] | None = None
+        if args.get("cursor"):
+            cursor = _decode_cursor(str(args["cursor"]), label="session-list")
+            if (
+                cursor.get("kind") != "sessions"
+                or bool(cursor.get("include_ended")) != include_ended
+                or str(cursor.get("query") or "") != query
+            ):
+                raise ValueError("session-list cursor does not match this query")
+            raw_after = cursor.get("after")
+            if not isinstance(raw_after, list) or len(raw_after) != 3:
+                raise ValueError("invalid session-list cursor")
+            after = (int(raw_after[0]), str(raw_after[1]), str(raw_after[2]))
+
         scoped = [
             session
             for session in self.sessions.sessions.values()
             if self._in_scope(caller, session.record)
-        ][:limit]
-        display_names = await self._live_display_names(scoped)
-        live = [
-            {
-                **session_summary(
-                    session.record,
-                    display_name=display_names[session.record.id],
-                ),
-                "ended": False,
-            }
-            for session in scoped
         ]
-        for item in live:
+        display_names = await self._live_display_names(scoped)
+        candidates: list[tuple[tuple[int, str, str], str, dict[str, Any]]] = []
+        for session in scoped:
+            item = _session_list_summary(
+                session.record,
+                display_name=display_names[session.record.id],
+            )
             if item["session_id"] == caller.record.id:
                 item["you"] = True
-        result: dict[str, Any] = {"sessions": live}
-        if bool(args.get("include_ended")):
+            searchable = "\n".join(
+                str(item.get(field) or "")
+                for field in (
+                    "session_id",
+                    "name",
+                    "display_name",
+                    "backend",
+                    "model",
+                    "agent_run_id",
+                )
+            ).casefold()
+            if query and query not in searchable:
+                continue
+            key = (
+                0 if item.get("you") else 1,
+                str(item.get("display_name") or "").casefold(),
+                str(item["session_id"]),
+            )
+            candidates.append((key, "live", item))
+
+        if include_ended:
             project_id, _scope_id = self._scope(caller)
             page = await self.history.history_page(
                 project_id=project_id or "__ungrouped__",
-                limit=limit,
+                limit=LIST_HISTORY_SCAN_LIMIT,
             )
-            live_ids = {item["session_id"] for item in live}
+            live_run_ids = {self._record_run_id(session.record) for session in scoped}
             ended_rows = [
-                row for row in page.get("items", []) if row.get("id") not in live_ids
-            ][:limit]
+                row
+                for row in page.get("items", [])
+                if self._history_row_in_scope(caller, row)
+                and self._row_run_id(row) not in live_run_ids
+            ]
             ended_names = await self._history_display_names(ended_rows)
-            result["ended_sessions"] = [
-                _history_summary(
+            for row in ended_rows:
+                item = _history_list_summary(
                     row,
                     display_name=ended_names[str(row.get("id") or "")],
                 )
-                for row in ended_rows
-            ]
+                searchable = "\n".join(
+                    str(item.get(field) or "")
+                    for field in (
+                        "session_id",
+                        "name",
+                        "display_name",
+                        "backend",
+                        "model",
+                        "agent_run_id",
+                    )
+                ).casefold()
+                if query and query not in searchable:
+                    continue
+                key = (
+                    2,
+                    str(item.get("display_name") or "").casefold(),
+                    str(item["session_id"]),
+                )
+                candidates.append((key, "ended", item))
+
+        candidates.sort(key=lambda entry: entry[0])
+        if after is not None:
+            candidates = [entry for entry in candidates if entry[0] > after]
+        selected = candidates[:limit]
+        while selected:
+            has_more = len(candidates) > len(selected)
+            next_cursor = (
+                _encode_cursor(
+                    {
+                        "v": 1,
+                        "kind": "sessions",
+                        "include_ended": include_ended,
+                        "query": query,
+                        "after": list(selected[-1][0]),
+                    }
+                )
+                if has_more
+                else None
+            )
+            live = [item for _key, kind, item in selected if kind == "live"]
+            ended = [item for _key, kind, item in selected if kind == "ended"]
+            result: dict[str, Any] = {
+                "sessions": live,
+                "count": len(selected),
+                "has_more": has_more,
+                "next_cursor": next_cursor,
+            }
+            if include_ended:
+                result["ended_sessions"] = ended
+            if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= LIST_MAX_BYTES:
+                return result
+            selected.pop()
+
+        result = {
+            "sessions": [],
+            "count": 0,
+            "has_more": bool(candidates),
+            "next_cursor": None,
+        }
+        if include_ended:
+            result["ended_sessions"] = []
         return result
 
     async def get_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
-        identity = str(args.get("session_id") or "").strip()
-        if not identity:
-            raise ValueError("session_id is required")
+        identity = str(args.get("session_id") or "self").strip() or "self"
         try:
             session, display_name = await self._resolve_live(caller, identity)
         except KeyError:
@@ -752,9 +914,7 @@ class McpService:
         }
 
     async def read_transcript(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
-        identity = str(args.get("session_id") or "").strip()
-        if not identity:
-            raise ValueError("session_id is required")
+        identity = str(args.get("session_id") or "self").strip() or "self"
         max_messages = max(
             1,
             min(
@@ -783,10 +943,31 @@ class McpService:
         path: Path | None = None
         backend = ""
         own_superseded_run = False
-        try:
+        requested_run_id = str(args.get("agent_run_id") or "").strip()
+        session = None
+        row: dict[str, Any] | None = None
+        if requested_run_id:
             session, _display_name = await self._resolve_live(caller, identity)
-        except KeyError:
-            session = None
+            current_run_id = self._record_run_id(session.record)
+            if requested_run_id != current_run_id:
+                if session.record.id != caller.record.id:
+                    raise KeyError(requested_run_id)
+                candidate = await self.history.history_entry(requested_run_id)
+                if (
+                    candidate is None
+                    or not self._history_row_in_scope(caller, candidate)
+                    or not bool(candidate.get("agent_visible", 1))
+                    or str(candidate.get("note_id") or "") != str(caller.record.id)
+                    or self._row_run_id(candidate) != requested_run_id
+                ):
+                    raise KeyError(requested_run_id)
+                row = candidate
+                session = None
+        else:
+            try:
+                session, _display_name = await self._resolve_live(caller, identity)
+            except KeyError:
+                session = None
         if session is not None:
             resolved_session_id = session.record.id
             run_id = self._record_run_id(session.record)
@@ -813,17 +994,22 @@ class McpService:
             backend = session.record.backend
             native_id = session.record.native_session_id
         else:
-            row, _display_name = await self._resolve_history(caller, identity)
+            if row is None:
+                row, _display_name = await self._resolve_history(caller, identity)
             raw = row.get("transcript_path")
             path = Path(raw) if raw else None
             backend = str(row.get("backend") or "")
             native_id = str(row.get("native_id") or "") or None
-            resolved_session_id = str(row.get("id") or identity)
             run_id = self._row_run_id(row)
             run_seq = int(row.get("agent_run_seq") or 0)
             own_superseded_run = bool(
                 str(row.get("note_id") or "") == str(caller.record.id)
                 and run_id != self._record_run_id(caller.record)
+            )
+            resolved_session_id = (
+                str(caller.record.id)
+                if own_superseded_run
+                else str(row.get("id") or identity)
             )
         if cursor is not None and str(cursor.get("run") or "") != run_id:
             raise ValueError("transcript cursor belongs to a different agent run")

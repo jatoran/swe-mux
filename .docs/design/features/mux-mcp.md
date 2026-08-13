@@ -38,8 +38,9 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   plausible-but-wrong teaches an agent to stop calling.
 - **Bounded and redacted.** Transcript, Project-note, and Agent Context source reads are capped at 512 KiB.
   Transcript results are also message-capped and pageable in either direction through run-bound opaque cursors.
-  search results carry at most the FTS excerpts `history_page` already bounds. Session
-  records go out through an explicit field allowlist (`session_summary`) — never
+  `list_sessions` returns at most 25 compact entries and 32 KiB across live and ended rows combined, with query filtering and an opaque continuation cursor.
+  Search results carry at most the FTS excerpts `history_page` already bounds. Detailed session
+  records go out through an explicit field allowlist (`session_summary`) - never
   `record.snapshot()`, which carries `spawn_env`. Any message or excerpt that trips the
   clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
 - **Session names match the UI.** Session summaries preserve the backend-generated `name`
@@ -53,7 +54,8 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   session, a conversation later" — and the second means the agent it is reasoning about
   retains nothing it was previously told. `read_transcript` follows the live run and never
   splices two conversations into one read.
-- **Past self is explicit.** A caller can address its own retired `agent_run_id` after an in-place conversation rollover.
+- **Past self is explicit.** `self` and an omitted `session_id` resolve to the caller, while `read_transcript(agent_run_id=...)` selects an exact current run or one of the caller's retired runs after an in-place conversation rollover.
+  An explicit retired-run selector is resolved before live session ids, so a first run whose id equals the logical session id cannot collide with its successor.
   Every returned message carries that run id and its persisted `agent_run_seq`, and the result says `own_superseded_run: true` rather than presenting it as current memory.
 - **Cross-Project access remains absent.** Phase 5.6 resolved the grant question by keeping every read own-Project only.
   There is no implicit widening and no named cross-Project grant in v0.5.
@@ -73,9 +75,9 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 
 | Tool | Returns |
 |---|---|
-| `list_sessions` | live sessions in the caller's Project (caller marked `you`), with raw and display names; optionally recently ended agent sessions |
-| `get_session` | status + metadata and a run brief (pinned title + opening request) by id, exact backend name, or exact display name; the caller's own row also lists superseded run ids |
-| `read_transcript` | bounded, pageable head or tail of exactly one run; every message names `agent_run_id` + `agent_run_seq`, system/meta is opt-in, and remote/unknown terminal boundaries return explicit unavailability |
+| `list_sessions` | a compact, queryable, pageable list of live and optionally recent ended sessions; the 25-row and 32 KiB caps apply to the combined result |
+| `get_session` | status + metadata and a run brief by id, exact name, or `self`; the caller's own row also lists superseded run ids |
+| `read_transcript` | bounded, pageable head or tail of exactly one run; `self` is the default and `agent_run_id` unambiguously selects the caller's retired run |
 | `search_history` | FTS over the Project's archived Claude/Codex conversations, with raw and display names, keyset-paginated |
 | `memory_sources` | the caller Project's descriptor-driven instruction and provider-memory inventory, including source attribution, capability, revision, modification time, and entrypoint kind |
 | `read_memory` | one bounded inventoried Agent Context source by opaque `source_id`, never by a caller-supplied filesystem path |
@@ -83,7 +85,7 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 | `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
 | `message_status` | current outcome of one `notify`, visible only to its attributed sending session |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
-| `notify` | stages a message in another Project session's queue addressed by id, backend name, or display name; returns the message id, state, and chain depth |
+| `notify` | stages a message with a visible sender/message/correlation envelope; returns the message id, correlation id, state, and chain depth |
 | `request_spawn` | writes an inert spawn approval row into Fleet Queue; returns the request id and starts nothing |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
@@ -95,7 +97,7 @@ indistinguishable from a broken server.
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed ten-tool read set without a prompt and do not allow `notify` or `request_spawn`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.
@@ -122,10 +124,12 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
   Source contents, prompt text, and SSH credential text are never logged.
 - JSON-RPC methods: `initialize` (protocol 2025-06-18, older versions negotiated),
   `ping`, `tools/list`, `tools/call`; notifications get 202. Batching is rejected.
+- Every tool advertises MCP annotations from the shared closed contract: reads are read-only and idempotent, while both writes remain permission-gated.
 
 ## Key files
 
 - Protocol + tools: `src/swe_mux/mcp.py`
+- Closed read/write declarations and Claude read permissions: `src/swe_mux/mcp_contract.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
 - Endpoint handler, rate limit, wiring: `src/swe_mux/server.py`
 - Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`

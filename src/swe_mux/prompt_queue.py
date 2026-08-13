@@ -343,6 +343,7 @@ class PromptQueueStore:
     async def create_message(
         self,
         *,
+        message_id: str | None = None,
         target_session_id: str,
         target_agent_run_id: str | None,
         target_backend: str | None,
@@ -361,7 +362,7 @@ class PromptQueueStore:
         constraints: dict[str, Any] | None = None,
         insert_after: str | None = None,
     ) -> dict[str, Any]:
-        identity = str(uuid.uuid4())
+        identity = str(message_id or uuid.uuid4())
         now = time.time()
         state = "armed" if armed else "draft"
 
@@ -1521,6 +1522,7 @@ class PromptQueueService:
     async def enqueue(
         self,
         *,
+        message_id: str | None = None,
         target_session_id: str,
         body: str,
         armed: bool = False,
@@ -1555,6 +1557,7 @@ class PromptQueueService:
         if record.state in {"exited", "crashed"}:
             raise QueueError("target_ended", "the target session has ended")
         message = await self.store.create_message(
+            message_id=message_id,
             target_session_id=target_session_id,
             target_agent_run_id=record.agent_run_id or None,
             target_backend=record.backend,

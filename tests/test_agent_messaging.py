@@ -148,6 +148,14 @@ async def test_a_notify_arrives_armed_unless_the_receiver_opted_out(
     assert message["origin"]["path"] == ["s1"]
     assert message["chain_depth"] == 1
     assert message["constraints"]["expires_at"] > time.time()
+    assert result["correlation_id"] == message["correlation_id"]
+    assert f'message_id: {result["message_id"]}' in message["body"]
+    assert f'correlation_id: {result["correlation_id"]}' in message["body"]
+    assert "from_session: s1" in message["body"]
+    assert "from_run: run-s1" in message["body"]
+    assert "from_name: claude-s1" in message["body"]
+    assert message["body"].endswith("\n\nI finished the migration")
+    assert message["payload"] == {"kind": "agent_notify", "version": 2}
 
     await harness.auto.set_accept_agent_messages("s2", True)
     armed = await harness.messaging.notify(

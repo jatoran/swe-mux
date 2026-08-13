@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from .config import Config
@@ -46,6 +47,37 @@ log = logging.getLogger("swe_mux.agent_messaging")
 # sender's context is stale long before this.
 DEFAULT_MESSAGE_TTL_HOURS = 24
 AGENT_SENDER_KIND = "agent"
+
+
+def _envelope_value(value: Any, *, max_chars: int = 500) -> str:
+    """Render untrusted metadata as one bounded notification header value."""
+    return " ".join(str(value or "").split())[:max_chars]
+
+
+def _notification_body(
+    *,
+    message_id: str,
+    correlation_id: str,
+    sender_id: str,
+    sender_run_id: str,
+    sender_name: str,
+    sender_backend: str,
+    reason: str,
+    body: str,
+) -> str:
+    headers = [
+        "[mux notification]",
+        f"message_id: {_envelope_value(message_id)}",
+        f"correlation_id: {_envelope_value(correlation_id)}",
+        f"from_session: {_envelope_value(sender_id)}",
+        f"from_run: {_envelope_value(sender_run_id)}",
+        f"from_name: {_envelope_value(sender_name)}",
+        f"from_backend: {_envelope_value(sender_backend)}",
+    ]
+    clean_reason = _envelope_value(reason)
+    if clean_reason:
+        headers.append(f"reason: {clean_reason}")
+    return "\n".join([*headers, "[/mux notification]", "", body])
 
 
 class AgentMessagingService:
@@ -203,15 +235,32 @@ class AgentMessagingService:
 
         armed = bool(await self.auto.accepts_agent_messages(target_id))
         ttl_seconds = DEFAULT_MESSAGE_TTL_HOURS * 3600
-        message = await self.queue.enqueue(
-            target_session_id=target_id,
+        expires_at = time.time() + ttl_seconds
+        message_id = str(uuid.uuid4())
+        correlation = _envelope_value(correlation_id, max_chars=200) or str(uuid.uuid4())
+        sender_name = str(getattr(caller.record, "name", "") or caller_id)
+        sender_run_id = str(getattr(caller.record, "agent_run_id", "") or caller_id)
+        sender_backend = str(getattr(caller.record, "backend", "") or "unknown")
+        visible_body = _notification_body(
+            message_id=message_id,
+            correlation_id=correlation,
+            sender_id=caller_id,
+            sender_run_id=sender_run_id,
+            sender_name=sender_name,
+            sender_backend=sender_backend,
+            reason=reason,
             body=text,
+        )
+        message = await self.queue.enqueue(
+            message_id=message_id,
+            target_session_id=target_id,
+            body=visible_body,
             armed=armed,
             sender_kind=AGENT_SENDER_KIND,
             sender_id=caller_id,
-            sender_label=str(getattr(caller.record, "name", "") or caller_id),
+            sender_label=sender_name,
             origin_session_id=caller_id,
-            correlation_id=str(correlation_id) if correlation_id else None,
+            correlation_id=correlation,
             chain_depth=depth,
             origin={
                 "path": path,
@@ -222,8 +271,19 @@ class AgentMessagingService:
                 "reason": str(reason or "")[:500] or None,
                 "created_at": time.time(),
             },
-            payload={"kind": "agent_notify", "version": 1},
-            constraints={"expires_at": time.time() + ttl_seconds},
+            payload={"kind": "agent_notify", "version": 2},
+            constraints={"expires_at": expires_at},
+        )
+        log.info(
+            "agent notification staged sender=%s sender_run=%s target=%s message=%s"
+            " correlation=%s chain_depth=%d deduplicated=%s",
+            caller_id,
+            sender_run_id,
+            target_id,
+            message["id"],
+            correlation,
+            depth,
+            bool(message.get("deduplicated")),
         )
         self.queue.events.emit_background(
             "queue_message_received",
@@ -235,12 +295,15 @@ class AgentMessagingService:
         )
         return {
             "message_id": str(message["id"]),
+            "correlation_id": correlation,
             "state": str(message["state"]),
             "target_session_id": target_id,
             "target_name": getattr(destination.record, "name", None),
             "chain_depth": depth,
             "deduplicated": bool(message.get("deduplicated")),
-            "expires_at": time.time() + ttl_seconds,
+            "expires_at": (message.get("constraints") or {}).get(
+                "expires_at", expires_at
+            ),
             "note": (
                 "The matching message was deleted by the receiving operator and was not recreated."
                 if message["state"] == "deleted"
@@ -437,6 +500,7 @@ class AgentMessagingService:
             }.get(raw_state, "refused")
         return {
             "message_id": str(message["id"]),
+            "correlation_id": message.get("correlation_id"),
             "status": status,
             "queue_state": raw_state,
             "target_session_id": str(message.get("target_session_id") or ""),

@@ -50,6 +50,7 @@ separately opt-in.
 - **The body shown is the body delivered.** No hidden rendered variant exists. Edits
   increment `revision`; `send-next` validates the exact revision the user last saw and
   refuses (`revision_conflict`) otherwise. Sent/delivering items are immutable.
+  For an agent-authored `mux.notify`, the stored body itself includes the visible mux provenance envelope before the caller's original text.
 - **Every delivery is an audited act with a named initiator.** `send-next` claims the head atomically (state,
   revision, head-of-line in one transaction), then re-checks target liveness, run identity,
   and `delivery_readiness` immediately before writing. Blocked/unknown readiness requires

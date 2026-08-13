@@ -19,12 +19,14 @@ import pytest
 from swe_mux.agent_context import AgentContextService
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.mcp import (
+    LIST_MAX_BYTES,
     TOOLS,
     TRANSCRIPT_MAX_MESSAGES,
     McpAuthError,
     McpService,
     session_summary,
 )
+from swe_mux.mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
 from swe_mux.project_files import create_note, write_note
 
 
@@ -182,6 +184,68 @@ async def test_list_sessions_is_scoped_to_the_caller_project() -> None:
     assert ids == {"s1", "s2"}
     you = [item for item in result["sessions"] if item.get("you")]
     assert [item["session_id"] for item in you] == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_is_combined_bounded_searchable_and_pageable() -> None:
+    caller = live_session("s00", token="tok")
+    live = [live_session(f"s{index:02d}") for index in range(1, 21)]
+    rows = [
+        {
+            "id": f"ended-{index:02d}",
+            "name": f"codex-ended-{index:02d}",
+            "backend": "codex",
+            "model": "gpt-test",
+            "project_id": "p1",
+            "project_scope_id": "scope-1",
+            "final_state": "exited",
+        }
+        for index in range(20)
+    ]
+    service = service_for(caller, *live, history=HistoryStub(rows))
+
+    first = await service.list_sessions(caller, {"include_ended": True, "limit": 100})
+    second = await service.list_sessions(
+        caller,
+        {
+            "include_ended": True,
+            "limit": 100,
+            "cursor": first["next_cursor"],
+        },
+    )
+    first_ids = {
+        item["agent_run_id"]
+        for item in [*first["sessions"], *first["ended_sessions"]]
+    }
+    second_ids = {
+        item["agent_run_id"]
+        for item in [*second["sessions"], *second["ended_sessions"]]
+    }
+
+    assert first["count"] == 25
+    assert first["has_more"] is True
+    assert first["next_cursor"]
+    assert second["count"] == 16
+    assert not first_ids & second_ids
+    assert len(json.dumps(first).encode("utf-8")) <= LIST_MAX_BYTES
+
+    filtered = await service.list_sessions(
+        caller, {"include_ended": True, "query": "ENDED-07"}
+    )
+    assert filtered["sessions"] == []
+    assert [item["agent_run_id"] for item in filtered["ended_sessions"]] == [
+        "ended-07"
+    ]
+
+    with pytest.raises(ValueError, match="does not match"):
+        await service.list_sessions(
+            caller,
+            {
+                "include_ended": True,
+                "query": "different",
+                "cursor": first["next_cursor"],
+            },
+        )
 
 
 @pytest.mark.asyncio
@@ -366,6 +430,94 @@ async def test_read_transcript_accepts_the_display_name(tmp_path: Path) -> None:
 
     assert result["session_id"] == "s2"
     assert result["messages"][0]["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_self_defaults_resolve_the_calling_session(tmp_path: Path) -> None:
+    transcript = tmp_path / "self.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"content": "my transcript"}}) + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok", transcript=transcript)
+    service = service_for(caller)
+
+    details = await service.get_session(caller, {})
+    transcript_result = await service.read_transcript(caller, {"from": "head"})
+
+    assert details["session_id"] == "s1"
+    assert transcript_result["session_id"] == "s1"
+    assert transcript_result["messages"][0]["text"] == "my transcript"
+
+
+@pytest.mark.asyncio
+async def test_explicit_run_id_reads_a_colliding_superseded_run(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.jsonl"
+    old_path = tmp_path / "old.jsonl"
+    current_path.write_text(
+        json.dumps({"type": "user", "message": {"content": "current marker"}}) + "\n",
+        encoding="utf-8",
+    )
+    old_path.write_text(
+        json.dumps({"type": "user", "message": {"content": "old marker"}}) + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok", transcript=current_path)
+    caller.record.agent_run_id = "run-current"
+    caller.record.agent_run_seq = 1
+    history = HistoryStub(
+        [
+            {
+                "id": "s1",
+                "note_id": "s1",
+                "agent_run_seq": 0,
+                "name": "claude-s1",
+                "backend": "claude",
+                "native_id": "s1",
+                "transcript_path": str(old_path),
+                "project_id": "p1",
+                "project_scope_id": "scope-1",
+                "agent_visible": 1,
+            }
+        ]
+    )
+    service = service_for(caller, history=history)
+
+    result = await service.read_transcript(
+        caller,
+        {"session_id": "self", "agent_run_id": "s1", "from": "head"},
+    )
+
+    assert result["session_id"] == "s1"
+    assert result["agent_run_id"] == "s1"
+    assert result["agent_run_seq"] == 0
+    assert result["own_superseded_run"] is True
+    assert [item["text"] for item in result["messages"]] == ["old marker"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_run_id_cannot_read_a_siblings_superseded_run() -> None:
+    caller = live_session("s1", token="tok")
+    sibling = live_session("s2")
+    history = HistoryStub(
+        [
+            {
+                "id": "run-sibling-old",
+                "note_id": "s2",
+                "backend": "claude",
+                "project_id": "p1",
+                "project_scope_id": "scope-1",
+                "agent_visible": 1,
+            }
+        ]
+    )
+    service = service_for(caller, sibling, history=history)
+
+    with pytest.raises(KeyError):
+        await service.read_transcript(
+            caller,
+            {"session_id": "s2", "agent_run_id": "run-sibling-old"},
+        )
 
 
 @pytest.mark.asyncio
@@ -696,6 +848,12 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "request_spawn",
     }
     assert names == {tool["name"] for tool in TOOLS}
+    by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}
+    assert set(READ_TOOL_NAMES) | set(WRITE_TOOL_NAMES) == names
+    assert all(by_name[name]["annotations"]["readOnlyHint"] for name in READ_TOOL_NAMES)
+    assert all(
+        not by_name[name]["annotations"]["readOnlyHint"] for name in WRITE_TOOL_NAMES
+    )
 
 
 @pytest.mark.asyncio
@@ -782,6 +940,15 @@ def test_claude_adapter_registers_the_mux_mcp_server(tmp_path: Path) -> None:
     assert server["url"] == "http://127.0.0.1:8765/mcp"
     # The token is per-session env expansion, never a literal in a shared file.
     assert server["headers"]["Authorization"] == "Bearer ${MUX_MCP_TOKEN}"
+    settings_path = Path(argv[argv.index("--settings") + 1])
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert settings["permissions"]["allow"] == [
+        f"mcp__mux__{name}" for name in READ_TOOL_NAMES
+    ]
+    assert not any(
+        f"mcp__mux__{name}" in settings["permissions"]["allow"]
+        for name in WRITE_TOOL_NAMES
+    )
 
 
 def test_codex_adapter_registers_streamable_http_with_env_bearer() -> None:
