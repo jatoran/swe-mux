@@ -11,6 +11,7 @@ It should call domain packages rather than acquire their storage or process resp
 | Package | Owns | Does not own |
 |---|---|---|
 | `desktop.py` | Windows tray/WebView lifecycle, single instance, login startup, daemon child supervision | PTYs, HTTP composition, Project/session state |
+| `desktop_window_state.py` | versioned normal-window bounds, maximized state, debounced atomic persistence, current-monitor fitting | WebView creation, tray actions, browser workspace layout |
 | `__main__.py` | daemon argument/config resolution and reusable aiohttp site lifecycle | desktop window/tray state |
 | `session.py` | live session registry, immutable root-provider identity, nested promotion/demotion, transcript ownership, spawn/stop, PTY fanout, bounded replay, interactive vs one-shot exit lifecycle, supervisor-session adoption/repair | provider transcript parsing, Project mutation |
 | `session_attachments.py` | trusted Project/worktree storage selection, filename normalization, image content classification, persistent `.swe-mux/attachments/` layout, atomic writes, and per-file/session quotas | HTTP multipart parsing, PTY insertion, provider parsing, retention cleanup |

@@ -60,6 +60,13 @@ continues to own every terminal.
   the chord.
 - Window close is cancelled and hidden. Minimize hides after the native transition. Tray Open
   shows/restores the same window; Open in browser preserves the ordinary browser surface.
+- Normal window bounds and maximized state persist in
+  `<data_dir>/desktop-window-state.json`, outside the replaceable application bundle.
+  Move and resize events are debounced and atomically saved; minimized and hidden presentation
+  are never persisted. Relaunch, redeploy, rollback, and login startup therefore restore the same
+  usable geometry, while a missing or invalid state uses the centered 1440 x 920 default.
+  Saved bounds are fitted to the current monitor working areas before window creation, so removing
+  a monitor or reducing its resolution cannot restore the title bar off-screen.
 - Start with Windows writes the exact current executable/config command to the current-user Run
   key. No machine-wide installation or elevation is required.
 - Tray Quit uses a native topmost Windows confirmation owned by the desktop supervisor, not the
@@ -146,6 +153,7 @@ continues to own every terminal.
 ## Key files
 
 - Desktop runtime: `src/swe_mux/desktop.py`
+- Desktop window-state validation and persistence: `src/swe_mux/desktop_window_state.py`
 - Daemon runner: `src/swe_mux/__main__.py`
 - Shutdown boundary: `src/swe_mux/server.py`
 - Package metadata: `pyproject.toml`, `uv.lock`

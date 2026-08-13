@@ -19,6 +19,18 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config, load_config
+from .desktop_window_state import (
+    DEFAULT_WINDOW_HEIGHT,
+    DEFAULT_WINDOW_WIDTH,
+    MIN_WINDOW_HEIGHT,
+    MIN_WINDOW_WIDTH,
+    WINDOW_STATE_NAME,
+    DesktopWindowState,
+    WindowStateRecorder,
+    fit_window_state,
+    load_window_state,
+    save_window_state,
+)
 from .lifecycle import ledger
 from .logsetup import enable_crash_tracebacks
 from .subprocess_flags import popen_outside_job
@@ -257,6 +269,8 @@ class DesktopRuntime:
         self.child: subprocess.Popen[bytes] | None = None
         self.window: Any = None
         self.icon: Any = None
+        self.window_state_path = config.data_dir / WINDOW_STATE_NAME
+        self.window_state_recorder: WindowStateRecorder | None = None
         self.exiting = False
         self.stop = threading.Event()
         assert config.config_path is not None
@@ -364,6 +378,89 @@ class DesktopRuntime:
         self.window.show()
         self.window.restore()
 
+    def _load_window_state(self, webview: Any) -> DesktopWindowState | None:
+        try:
+            saved = load_window_state(self.window_state_path)
+        except FileNotFoundError:
+            ledger(
+                self.config.data_dir,
+                f"desktop window state absent; using {DEFAULT_WINDOW_WIDTH}x"
+                f"{DEFAULT_WINDOW_HEIGHT} centered",
+            )
+            return None
+        except (OSError, ValueError) as exc:
+            ledger(
+                self.config.data_dir,
+                f"desktop window state invalid; using defaults ({exc})",
+            )
+            return None
+
+        try:
+            restored = fit_window_state(saved, webview.screens)
+        except Exception as exc:
+            ledger(
+                self.config.data_dir,
+                f"desktop monitor inventory unavailable; restoring saved bounds unchanged ({exc})",
+            )
+            restored = saved
+        if restored != saved:
+            try:
+                save_window_state(self.window_state_path, restored)
+            except OSError as exc:
+                ledger(
+                    self.config.data_dir,
+                    f"desktop window state adjustment could not be saved ({exc})",
+                )
+            else:
+                ledger(
+                    self.config.data_dir,
+                    "desktop window state fitted to current monitors "
+                    f"x={restored.x} y={restored.y} width={restored.width} "
+                    f"height={restored.height} maximized={restored.maximized}",
+                )
+        else:
+            ledger(
+                self.config.data_dir,
+                "desktop window state restored "
+                f"x={restored.x} y={restored.y} width={restored.width} "
+                f"height={restored.height} maximized={restored.maximized}",
+            )
+        return restored
+
+    def _window_state_saved(self, state: DesktopWindowState) -> None:
+        ledger(
+            self.config.data_dir,
+            "desktop window state saved "
+            f"x={state.x} y={state.y} width={state.width} "
+            f"height={state.height} maximized={state.maximized}",
+        )
+
+    def _window_state_failed(self, exc: Exception) -> None:
+        ledger(self.config.data_dir, f"desktop window state save failed ({exc})")
+
+    def _flush_window_state(self) -> None:
+        recorder = getattr(self, "window_state_recorder", None)
+        if recorder is not None:
+            recorder.flush()
+
+    def _capture_initial_window_state(self, *_: object) -> None:
+        recorder = self.window_state_recorder
+        if recorder is None:
+            return
+        try:
+            x = self.window.x
+            y = self.window.y
+            width = self.window.width
+            height = self.window.height
+        except Exception as exc:
+            ledger(
+                self.config.data_dir,
+                f"desktop initial window geometry unavailable ({exc})",
+            )
+            return
+        recorder.moved(x, y)
+        recorder.resized(width, height)
+
     def open_external(self, *_: object) -> None:
         webbrowser.open(self.url, new=2)
 
@@ -401,6 +498,7 @@ class DesktopRuntime:
     def close_to_tray(self) -> bool | None:
         if self.exiting:
             return None
+        self._flush_window_state()
         self.window.hide()
         return False
 
@@ -464,6 +562,7 @@ class DesktopRuntime:
     def quit(self, *_: object) -> None:
         if self.exiting:
             return
+        self._flush_window_state()
         stopped = request_daemon_shutdown(self.url, self.token, mode="quit")
         if stopped:
             deadline = time.monotonic() + 15
@@ -548,17 +647,33 @@ class DesktopRuntime:
         # the user with a healthy daemon and nothing to talk to it.
         healthy = self.ensure_daemon()
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+        window_state = self._load_window_state(webview)
+        self.window_state_recorder = WindowStateRecorder(
+            self.window_state_path,
+            window_state,
+            on_saved=self._window_state_saved,
+            on_error=self._window_state_failed,
+        )
         self.window = webview.create_window(
             "swe-mux",
             self.url,
-            width=1440,
-            height=920,
-            min_size=(760, 480),
+            width=window_state.width if window_state else DEFAULT_WINDOW_WIDTH,
+            height=window_state.height if window_state else DEFAULT_WINDOW_HEIGHT,
+            x=window_state.x if window_state else None,
+            y=window_state.y if window_state else None,
+            min_size=(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
             hidden=self.hidden,
+            maximized=window_state.maximized if window_state else False,
             text_select=True,
             background_color="#090a0c",
         )
         self.window.events.closing += self.close_to_tray
+        self.window.events.shown += self._capture_initial_window_state
+        self.window.events.moved += self.window_state_recorder.moved
+        self.window.events.resized += self.window_state_recorder.resized
+        self.window.events.maximized += self.window_state_recorder.maximized
+        self.window.events.minimized += self.window_state_recorder.minimized
+        self.window.events.restored += self.window_state_recorder.restored
         self.window.events.minimized += self.hide_minimized
         menu_items = [
             pystray.MenuItem("Open swe-mux", self.show, default=True),
@@ -599,6 +714,8 @@ class DesktopRuntime:
             )
         finally:
             self.stop.set()
+            if self.window_state_recorder is not None:
+                self.window_state_recorder.close()
             if self.icon is not None:
                 self.icon.stop()
             self.instance.close()
