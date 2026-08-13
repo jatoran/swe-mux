@@ -16,6 +16,11 @@ responsive controls.
   and the active Project's Run trigger above the sidebar column.
   The product wordmark is omitted because Project scope is the useful persistent identity in this compact row.
   Workspace tabs are not global top-rail state; every pane renders its own tab strip beside that rail.
+  Scan timeline has no top-rail action or spend chip.
+  Its complete control and status surface lives in the utility drawer's Timeline tab.
+- The Timeline tab begins with Project-scoped controls: Project permission and the expandable `.swe-mux/project-context.md` editor with Save and **Copy setup prompt**.
+  Session-scoped controls follow: current-run permission, current scan, full-session scan and progress, spend, records, rollover boundaries, and source expansion.
+  Enabling Project permission does not authorize a run or backfill history; **Scan full session** is the explicit catch-up action.
 - The sidebar is pointer/keyboard resizable from 190-480 px and collapsible.
   Dragging its divider below 150 px previews collapse, and reversing the same drag past 170 px reopens it before release.
   The separate thresholds prevent state chatter near the boundary.
@@ -332,6 +337,9 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Automation enablement is not duplicated in Settings.
+  The Automation dashboard owns the engine, Scan timeline, titler, summarizer, attention-observer, and custom-rule switches.
+  Settings retains OpenRouter credentials, models, budgets, execution bounds, retention, and advanced rule definitions.
 - Git and processes exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
 - Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).

@@ -15,15 +15,10 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   surface renders dependencies straight from this registry, so a placeholder edge presented
   as a complete dependency set would let a user switch on something that then does nothing.
   Enabling an unimplemented id is refused (`409 automation_not_implemented`).
-- **Substrate**: the foundation consumers read from (`raw_store`, `tier0`, `project_card`,
-  `scan_timeline`). Inert in the sense that matters — none of it acts, notifies, or writes
-  toward a session. Most of it also never spends; `project_card` is the exception and is
-  called out below.
-- **Substrate that spends**: `project_card` costs one cheap model call per documentation
-  fingerprint and `scan_timeline` costs bounded continuous calls only while one current run is
-  explicitly enabled, which is exactly why both are opt-in rather than ambient.
-  The card is additionally *lazy*: enabling it schedules nothing, so a project no consumer reads
-  costs nothing (`project-card.md`, `scan-timeline.md`).
+- **Substrate**: the foundation consumers read from (`raw_store`, `tier0`, `scan_timeline`).
+  It is inert in the sense that matters: none of it acts, notifies, or writes toward a session.
+- **Substrate that spends**: `scan_timeline` costs bounded continuous calls only while one current run is explicitly enabled, which is why it is opt-in rather than ambient.
+  Project context is user-owned data rather than an automation and never causes a model call (`project-card.md`, `scan-timeline.md`).
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
@@ -46,10 +41,8 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   set, never global automations: a Project that never opted in contributes nothing.
 - Enablement gating is distinct from config-value precedence. Once enabled, a setting
   value still resolves session/request → project → global-default.
-- Tier 0 capture, the deterministic consumers, and the project card share one resolver and
-  one short TTL cache per Project root, so a Project can never have one running under a
-  stale answer another already refreshed (`tier0-facts.md`, `deterministic-consumers.md`,
-  `project-card.md`).
+- Tier 0 capture, the deterministic consumers, and the scan timeline share one short TTL gate cache per Project root.
+  Every Project-automation write clears that cache before the change event is emitted, so the drawer never waits for expiration after a toggle (`tier0-facts.md`, `deterministic-consumers.md`, `scan-timeline.md`).
 
 ## Toggle surface
 
@@ -66,6 +59,9 @@ enabled-and-working:
 - `scan_timeline` also exposes `scan_timeline_daily_budget_usd` in this editor.
   Project permission never enables a run; the current conversation must still be enabled from
   its Timeline tab.
+- The Timeline tab exposes a Project-scoped Scan timeline shortcut.
+  Enabling it adds `scan_timeline` plus `raw_store` and `tier0`; disabling it also disables consumers that depend on the timeline.
+  This shortcut creates the blank Project context file but does not backfill or enable the current run.
 
 ## Configuration
 
@@ -76,6 +72,7 @@ enabled-and-working:
 ```text
 GET /api/projects/{project_id}/automations
 PUT /api/projects/{project_id}/automations   {automations: {id: bool}, revision?}
+PUT /api/sessions/{session_id}/scan-timeline/project   {enabled: bool}
 ```
 
 `GET` returns the registry (id, kind, label, `requires`, `implemented`), the project's
