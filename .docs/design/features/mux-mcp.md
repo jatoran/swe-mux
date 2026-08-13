@@ -87,7 +87,7 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 | `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
 | `message_status` | current outcome of one `notify`, visible only to its attributed sending session |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
-| `notify` | stages a message with a visible sender/message/correlation envelope; returns the message id, correlation id, state, and chain depth |
+| `notify` | stages a message with a visible sender/message/correlation envelope; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
 | `request_spawn` | writes an inert spawn approval row into Fleet Queue; returns the request id and starts nothing |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,

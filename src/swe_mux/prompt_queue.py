@@ -53,7 +53,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-QUEUE_SCHEMA_VERSION = 3
+QUEUE_SCHEMA_VERSION = 4
 QUEUE_EVENT_LOOP = "prompt-queue-events"
 
 # States exactly per the roadmap. `delivering` is transient but persisted so a
@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS queue_messages (
   sender_label TEXT,
   origin_session_id TEXT,
   correlation_id TEXT,
+  thread_id TEXT,
   chain_depth INTEGER NOT NULL DEFAULT 0,
   origin_json TEXT,
   payload_json TEXT,
@@ -157,6 +158,14 @@ CREATE INDEX IF NOT EXISTS idx_queue_messages_sender
 CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_messages_correlation
   ON queue_messages(sender_kind, sender_id, correlation_id)
   WHERE correlation_id IS NOT NULL;
+-- A relay thread is the exchange itself, and it is *not* the correlation id:
+-- correlation is a per-sender idempotency key, so a second message from the
+-- same sender in the same exchange would dedup into the first. `thread_id` is
+-- assigned by the daemon at the head of a chain and inherited by every message
+-- that continues it, which is what makes the turn bound countable.
+CREATE INDEX IF NOT EXISTS idx_queue_messages_thread
+  ON queue_messages(thread_id, created_at)
+  WHERE thread_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS queue_deliveries (
   id TEXT PRIMARY KEY,
   message_id TEXT NOT NULL,
@@ -285,6 +294,7 @@ class PromptQueueStore:
             ("sender_label", "TEXT"),
             ("origin_session_id", "TEXT"),
             ("correlation_id", "TEXT"),
+            ("thread_id", "TEXT"),
             ("chain_depth", "INTEGER NOT NULL DEFAULT 0"),
             ("deleted_at", "REAL"),
         )
@@ -356,6 +366,7 @@ class PromptQueueStore:
         sender_label: str | None = None,
         origin_session_id: str | None = None,
         correlation_id: str | None = None,
+        thread_id: str | None = None,
         chain_depth: int = 0,
         origin: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
@@ -395,9 +406,9 @@ class PromptQueueStore:
                 "INSERT INTO queue_messages"
                 "(id,target_session_id,target_agent_run_id,target_backend,target_label,"
                 "project_id,position,state,body,revision,sender_kind,sender_id,sender_label,"
-                "origin_session_id,correlation_id,chain_depth,origin_json,"
+                "origin_session_id,correlation_id,thread_id,chain_depth,origin_json,"
                 "payload_json,constraints_json,created_at,updated_at,armed_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     identity,
                     target_session_id,
@@ -413,6 +424,7 @@ class PromptQueueStore:
                     sender_label,
                     origin_session_id,
                     correlation_id,
+                    thread_id,
                     max(0, int(chain_depth)),
                     _dumps(origin),
                     _dumps(payload),
@@ -1065,32 +1077,72 @@ class PromptQueueStore:
         return await self._run(op)
 
     async def inbound_relay_context(
-        self, session_id: str, agent_run_id: str | None
+        self, session_id: str, agent_run_id: str | None, peer_id: str | None = None
     ) -> dict[str, Any]:
-        """The deepest relay message this session's current run has received.
+        """The relay thread a session's next message to ``peer_id`` continues.
 
-        Chain depth and the cycle path are derived from the queue itself — the
-        message rows already record who sent what to whom — so no separate
-        relay-state table can drift out of sync with the audit trail.
+        Chain depth, the cycle path, and the thread identity are derived from
+        the queue itself — the message rows already record who sent what to
+        whom — so no separate relay-state table can drift out of sync with the
+        audit trail.
+
+        Which inbound message to inherit from is a policy question, not an
+        arbitrary pick. When ``peer_id`` has messaged this session, the answer
+        is *their most recent message*: that is the thread a reply belongs to.
+        Otherwise the answer is the deepest live chain, because a message to a
+        new session extends whichever chain travelled furthest to get here.
+        Preferring the peer is what keeps one unrelated deep chain from wedging
+        every other conversation a session is in.
         """
 
         def op() -> dict[str, Any]:
+            # The run filter belongs in SQL: applying it after `LIMIT 1` lets a
+            # row from a previous run mask the current run's real context and
+            # silently report an unrelayed session.
             rows = self._db.execute(
                 "SELECT * FROM queue_messages WHERE target_session_id=? AND sender_kind='agent'"
-                " AND state='sent' ORDER BY chain_depth DESC, sent_at DESC LIMIT 1",
-                (session_id,),
+                " AND state='sent' AND (? IS NULL OR target_agent_run_id IS NULL"
+                " OR target_agent_run_id=?) ORDER BY sent_at DESC LIMIT 100",
+                (session_id, agent_run_id or None, agent_run_id or None),
             ).fetchall()
-            for row in rows:
-                item = _row_to_message(row)
-                if agent_run_id and item.get("target_agent_run_id") not in (None, agent_run_id):
-                    continue
-                origin = item.get("origin") or {}
-                path = origin.get("path") if isinstance(origin, dict) else None
-                return {
-                    "depth": int(item.get("chain_depth") or 0),
-                    "path": [str(entry) for entry in path] if isinstance(path, list) else [],
-                }
-            return {"depth": 0, "path": []}
+            items = [_row_to_message(row) for row in rows]
+            chosen: dict[str, Any] | None = None
+            if peer_id:
+                chosen = next(
+                    (item for item in items if str(item.get("sender_id") or "") == peer_id),
+                    None,
+                )
+            if chosen is None and items:
+                chosen = max(items, key=lambda item: int(item.get("chain_depth") or 0))
+            if chosen is None:
+                return {"depth": 0, "path": [], "thread_id": None, "from_session": None}
+            origin = chosen.get("origin") or {}
+            path = origin.get("path") if isinstance(origin, dict) else None
+            return {
+                "depth": int(chosen.get("chain_depth") or 0),
+                "path": [str(entry) for entry in path] if isinstance(path, list) else [],
+                "thread_id": str(chosen.get("thread_id") or "") or None,
+                "from_session": str(chosen.get("sender_id") or "") or None,
+            }
+
+        return await self._run(op)
+
+    async def thread_message_count(self, thread_id: str) -> int:
+        """Agent messages staged in one relay thread, deleted rows excluded.
+
+        This is the volume bound on a back-and-forth. Chain depth cannot serve
+        that purpose once replies are allowed: a two-party exchange never
+        reaches a new session, so its depth is constant no matter how long the
+        two of them keep talking.
+        """
+
+        def op() -> int:
+            row = self._db.execute(
+                "SELECT COUNT(*) n FROM queue_messages WHERE thread_id=?"
+                " AND sender_kind='agent' AND state!='deleted'",
+                (thread_id,),
+            ).fetchone()
+            return int(row["n"]) if row else 0
 
         return await self._run(op)
 
@@ -1532,6 +1584,7 @@ class PromptQueueService:
         sender_label: str | None = None,
         origin_session_id: str | None = None,
         correlation_id: str | None = None,
+        thread_id: str | None = None,
         chain_depth: int = 0,
         origin: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
@@ -1570,6 +1623,7 @@ class PromptQueueService:
             sender_label=sender_label,
             origin_session_id=origin_session_id,
             correlation_id=correlation_id,
+            thread_id=thread_id,
             chain_depth=chain_depth,
             origin=origin,
             payload=payload,

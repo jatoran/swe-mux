@@ -131,7 +131,11 @@
   (`user|remote_user|agent|rule|queue_draft`, derived from the transport or the caller's
   MCP token, never claimed), `sender_id`/`sender_label`, `origin_session_id`,
   `correlation_id` (partial-unique per sender: a retried send returns the original row),
-  `chain_depth`, `origin_json` (relay path / rule id / Tier 0 fact fingerprints),
+  `thread_id` (the relay exchange, assigned by the daemon at the head of a chain and
+  inherited by every message continuing it — deliberately *not* the correlation id, which is
+  a per-sender idempotency key and would dedup a sender's second message in one exchange),
+  `chain_depth` (distinct sessions that have spoken in the thread), `origin_json` (relay path
+  with the most recent sender last / rule id / Tier 0 fact fingerprints),
   `payload_json` (typed action payload for control-plane drafts), `constraints_json`
   (`not_before`, `expires_at`) — plus blocked reasons, stranded reason, `cancel_kind`
   (`cancelled|skipped|revoked|expired`), `retargeted_from_json`, and lifecycle timestamps

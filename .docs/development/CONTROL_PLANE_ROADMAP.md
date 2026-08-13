@@ -818,6 +818,37 @@ never interrupts an active turn or bypasses approvals/Q&A, and carries the calli
 session as provenance. Session A gains no knowledge of or authority over session B
 beyond what the target allowlist grants.
 
+**A reply is a notify, and it is bounded rather than forbidden (2026-08-13).** The
+first implementation treated any message to a session already in the relay path as a
+cycle. A reply *is* A→B→A, so this refused the very first reply every time: B could
+receive a handoff and act on it, but could never acknowledge or correct it, and the
+originator was left with a delivery receipt and no answer. That was over-enforcement,
+not posture — a single bounded reply creates no autonomy that the one-way message did
+not already create, since it is still an inert queue item under the receiver's arming
+policy, the readiness predicate, and the audit trail.
+
+The bound that was actually wanted is now stated as two, because they stop different
+things:
+
+- **Propagation** — `chain_depth`, default 3 — how many distinct sessions one thread
+  may reach. It grows only when a message lands on a session that has not spoken in
+  the thread yet. This is the fan-out bound, and it is unchanged in strength: a linear
+  chain still refuses at exactly the same hop it always did.
+- **Volume** — `max_thread_turns`, default 6 — how many agent messages one thread may
+  hold. This is what stops two agents talking forever, and it is the bound chain depth
+  was being misused for. Depth cannot do this job once replies exist: a two-party
+  exchange reaches nobody new, so its depth is constant however long it runs.
+
+Cycle detection survives for the case it was really for: a **ring** that reaches past
+the session that spoke to you (A→B→C→A) to route around the propagation bound.
+Answering the session that spoke to you is a conversation and is allowed; reaching
+back around it is not. The refusals stay typed (`chain_depth_exceeded`,
+`thread_budget_exhausted`, `relay_cycle`) and each now names what the agent may do
+instead, and the receiver's envelope carries a `reply_with` line — an agent that must
+learn from a refusal whether it may answer will conclude it cannot, which is exactly
+what happened in practice. Mechanism and derivation:
+`design/features/agent-messaging.md`.
+
 Spawn stays out of agent reach, but a flat refusal loses the workflow actually
 wanted. The middle path is the §13 queue-draft pattern applied to spawn:
 `mux.requestSpawn(...)` creates an **inert draft in the observation inbox**, not a
@@ -879,8 +910,12 @@ re-examination concluded the proposed enforcement (token check on mutating route
 daemon-local browser bearer) cannot deliver the property: a same-user process on this host
 can request whatever credential the browser is given, so the only real boundary is OS-level
 isolation (an ACL'd per-user pipe the browser holds and sessions do not). Consequence to
-carry forward: **the budgets, allowlists, depth caps, and cycle detection in §7.2 bound
-well-behaved callers, not a compromised one.** What compensates is that agent-reachable
+carry forward: **the budgets, allowlists, depth caps, thread turn budgets, and cycle
+detection in §7.2 bound well-behaved callers, not a compromised one.** This is also why the
+2026-08-13 reply change costs nothing here: relaxing an over-tight rule for well-behaved
+callers does not move a boundary that never rested on it. The thread identity is still
+daemon-assigned rather than caller-supplied, so no caller can reset its own budget by
+renaming its exchange. What compensates is that agent-reachable
 authority is strictly narrower than the browser's — no tool delivers, spawns, or writes to a
 PTY. Full reasoning: `design/features/agent-messaging.md`.
 
@@ -1096,6 +1131,13 @@ another agent can pick up mid-plan. Section links point to the design detail.
     act and is what spawns). One audit trail with the browser path; sender derived from the
     token. Design: `design/features/agent-messaging.md`. The same-host boundary was
     re-examined and re-affirmed with its limits written down (§7.4).
+  - [x] **Replies unblocked 2026-08-13.** The shipped cycle rule refused every reply,
+    because a reply is A→B→A: a session could receive a handoff and act on it but never
+    answer. Split into a propagation bound (`chain_depth`, grows only on reaching a session
+    new to the thread) and a volume bound (`max_thread_turns`), with cycle detection kept
+    for rings that reach past the sender. Relay context now follows the peer and filters the
+    run in SQL, so one deep unrelated thread no longer wedges a session's other exchanges.
+    Rationale and the two-bound model: §7.2.
 - [x] **2.6 · mux MCP v0.5: situational-awareness reads** (§7.5). Shipped as `ROADMAP.md`
   Phase 5.6. Tool-surface work only: every item is a read over a service that already
   shipped, so it adds no substrate and no authority. Needs step 3.5's run boundary.

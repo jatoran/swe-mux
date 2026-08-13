@@ -83,7 +83,9 @@ separately opt-in.
   events carry ids and counts only.
 - **Provenance-rich sender model.** `sender_kind` (`user | remote_user | agent | rule |
   queue_draft`), `sender_id`/`sender_label`, `origin_session_id`, `correlation_id` (unique
-  per sender: a retry returns the original message, never a duplicate), `chain_depth`,
+  per sender: a retry returns the original message, never a duplicate), `thread_id` (the
+  relay exchange a message continues; daemon-assigned, and distinct from `correlation_id`
+  for exactly the reason that key is per-sender), `chain_depth`,
   `origin_json` (relay path, originating rule/observer id, source Tier 0
   facts/fingerprints), `payload_json` (a typed action payload re-validated at send time),
   and `constraints_json`. **The kind is derived, never claimed**: the HTTP route reads it

@@ -3,9 +3,10 @@
 What these pin: a notify is an ordinary queue item with provenance, not a
 delivery; the receiver's policy decides whether it arrives armed; every relay
 bound (Project scope, self, size, per-origin budget, target backlog, chain
-depth, cycle) is enforced in the daemon operation rather than in the MCP layer;
-retries with a correlation id do not duplicate; and `request_spawn` writes an
-inert draft that starts nothing.
+depth, thread turns, rings) is enforced in the daemon operation rather than in
+the MCP layer; a reply to the session that messaged you is an ordinary threaded
+turn rather than a cycle; retries with a correlation id do not duplicate; and
+`request_spawn` writes an inert draft that starts nothing.
 """
 
 from __future__ import annotations
@@ -260,12 +261,13 @@ async def test_size_budget_and_backlog_bounds(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chain_depth_and_cycles_are_bounded(tmp_path: Path) -> None:
+async def test_chain_depth_bounds_propagation_not_conversation(tmp_path: Path) -> None:
     harness = Harness(
         tmp_path,
         live_session("s1"),
         live_session("s2"),
         live_session("s3"),
+        live_session("s4"),
         agent_message_max_chain_depth=2,
     )
     try:
@@ -274,32 +276,164 @@ async def test_chain_depth_and_cycles_are_bounded(tmp_path: Path) -> None:
         )
         # The relay context is derived from *delivered* messages, so mark it sent.
         await harness.store.finalize_delivery(
-            "delivery-1",
-            first["message_id"],
-            outcome="sent",
-            message_state="sent",
+            "delivery-1", first["message_id"], outcome="sent", message_state="sent"
         )
         second = await harness.messaging.notify(
             harness.manager.sessions["s2"], target="s3", body="hop two"
         )
         assert second["chain_depth"] == 2
         await harness.store.finalize_delivery(
-            "delivery-2",
-            second["message_id"],
-            outcome="sent",
-            message_state="sent",
+            "delivery-2", second["message_id"], outcome="sent", message_state="sent"
         )
+        # Reaching a session that has not spoken in the thread is propagation,
+        # and that is what the depth budget bounds.
         with pytest.raises(QueueError) as deep:
             await harness.messaging.notify(
-                harness.manager.sessions["s3"], target="s1", body="hop three"
+                harness.manager.sessions["s3"], target="s4", body="hop three"
             )
         assert deep.value.code == "chain_depth_exceeded"
-        # And a cycle is refused even inside the depth budget.
+        # Answering the session that just spoke to you reaches nobody new, so it
+        # is allowed even though the depth budget is already spent. Depth still
+        # records that three sessions have now spoken in the thread.
+        reply = await harness.messaging.notify(
+            harness.manager.sessions["s3"], target="s2", body="answering you"
+        )
+        assert reply["is_reply"] is True
+        assert reply["chain_depth"] == 3
+        assert reply["thread_id"] == second["thread_id"]
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_reply_to_the_sender_is_allowed_and_threaded(tmp_path: Path) -> None:
+    """The case that made replies impossible: A→B→A is a conversation, not a ring."""
+    harness = Harness(tmp_path, live_session("s1"), live_session("s2"))
+    try:
+        first = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s2", body="here is what I found"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-1", first["message_id"], outcome="sent", message_state="sent"
+        )
+        reply = await harness.messaging.notify(
+            harness.manager.sessions["s2"], target="s1", body="acknowledged, one correction"
+        )
+        assert reply["is_reply"] is True
+        assert reply["thread_id"] == first["thread_id"]
+        # The receiver is told the reply channel exists, in the one surface they see.
+        body = (await harness.store.messages_for_target("s2"))["messages"][0]["body"]
+        assert 'reply_with: notify(target="s1")' in body
+        # And the exchange can continue back the other way.
+        await harness.store.finalize_delivery(
+            "delivery-2", reply["message_id"], outcome="sent", message_state="sent"
+        )
+        third = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s2", body="understood"
+        )
+        assert third["thread_id"] == first["thread_id"]
+        assert third["is_reply"] is True
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_thread_has_a_turn_budget(tmp_path: Path) -> None:
+    harness = Harness(
+        tmp_path,
+        live_session("s1"),
+        live_session("s2"),
+        agent_message_max_thread_turns=2,
+        agent_message_pending_per_target=10,
+    )
+    try:
+        first = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s2", body="one"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-1", first["message_id"], outcome="sent", message_state="sent"
+        )
+        second = await harness.messaging.notify(
+            harness.manager.sessions["s2"], target="s1", body="two"
+        )
+        assert second["thread_messages_remaining"] == 0
+        await harness.store.finalize_delivery(
+            "delivery-2", second["message_id"], outcome="sent", message_state="sent"
+        )
+        with pytest.raises(QueueError) as spent:
+            await harness.messaging.notify(
+                harness.manager.sessions["s1"], target="s2", body="three"
+            )
+        assert spent.value.code == "thread_budget_exhausted"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_ring_around_the_chain_is_still_refused(tmp_path: Path) -> None:
+    harness = Harness(
+        tmp_path, live_session("s1"), live_session("s2"), live_session("s3")
+    )
+    try:
+        first = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s2", body="hop one"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-1", first["message_id"], outcome="sent", message_state="sent"
+        )
+        second = await harness.messaging.notify(
+            harness.manager.sessions["s2"], target="s3", body="hop two"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-2", second["message_id"], outcome="sent", message_state="sent"
+        )
+        # s3 may answer s2, but reaching past it to s1 closes a ring.
         with pytest.raises(QueueError) as cycle:
             await harness.messaging.notify(
-                harness.manager.sessions["s2"], target="s1", body="back to the start"
+                harness.manager.sessions["s3"], target="s1", body="around the back"
             )
         assert cycle.value.code == "relay_cycle"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unrelated_deep_chain_does_not_wedge_a_reply(tmp_path: Path) -> None:
+    """Relay context follows the peer, so one deep thread cannot block another."""
+    harness = Harness(
+        tmp_path,
+        live_session("s1"),
+        live_session("s2"),
+        live_session("s3"),
+        live_session("s4"),
+        agent_message_max_chain_depth=2,
+    )
+    try:
+        # A two-hop chain s1→s2→s4 leaves s4 sitting at the depth limit.
+        hop1 = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s2", body="chain one"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-1", hop1["message_id"], outcome="sent", message_state="sent"
+        )
+        hop2 = await harness.messaging.notify(
+            harness.manager.sessions["s2"], target="s4", body="chain two"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-2", hop2["message_id"], outcome="sent", message_state="sent"
+        )
+        # A separate, shallow thread reaches s4 from s3.
+        other = await harness.messaging.notify(
+            harness.manager.sessions["s3"], target="s4", body="unrelated question"
+        )
+        await harness.store.finalize_delivery(
+            "delivery-3", other["message_id"], outcome="sent", message_state="sent"
+        )
+        answer = await harness.messaging.notify(
+            harness.manager.sessions["s4"], target="s3", body="unrelated answer"
+        )
+        assert answer["thread_id"] == other["thread_id"]
+        assert answer["chain_depth"] == 2
     finally:
         harness.close()
 

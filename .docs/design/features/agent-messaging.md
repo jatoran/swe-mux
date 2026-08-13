@@ -41,20 +41,41 @@ session outside its Project, and cannot claim to be anyone else.
   | body size | 4 000 chars | `body_too_large` |
   | per-origin hourly budget | 20 messages | `origin_budget_exhausted` |
   | undelivered agent messages per target | 5 | `target_backlog_full` |
-  | relay chain depth | 3 hops | `chain_depth_exceeded` |
-  | cycle over the recorded relay path | — | `relay_cycle` |
+  | relay propagation: distinct sessions one thread may reach | 3 | `chain_depth_exceeded` |
+  | agent messages within one thread | 6 | `thread_budget_exhausted` |
+  | ring back past the session that messaged you | — | `relay_cycle` |
   | kill switch (`agent_messaging_enabled`) | on | `agent_messaging_disabled` |
   | expiry | 24 h | item is cancelled, `cancel_kind: expired` |
 
-- **Chain depth and cycles are derived from the queue itself.** Each message records
-  `chain_depth` and an `origin.path` of session ids. A session's inbound depth is read from
-  the deepest *delivered* agent message it received, so no separate relay-state table can
-  drift out of sync with the audit trail. A→B→A is refused, which is how a pair of agents
-  would otherwise burn a plan's worth of tokens talking to each other.
+- **Replying to the session that messaged you is an ordinary turn, not a cycle.**
+  This is the load-bearing distinction, and getting it wrong is what made replies impossible
+  before 2026-08-13: a reply *is* A→B→A, so a cycle rule that tested "is the target anywhere
+  upstream" refused the first reply every time and left the sender's feedback
+  unacknowledged. Cycle detection now refuses only a ring that reaches *past* the session
+  that spoke to you (A→B→C→A), which is the loop that routes around the propagation bound.
+- **Two bounds, because they stop different things.** `chain_depth` bounds **propagation** -
+  how many distinct sessions one thread reaches - and grows only when a message lands on a
+  session that has not spoken in the thread yet; a back-and-forth reaches nobody new and so
+  holds its depth. `max_thread_turns` bounds **volume** inside one thread, and is what
+  actually stops two agents talking forever. Chain depth cannot serve that purpose once
+  replies exist, because a two-party exchange has constant depth however long it runs.
+- **Threads, depth, and rings are derived from the queue itself.** Each message records a
+  `thread_id`, a `chain_depth`, and an `origin.path` of session ids with the most recent
+  sender last, so no separate relay-state table can drift out of sync with the audit trail.
+  A session's inbound context is the peer's most recent *delivered* message when the peer
+  has written to it, and otherwise the deepest live chain — following the peer is what stops
+  one unrelated deep thread from wedging every other conversation a session is in. The run
+  filter is applied in SQL: applying it after `LIMIT 1` let a previous run's row mask the
+  current context and silently report an unrelayed session.
+- **`thread_id` is not the correlation id.** Correlation is a *per-sender idempotency key*,
+  so a sender's second message in the same exchange would dedup into its first. The thread is
+  assigned by the daemon at the head of a chain and inherited by everything that continues
+  it, which also keeps it underivable from anything the caller supplies.
 - **Retry-safe correlation.** An optional `correlation_id` is unique per sender; a retry
   returns the original message instead of a duplicate in the target's queue.
-- **The receiver sees provenance in the prompt.** The stored queue body begins with a bounded `[mux notification]` envelope naming message id, correlation id, sender session, sender run, sender name, sender backend, and optional reason.
+- **The receiver sees provenance in the prompt.** The stored queue body begins with a bounded `[mux notification]` envelope naming message id, correlation id, sender session, sender run, sender name, sender backend, optional reason, and a `reply_with` line carrying the exact target to answer and how many messages the exchange has left.
   The daemon generates message and correlation ids before enqueue, so the visible values match the durable row and the result returned to the sender.
+  The `reply_with` line is not decoration: the envelope is the only surface the receiver sees, and without it an agent learns whether it may answer from a refusal, which is how a reply gets abandoned as impossible.
   The original caller body follows the envelope unchanged.
 - **One audit trail.** An MCP-originated message is an ordinary queue item: same states,
   same head-of-line rule, same `queue_deliveries` rows, distinguishable only by
@@ -131,7 +152,7 @@ MCP  spawn_requests()
 
 `agent_messaging_enabled`, `agent_message_max_chars`, `agent_message_hourly_budget`,
 `agent_message_pending_per_target`, `agent_message_max_chain_depth`,
-`request_spawn_enabled` (`config.py`). Per-session `accept_agent_messages` is runtime state
+`agent_message_max_thread_turns`, `request_spawn_enabled` (`config.py`). Per-session `accept_agent_messages` is runtime state
 in `queue_auto_policy`, defaulted on per run by the conversation-default grant rather than by
 a config key - it is a per-conversation decision, and the config file is the wrong place for
 state that has to be flippable instantly and per session.

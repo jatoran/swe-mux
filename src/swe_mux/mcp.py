@@ -417,7 +417,10 @@ TOOLS: list[dict[str, Any]] = [
             "an active turn, never answers an approval prompt, and by default "
             "lands as an inert draft a human must approve. Use it to hand off "
             "or to flag something the other session needs; do not use it to "
-            "issue instructions you would not want a human to read first."
+            "issue instructions you would not want a human to read first. "
+            "You may reply to a session that messaged you: pass its session id "
+            "as the target and the reply continues the same bounded exchange. "
+            "The result reports how many messages that exchange has left."
         ),
         "inputSchema": {
             "type": "object",
