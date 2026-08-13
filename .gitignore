@@ -11,6 +11,8 @@ desktop.ini
 # === Git ===
 .git/
 .claude/worktrees/
+.agents/worktrees/
+.codex/worktrees/
 
 # === Node.js ===
 node_modules/
