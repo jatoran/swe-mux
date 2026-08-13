@@ -113,6 +113,11 @@
   or what consumers read from it): `design/features/project-card.md`,
   `design/features/automation-enablement.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
+- Changing the scan timeline, per-run scan grant, rollover boundary, scan budgets, source
+  rehydration, or dead-end extraction: `design/features/scan-timeline.md`,
+  `design/features/automation-enablement.md`, `design/features/automation.md`,
+  `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`,
+  `technical/backend/sqlite.md`, `technical/frontend/packages.md`
 - Changing the agent MCP surface (endpoint, tools, per-session tokens, CLI registration):
   `design/features/mux-mcp.md`, `design/interfaces.md`, `technical/backend/packages.md`
 - Changing the observation inbox: `design/features/observations.md`, `design/interfaces.md`,

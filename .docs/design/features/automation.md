@@ -89,6 +89,11 @@ and the declared minimum observation capability.
 Built-ins are an explicit-name-preserving session titler, one-line turn summarizer, stalled-run
 triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
 completion evidence is coalesced before completion-triggered calls.
+
+The scan timeline shares the OpenRouter transport, observer-call audit, and spend ledger but is
+not a user-authored rule.
+It has a separate three-gate and run-lifetime contract in `scan-timeline.md`, and its provider
+output can only become a scan record or an explicitly enabled dead-end annotation.
 `builtin.session-titler-initial` fires on an observed user request (`turn_started` or
 `transcript_message`) and gets a repair opportunity at `turn_ended` if the prompt arrived after
 the opening trigger. Its `title_v2` result includes `stability=provisional|settled`. A concrete

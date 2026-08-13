@@ -132,4 +132,10 @@ regression is valuable because these user-visible paths historically exposed lea
   `AutomationStore`. The row is a cache whose validity is a source fingerprint, not an age,
   so it is deliberately excluded from the retention prune (like `automation_model_cache`,
   it is bounded by construction).
+- `src/swe_mux/scan_timeline.py` - writes run grants, records, rollover boundaries, and bounded
+  read metrics through `AutomationStore`.
+  Scan records and boundaries use the durable retention window; run state and the one-row metrics
+  table are bounded by run count and construction.
+  The shared budget ledger's nullable Project/run dimensions let failed billable calls count
+  toward scan budgets without fabricating a semantic record.
 - `tests/test_automation_phase6.py`

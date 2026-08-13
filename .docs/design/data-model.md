@@ -94,6 +94,21 @@
   token counts, `cost_usd`, `created_at`. A cache, not a record: the row is served only while
   its `fingerprint` still matches the Project's current `.docs`, so it is replaced in place
   and never pruned by age. Per-project opt-in and gated; see `features/project-card.md`.
+- `scan_timeline_runs`: the current authorization and delta cursor for one `agent_run_id`.
+  It records the persistent terminal `session_id`, Project, enabled/disabled timestamps, last
+  scan time, and last source timestamp.
+  A successor conversation has another primary key and therefore starts disabled.
+- `scan_timeline_records`: append-only structured Tier 1 records keyed to both `session_id` and
+  `agent_run_id`, with the bounded source interval, trigger, validated semantic JSON, transcript
+  input hash, requested/resolved model, generation, token counts, cost, and creation time.
+  Transcript text remains in the authoritative provider transcript.
+- `scan_timeline_boundaries`: explicit predecessor-to-successor run boundaries for one persistent
+  session, including rollover reason and time.
+- `scan_timeline_metrics`: one bounded aggregate row measuring record reads, source rehydrations,
+  and their derived rate.
+- `automation_budget_ledger` additionally carries nullable `project_id` and `agent_run_id` so a
+  continuously costing substrate can enforce and display Project and run budgets even when a
+  failed provider call creates no semantic record.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
   (re-copying promotes rather than duplicates), character/line counts, provenance
   (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here

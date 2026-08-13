@@ -211,6 +211,10 @@ PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
+GET     /sessions/{session_id}/scan-timeline
+PUT     /sessions/{session_id}/scan-timeline  {enabled}
+POST    /sessions/{session_id}/scan-timeline/scan
+GET     /sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 ```
 
 The old observation endpoints and `.swe-mux/observations.json` remain compatibility storage.
@@ -226,6 +230,14 @@ can show a dependency tree rather than a flat checkbox list. `PUT` replaces the 
 through the ordinary project-config write: `409 revision_conflict` on a stale revision,
 `409 automation_not_implemented` for a reserved id with no code behind it. The same table is
 also carried by the typed portable Project options (`features/automation-enablement.md`).
+
+The scan-timeline routes expose the readable records and boundaries for one persistent session.
+`PUT` changes only the current `agent_run_id` grant and refuses when either outer gate is off.
+`POST .../scan` requests one bounded scan and returns no record when there is no new input or a
+budget gate is closed.
+The record route returns compressed metadata by default; `rehydrate=1` reparses the authoritative
+current or historical run transcript for the record's source interval and increments the measured
+rehydration rate (`features/scan-timeline.md`).
 
 `GET|PUT /project/config` accept an optional `project_id`. Supplying it makes that
 registered Project's root authoritative for paths; without it the daemon re-resolves the

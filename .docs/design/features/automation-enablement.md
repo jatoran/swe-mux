@@ -20,9 +20,10 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   toward a session. Most of it also never spends; `project_card` is the exception and is
   called out below.
 - **Substrate that spends**: `project_card` costs one cheap model call per documentation
-  fingerprint and `scan_timeline` will cost more, which is exactly why they are opt-in
-  rather than ambient. The card is additionally *lazy*: enabling it schedules nothing, so a
-  project no consumer reads costs nothing (`project-card.md`).
+  fingerprint and `scan_timeline` costs bounded continuous calls only while one current run is
+  explicitly enabled, which is exactly why both are opt-in rather than ambient.
+  The card is additionally *lazy*: enabling it schedules nothing, so a project no consumer reads
+  costs nothing (`project-card.md`, `scan-timeline.md`).
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
@@ -62,6 +63,9 @@ enabled-and-working:
 - Unimplemented ids render disabled and labelled, never as ready to switch on.
 - The file remains the source of truth; the editor is a two-way view over it and the write
   is revision-checked like every other project-config write.
+- `scan_timeline` also exposes `scan_timeline_daily_budget_usd` in this editor.
+  Project permission never enables a run; the current conversation must still be enabled from
+  its Timeline tab.
 
 ## Configuration
 
@@ -93,3 +97,4 @@ config endpoints (`GET|PUT /api/project/config`) still carry the same table.
 - `deterministic-consumers.md` — the model-free detectors gated by this DAG.
 - `project-resources.md` — the `.swe-mux/config.toml` typed-options surface.
 - `automation.md` — the OpenRouter observer/rule layer (separate mechanism).
+- `scan-timeline.md` — the additional current-run grant, budget, and rollover contract.
