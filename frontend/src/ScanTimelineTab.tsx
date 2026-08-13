@@ -173,7 +173,10 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
             {record.claim&&<dl><dt>Claim</dt><dd>{record.claim}</dd></dl>}
             {record.blocked_on!=='none'&&<dl><dt>Blocked</dt><dd>{record.blocked_on}</dd></dl>}
             {record.dead_end&&record.approach_status==='abandoned'&&<dl class="scan-dead-end"><dt>Dead end</dt><dd>{record.dead_end}</dd></dl>}
-            {!!record.target.length&&<small>{record.target.join(' · ')}</small>}
+            {!!record.target.length&&<details class="scan-record-targets">
+              <summary>Evidence targets <span>{record.target.length}</span></summary>
+              <ul>{record.target.map(target=><li key={target}><code>{target}</code></li>)}</ul>
+            </details>}
             <footer><span>{record.behavior.join(' · ')} · confidence {percent(record.confidence)}</span><button disabled={busy} onClick={()=>void source(record)}>{expanded[record.id]!==undefined?'Hide source':'View source'}</button></footer>
             {expanded[record.id]!==undefined&&<pre class="scan-source">{JSON.stringify(expanded[record.id],null,2)}</pre>}
           </article>

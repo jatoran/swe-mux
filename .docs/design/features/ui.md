@@ -20,6 +20,7 @@ responsive controls.
   Its complete control and status surface lives in the utility drawer's Timeline tab.
 - The Timeline tab begins with Project-scoped controls: Project permission and the expandable `.swe-mux/project-context.md` editor with Save and **Copy setup prompt**.
   Session-scoped controls follow: current-run permission, current scan, full-session scan and progress, spend, records, rollover boundaries, and source expansion.
+  Each record keeps its potentially long evidence-target list collapsed by default, exposes the target count in the disclosure label, and bounds the expanded list with its own scroll area.
   Enabling Project permission does not authorize a run or backfill history; **Scan full session** is the explicit catch-up action.
 - The sidebar is pointer/keyboard resizable from 190-480 px and collapsible.
   Dragging its divider below 150 px previews collapse, and reversing the same drag past 170 px reopens it before release.

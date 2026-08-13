@@ -73,6 +73,7 @@ An unpriced billable call reserves the conservative preflight estimate so missin
 
 The Timeline tab is the only scan control and status surface.
 It shows Project permission and context, current-run permission, daily spend, daily tokens, current-run tokens and budget, record-source reads, source rehydrations, and the measured rehydration rate.
+Each record shows the count of deterministic evidence targets and keeps their paths, symbols, and command strings inside a collapsed, scroll-bounded disclosure.
 There is no scan button or scan-spend control in the application topbar.
 
 ## Dead-end memory

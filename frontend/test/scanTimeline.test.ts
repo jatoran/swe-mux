@@ -33,3 +33,12 @@ test('timeline drawer owns project context, project permission, and full-session
   assert.ok(timeline.includes('Scan full session'))
   assert.ok(timeline.includes('/scan-timeline/backfill'))
 })
+
+test('timeline records collapse verbose evidence targets by default', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  const styles = source('style.css')
+  assert.ok(timeline.includes('<details class="scan-record-targets">'))
+  assert.ok(timeline.includes('Evidence targets'))
+  assert.ok(!timeline.includes("record.target.join(' · ')"))
+  assert.ok(styles.includes('.scan-record-targets ul{max-height:240px;overflow:auto'))
+})
