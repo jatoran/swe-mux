@@ -767,6 +767,35 @@ async def _dispatch_transcript_event(
     event: dict[str, Any],
     events: EventBus,
 ) -> None:
+    # Date this record once, here, for whatever the readers below decide it means.
+    #
+    # Every harness that keeps a transcript — claude, codex, omp, pi — writes a
+    # top-level ISO `timestamp` on each record, so "a turn boundary is dated by
+    # the record that carries it" is one rule at the shared dispatch rather than
+    # four re-implementations inside the per-harness readers, and a harness added
+    # later inherits it by routing through here. Backends with no transcript at
+    # all (opencode's hooks, shell) never reach this and keep the wall clock,
+    # which is the right answer for a boundary that is observed as it happens.
+    #
+    # Scoped rather than stored: it describes the record in flight and nothing
+    # else, so it is restored on the way out even when a reader raises. Nesting
+    # cannot happen today, but restoring the previous value rather than clearing
+    # keeps that an implementation detail instead of a latent trap.
+    ts = _event_timestamp(event)
+    previous = getattr(session, "observation_record_ts", None)
+    session.observation_record_ts = ts if _plausible_record_ts(session, ts) else None
+    try:
+        await _dispatch_transcript_event_inner(backend, session, event, events)
+    finally:
+        session.observation_record_ts = previous
+
+
+async def _dispatch_transcript_event_inner(
+    backend: Backend,
+    session: Session,
+    event: dict[str, Any],
+    events: EventBus,
+) -> None:
     if backend == "claude":
         await _claude(session, event, events)
     elif backend == "codex":
@@ -887,6 +916,10 @@ async def _finish_transcript_catchup(
     session.observation_replay = False
     state = _observation_state(session)
     open_turn = bool(state.get("root_turn_active"))
+    # Replay dated this turn from the record that opened it. Re-adopting it below
+    # has to carry that date forward, or the adoption reads as a turn beginning
+    # now and the sidebar ages the work from the restart instead of from the work.
+    open_turn_started_at = state.get("turn_started_at") if open_turn else None
     recent = (
         last_historical_ts is not None
         and attach_ts - last_historical_ts < CATCHUP_OPEN_TURN_WINDOW_SECONDS
@@ -911,9 +944,23 @@ async def _finish_transcript_catchup(
         session.state_source_priority = -1
     if open_turn and recent:
         await _begin_root_turn(
-            session, events, source="transcript", evidence="catchup:open_turn_recent"
+            session,
+            events,
+            source="transcript",
+            evidence="catchup:open_turn_recent",
+            started_at=(
+                float(open_turn_started_at)
+                if isinstance(open_turn_started_at, int | float)
+                else None
+            ),
         )
     else:
+        # No turn is running, so nothing may still be dated as if one were. The
+        # record survives a session-preserving restart, so a stamp left behind
+        # here is one the next `working` reading would age from — a turn that
+        # ended yesterday explaining how long today's work has taken.
+        state["turn_started_at"] = 0.0
+        session.record.turn_started_at = None
         await _transition(
             session, events, "idle", source="transcript", evidence="catchup:settled"
         )
@@ -1419,8 +1466,20 @@ async def _resume_from_awaiting(
 
 
 async def _begin_root_turn(
-    session: Session, events: EventBus, *, source: str, evidence: str | None = None
+    session: Session,
+    events: EventBus,
+    *,
+    source: str,
+    evidence: str | None = None,
+    started_at: float | None = None,
 ) -> None:
+    """Open a root turn, or join the one already open.
+
+    `started_at` re-adopts a turn that history already dated — catch-up finding
+    the transcript's last turn still open. Without it the adoption restamps the
+    turn as beginning now, which is how a session working across a daemon restart
+    came back reading "0s" and then aged from the restart rather than the work.
+    """
     state = _observation_state(session)
     if source == "transcript":
         # Ordered, in-band evidence of new work supersedes the prior close.
@@ -1449,8 +1508,13 @@ async def _begin_root_turn(
     state["root_turn_active"] = True
     state["root_completion_seen"] = False
     # Same clock the turn is *closed* against, so the two ends of one measurement
-    # cannot come from different time sources under the replay harness.
-    state["turn_started_at"] = _session_now(session)
+    # cannot come from different time sources — under the replay harness, and
+    # equally under transcript catch-up, where the wall clock is not the turn's.
+    state["turn_started_at"] = (
+        float(started_at)
+        if started_at is not None and _plausible_record_ts(session, started_at)
+        else _turn_now(session)
+    )
     # Mirrored onto the record so a client can age the *turn* rather than the
     # state, which restarts on every tool call and approval inside that turn.
     session.record.turn_started_at = state["turn_started_at"]
@@ -1486,33 +1550,51 @@ def _background_wait_reason(session: Session) -> str | None:
 #: on a session that was simply idle overnight.
 MAX_TURN_DURATION_SECONDS = 6 * 60 * 60
 
+#: The other end of the same rule. A root turn is a model round trip at minimum,
+#: so anything this short is a boundary artifact — an open and a close landing on
+#: one instant — rather than a turn that genuinely took no time. Both ends of the
+#: measurement now come from the record stream, which removes the pair that used
+#: to produce these wholesale; the floor stays because the alternative to
+#: rejecting an artifact is publishing it, and a published one reads as `0s`
+#: forever on a row whose whole job is to say how long something took.
+MIN_TURN_DURATION_SECONDS = 0.25
+
 
 def _record_turn_duration(
     session: Session, state: dict[str, Any], payload: dict[str, Any]
 ) -> None:
-    """Stamp the completed turn's wall-clock duration on the record and event.
+    """Stamp the completed turn's duration on the record and event.
 
     The record field is what a sidebar reads for a ready session ("the last turn
     took 72s"); the event field is what consumers that never hold a record read.
-    A turn with no recorded start, or one long enough to be a missed boundary,
-    leaves the previous measurement alone rather than replacing it with a lie.
+
+    Every rejection here leaves the previous measurement in place rather than
+    replacing it with a lie, because a stale-but-real number beats a fresh wrong
+    one on a row a human reads to decide whether to intervene. A turn is rejected
+    when it has no recorded start, when it is long enough to be a missed boundary,
+    and when it is too short to be a model round trip — including the negative
+    "duration" that out-of-order records can produce, which used to clamp to zero
+    and publish itself as a real measurement of no time at all.
     """
     started = float(state.get("turn_started_at") or 0.0)
     state["turn_started_at"] = 0.0
     session.record.turn_started_at = None
-    # A harness that reports its own turn duration is more authoritative than the
-    # daemon's wall clock, which also counts the lag before the boundary was seen.
+    # A harness that reports its own turn duration is more authoritative than any
+    # measurement taken from the outside, which also counts observation lag.
     reported = payload.get("duration_ms")
     if isinstance(reported, int | float) and not isinstance(reported, bool) and reported > 0:
         session.record.last_turn_ms = float(reported)
         return
     if started <= 0.0:
         return
-    elapsed = max(0.0, _session_now(session) - started)
-    if elapsed > MAX_TURN_DURATION_SECONDS:
+    # Both ends from `_turn_now`: the record that closed the turn against the
+    # record that opened it, so replaying the transcript re-derives the same
+    # length instead of measuring how fast the replay ran.
+    elapsed = _turn_now(session) - started
+    if elapsed > MAX_TURN_DURATION_SECONDS or elapsed < MIN_TURN_DURATION_SECONDS:
         log.debug(
             "discarding implausible turn duration",
-            extra={"session": session.record.id, "seconds": round(elapsed, 1)},
+            extra={"session": session.record.id, "seconds": round(elapsed, 3)},
         )
         return
     session.record.last_turn_ms = round(elapsed * 1000.0, 1)
@@ -1631,7 +1713,10 @@ async def _complete_empty_hook_turn(session: Session, events: EventBus) -> None:
     if not state.get("root_turn_active") or state.get("turn_saw_activity"):
         return
     started = float(state.get("turn_started_at") or 0.0)
-    if _session_now(session) - started > EMPTY_HOOK_TURN_WINDOW_SECONDS:
+    # Same clock the start was stamped from; comparing a record-dated start
+    # against the wall clock would read every replayed turn as far outside the
+    # window and silently stop closing these.
+    if _turn_now(session) - started > EMPTY_HOOK_TURN_WINDOW_SECONDS:
         return
     await _finish_root_turn(
         session, events, source="transcript", force=True, evidence="local_command_record"
@@ -2266,6 +2351,46 @@ def _session_now(session: Session) -> float:
         if callable(wall):
             return float(wall())
     return time.time()
+
+
+def _plausible_record_ts(session: Session, ts: float | None) -> bool:
+    """Whether a record's own stamp can be trusted to date a turn boundary.
+
+    A transcript is written by a harness process on this machine, so its stamps
+    share the daemon's time base rather than being a foreign clock. That is what
+    makes them usable at all — but a truncated line, a hand-written fixture, or a
+    clock that jumped can still carry something absurd, and a turn dated from one
+    would be published as a measurement instead of rejected as one. Anything at or
+    before the present is admissible however old, because replaying history is the
+    whole point of the field; only the future is impossible.
+    """
+    if ts is None or not math.isfinite(ts) or ts <= 0.0:
+        return False
+    return ts <= _session_now(session) + HISTORICAL_TIMESTAMP_SLACK_SECONDS
+
+
+def _turn_now(session: Session) -> float:
+    """The clock a turn boundary is stamped from.
+
+    While a transcript record is being dispatched this is *that record's own*
+    timestamp, so both ends of a turn are dated by the stream the turn is made of
+    instead of by when the daemon happened to be watching. That is what makes the
+    timing derived rather than observed: catch-up after a restart or a redeploy
+    replays the same records and recomputes the same numbers.
+
+    Measuring against the wall clock instead collapsed every replayed turn to the
+    milliseconds the replay itself took — an idle row's "last turn took" became
+    `0.0`, which renders as nothing at all, or a couple of milliseconds, which
+    renders as the literal `0s` that made this worth fixing.
+
+    Outside a record dispatch — a live hook boundary, the PTY fallback pair — there
+    is nothing to date the turn from but the clock, and that is also the honest
+    answer there: those boundaries are observed as they happen.
+    """
+    ts = getattr(session, "observation_record_ts", None)
+    if isinstance(ts, int | float) and not isinstance(ts, bool):
+        return float(ts)
+    return _session_now(session)
 
 
 def _standing_now(session: Session, event: dict[str, Any]) -> float:

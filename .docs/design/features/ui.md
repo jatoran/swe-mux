@@ -1775,6 +1775,16 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   `idle` reports how long the **last completed turn** took; an ended session reports its lifetime.
   Every form is at most four characters (`59s`, `1m12`, `22m`, `1h30`, `3d6h`) so the right section forms a column rather than a ragged edge.
   A ready session's number is static, so a settled fleet re-renders on no clock at all.
+- **The duration renders nothing rather than a placeholder when it cannot answer.**
+  A row that says nothing is read as "no measurement"; a row that says `0s` is read as a measurement of zero, and both failures this field has actually produced were indistinguishable from a turn that had just begun.
+  A `last_turn_ms` under `MIN_REPORTABLE_TURN_MS` (250 ms) is refused: daemons predating record-dated turn boundaries wrote the replay's own elapsed time into records that survive a restart, so those values are already on disk and the row has to refuse them on the way out too.
+  A `turn_started_at` or `state_since` more than `CLOCK_SKEW_TOLERANCE_SECONDS` (5 s) in this device's future is refused for the same reason.
+  Inside that band a zero is the truth — a turn one tick old really has run for no whole seconds — so the tolerance must not swallow the honest zero.
+- **Sidebar durations are aged on the daemon's clock, not the browser's.**
+  Every timestamp the row subtracts from was written by the daemon, and the two clocks are only the same clock when the browser runs on the same machine.
+  Remote access is a first-class way to use swe-mux, so a laptop or phone a few seconds behind made the age of every working session negative, and clamping the negative away froze the row at `0s` for the whole turn with nothing else on screen looking wrong.
+  `serverClock.ts` holds the offset, read from the HTTP `Date` header that every response already carries — including error responses, so the clock stays honest through an outage, which is exactly when a wrong offset would be least likely to be noticed.
+  Request latency is halved out the way NTP does it, and the offset only moves when a reading disagrees by more than `CLOCK_OFFSET_NOISE_FLOOR_SECONDS` (2 s), because a duration the user watches count up must not step backwards because one poll landed differently.
 - **Every Git field describes the checkout, never the session.**
   `git status` answers for the whole repository however it is invoked, so sessions sharing a working tree necessarily report identical figures and there is no per-session measurement to take.
   A quantity whose checkout (`GitState.root`) has more than one **live** session is drawn underlined, and its tooltip says how many; ended sessions do not count, because one live session in a checkout is unambiguous however many corpses sit beside it.

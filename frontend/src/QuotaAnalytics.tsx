@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
+import { serverNow } from './serverClock.ts'
 import type { ProviderAccount, ProviderAccountsStatus } from './ProviderAccounts'
 import {
   accountDisplayLabel,
@@ -60,7 +61,9 @@ function QuotaChart({
   resets:ResetEvent[]
 }) {
   const times=series.flatMap(item=>item.points.map(quotaPointTime))
-  const minimum=Math.min(...times,Date.now()/1000)
+  // Daemon clock: `times` are daemon-stamped sample instants, and an axis bound
+  // taken from a browser clock that disagrees would shift the whole plot.
+  const minimum=Math.min(...times,serverNow())
   const maximum=Math.max(...times,minimum+1)
   const x=(time:number)=>52+(time-minimum)/(maximum-minimum)*692
   const y=(value:number)=>164-Math.max(0,Math.min(100,value))/100*136

@@ -1,3 +1,4 @@
+import { serverNow } from './serverClock.ts'
 import type { Project, Session } from './types.ts'
 import type { VoiceSessionAddress } from './voiceNavigation.ts'
 
@@ -34,7 +35,7 @@ const claim = <T>(value:T, source:string, observedAt:number, ageSeconds:number, 
 })
 
 /** A projection of the current session ledger, recomputed from snapshots and never cached. */
-export function buildFleetReadModel(sessions: Session[], projects: Project[], now = Date.now() / 1000): FleetReadModel {
+export function buildFleetReadModel(sessions: Session[], projects: Project[], now = serverNow()): FleetReadModel {
   const names = new Map(projects.map(project => [project.id, project.name]))
   const counts = Object.fromEntries(STATES.map(state => [state, 0])) as Record<Session['state'],number>
   const items = sessions.filter(session => !session.pending).map(session => {

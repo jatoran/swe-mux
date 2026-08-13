@@ -574,20 +574,38 @@ Two timings cross the API boundary so a client can age a session without a secon
   Wall-clock rather than monotonic because a browser has no access to this process's clock origin.
   A record adopted from a daemon that predates the field is seeded at adoption rather than left
   at zero, and a client renders `0` as "unknown", never as "just now".
-- `turn_started_at` is the wall-clock instant the current root turn began, cleared when it ends.
+- `turn_started_at` is the instant the current root turn began, cleared when it ends.
   This, not `state_since`, is what "how long has it been working" means: a turn spans every tool call and every approval inside it, while `state_since` restarts on each of them.
   Run-scoped like `last_turn_ms`.
-- `last_turn_ms` is the wall-clock length of the last **completed** root turn.
-  A harness-reported `duration_ms` outranks the daemon's own measurement, which also counts the
-  lag before the boundary was observed.
-  A turn longer than `MAX_TURN_DURATION_SECONDS` (6 h) is treated as a missed boundary rather
-  than a measurement and leaves the previous value alone: an overnight-idle session must not
-  claim its last turn took nine hours.
+- `last_turn_ms` is the length of the last **completed** root turn.
+  A harness-reported `duration_ms` outranks any measurement taken from the outside, which also counts observation lag.
+  Otherwise the two boundary stamps are subtracted, and the result is published only if it is a plausible turn.
+  Implausible in either direction leaves the previous value in place rather than replacing it with a lie, because a stale-but-real number beats a fresh wrong one on a row a human reads to decide whether to intervene.
+  Longer than `MAX_TURN_DURATION_SECONDS` (6 h) is a missed boundary, not a measurement: an overnight-idle session must not claim its last turn took nine hours.
+  Shorter than `MIN_TURN_DURATION_SECONDS` (250 ms) is a boundary artifact, not a turn — a root turn is a model round trip at minimum, and a published artifact renders as the literal `0s` a duration column exists to avoid.
+  Negative is the same rejection and reaches it the same way, rather than clamping to zero and publishing the clamp as a real measurement of no time.
   The field is run-scoped and cleared wherever observation identity resets, because a duration
   measured in a replaced conversation is not this conversation's.
 
-Both ends of a turn are stamped from `_session_now`, so the replay harness's virtual clock
-cannot pair a virtual start with a real end.
+### Turn boundaries are dated by the records that carry them
+
+`_turn_now` stamps both ends of a turn, and while a transcript record is being dispatched it returns *that record's own* `timestamp` rather than the wall clock.
+This is what makes the timing **derived** rather than observed: catch-up after a restart or a redeploy replays the same records and recomputes the same numbers, so the values are idempotent across daemon lifetime.
+Measuring against the wall clock instead collapsed every replayed turn to the milliseconds the replay itself took, writing `0.0` (which the sidebar draws as nothing) or a millisecond or two (which it draws as `0s`).
+
+`_dispatch_transcript_event` scopes the stamp for the duration of one record and restores the previous value on the way out, so it never persists and never describes anything but the record in flight.
+Scoping it at the shared dispatch rather than inside the per-harness readers is what makes the rule harness-agnostic: claude, codex, omp and pi all write a top-level ISO `timestamp`, and a harness added to the registry inherits the rule by routing through the same dispatch.
+Backends with no transcript at all — opencode's hooks, shell — never reach it and keep the wall clock, which is the honest answer for a boundary observed as it happens.
+
+`_plausible_record_ts` gates admission: finite, positive, and no later than the present plus `HISTORICAL_TIMESTAMP_SLACK_SECONDS`.
+Arbitrarily old is admissible because replaying history is the point of the field; only the future is impossible.
+A rejected stamp falls back to `_session_now`, so a corrupt line degrades to the previous behavior instead of poisoning the measurement.
+
+Under the replay harness both ends still agree, because its fixture records are stamped from the same virtual clock (`VirtualClock` via `_stamp`); a virtual start can no more pair with a real end than before.
+
+`_finish_transcript_catchup` carries an open turn's replay-derived start into `_begin_root_turn` through `started_at`.
+Without it, re-adopting a turn that history left open restamped it as beginning now, and every working row in the fleet read `0s` the moment the daemon came back and then aged from the restart rather than from the work.
+When catch-up settles to `idle` instead, it clears both `turn_started_at` stamps: the record survives a session-preserving restart, so a stamp left behind is one the next `working` reading would age from.
 
 ## Reading the PTY screen
 

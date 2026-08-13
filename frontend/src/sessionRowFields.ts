@@ -115,6 +115,30 @@ const CONTEXT_NOTABLE_PCT = 0.6
 const COST_NOTABLE_USD = 1
 
 /**
+ * Shortest `last_turn_ms` that describes a turn rather than a boundary artifact.
+ *
+ * Mirrors `MIN_TURN_DURATION_SECONDS` in `observation.py`, which is where the
+ * rule is enforced. This copy is not redundant: a daemon that predates that rule
+ * wrote sub-millisecond durations into records that survive a restart, so the
+ * values are already on disk and the row has to refuse them on the way out too.
+ * Without it a session whose "last turn" was written as 2 ms reads `0s` — a
+ * measurement of nothing, indistinguishable from a real one.
+ */
+const MIN_REPORTABLE_TURN_MS = 250
+
+/**
+ * How far a daemon timestamp may sit in this device's future before its age is
+ * treated as unknowable rather than as zero.
+ *
+ * `serverClock.ts` removes real skew, but its estimate has a resolution of its
+ * own, and a turn that genuinely started a moment ago is legitimately at zero.
+ * Inside the band, "0s" is the truth; beyond it the correction did not hold and
+ * the honest render is nothing at all, because the failure this replaces was a
+ * row frozen at "0s" for ten minutes of visible work.
+ */
+const CLOCK_SKEW_TOLERANCE_SECONDS = 5
+
+/**
  * Compact duration, never wider than four characters.
  *
  * Fixed width is what lets the right section be a column instead of a ragged
@@ -142,10 +166,18 @@ export function formatRowDuration(seconds: number): string {
   return days < 10 && restHours ? `${days}d${restHours}h` : `${days}d`
 }
 
-/** Seconds the session has been in its current state; 0 when the daemon never dated it. */
-export function secondsInState(session: Session, now: number): number {
-  if (!session.state_since) return 0
-  return Math.max(0, now - session.state_since)
+/**
+ * Age of a daemon timestamp on this device's corrected clock, or `null` when the
+ * two clocks disagree by enough that any number would be invented.
+ *
+ * The single way this module turns a daemon instant into an elapsed time. It
+ * replaced a helper that clamped every disagreement to zero, which is what let a
+ * skewed client render a lie in the shape of a measurement.
+ */
+function ageOf(stamp: number, now: number): number | null {
+  const seconds = now - stamp
+  if (seconds < -CLOCK_SKEW_TOLERANCE_SECONDS) return null
+  return Math.max(0, seconds)
 }
 
 const isEnded = (session: Session) => session.state === 'exited' || session.state === 'crashed'
@@ -164,6 +196,12 @@ const isEnded = (session: Session) => session.state === 'exited' || session.stat
  * A ready session reports how long its last turn took rather than how long it
  * has been ready — that number is static, which also means a settled fleet
  * re-renders on no clock at all.
+ *
+ * Every branch renders nothing rather than a placeholder when it cannot answer.
+ * A row that says nothing is read as "no measurement"; a row that says `0s` is
+ * read as a measurement of zero, and the two failures this function has actually
+ * produced — a replayed turn recorded as 2 ms, and a client clock behind the
+ * daemon's — were both indistinguishable from a turn that had just begun.
  */
 function durationToken(session: Session, context: SessionRowContext): { text: string; title: string; seconds: number } | null {
   if (isEnded(session)) {
@@ -173,16 +211,18 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
       : null
   }
   if (session.state === 'idle') {
-    if (typeof session.last_turn_ms !== 'number' || session.last_turn_ms <= 0) return null
+    if (typeof session.last_turn_ms !== 'number' || session.last_turn_ms < MIN_REPORTABLE_TURN_MS) return null
     const seconds = session.last_turn_ms / 1000
     return { text: formatRowDuration(seconds), title: `last turn took ${formatRowDuration(seconds)}`, seconds }
   }
   if (session.state !== 'awaiting' && session.turn_started_at) {
-    const seconds = Math.max(0, context.now - session.turn_started_at)
+    const seconds = ageOf(session.turn_started_at, context.now)
+    if (seconds === null) return null
     return { text: formatRowDuration(seconds), title: `this turn has run ${formatRowDuration(seconds)}`, seconds }
   }
-  const seconds = secondsInState(session, context.now)
   if (!session.state_since) return null
+  const seconds = ageOf(session.state_since, context.now)
+  if (seconds === null) return null
   return { text: formatRowDuration(seconds), title: `${session.state} for ${formatRowDuration(seconds)}`, seconds }
 }
 
@@ -309,8 +349,9 @@ function candidateFor(
     }
     case 'idleFor': {
       if (session.state !== 'idle') return null
-      const seconds = secondsInState(session, context.now)
       if (!session.state_since) return null
+      const seconds = ageOf(session.state_since, context.now)
+      if (seconds === null) return null
       return make(
         { kind: 'text', text: formatRowDuration(seconds), tone: 'muted', title: `idle for ${formatRowDuration(seconds)}` },
         seconds >= IDLE_FOR_NOTABLE_SECONDS,

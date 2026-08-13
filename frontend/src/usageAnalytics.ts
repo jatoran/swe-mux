@@ -1,4 +1,5 @@
 import type { ProviderAccount } from './ProviderAccounts'
+import { serverNow } from './serverClock.ts'
 
 export type CostMethod = 'source_estimate'|'proportional'|'unavailable'|'mixed'
 
@@ -166,7 +167,10 @@ export function quotaSeriesPath(options:{
   if(options.provider)query.set('provider',options.provider)
   if(options.account)query.set('account',options.account)
   if(options.range!=='all'){
-    const now = options.now??Date.now()/1000
+    // Daemon clock: this bounds a query against telemetry the daemon stamped, so
+    // a browser out of step silently asks for a window that misses the newest
+    // samples (or runs past the end and returns short).
+    const now = options.now??serverNow()
     query.set('since',String(Math.floor(now-Number(options.range)*86400)))
     query.set('until',String(Math.floor(now)))
   }

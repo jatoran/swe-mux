@@ -1,3 +1,5 @@
+import { noteServerDate } from './serverClock.ts'
+
 export type ApiError = Error & {
   fields?: Record<string,string>; status?: number; timeout?: boolean
   /** The complete error body — typed daemon operations (the prompt queue) carry a
@@ -21,6 +23,7 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
     if (options.signal?.aborted) controller.abort()
     else options.signal?.addEventListener('abort', () => controller.abort(), { once: true })
   }
+  const sentAt = Date.now()
   try {
     const response = await fetch(path, {
       method,
@@ -28,6 +31,10 @@ export async function api<T>(method: string, path: string, body?: unknown, optio
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller ? controller.signal : options.signal,
     })
+    // Sampled before the ok check so a failing daemon still keeps the clock
+    // honest: the sidebar goes on ageing sessions through an outage, and that is
+    // exactly when a wrong offset would be least likely to be noticed.
+    noteServerDate(response.headers.get('Date'), sentAt, Date.now())
     if (!response.ok) {
       const detail = await response.json().catch(() => ({ error: response.statusText }))
       const error = new Error(detail.error || `${method} ${path} failed`) as ApiError

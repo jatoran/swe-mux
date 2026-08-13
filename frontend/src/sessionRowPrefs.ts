@@ -19,6 +19,7 @@ import { MOBILE_QUERY, currentProfile, rawDomain, saveDomain, type SettingsProfi
 import {
   defaultSessionRowConfig, normalizeSessionRowConfig, type SessionRowConfig,
 } from './sessionRowConfig.ts'
+import { serverNow } from './serverClock.ts'
 
 const ROW_PROFILE: SettingsProfile = 'desktop'
 
@@ -121,17 +122,22 @@ export function useObservedWidth(target: { current: HTMLElement | null }): numbe
 }
 
 /**
- * Shared quantized wall clock, in epoch seconds.
+ * Shared quantized wall clock, in epoch seconds **on the daemon's clock**.
  *
  * One timer for the whole sidebar instead of one per row, and stopped entirely
  * while the tab is hidden — a background tab has no rows to age.
+ *
+ * Corrected rather than local because every timestamp it is subtracted from was
+ * written by the daemon. On the same machine the correction is zero and this is
+ * the browser clock; from a phone or another host it is the difference between a
+ * working row that counts up and one frozen at "0s" (see `serverClock.ts`).
  */
 export function useRowClock(active = true): number {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
+  const [now, setNow] = useState(() => Math.floor(serverNow()))
   useEffect(() => {
     if (!active) return
     let timer: number | undefined
-    const tick = () => setNow(Math.floor(Date.now() / 1000))
+    const tick = () => setNow(Math.floor(serverNow()))
     const start = () => {
       if (timer !== undefined) return
       tick()

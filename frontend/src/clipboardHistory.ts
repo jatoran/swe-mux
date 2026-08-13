@@ -20,6 +20,7 @@
 // Explicit extension: this module is unit-tested under node's type-stripping
 // runner, which does not resolve extensionless specifiers.
 import { api } from './api.ts'
+import { serverNow } from './serverClock.ts'
 
 export type ClipboardEntry = {
   id: string
@@ -287,8 +288,11 @@ export async function clearClipboardHistory(includePinned = false): Promise<numb
   return result.removed
 }
 
-/** Compact "3m ago" style stamp for the picker rows. */
-export function relativeAge(seconds: number, now: number = Date.now() / 1000): string {
+/** Compact "3m ago" style stamp for the picker rows.
+ *
+ *  Daemon clock: the entry was stamped there, so a browser a minute out of step
+ *  would report a just-copied entry as a minute old, or as "now" long after. */
+export function relativeAge(seconds: number, now: number = serverNow()): string {
   const delta = Math.max(0, now - seconds)
   if (delta < 45) return 'now'
   if (delta < 3600) return `${Math.round(delta / 60)}m`

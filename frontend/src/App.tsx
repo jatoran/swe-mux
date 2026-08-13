@@ -162,6 +162,7 @@ import type { DotShape } from './sessionRowConfig'
 import {
   applySessionDotSize, useObservedWidth, useRowClock, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
+import { serverNow } from './serverClock.ts'
 import { buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc, shedForWidth } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
@@ -279,7 +280,10 @@ type WorktreeSpawnResult={status:'not_requested'|'spawned'|'error';session_id?:s
 type PendingSpawn={projectId:string;placement:PendingSpawnPlacement|null;resolvedId?:string}
 
 function pendingTerminal(id:string,project:Project,backend:string='shell',options?:{cwd?:string;name?:string;label?:string;detail?:string}):Session {
-  const now=Date.now()/1000
+  // Daemon clock: this placeholder is rendered by the same sidebar row that ages
+  // real sessions, so stamping it locally would make it the one row whose age is
+  // measured between two different clocks.
+  const now=serverNow()
   const cwd=options?.cwd||project.root
   return {
     id,name:options?.name||`starting ${backend==='shell'?'terminal':backend}…`,project_id:project.id,backend,native_session_id:id,
@@ -3696,7 +3700,7 @@ export function App() {
     if(session.awaiting_reason==='approval')return ['go to the one waiting for approval','show approvals','open approval']
     if(session.awaiting_reason==='question'||session.awaiting_reason==='elicitation')return ['go to the one waiting for an answer','show questions']
     if(session.awaiting_reason==='rate_limit')return ['go to the rate limited one']
-    if(session.delivery_readiness?.state==='unknown'||((session.state==='working'||session.state==='running')&&Date.now()/1000-session.last_activity_ts>300))return ['go to the stuck one']
+    if(session.delivery_readiness?.state==='unknown'||((session.state==='working'||session.state==='running')&&serverNow()-session.last_activity_ts>300))return ['go to the stuck one']
     if(session.state==='working'||session.state==='running')return ['go to the working one']
     if(session.state==='idle')return ['go to the idle one']
     if(session.state==='crashed')return ['go to the crashed one']

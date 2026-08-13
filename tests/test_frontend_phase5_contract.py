@@ -43,7 +43,10 @@ def test_scheduling_is_a_property_of_the_queued_item() -> None:
 
     assert "scheduleQueueMessage" in pane
     assert "Clear schedule" in pane
-    assert "not_before: Date.now() / 1000 + preset.seconds" in pane
+    # Stamped on the daemon's clock, because the daemon is what waits on it: a
+    # browser out of step would release the message early or hold it late.
+    assert "not_before: serverNow() + preset.seconds" in pane
+    assert "Date.now()" not in pane
     # No browser timer anywhere in the send path.
     assert "setTimeout" not in pane
     assert "a browser timer dies with the tab" in api

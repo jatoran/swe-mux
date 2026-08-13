@@ -1,4 +1,5 @@
 import { api, type ApiError } from './api.ts'
+import { serverNow } from './serverClock.ts'
 
 // Phase 4: the persistent manual prompt queue. Every function here is a thin
 // caller over the daemon's typed queue operations — the daemon owns ordering,
@@ -282,8 +283,13 @@ export const decideSpawnRequest = (
   { decision },
 )
 
-/** `due` | `scheduled` | `expired` — mirrors the daemon's `schedule_status`. */
-export function scheduleStatus(message: QueueMessage, now = Date.now() / 1000): string {
+/** `due` | `scheduled` | `expired` — mirrors the daemon's `schedule_status`.
+ *
+ *  On the daemon's clock, because "mirrors" is the contract: the constraints were
+ *  written there and the daemon will act on them there, so a browser comparing
+ *  them against its own clock can show a message as due while the daemon still
+ *  holds it (or the reverse). */
+export function scheduleStatus(message: QueueMessage, now = serverNow()): string {
   const expires = message.constraints?.expires_at
   if (typeof expires === 'number' && now >= expires) return 'expired'
   const notBefore = message.constraints?.not_before

@@ -13,6 +13,7 @@ import {
 import type { Session } from './types'
 import { deliversHarnessPrompts } from './harnessRegistry'
 import { reportPromptSubmitted } from './projectRecency'
+import { serverNow } from './serverClock.ts'
 import { forgetEditorFocus, noteEditorFocus } from './insertTarget'
 import type { EditorHandle } from './insertTarget'
 
@@ -348,7 +349,10 @@ export function QueuePane({
                   disabled={busy}
                   onClick={() =>
                     void run(message.id, () =>
-                      scheduleQueueMessage(message.id, { not_before: Date.now() / 1000 + preset.seconds }),
+                      // Daemon clock: this instant is sent to the daemon and the
+                      // daemon is what waits on it, so a browser out of step
+                      // would release the message early or hold it late.
+                      scheduleQueueMessage(message.id, { not_before: serverNow() + preset.seconds }),
                     )
                   }
                 >

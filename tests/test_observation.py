@@ -1336,6 +1336,254 @@ async def test_implausibly_long_turn_is_discarded_rather_than_reported() -> None
     assert session.record.last_turn_ms == 12_000.0
 
 
+async def test_instantaneous_turn_is_discarded_rather_than_reported() -> None:
+    """The other end of the same rule: a turn is a model round trip, not an instant.
+
+    A boundary pair landing on one moment is an artifact of how it was observed,
+    and publishing it renders as the literal `0s` a duration column exists to
+    avoid. Keeping the previous measurement is the same honest failure as the
+    six-hour case.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    session.clock.advance(31.0)
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.last_turn_ms == 31_000.0
+
+    await _begin_root_turn(session, events, source="transcript")
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.last_turn_ms == 31_000.0
+
+
+def _iso(ts: float) -> str:
+    """A transcript record's own stamp, in the shape every harness writes it."""
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat().replace("+00:00", "Z")
+
+
+async def test_turn_length_comes_from_the_records_not_from_the_daemons_clock() -> None:
+    """The bug this exists for: replaying a transcript re-derives the real length.
+
+    The clock deliberately never advances here — that is what catch-up after a
+    daemon restart looks like, a whole conversation arriving in one read. Dating
+    both ends from the wall clock measured how fast the replay ran and wrote a
+    turn of `0.0` ms, which the sidebar renders as nothing, or of a millisecond
+    or two, which it renders as the literal `0s` that started this.
+    """
+    from swe_mux.observation import _dispatch_transcript_event
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    opened = session.clock.wall() - 4_000.0
+
+    await _dispatch_transcript_event(
+        "claude",
+        session,
+        {"timestamp": _iso(opened), "type": "user", "message": {"content": "do the thing"}},
+        events,
+    )
+    assert session.record.turn_started_at == opened
+
+    await _dispatch_transcript_event(
+        "claude",
+        session,
+        {
+            "timestamp": _iso(opened + 95.0),
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"},
+        },
+        events,
+    )
+    assert session.record.last_turn_ms == 95_000.0
+
+
+async def test_record_dated_turns_are_shared_by_every_transcript_harness() -> None:
+    """The rule lives at the shared dispatch, so a harness cannot opt out of it.
+
+    claude, codex, omp and pi all write a top-level ISO `timestamp`; dating the
+    boundary from it is one rule at `_dispatch_transcript_event` rather than four
+    inside the readers, and this pins that a non-Claude harness gets it too.
+    """
+    from swe_mux.observation import _dispatch_transcript_event
+
+    session = cast(Any, ReplaySession("codex"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    opened = session.clock.wall() - 900.0
+
+    await _dispatch_transcript_event(
+        "codex",
+        session,
+        {"timestamp": _iso(opened), "type": "event_msg", "payload": {"type": "task_started"}},
+        events,
+    )
+    assert session.record.turn_started_at == opened
+
+    await _dispatch_transcript_event(
+        "codex",
+        session,
+        {
+            "timestamp": _iso(opened + 42.0),
+            "type": "event_msg",
+            "payload": {"type": "task_complete"},
+        },
+        events,
+    )
+    assert session.record.last_turn_ms == 42_000.0
+
+
+async def test_record_stamp_does_not_outlive_the_record_being_dispatched() -> None:
+    """It describes the record in flight and nothing else.
+
+    Leaking past the dispatch would date a live hook boundary — or the next
+    record, which carries no stamp of its own — with a timestamp that belongs to
+    something already handled.
+    """
+    from swe_mux.observation import _dispatch_transcript_event
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+
+    await _dispatch_transcript_event(
+        "claude",
+        session,
+        {
+            "timestamp": _iso(session.clock.wall() - 500.0),
+            "type": "user",
+            "message": {"content": "hello"},
+        },
+        events,
+    )
+    assert getattr(session, "observation_record_ts", None) is None
+
+
+async def test_a_future_dated_record_falls_back_to_the_clock() -> None:
+    """A stamp the daemon cannot have observed yet is corrupt, not evidence."""
+    from swe_mux.observation import _dispatch_transcript_event
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+
+    await _dispatch_transcript_event(
+        "claude",
+        session,
+        {
+            "timestamp": _iso(session.clock.wall() + 86_400.0),
+            "type": "user",
+            "message": {"content": "hello"},
+        },
+        events,
+    )
+    assert session.record.turn_started_at == session.clock.wall()
+
+
+async def test_catchup_readopts_an_open_turn_at_the_time_the_records_say() -> None:
+    """A session working across a restart keeps ageing from the work, not the restart.
+
+    Catch-up finding the transcript's last turn still open used to restamp it as
+    beginning now, so every working row in the fleet read `0s` the moment the
+    daemon came back and then counted up from the restart.
+    """
+    from swe_mux.observation import _dispatch_transcript_event, _finish_transcript_catchup
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    opened = session.clock.wall() - 610.0
+
+    session.observation_replay = True
+    await _dispatch_transcript_event(
+        "claude",
+        session,
+        {"timestamp": _iso(opened), "type": "user", "message": {"content": "long job"}},
+        events,
+    )
+    await _finish_transcript_catchup(
+        session,
+        events,
+        attach_ts=session.clock.wall(),
+        last_historical_ts=session.clock.wall() - 5.0,
+        historical_seen=4,
+    )
+
+    assert session.record.state == "working"
+    assert session.record.turn_started_at == opened
+    assert session.observation_state["turn_started_at"] == opened
+
+
+async def test_catchup_that_settles_leaves_no_turn_dated_behind_it() -> None:
+    """Nothing may still be dated as if a turn were running once none is.
+
+    The record survives a session-preserving restart, so a stamp left here is one
+    the next `working` reading would age from — a turn that ended yesterday
+    explaining how long today's work has taken.
+    """
+    from swe_mux.observation import _dispatch_transcript_event, _finish_transcript_catchup
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+
+    session.observation_replay = True
+    await _dispatch_transcript_event(
+        "claude",
+        session,
+        {
+            "timestamp": _iso(session.clock.wall() - 90_000.0),
+            "type": "user",
+            "message": {"content": "yesterday's job"},
+        },
+        events,
+    )
+    assert session.record.turn_started_at is not None
+
+    await _finish_transcript_catchup(
+        session,
+        events,
+        attach_ts=session.clock.wall(),
+        last_historical_ts=session.clock.wall() - 90_000.0,
+        historical_seen=4,
+    )
+
+    assert session.record.state == "idle"
+    assert session.record.turn_started_at is None
+    assert not session.observation_state["turn_started_at"]
+
+
+async def test_out_of_order_boundary_does_not_publish_a_negative_turn_as_zero() -> None:
+    """A close dated before its own start is not a turn that took no time.
+
+    It used to clamp to zero and publish, which is the shape of a real
+    measurement. Records can arrive out of order across a rollover, and the row
+    must not report one as a completed instant.
+    """
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    session.record.parser_status = "ready"
+    session.transcript_growth_ts = session.clock.wall()
+    events = EventBus()
+    await _begin_root_turn(session, events, source="transcript")
+    session.observation_state["turn_started_at"] = session.clock.wall() + 90.0
+    await _finish_root_turn(session, events, source="transcript")
+    assert session.record.last_turn_ms is None
+
+
 def test_watchdog_recovers_proven_ended_turns_faster_than_pty_backstop() -> None:
     # #4: a tail that proves the turn ended is high-confidence, so recovery no
     # longer waits the full stall window; the ambiguous PTY backstop still does.

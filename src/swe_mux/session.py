@@ -1949,6 +1949,11 @@ class Session:
         # True while the observer replays transcript content that predates its
         # attachment; state transitions and update fanout are suppressed then.
         self.observation_replay = False
+        # The timestamp of the transcript record currently being dispatched, which
+        # is what turn boundaries are dated from (`observation._turn_now`). Scoped
+        # to one dispatch and restored on the way out, so it is never persisted and
+        # never describes anything but the record in flight; `None` outside one.
+        self.observation_record_ts: float | None = None
         # Set when this PTY was promoted around a nested agent CLI; used to
         # ignore shell-prompt echoes from just before/around the promotion.
         self.agent_promoted_at: float | None = None

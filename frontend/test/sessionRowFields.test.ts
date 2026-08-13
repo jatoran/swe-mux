@@ -10,7 +10,7 @@ import {
 import { sessionDotSize } from '../src/sessionRowPrefs.ts'
 import {
   buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
-  identityRowTokens, sessionContextArc, secondsInState, shedForWidth,
+  identityRowTokens, sessionContextArc, shedForWidth,
 } from '../src/sessionRowFields.ts'
 import { shapePath } from '../src/dotShapes.ts'
 
@@ -86,6 +86,38 @@ test('a working session with no open turn falls back to time in state', () => {
 test('a ready session with no completed turn shows no duration at all', () => {
   const config = withBottom(defaultSessionRowConfig(), ['duration'])
   assert.deepEqual(bottomText(session({ state: 'idle', last_turn_ms: null }), config), [])
+})
+
+test('a sub-second last turn is no measurement rather than a turn that took 0s', () => {
+  // Daemons before the record-dated turn fix wrote the replay's own elapsed time
+  // into `last_turn_ms`, and those records survive a restart. 0 ms already drew
+  // nothing; 2 ms drew the literal `0s` — one defect rendering two ways.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  assert.deepEqual(bottomText(session({ state: 'idle', last_turn_ms: 0 }), config), [])
+  assert.deepEqual(bottomText(session({ state: 'idle', last_turn_ms: 2 }), config), [])
+  assert.deepEqual(bottomText(session({ state: 'idle', last_turn_ms: 249 }), config), [])
+  assert.deepEqual(bottomText(session({ state: 'idle', last_turn_ms: 1_500 }), config), ['1s'])
+})
+
+test('a turn that just began still reads 0s', () => {
+  // The tolerance for clock disagreement must not swallow the honest zero: a
+  // turn one tick old really has run for no whole seconds yet.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  assert.deepEqual(bottomText(session({ state: 'working', turn_started_at: NOW }), config), ['0s'])
+  assert.deepEqual(bottomText(session({ state: 'working', turn_started_at: NOW + 2 }), config), ['0s'])
+})
+
+test('a turn dated beyond the clock tolerance shows nothing, not a frozen 0s', () => {
+  // A client whose clock trails the daemon's used to clamp every negative age to
+  // zero, so a session that had been working ten minutes sat at `0s` for the
+  // whole turn with nothing else on screen looking wrong. Saying nothing is the
+  // honest render; `serverClock.ts` is what keeps it rare.
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  assert.deepEqual(bottomText(session({ state: 'working', turn_started_at: NOW + 600 }), config), [])
+  assert.deepEqual(
+    bottomText(session({ state: 'awaiting', state_since: NOW + 600, turn_started_at: null }), config),
+    [],
+  )
 })
 
 test('notable mode hides a short turn and a short working stretch', () => {
@@ -263,9 +295,9 @@ test('an ended session reports its lifetime and its exit reason', () => {
 })
 
 test('a session the daemon never dated shows no age rather than 1970', () => {
-  const config = withBottom(defaultSessionRowConfig(), ['duration'])
-  assert.equal(secondsInState(session({ state_since: 0 }), NOW), 0)
+  const config = withBottom(defaultSessionRowConfig(), ['duration', 'idleFor'])
   assert.deepEqual(bottomText(session({ state: 'working', state_since: 0 }), config), [])
+  assert.deepEqual(bottomText(session({ state: 'idle', state_since: 0, last_turn_ms: null }), config), [])
 })
 
 test('separators are carried, not baked, so hidden fields leave no dangling marks', () => {

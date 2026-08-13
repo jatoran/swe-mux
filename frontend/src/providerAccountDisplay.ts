@@ -1,3 +1,9 @@
+// `resets_at` is a provider instant the daemon captured and stores, so every
+// countdown here is aged on the daemon's clock (`serverNow`) rather than the
+// browser's. A remote client a minute out of step would otherwise report a quota
+// window as reset while the daemon still holds it throttled.
+import { serverNow } from './serverClock.ts'
+
 export type QuotaWindowDisplay={used_percent:number;resets_at?:number|null}
 export type QuotaAccountDisplay={quota?:{status:string;error?:string|null;session?:QuotaWindowDisplay|null;weekly?:QuotaWindowDisplay|null;fable?:QuotaWindowDisplay|null}|null}
 
@@ -5,7 +11,7 @@ export const percent=(window?:QuotaWindowDisplay|null)=>window?`${Math.round(win
 
 export const accountAbbreviation=(label:string)=>[...label.trim()].slice(0,4).join('').toUpperCase()||'—'
 
-export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=Date.now()/1000)=>{
+export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=serverNow())=>{
   if(!resetsAt)return ''
   const seconds=Math.max(0,Math.ceil(resetsAt-nowSeconds))
   if(seconds<60)return '<1m'
@@ -15,8 +21,8 @@ export const formatResetRemaining=(resetsAt?:number|null,nowSeconds=Date.now()/1
   return hours?`${hours}h${mins}m`:`${minutes}m`
 }
 
-export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=Date.now()/1000)=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
-export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=Date.now()/1000)=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · ${percent(account.quota.fable)} Fable`:''}`
+export const quotaWindowSummary=(window?:QuotaWindowDisplay|null,nowSeconds=serverNow())=>window?`${percent(window)}${window.resets_at?` ${formatResetRemaining(window.resets_at,nowSeconds)}`:''}`:'—'
+export const quotaSummary=(account?:QuotaAccountDisplay,nowSeconds=serverNow())=>account?.quota?.status==='error'?'unavailable':`${quotaWindowSummary(account?.quota?.session,nowSeconds)} - ${quotaWindowSummary(account?.quota?.weekly,nowSeconds)}${account?.quota?.fable?` · ${percent(account.quota.fable)} Fable`:''}`
 
 export type ProviderQuotaWindows={session:QuotaWindowDisplay|null;weekly:QuotaWindowDisplay|null;fable:QuotaWindowDisplay|null}
 
@@ -68,7 +74,7 @@ export type QuotaGridSegment={key:'session'|'weekly'|'fable';heading:string;text
  * every value self-describing, so an unavailable session window does not need a dash
  * placeholder before the weekly value.
  */
-export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=Date.now()/1000):QuotaGridSegment[]{
+export function quotaGridSegments(windows?:ProviderQuotaWindows|null,nowSeconds=serverNow()):QuotaGridSegment[]{
   const slots:Array<{key:QuotaGridSegment['key'];window:QuotaWindowDisplay|null}>=[
     {key:'session',window:windows?.session||null},
     {key:'weekly',window:windows?.weekly||null},
