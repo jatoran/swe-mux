@@ -45,9 +45,8 @@ and the declared minimum observation capability.
   cancellable, retried for transient transport failures, and locally validated.
 - Routing may fall back between providers for the exact requested model when the provider
   supports the required schema parameters.
-- Settings provides write-only set/replace/test/clear key controls, exact cheap/standard
-  model IDs, explicit model refresh, global/per-rule token+dollar budgets, hourly caps,
-  concurrency, input/output limits, retention, and independent observer toggles.
+- Settings provides write-only set/replace/test/clear key controls, exact cheap/standard model IDs, explicit model refresh, global/per-rule token and dollar budgets, hourly caps, concurrency, input/output limits, retention, and advanced rule configuration.
+- The Automation dashboard is the single enablement surface for the automation engine, Scan timeline, built-in titler and summarizer, the shared attention-observer group, and custom rules.
 - Cheap and standard model controls are searchable comboboxes whose result popovers have a
   bounded scroll height on desktop and mobile.
 - Windows persistent keys use current-user DPAPI in `automation.secrets.json`;
@@ -62,9 +61,8 @@ and the declared minimum observation capability.
   secondary sub-tab row shown only when a group has more than one view. A `?` in the header
   opens a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer
   to it while open.
-- Configure is the complete effective inventory: built-in system observers plus canonical
-  `rules.toml` rules, with an at-a-glance status strip (automation on/off, observer counts,
-  spend today). Disabled built-ins remain visible.
+- Configure is the complete effective inventory: global controls, built-in system observers, and canonical `rules.toml` rules, with an at-a-glance status strip for automation state, observer counts, and daily spend.
+  Disabled controls and built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
   owning config setting. Titler and summarizer toggle independently; stall, approval, and
   context observers share the `phase7_observers_enabled` attention setting.

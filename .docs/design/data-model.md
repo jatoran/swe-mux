@@ -89,19 +89,20 @@
   pass/fail counts and failing-test ids inside the bounded detail. Command text is never
   stored beyond bounded detail, and that detail is bounded per value so the row always
   re-parses. Per-project opt-in and gated; see `features/tier0-facts.md`.
-- `project_cards`: one distilled architecture card per Project — `project_id` (primary key),
-  `project_root`, `fingerprint`, `card_json`, `schema_version`, the requested/resolved model,
-  token counts, `cost_usd`, `created_at`. A cache, not a record: the row is served only while
-  its `fingerprint` still matches the Project's current `.docs`, so it is replaced in place
-  and never pruned by age. Per-project opt-in and gated; see `features/project-card.md`.
+- Project context has no SQLite entity.
+  Its source of truth is the bounded user-owned `<project>/.swe-mux/project-context.md` file with content-derived revisions (`features/project-card.md`).
+- `project_cards` is a retained legacy table from the retired generated-card implementation.
+  Active runtime code never reads, writes, refreshes, or spends against it.
 - `scan_timeline_runs`: the current authorization and delta cursor for one `agent_run_id`.
   It records the persistent terminal `session_id`, Project, enabled/disabled timestamps, last
   scan time, and last source timestamp.
   A successor conversation has another primary key and therefore starts disabled.
+  Backfilled historical records update the cursor with a monotonic maximum and cannot move live delta capture backwards.
 - `scan_timeline_records`: append-only structured Tier 1 records keyed to both `session_id` and
   `agent_run_id`, with the bounded source interval, trigger, validated semantic JSON, transcript
   input hash, requested/resolved model, generation, token counts, cost, and creation time.
   Transcript text remains in the authoritative provider transcript.
+  Reads order records by source start time and then creation time, so records added by a later full-session scan appear at their historical position.
 - `scan_timeline_boundaries`: explicit predecessor-to-successor run boundaries for one persistent
   session, including rollover reason and time.
 - `scan_timeline_metrics`: one bounded aggregate row measuring record reads, source rehydrations,

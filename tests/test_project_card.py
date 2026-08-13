@@ -471,11 +471,8 @@ async def test_a_stale_stored_row_is_never_served(tmp_path: Path, store_path: Pa
 # ---- Enablement registry -----------------------------------------------------
 
 
-def test_project_card_is_an_implemented_substrate_toggle() -> None:
-    automation = registry.REGISTRY["project_card"]
-    assert automation.kind == registry.SUBSTRATE
-    assert automation.implemented is True
-    assert registry.resolve({"project_card"}).is_enabled("project_card")
+def test_generated_project_card_is_not_an_automation_toggle() -> None:
+    assert "project_card" not in registry.REGISTRY
 
 
 def test_card_sources_are_a_pure_function_of_the_project(tmp_path: Path) -> None:

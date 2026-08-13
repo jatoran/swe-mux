@@ -458,8 +458,8 @@ def test_unimplemented_automations_are_marked_so_the_toggle_cannot_mislead() -> 
     # reserved id with a placeholder edge must not present as ready to enable.
     for automation_id in ("attention_ranking",):
         assert REGISTRY[automation_id].implemented is False, automation_id
-    # The Project card and scan timeline are real substrate toggles now.
-    assert REGISTRY["project_card"].implemented is True
+    # Project context is user-owned data, not an automation toggle.
+    assert "project_card" not in REGISTRY
     assert REGISTRY["scan_timeline"].implemented is True
     # Ranking reads every other signal; a one-dependency tree would be a lie.
     assert set(REGISTRY["attention_ranking"].requires) >= {

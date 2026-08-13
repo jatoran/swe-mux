@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  applicationTouchScroll,
+  CLAUDE_TOUCH_REPORT_INTERVAL_MS,
   defaultMobileInputSettings,
   mobileDragTarget,
   mobileInputSettings,
@@ -10,6 +12,53 @@ import {
   terminalWordRange,
   touchWheelDelta,
 } from '../src/mobileInput.ts'
+
+test('Claude application scrolling compensates for its wheel multiplier', () => {
+  let state = { pixels: 0, lastReportAt: Number.NEGATIVE_INFINITY }
+
+  // Claude moves three rows for its first wheel report, so two rows of finger travel
+  // remain banked and the third produces exactly one report.
+  let result = applicationTouchScroll(state, 24, 12, 'claude', 0)
+  assert.deepEqual(result, {
+    steps: 0,
+    remainder: 24,
+    lastReportAt: Number.NEGATIVE_INFINITY,
+    distance: 0,
+    droppedPixels: 0,
+  })
+  state = { pixels: result.remainder, lastReportAt: result.lastReportAt }
+  result = applicationTouchScroll(state, 12, 12, 'claude', 10)
+  assert.equal(result.steps, 1)
+  assert.equal(result.distance, 36)
+  assert.equal(result.remainder, 0)
+})
+
+test('Claude fast touch scroll is rate capped without delayed backlog', () => {
+  let state = { pixels: 0, lastReportAt: Number.NEGATIVE_INFINITY }
+  const first = applicationTouchScroll(state, 120, 12, 'claude', 0)
+  assert.equal(first.steps, 1)
+  assert.equal(first.droppedPixels, 84)
+
+  state = { pixels: first.remainder, lastReportAt: first.lastReportAt }
+  const gated = applicationTouchScroll(state, 120, 12, 'claude', CLAUDE_TOUCH_REPORT_INTERVAL_MS - 1)
+  assert.equal(gated.steps, 0)
+  assert.equal(gated.remainder, 36)
+  assert.equal(gated.droppedPixels, 84)
+
+  state = { pixels: gated.remainder, lastReportAt: gated.lastReportAt }
+  const released = applicationTouchScroll(state, 1, 12, 'claude', CLAUDE_TOUCH_REPORT_INTERVAL_MS)
+  assert.equal(released.steps, 1)
+  assert.equal(released.remainder, 0)
+  assert.equal(released.droppedPixels, 1)
+
+  // Other mouse-aware TUIs keep the existing one-report-per-row behavior.
+  const generic = applicationTouchScroll(
+    { pixels: 0, lastReportAt: Number.NEGATIVE_INFINITY },
+    120, 12, 'codex', 0,
+  )
+  assert.equal(generic.steps, 10)
+  assert.equal(generic.distance, 120)
+})
 
 test('mobile input defaults favor smart natural scrolling', () => {
   assert.deepEqual(mobileInputSettings({}), defaultMobileInputSettings)

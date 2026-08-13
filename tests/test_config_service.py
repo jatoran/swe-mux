@@ -50,6 +50,12 @@ def test_public_config_describes_the_host_pty_for_xterm(tmp_path: Path) -> None:
         assert descriptor is None
 
 
+def test_scan_timeline_run_budget_supports_substantial_backfills(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "config.toml")
+
+    assert config.scan_timeline_run_token_budget == 100_000
+
+
 def test_conversation_stt_defaults_and_untouched_sapi_pair_migrate_to_whisper(
     tmp_path: Path,
 ) -> None:

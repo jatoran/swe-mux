@@ -59,8 +59,9 @@ It should call domain packages rather than acquire their storage or process resp
 | `automation_registry.py` | control-plane enablement DAG: substrate/consumer deps, cycle-checked resolution | storage, execution |
 | `tier0_store.py` | deterministic no-model fact capture (Tier 0 substrate), gated per-project, source pointers, run/project fact queries | model calls, actuation |
 | `deterministic_consumers.py` | model-free detectors over Tier 0 (loop/stall, declared-vs-verified, doc debt, provenance edges) and the turn-boundary runner | model calls, spend, anything that writes toward a session |
-| `project_card.py` | per-Project distilled architecture card (CP substrate step 4): bounded `.docs` source gather, deterministic Key-files → area inversion, content fingerprint + cache validity, one budgeted cheap-model distillation, rendered prompt prefix | consumers of the card, any fallback when a provider is unavailable (there is none — no card), HTTP, UI |
-| `scan_timeline.py` | three-gated, run-scoped Tier 1 scanner: event/heartbeat scheduling, bounded transcript deltas plus same-run continuity and Tier 0 facts, strict DeepSeek V4 Flash extraction, rollover boundaries, run/Project budget enforcement, source rehydration, and dead-end annotation candidates | PTY writes, attention ranking, cross-run continuity, guessed records when the provider fails |
+| `project_context.py` | fixed `.swe-mux/project-context.md` path, bounded UTF-8 Markdown read, blank-file initialization, atomic revision-checked writes, setup prompt, and scan prompt prefix | repository crawling, inferred context, model calls, arbitrary paths, UI rendering |
+| `project_card.py` | retained generated-card implementation for source compatibility only; no runtime construction or consumers | active Project context, scan input, automation enablement |
+| `scan_timeline.py` | three-gated, run-scoped Tier 1 scanner: event/heartbeat scheduling, bounded transcript deltas plus same-run continuity, user Project context and Tier 0 facts, explicit oldest-first uncovered full-session scans, strict DeepSeek V4 Flash extraction, rollover boundaries, run/Project budget enforcement, exact-interval source rehydration, progress state, and dead-end annotation candidates | PTY writes, attention ranking, cross-run continuity, guessed records when the provider fails |
 | `mcp.py` | agent-facing MCP protocol + closed tool set: Project-scoped session/run briefs, compact filtered history hits and stale-safe hit-neighborhood reads, bidirectional run-bound transcript pages, Agent Context sources, Project notes, sender message status, caller spawn-request status, and two thin write callers (`notify`, `request_spawn`); token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics | history indexing/ranking (`history.py`), relay policy and queue/request storage (those live in `agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, aiohttp handlers (`server.py`) |
 | `mcp_contract.py` | the shared closed read/write tool declarations and generated Claude read-permission names | tool implementation, transport, write approval |
 | `prompt_queue.py` | persistent prompt queue: durable message store (states, strict head-of-line, revisions, sender provenance, correlation, relay depth), typed operations (enqueue/edit/arm/move/cancel/delete/retarget/schedule/send-next), content-erasing delete tombstones, delivery constraints, auto-policy + proving-counter tables, event-driven stranding + startup reconcile, delivery audit, seed-prompt staging (`stage_seed_argv`) | *when* an automatic send happens (`auto_delivery.py`), who may address whom (`agent_messaging.py`), PTY ownership (delivery writes go through the injected operator-input helper), aiohttp handlers |
@@ -323,13 +324,9 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   transcript interpretation beyond a literal claim pattern, and no output but annotations.
   A finding carries the *set* of facts it rests on, because a single event pointer cannot
   express "this repeated three times and nothing moved".
-- `project_card.py` is the first substrate that spends. Two rules keep
-  that honest: it is lazy (nothing is built until a consumer asks, so an enabled project no
-  one reads costs nothing), and it never degrades to a heuristic. Missing provider, missing
-  key, provider error, empty answer, exhausted budget, undocumented project — every one of
-  them yields *no card*, because a consumer prepending a wrong card is worse off than one
-  prepending nothing. Its file → area map is copied verbatim from the docs, never routed
-  through the model.
+- `project_context.py` makes Project context explicit user-owned data rather than inferred substrate.
+  It reads one bounded fixed Markdown path, never crawls the repository, and degrades to empty context on an invalid or unavailable file.
+  The editor's setup prompt can ask an agent to author the file, but swe-mux itself performs no generation and spends no tokens on context.
 - `scan_timeline.py` is the continuous-cost substrate and therefore has three gates rather than
   one: global master, Project DAG permission, and an off-by-default grant on the exact current
   `agent_run_id`.

@@ -16,10 +16,20 @@ test('scan timeline is explicitly gated per current run and resets at conversati
 test('scan timeline exposes cost, run tokens, source expansion, and the fixed model', () => {
   const timeline = source('ScanTimelineTab.tsx')
   const settings = source('Settings.tsx')
-  const status = source('ScanSpendStatus.tsx')
+  const app = source('App.tsx')
   assert.ok(timeline.includes('spend_today.cost_usd'))
   assert.ok(timeline.includes('run_token_budget'))
   assert.ok(timeline.includes('?rehydrate=1'))
   assert.ok(settings.includes('Fixed default: OpenRouter DeepSeek V4 Flash latest alias.'))
-  assert.ok(status.includes('scan-spend-status'))
+  assert.ok(!app.includes('ScanSpendStatus'))
+})
+
+test('timeline drawer owns project context, project permission, and full-session scans', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  assert.ok(timeline.includes('Project context'))
+  assert.ok(timeline.includes('Copy setup prompt'))
+  assert.ok(timeline.includes('/project-context'))
+  assert.ok(timeline.includes('/scan-timeline/project'))
+  assert.ok(timeline.includes('Scan full session'))
+  assert.ok(timeline.includes('/scan-timeline/backfill'))
 })

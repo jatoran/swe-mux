@@ -48,6 +48,77 @@ export type TerminalScrollSteps = {
   remainder: number
 }
 
+export type ApplicationTouchScrollState = {
+  /** Finger travel not yet converted into an application wheel report. */
+  pixels: number
+  /** Pointer-event timestamp of the last report sent during this gesture. */
+  lastReportAt: number
+}
+
+export type ApplicationTouchScrollResult = TerminalScrollSteps & {
+  lastReportAt: number
+  /** Pixel distance the application is expected to move for the emitted reports. */
+  distance: number
+  /** Excess high-velocity travel intentionally not banked for delayed scrolling. */
+  droppedPixels: number
+}
+
+/**
+ * Claude Code's xterm.js wheel path currently starts at three rows per wheel report and
+ * raises that multiplier again when reports arrive less than 80ms apart. Mobile touch
+ * therefore needs a different unit from xterm scrollback: three finger rows per report,
+ * with enough separation to keep Claude on its base multiplier even after the downstream
+ * repaint pacer adds a frame. Excess fast-flick travel is shed instead of queued, because
+ * replaying it later is the runaway-scroll failure.
+ */
+export const CLAUDE_TOUCH_ROWS_PER_REPORT = 3
+export const CLAUDE_TOUCH_REPORT_INTERVAL_MS = 120
+
+export function applicationTouchScroll(
+  state: ApplicationTouchScrollState,
+  deltaPixels: number,
+  rowHeight: number,
+  backend: string,
+  now: number,
+): ApplicationTouchScrollResult {
+  if (rowHeight <= 0 || !deltaPixels) {
+    return { steps: 0, remainder: rowHeight > 0 ? state.pixels : 0, lastReportAt: state.lastReportAt, distance: 0, droppedPixels: 0 }
+  }
+
+  // Reversing direction abandons a pending report from the old direction. A wheel tick
+  // after the finger reverses must never continue scrolling the previous way.
+  const carried = state.pixels && Math.sign(state.pixels) !== Math.sign(deltaPixels)
+    ? deltaPixels
+    : state.pixels + deltaPixels
+
+  if (backend.toLowerCase() !== 'claude') {
+    const budget = terminalScrollSteps(carried, rowHeight)
+    return {
+      ...budget,
+      lastReportAt: budget.steps ? now : state.lastReportAt,
+      distance: budget.steps * rowHeight,
+      droppedPixels: 0,
+    }
+  }
+
+  const reportDistance = rowHeight * CLAUDE_TOUCH_ROWS_PER_REPORT
+  const bounded = Math.max(-reportDistance, Math.min(reportDistance, carried))
+  const droppedPixels = Math.max(0, Math.abs(carried) - Math.abs(bounded))
+  const intervalElapsed = now < state.lastReportAt || now - state.lastReportAt >= CLAUDE_TOUCH_REPORT_INTERVAL_MS
+  if (Math.abs(bounded) < reportDistance || !intervalElapsed) {
+    return { steps: 0, remainder: bounded, lastReportAt: state.lastReportAt, distance: 0, droppedPixels }
+  }
+
+  const steps = Math.sign(bounded)
+  return {
+    steps,
+    remainder: bounded - steps * reportDistance,
+    lastReportAt: now,
+    distance: steps * reportDistance,
+    droppedPixels,
+  }
+}
+
 /**
  * Split a pixel budget into whole rows and the remainder to carry.
  *

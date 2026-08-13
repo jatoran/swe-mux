@@ -211,9 +211,13 @@ PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
+GET     /projects/{project_id}/project-context
+PUT     /projects/{project_id}/project-context {markdown, revision}
 GET     /sessions/{session_id}/scan-timeline
 PUT     /sessions/{session_id}/scan-timeline  {enabled}
+PUT     /sessions/{session_id}/scan-timeline/project {enabled}
 POST    /sessions/{session_id}/scan-timeline/scan
+POST    /sessions/{session_id}/scan-timeline/backfill
 GET     /sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 ```
 
@@ -231,10 +235,18 @@ through the ordinary project-config write: `409 revision_conflict` on a stale re
 `409 automation_not_implemented` for a reserved id with no code behind it. The same table is
 also carried by the typed portable Project options (`features/automation-enablement.md`).
 
+The Project-context routes read and revision-check one fixed user-owned Markdown file.
+`GET` returns blank content and revision `missing` when it does not exist.
+`PUT` accepts no path and returns `409 revision_conflict` rather than overwriting a concurrent external edit.
+The response includes the bounded setup prompt copied by the Timeline drawer (`features/project-card.md`).
+
 The scan-timeline routes expose the readable records and boundaries for one persistent session.
 `PUT` changes only the current `agent_run_id` grant and refuses when either outer gate is off.
+`PUT .../project` changes the Project permission and its required dependencies without authorizing a run or starting historical work.
 `POST .../scan` requests one bounded scan and returns no record when there is no new input or a
 budget gate is closed.
+`POST .../backfill` starts an oldest-first background scan of uncovered messages in the current run and returns its initial state.
+The ordinary timeline snapshot carries progress and an honest completed, partial, or failed result.
 The record route returns compressed metadata by default; `rehydrate=1` reparses the authoritative
 current or historical run transcript for the record's source interval and increments the measured
 rehydration rate (`features/scan-timeline.md`).
@@ -933,9 +945,8 @@ another's identity.
 seconds since progress), `degraded[]`, and per-subscriber `event_bus` drop counts and queue
 depths plus `tier0_capture` (captured/dropped, last error) and `deterministic_consumers`
 (findings, last error, loop liveness — a detector that stopped producing findings is
-otherwise indistinguishable from a quiet fleet) plus `project_cards` (cached/builds/skipped
-and the last reason a project got no card — "no card" is a legitimate outcome, so the reason
-has to be readable somewhere). Both are in-memory per daemon
+otherwise indistinguishable from a quiet fleet) plus `project_contexts` (fixed path, size bound,
+reads, writes, blank-file creates, and last read error). Both are in-memory per daemon
 boot and do not survive a restart.
 
 It also reports **what each loop costs**, not only whether it lives. Every `loops[]` entry
