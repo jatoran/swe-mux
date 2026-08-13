@@ -362,8 +362,10 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # never answered "does this surface belong beside a terminal" — it has no send button,
     # so nothing in it needed the terminal on screen, and it read as a duplicate of the
     # Queue tab three cells up. A count going *down* is the healthy direction here.
+    # Re-checked at thirteen (Timeline): it is a compact session-scoped reader and uses the
+    # same one-row scroller and selected-tab reveal contract.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 12, ids
+    assert len(ids) == 13, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert "drawer-chrome" not in drawer
@@ -418,7 +420,7 @@ def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> No
     assert "presentation={activeDrawerPresentation}" in app
     assert (
         "drawerLauncherTabs.filter("
-        "tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{"
+        "tab=>!['transcript','timeline'].includes(tab.id)||hasHarnessTranscript(active?.backend)).map(tab=>{"
     ) in app
     assert "stack.tabs.filter(tabAvailable).map((id, index, visibleTabs) => {" in drawer
     assert "renderNode(layout.root)" in drawer

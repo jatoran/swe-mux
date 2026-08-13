@@ -568,7 +568,7 @@ async def test_automation_toggle_surface_reports_the_dependency_graph(tmp_path: 
     assert payload["requested"] == {}
     assert by_id["loop_detection"]["requires"] == ["tier0"]
     assert by_id["tier0"]["requires"] == ["raw_store"]
-    assert by_id["scan_timeline"]["implemented"] is False
+    assert by_id["scan_timeline"]["implemented"] is True
 
     # A consumer without its substrate resolves as blocked, naming what is missing.
     partial = await put_project_automations(  # type: ignore[arg-type]
@@ -605,7 +605,7 @@ async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path)
     project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
 
     async def body() -> dict[str, object]:
-        return {"automations": {"scan_timeline": True, "tier0": True, "raw_store": True}}
+        return {"automations": {"attention_ranking": True}}
 
     response = await put_project_automations(  # type: ignore[arg-type]
         SimpleNamespace(
