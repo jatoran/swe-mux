@@ -58,10 +58,10 @@
   The uniqueness key is `(session_id, agent_run_id, worktree_root, commit_oid)` with shell runs represented by the empty run id.
   An internal evidence rank permits only equal or stronger observations to replace classification fields while preserving the earliest observation time.
   Project deletion removes Project rows, and explicit History-entry deletion removes rows for that agent run.
-- `history_messages` + `history_messages_fts`: derived role-aware user/assistant text and
-  provider-native optional timestamp plus FTS5 lookup surface. `history_transcript_index` stores
-  source mtime/size, parser version, message count, and index time so empty/unchanged transcripts
-  remain incremental.
+- `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
+  `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
+  Both FTS5 tables are external-content derivatives of `history_messages` and stay synchronized by triggers.
+  `history_transcript_index` stores source mtime/size, parser version, message count, and index time so empty/unchanged transcripts remain incremental and MCP hit watermarks can reject stale pointers.
 - `events`: monotonically sequenced mux events.
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.
@@ -94,19 +94,20 @@
   pass/fail counts and failing-test ids inside the bounded detail. Command text is never
   stored beyond bounded detail, and that detail is bounded per value so the row always
   re-parses. Per-project opt-in and gated; see `features/tier0-facts.md`.
-- `project_cards`: one distilled architecture card per Project — `project_id` (primary key),
-  `project_root`, `fingerprint`, `card_json`, `schema_version`, the requested/resolved model,
-  token counts, `cost_usd`, `created_at`. A cache, not a record: the row is served only while
-  its `fingerprint` still matches the Project's current `.docs`, so it is replaced in place
-  and never pruned by age. Per-project opt-in and gated; see `features/project-card.md`.
+- Project context has no SQLite entity.
+  Its source of truth is the bounded user-owned `<project>/.swe-mux/project-context.md` file with content-derived revisions (`features/project-card.md`).
+- `project_cards` is a retained legacy table from the retired generated-card implementation.
+  Active runtime code never reads, writes, refreshes, or spends against it.
 - `scan_timeline_runs`: the current authorization and delta cursor for one `agent_run_id`.
   It records the persistent terminal `session_id`, Project, enabled/disabled timestamps, last
   scan time, and last source timestamp.
   A successor conversation has another primary key and therefore starts disabled.
+  Backfilled historical records update the cursor with a monotonic maximum and cannot move live delta capture backwards.
 - `scan_timeline_records`: append-only structured Tier 1 records keyed to both `session_id` and
   `agent_run_id`, with the bounded source interval, trigger, validated semantic JSON, transcript
   input hash, requested/resolved model, generation, token counts, cost, and creation time.
   Transcript text remains in the authoritative provider transcript.
+  Reads order records by source start time and then creation time, so records added by a later full-session scan appear at their historical position.
 - `scan_timeline_boundaries`: explicit predecessor-to-successor run boundaries for one persistent
   session, including rollover reason and time.
 - `scan_timeline_metrics`: one bounded aggregate row measuring record reads, source rehydrations,

@@ -138,6 +138,7 @@ uncommitted work together.
 - The Project-scoped Git tab has Map, Log, and Provenance readings of one repository.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
 - Each collapsed Map row gives the branch identity its own bounded line and wraps status metrics on a separate line, so divergence and state cannot overlap the title at narrow drawer widths.
+  The worktree indicator is inline with the identity, while the left-aligned expand control is inline with the metrics; neither control reserves an otherwise empty row.
   The worktree leaf appears beside the branch only when it adds information; the exact root remains in expanded detail.
   Zero comparison divergence is omitted rather than rendered as separate ahead and behind labels.
 - Local changes are separate `CONFLICTS`, `UNSTAGED`, and `STAGED` groups.

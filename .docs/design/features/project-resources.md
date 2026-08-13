@@ -108,7 +108,7 @@ The file tree and notes collection are utility-drawer tabs.
   note endpoint (`{markdown, revision}`); Markdown files PUT the file endpoint
   (`{path, text, revision}`). The queue's debounce, in-flight coalescing, 409 conflict banner,
   retry, and teardown beacon are identical for both.
-- The vendored Continuity 0.2.35 editor owns mobile touch and soft-keyboard arbitration.
+- The vendored Continuity 0.2.36 editor owns mobile touch and soft-keyboard arbitration.
   `pointerdown` does not focus its textarea; a resolved typing tap projects the caret and focuses
   synchronously, while scrolling and cancellation do not raise the keyboard.
   Long-press selection and selection-handle adjustment preserve an already-visible keyboard but
@@ -122,12 +122,23 @@ The file tree and notes collection are utility-drawer tabs.
   and flushing on unmount could not help because the editor never handed it over. Unmount now
   calls the editor's `commitComposition()` before flushing, which folds the run in and emits its
   `continuity-change` synchronously, so the queue has the text before the flush sends it.
-- Continuity 0.2.35 also commits an open composition inside `destroy()`, but this host cannot
+- Continuity 0.2.36 also commits an open composition inside `destroy()`, but this host cannot
   rely on that: the React adapter unbinds its listeners when the ref detaches, and `destroy()`
   runs a microtask after the DOM removal that follows, so the change it emits reaches nobody
   here. The explicit call lands while the listeners are still bound, because Preact runs a
   component's effect cleanups before unmounting that component's children. Hosts that bind
   directly to the element and never detach need nothing.
+- Continuity 0.2.36 scopes every block-marker toggle to the lines it rewrites: bullet, numbered,
+  and task toggles, blockquote wrapping, and heading demotion.
+  Marking one line of a multi-line paragraph previously left the following line as CommonMark
+  lazy-continuation text, which silently folded that untouched line into the new block, and the
+  reverse toggle had the mirror defect of dropping a line into the block above it.
+  A toggle now inserts a blank-line separator as part of the same edit wherever the rewrite would
+  otherwise absorb a neighbour or newly join one.
+  Separators are inserted and never auto-removed, because a blank line the writer typed is
+  indistinguishable from one a toggle inserted, so toggling on and then off is byte-identical only
+  where no separator was needed.
+  The separator, the marker, and the selection share one undo group.
 - The SDK also owns two further touch behaviors we cannot reach: Enter continues a list
   marker even while an IME composition is open (Android keyboards hold one across ordinary
   typing, and the editor's `beforeinput` router used to skip its line-break entries for
@@ -258,7 +269,7 @@ The file tree and notes collection are utility-drawer tabs.
   trail does not cover it, and the section's own content fills the screen below it.
 - The editor's `revealRange` is not how heading jumps get there because revealing a range also
   makes it the primary selection.
-  Continuity 0.2.35 accurately reveals find results against projected geometry on desktop and
+  Continuity 0.2.36 accurately reveals find results against projected geometry on desktop and
   coarse pointers, but a heading jump must remain viewport-only and retain one source row for
   the heading trail.
 - No exported geometry converts pixels to lines outside the editor, so the jump is a feedback

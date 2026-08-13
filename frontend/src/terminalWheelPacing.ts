@@ -2,9 +2,10 @@
  * Pacing for wheel-scroll mouse reports sent to an application that owns the mouse.
  *
  * When a TUI enables mouse tracking (Claude does), a scroll gesture becomes a run of SGR
- * scroll reports, one per row of travel: xterm emits exactly one report per wheel event
- * whatever magnitude that event carries, so the pane dispatches one event per row it means
- * to scroll (`forwardApplicationScroll`). Each report makes an alternate-screen application
+ * scroll reports. xterm emits exactly one report per wheel event whatever magnitude that
+ * event carries, so the pane dispatches one event per report (`forwardApplicationScroll`).
+ * The touch layer chooses the application-specific distance represented by each report.
+ * Each report makes an alternate-screen application
  * repaint (~2-20 KB of output), and a full-width Claude pane was measured consuming ~230
  * reports per second, while a free-spinning wheel or a trackpad flick can emit
  * thousands. Nothing else in the pipeline sheds load, so every excess report is banked

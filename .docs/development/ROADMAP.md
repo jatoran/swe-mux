@@ -149,7 +149,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                  (incl. mux.notify / mux.requestSpawn over the queue)       [done: CP §7.2]
                 -> Phase 5.4  Agent conversation rollover                   [done: CP step 3.5]
                   -> Phase 5.6  mux MCP v0.5: situational-awareness reads   [done]
-                    -> Phase 5.5  Project card + scan timeline              [done: CP steps 4-5]
+                    -> Phase 5.5  Project context + scan timeline           [done: CP steps 4-5]
                       -> Phase 5.8  SSH boundary handling in terminals      [correctness done; profiles deferred]
                         -> Phase 6  Agent Context + instruction coverage    [coverage done; rest deferred/culled]
                            (return-path channel 2: standing context, not pull) [CP §7]
@@ -202,7 +202,7 @@ document and are not duplicated here.
 | 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, and now runs **before** Phase 5.5 so its usage can justify or retire the timeline |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
 | 3.5 · Run boundary contract | **Phase 5.4** | not a control-plane step of its own, but a hard prerequisite for steps 4–8, which inherit their boundary from it and must never implement conversation-change detection themselves |
-| 4–5 · Project card + scan timeline | **Phase 5.5** | shipped; the timeline is opt-in at the global, Project, and current-run levels, and inherits Phase 5.4's run boundary |
+| 4–5 · Project context + scan timeline | **Phase 5.5** | shipped; context is one user-owned Markdown file, and the timeline is opt-in at the global, Project, and current-run levels with explicit full-session backfill and Phase 5.4's run boundary |
 | 6–7 · Attention ranking + narration | **Phase 6.5** | ranking needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one); narration is separately gated on the annotation surface being read |
 | 8 · Cross-session + mux MCP v1 | **Phase 7.5** | semantic half only; the memory-source reads moved to Phase 5.6. Needs the CP 5 timeline, the Phase 6 harness-coverage fix, the Phase 7 typed operations, and Phase 5.4 run-scoped retrieval |
 | 9 · Agent session control | **Phase 7.6** | the first agent-reachable actuation; needs the Phase 1/5 readiness predicate, a graceful-stop daemon op that does not exist yet (Phase 7), and the Phase 6.5 attention channels so a remote interrupt is never silent |
@@ -1247,7 +1247,7 @@ conversation replacements under live PTYs.
   **Operator-confirmed 2026-08-12** on the frozen desktop app after the Claude and Codex
   rollover checks.
 
-## Phase 5.5 — Control-plane project card and scan timeline
+## Phase 5.5 - Project context and scan timeline
 
 Control-plane build-order steps 4–5 (`CONTROL_PLANE_ROADMAP.md` §5.4–5.5). The first
 model-cost layer of the control plane and the substrate every semantic consumer reads from.
@@ -1263,12 +1263,11 @@ Start the timeline only once the free reads are in use and are observably insuff
 turn out to cover the need, this phase shrinks to whatever the deterministic detectors and
 transcript reads genuinely cannot answer.
 
-- [x] Project card (CP §5.4): distilled, cached architecture summary that feeds the scan
-  timeline and later Tier 2 analysis. Per-project opt-in (`project_card`), one budgeted
-  cheap-model call per documentation fingerprint, a deterministic file → area map the model
-  never rewrites, cache validity decided by source content rather than a TTL, and no card at
-  all — never a guessed one — when a provider is unavailable. Internal API only; the scan
-  timeline and screenshot-to-agent are its consumers. `design/features/project-card.md`.
+- [x] Project context card: one user-owned, bounded `.swe-mux/project-context.md` file that feeds the scan timeline.
+  It starts blank, is edited from the Timeline drawer, saves atomically with revision checks, and includes a copyable setup prompt for an agent to populate it from verified repository evidence.
+  swe-mux never crawls Project docs or generates context itself.
+  The retired generated-card design is archived and its legacy database rows are inert.
+  `design/features/project-card.md`.
 - [x] Scan timeline (CP §5.5): periodic and event-triggered cheap-model records forming a
   per-session timeline, per-project opt-in, budgeted, and inert when disabled.
 - [x] **Scan records carry `agent_run_id`, not `session_id` alone, and a run is the timeline's
@@ -1289,14 +1288,18 @@ transcript reads genuinely cannot answer.
   dropped *within* a run is evidence of a dead end (CP §6.2).
 - [x] Ship the persistent spend/budget line (CP §9 UI work) with this phase; this is the
   first feature whose cost is continuous rather than per-run.
+- [x] Keep every timeline control in the Timeline drawer.
+  The drawer owns Project permission, Project context, the per-run grant, current scan, full-session scan, spend, records, and source expansion; the topbar has no scan action.
+- [x] Full-session scan processes uncovered current-run messages oldest first, preserves source-time ordering, never moves the live cursor backwards, and reports completed, partial, or failed progress without weakening any gate or budget.
+- [x] Automation enablement is centralized in the Automation dashboard.
+  Settings retains provider, model, budget, execution, and advanced rule configuration but no duplicate engine, timeline, titler, summarizer, or attention-observer switches.
 
 ### Phase 5.5 exit criteria
 
 - [x] Scan records are per-project opt-in, budget-bounded, and degrade to no records rather
   than to guesses when a provider is unavailable.
 - [x] The rehydration rate is measured and visible, not assumed.
-- [x] Model spend for the timeline is visible in an always-on surface before the feature is
-  enabled by default anywhere.
+- [x] Model spend for the timeline is visible in the Timeline drawer before the feature is enabled by default anywhere.
 - [x] No timeline segment, continuity window, novelty comparison, or derived title spans a
   conversation rollover, and the boundary is visible in the timeline UI.
 

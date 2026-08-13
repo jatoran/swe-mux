@@ -10,13 +10,14 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import type { Session } from './types'
-import { assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
+import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
 import { isTerminalProtocolResponse, shouldSuppressTerminalProtocolResponse } from './terminalProtocol'
 import { clampContextMenuLeft, fitMenuInViewport } from './menuPosition'
 import {
+  applicationTouchScroll,
   mobileDragTarget,
   terminalCellAtPoint,
   terminalScrollSteps,
@@ -2512,6 +2513,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       moved:boolean
       /** Sub-row scroll travel carried between move events. */
       pixels:number
+      applicationLastReportAt:number
+      applicationInputPixels:number
+      applicationReports:number
+      applicationDroppedPixels:number
       selecting:{start:TerminalCell;length:number}|null
     }|null=null
     // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
@@ -2619,7 +2624,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         lastTouchAt = Date.now()
         softKeyboardBeforeGesture=softKeyboardHolder()
         softKeyboardDismissalsBeforeGesture=softKeyboardDismissals()
-        touch={pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,px:event.clientX,py:event.clientY,moved:false,pixels:0,selecting:null}
+        touch={
+          pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,
+          px:event.clientX,py:event.clientY,moved:false,pixels:0,applicationLastReportAt:Number.NEGATIVE_INFINITY,
+          applicationInputPixels:0,applicationReports:0,applicationDroppedPixels:0,selecting:null,
+        }
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
           const cell = cellAt(event.clientX,event.clientY)
@@ -2685,13 +2694,23 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // through would hand the browser a page scroll partway through a gesture.
       event.preventDefault()
       const rowHeight=paneRowHeight()
-      const budget=terminalScrollSteps(touch.pixels+delta,rowHeight)
-      touch.pixels=budget.remainder
-      if(!budget.steps)return
       if(dragTarget==='terminal'){
+        const budget=terminalScrollSteps(touch.pixels+delta,rowHeight)
+        touch.pixels=budget.remainder
+        if(!budget.steps)return
         term.scrollLines(budget.steps)
         return
       }
+      const budget=applicationTouchScroll(
+        {pixels:touch.pixels,lastReportAt:touch.applicationLastReportAt},
+        delta,rowHeight,applicationTouchScrollProfile(backendRef.current),event.timeStamp,
+      )
+      touch.pixels=budget.remainder
+      touch.applicationLastReportAt=budget.lastReportAt
+      touch.applicationInputPixels+=Math.abs(delta)
+      touch.applicationReports+=Math.abs(budget.steps)
+      touch.applicationDroppedPixels+=budget.droppedPixels
+      if(!budget.steps)return
       // This scroll belongs to the application, so nothing in xterm's buffer will ever record
       // it. The drags this pane forwards are its only evidence of where that viewport is, so
       // it totals them: a drag back through the history raises the chip, and a drag toward
@@ -2700,7 +2719,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       // otherwise left with a chip that only a tap can dismiss, on a viewport already sitting
       // exactly where the tap would send it. Totalled in the rows actually forwarded rather
       // than the finger's pixels, which is what the application moved by.
-      appTailDistanceRef.current=trackAppTailDistance(appTailDistanceRef.current,budget.steps*rowHeight)
+      appTailDistanceRef.current=trackAppTailDistance(appTailDistanceRef.current,budget.distance)
       const off=appOffTailByDistance(appTailDistanceRef.current,rowHeight)
       if(off!==appOffTailRef.current){
         appOffTailRef.current=off;setAppOffTail(off)
@@ -2752,6 +2771,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         }
       }
       if(focusOnMouseClaim)focusTerminalInput()
+      if(touch?.applicationInputPixels){
+        recordTerminalRenderDiagnostic(session.id,'mobile_application_scroll',{
+          backend:backendRef.current,
+          inputPixels:Math.round(touch.applicationInputPixels),
+          reports:touch.applicationReports,
+          droppedPixels:Math.round(touch.applicationDroppedPixels),
+        })
+      }
       stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()
       // A gesture that was not a typing tap gives the keyboard back exactly as it found
       // it — up if it was up, down if it was down. Deferred a frame, and ordered after

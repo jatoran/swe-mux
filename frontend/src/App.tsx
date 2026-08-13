@@ -78,7 +78,6 @@ import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
-import { ScanSpendStatus } from './ScanSpendStatus'
 import { VoicePlayer } from './VoicePlayer'
 import { ConversationSurface, ConversationToggle, useConversation } from './ConversationControl'
 import { resolveConversationTarget } from './conversationTarget'
@@ -4815,7 +4814,6 @@ export function App() {
       {/* Quota sits beside nav, at the start of the bar: it is glanced at constantly, and the
           two edges are where a thumb reaching for a toggle lands, so it takes neither. */}
       <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
-      <ScanSpendStatus session={active||null} onOpen={()=>showDrawerTab('timeline')}/>
       {/* The toolbar title is the Project menu's trigger. Single tap opens it on
           touch: a long-press was the only way in, and holding a text node is what
           raised the selection UI. Long-press/right-click still work for parity.
@@ -4858,7 +4856,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><ScanSpendStatus session={active||null} onOpen={()=>showDrawerTab('timeline')}/>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root

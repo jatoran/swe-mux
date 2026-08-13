@@ -187,6 +187,38 @@ export function isPinnedToBottom(scrollTop: number, scrollHeight: number, client
   return scrollHeight - (scrollTop + clientHeight) <= TRANSCRIPT_BOTTOM_SLACK
 }
 
+/** The parts of a live `Selection` the reading column has to read.
+ *
+ * Structural rather than the DOM types so the rule below is testable under the plain
+ * node runner, like everything else in this file. A real `Selection` and a real
+ * `Element` both satisfy these as they stand. */
+export type TranscriptSelectionLike = Readonly<{
+  isCollapsed: boolean
+  rangeCount: number
+  anchorNode: Node | null
+  focusNode: Node | null
+}>
+
+export type TranscriptSelectionHost = Readonly<{ contains: (node: Node | null) => boolean }>
+
+/**
+ * Whether the reader is holding a manual selection over this column.
+ *
+ * Either endpoint inside the body counts, not both. A selection being dragged is
+ * routinely reported with one end outside the column for a frame or two, and the whole
+ * point of asking is to stop the follow-scroll from destroying a selection mid-drag —
+ * so the reading that errs toward "yes, they are selecting" is the correct one.
+ */
+export function transcriptSelectionActive(
+  selection: TranscriptSelectionLike | null,
+  host: TranscriptSelectionHost | null,
+): boolean {
+  if (!selection || !host) return false
+  // A collapsed selection is a caret, which every tap in the column leaves behind.
+  if (selection.isCollapsed || selection.rangeCount < 1) return false
+  return host.contains(selection.anchorNode) || host.contains(selection.focusNode)
+}
+
 // One slot, not a map. The rule is "keep my place while I am on this session, and
 // start at the newest message when I move to another one", so remembering more than
 // the current session would be remembering something nobody asked to keep — and a

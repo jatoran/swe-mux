@@ -16,6 +16,11 @@ responsive controls.
   and the active Project's Run trigger above the sidebar column.
   The product wordmark is omitted because Project scope is the useful persistent identity in this compact row.
   Workspace tabs are not global top-rail state; every pane renders its own tab strip beside that rail.
+  Scan timeline has no top-rail action or spend chip.
+  Its complete control and status surface lives in the utility drawer's Timeline tab.
+- The Timeline tab begins with Project-scoped controls: Project permission and the expandable `.swe-mux/project-context.md` editor with Save and **Copy setup prompt**.
+  Session-scoped controls follow: current-run permission, current scan, full-session scan and progress, spend, records, rollover boundaries, and source expansion.
+  Enabling Project permission does not authorize a run or backfill history; **Scan full session** is the explicit catch-up action.
 - The sidebar is pointer/keyboard resizable from 190-480 px and collapsible.
   Dragging its divider below 150 px previews collapse, and reversing the same drag past 170 px reopens it before release.
   The separate thresholds prevent state chatter near the boundary.
@@ -332,6 +337,9 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- Automation enablement is not duplicated in Settings.
+  The Automation dashboard owns the engine, Scan timeline, titler, summarizer, attention-observer, and custom-rule switches.
+  Settings retains OpenRouter credentials, models, budgets, execution bounds, retention, and advanced rule definitions.
 - Git and processes exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
 - Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
@@ -1208,6 +1216,12 @@ responsive controls.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
+  **A manual selection is a first-class way to copy from this column, not only the buttons.**
+  None of the column's chrome can hold a selection endpoint: not the head bar, the sticky copy control, the message headers, the seams, or Show more.
+  The head bar is the one that mattered, because it is a sibling above the scroller and therefore precedes every message in document order, so a drag that wandered past the top of the body resolved its caret into it and the highlight swallowed the whole transcript above the anchor.
+  Making the chrome unselectable both removes that trap and keeps speaker labels, timestamps, and seam counts off the clipboard, so a dragged selection yields the prose and nothing else.
+  On touch the sticky copy control also hides for as long as a selection is held, since it is the last thing in the path a selection handle travels that still accepts a tap.
+  Holding a selection over the column suspends the follow-scroll below for its duration; the arrival becomes the same "N new" pill a reader who scrolled up gets, and releasing the selection re-reads whether the column is still at its bottom rather than trusting the answer from before the freeze.
   Every message header shows its full local date and time, not only a time-of-day.
   An explicit Show more or Show less choice is device-local and keyed by session, agent run, and stable message identity, so appending messages, a moving transcript window, or navigating away does not reset it or apply it to a different message.
   Search temporarily showing a full matching message does not change that saved choice.
@@ -1255,6 +1269,9 @@ responsive controls.
   speaks cannot be read at all, which is the failure this tab exists to fix. Returning to a
   session still focused restores where reading stopped; moving to another session starts at its
   newest message, and nothing is remembered per session beyond the one you are on.
+  A held selection counts as "not at the bottom" for as long as it is held, on the same
+  principle: an agent finishing a turn is precisely when someone is selecting what it just said,
+  and moving the column then destroys the selection outright.
 - It refreshes when the transcript observer consumes a user message (`transcript_message`) and at
   the assistant turn boundary (`turn_ended`), never on a timer. The first event makes a submitted
   prompt appear without waiting for the response; the second collects the completed answer.
@@ -1592,7 +1609,7 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.35 separately owns single-finger note-touch
+  text entry, so the early blur is safe. Continuity 0.2.36 separately owns single-finger note-touch
   arbitration and the editor's Android soft-keyboard gate. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
 - Continuity tracks explicit typing intent and visual-viewport keyboard occlusion per editor.

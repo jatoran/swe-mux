@@ -109,10 +109,7 @@
 - Changing Tier 0 deterministic fact capture or its source pointers/fingerprints:
   `design/features/tier0-facts.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
-- Changing the control-plane project card (its sources, fingerprint/invalidation, budget,
-  or what consumers read from it): `design/features/project-card.md`,
-  `design/features/automation-enablement.md`, `design/data-model.md`,
-  `technical/backend/packages.md`, `technical/backend/sqlite.md`
+- Changing the user-owned Project context card (its fixed file, editor, bounds, revision contract, setup prompt, or scan prefix): `design/features/project-card.md`, `design/features/automation-enablement.md`, `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing the scan timeline, per-run scan grant, rollover boundary, scan budgets, source
   rehydration, or dead-end extraction: `design/features/scan-timeline.md`,
   `design/features/automation-enablement.md`, `design/features/automation.md`,

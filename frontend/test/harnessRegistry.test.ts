@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   allBackendNames,
+  applicationTouchScrollProfile,
   appliesWidthEnvelope,
   assignsConversationId,
   deliversHarnessPrompts,
@@ -91,6 +92,10 @@ test('an unknown harness defaults every terminal trait to the conservative answe
   assert.equal(suppressesLateColorResponse('future-agent'), false)
   assert.equal(supportsBranch('future-agent'), false)
   assert.equal(assignsConversationId('future-agent'), false)
+  assert.deepEqual(applicationTouchScrollProfile('future-agent'), {
+    rowsPerReport: 1,
+    reportIntervalMs: 0,
+  })
   // The majority spelling, because typing `/name` is the least surprising guess.
   assert.equal(skillInvocationPrefix('future-agent'), '/')
 
@@ -124,6 +129,14 @@ test('the generated seed carries the daemon capabilities the browser gates on', 
   assert.equal(minDesktopColumns('claude'), 0)
   assert.equal(suppressesLateColorResponse('codex'), true)
   assert.equal(suppressesLateColorResponse('claude'), false)
+  assert.deepEqual(applicationTouchScrollProfile('claude'), {
+    rowsPerReport: 3,
+    reportIntervalMs: 120,
+  })
+  assert.deepEqual(applicationTouchScrollProfile('codex'), {
+    rowsPerReport: 1,
+    reportIntervalMs: 0,
+  })
   assert.deepEqual(
     HARNESS_REGISTRY_SEED.harnesses.filter(item => item.capabilities.branch).map(item => item.name),
     ['claude', 'codex'],

@@ -790,9 +790,10 @@ class AutomationStore:
                 ),
             )
             self._db.execute(
-                "UPDATE scan_timeline_runs SET last_scan_at=?,last_source_ts=?,updated_at=? "
+                "UPDATE scan_timeline_runs SET last_scan_at=?,"
+                "last_source_ts=MAX(COALESCE(last_source_ts,?),?),updated_at=? "
                 "WHERE agent_run_id=?",
-                (created, t1, created, agent_run_id),
+                (created, t1, t1, created, agent_run_id),
             )
             self._db.commit()
 
@@ -817,7 +818,7 @@ class AutomationStore:
             if value:
                 sql += f" AND {field}=?"
                 args.append(value)
-        sql += " ORDER BY created_at ASC LIMIT ?"
+        sql += " ORDER BY t0 ASC,created_at ASC LIMIT ?"
         args.append(max(1, min(limit, 2000)))
 
         def op() -> list[dict[str, Any]]:

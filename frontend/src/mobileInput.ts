@@ -48,6 +48,79 @@ export type TerminalScrollSteps = {
   remainder: number
 }
 
+export type ApplicationTouchScrollState = {
+  /** Finger travel not yet converted into an application wheel report. */
+  pixels: number
+  /** Pointer-event timestamp of the last report sent during this gesture. */
+  lastReportAt: number
+}
+
+export type ApplicationTouchScrollResult = TerminalScrollSteps & {
+  lastReportAt: number
+  /** Pixel distance the application is expected to move for the emitted reports. */
+  distance: number
+  /** Excess high-velocity travel intentionally not banked for delayed scrolling. */
+  droppedPixels: number
+}
+
+export type ApplicationTouchScrollProfile = {
+  rowsPerReport: number
+  reportIntervalMs: number
+}
+
+/**
+ * Some application-owned viewports consume several rows per wheel report or accelerate
+ * reports that arrive too close together. The harness registry publishes that measured
+ * profile. Excess fast-flick travel is shed instead of queued, because replaying it later
+ * is the runaway-scroll failure.
+ */
+export function applicationTouchScroll(
+  state: ApplicationTouchScrollState,
+  deltaPixels: number,
+  rowHeight: number,
+  profile: ApplicationTouchScrollProfile,
+  now: number,
+): ApplicationTouchScrollResult {
+  if (rowHeight <= 0 || !deltaPixels) {
+    return { steps: 0, remainder: rowHeight > 0 ? state.pixels : 0, lastReportAt: state.lastReportAt, distance: 0, droppedPixels: 0 }
+  }
+
+  // Reversing direction abandons a pending report from the old direction. A wheel tick
+  // after the finger reverses must never continue scrolling the previous way.
+  const carried = state.pixels && Math.sign(state.pixels) !== Math.sign(deltaPixels)
+    ? deltaPixels
+    : state.pixels + deltaPixels
+
+  const rowsPerReport = Math.max(1, Math.trunc(profile.rowsPerReport))
+  const reportIntervalMs = Math.max(0, Math.trunc(profile.reportIntervalMs))
+  if (rowsPerReport === 1 && reportIntervalMs === 0) {
+    const budget = terminalScrollSteps(carried, rowHeight)
+    return {
+      ...budget,
+      lastReportAt: budget.steps ? now : state.lastReportAt,
+      distance: budget.steps * rowHeight,
+      droppedPixels: 0,
+    }
+  }
+
+  const reportDistance = rowHeight * rowsPerReport
+  const bounded = Math.max(-reportDistance, Math.min(reportDistance, carried))
+  const droppedPixels = Math.max(0, Math.abs(carried) - Math.abs(bounded))
+  const intervalElapsed = now < state.lastReportAt || now - state.lastReportAt >= reportIntervalMs
+  if (Math.abs(bounded) < reportDistance || !intervalElapsed) {
+    return { steps: 0, remainder: bounded, lastReportAt: state.lastReportAt, distance: 0, droppedPixels }
+  }
+
+  const steps = Math.sign(bounded)
+  return {
+    steps,
+    remainder: bounded - steps * reportDistance,
+    lastReportAt: now,
+    distance: steps * reportDistance,
+    droppedPixels,
+  }
+}
+
 /**
  * Split a pixel budget into whole rows and the remainder to carry.
  *

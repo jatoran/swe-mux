@@ -99,6 +99,9 @@ gets the same guarantee.
   backfill did exactly that, resurrecting every quarantined misattributed run on each restart;
   it is now gated on the column having just been added and additionally excludes the
   quarantine exit reasons.
+- History's MCP retrieval migration follows that rule twice.
+  Adding `history_messages.ts_epoch` backfills provider timestamps only when the column is first added.
+  Creating the external-content `history_messages_trigram` table issues its FTS5 `rebuild` command only when the table did not exist before schema creation; later connects rely on the insert/update/delete triggers.
 - A proven session-identity repair may atomically delete that session's rebuildable
   tool/compaction/coverage rows and reassign its retained process fingerprints. This remains an
   operational-telemetry transaction through the shared coordinator; History does not mutate
@@ -128,14 +131,14 @@ regression is valuable because these user-visible paths historically exposed lea
   Writes are `INSERT OR IGNORE` against the `(session_id, agent_run_id, seq)` key, so a
   replayed batch after a failed flush cannot duplicate rows.
 - `src/swe_mux/tier0_store.py`, `src/swe_mux/deterministic_consumers.py`
-- `src/swe_mux/project_card.py` — writes one `project_cards` row per Project through
-  `AutomationStore`. The row is a cache whose validity is a source fingerprint, not an age,
-  so it is deliberately excluded from the retention prune (like `automation_model_cache`,
-  it is bounded by construction).
+- `src/swe_mux/project_context.py` writes no SQLite rows.
+  The Project-owned Markdown file is its only active store.
+- The `project_cards` table remains for compatibility with existing databases, but no active runtime service reads or writes it.
 - `src/swe_mux/scan_timeline.py` - writes run grants, records, rollover boundaries, and bounded
   read metrics through `AutomationStore`.
   Scan records and boundaries use the durable retention window; run state and the one-row metrics
   table are bounded by run count and construction.
+  Backfill inserts use the same record table, record reads order by source time, and run-cursor updates take the maximum existing/source timestamp.
   The shared budget ledger's nullable Project/run dimensions let failed billable calls count
   toward scan budgets without fabricating a semantic record.
 - `tests/test_automation_phase6.py`
