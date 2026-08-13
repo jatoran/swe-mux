@@ -140,15 +140,12 @@ export const BACK_COMMAND = 'nav.back'
 // finger counts, matching the swipe-away-close override. Edge-anchored swipes are not an
 // option here — Android owns them — so this is the mid-screen swipe.
 const BACK_SLOTS = new Set<GestureSlot>(['swipe_right', 'two_finger_swipe_right'])
+const HORIZONTAL_SLOTS = new Set<GestureSlot>(['swipe_left', 'swipe_right', 'two_finger_swipe_left', 'two_finger_swipe_right'])
 
-// While a slide-in panel is open, the horizontal swipe pointing back toward the
-// edge it slid in from means "push it away". With the override enabled, that
-// swipe closes the panel instead of running its normal binding — so dismissing
-// the right-edge drawer can never open the left sidebar on top of it (and vice
-// versa). The override is keyed on the open panel, not the slot's binding, so it
-// also applies when the slot is unbound: an open panel with a scrim makes the
-// swipe-away motion unambiguous. Swipes toward an open panel keep their binding
-// (the drawer's own toggle direction already closes it from over the scrim).
+// While the left sidebar is open, either horizontal direction closes it. The
+// right-edge drawer keeps its directional rule: a rightward swipe pushes it
+// away. These overrides are keyed on the open panel rather than the slot's
+// binding, so they also work when that slot is unbound.
 export function resolveGestureCommand(
   slot: GestureSlot,
   settings: MobileGestureSettings,
@@ -167,9 +164,14 @@ export function resolveGestureCommand(
   if (swipeAwayClose) {
     // The right-edge drawer overlays the sidebar, so it wins when both are open.
     if (panels.drawerOpen && (slot === 'swipe_right' || slot === 'two_finger_swipe_right')) return 'drawer.toggle'
-    if (panels.sidebarOpen && (slot === 'swipe_left' || slot === 'two_finger_swipe_left')) return 'sidebar.close'
+    if (panels.sidebarOpen && HORIZONTAL_SLOTS.has(slot)) return 'sidebar.close'
   }
   return settings[slot]
+}
+
+/** Dismiss-stack levels other than the two mobile slide-in panels are gesture overlays. */
+export function gestureOverlayDepth(dismissDepth: number, panels: OverlayPanels): number {
+  return Math.max(0, dismissDepth - Number(panels.sidebarOpen) - Number(panels.drawerOpen))
 }
 
 export function swipeAwayCloseEnabled(config: Record<string, unknown>): boolean {

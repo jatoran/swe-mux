@@ -78,7 +78,6 @@ import type { InsertTarget } from './insertTarget'
 import type { NotePlacement } from './NotesTab'
 import { ProjectRunMenu } from './ProjectRunMenu'
 import { AutomationDashboard } from './AutomationDashboard'
-import { ScanSpendStatus } from './ScanSpendStatus'
 import { VoicePlayer } from './VoicePlayer'
 import { ConversationSurface, ConversationToggle, useConversation } from './ConversationControl'
 import { resolveConversationTarget } from './conversationTarget'
@@ -129,7 +128,7 @@ import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettin
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
-import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
@@ -1698,7 +1697,7 @@ export function App() {
           if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // already ride the session snapshots, so `git_changed` needs no payload here.
-          if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
+          if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed'||event.type==='git_provenance_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
           if(!isReplay&&event.type==='note_changed')window.dispatchEvent(new CustomEvent('mux:note-changed',{detail:{scope:event.payload?.scope==='global'?'global':'project',projectId:String(event.payload?.project_id||''),kind:event.payload?.scope==='global'?'global-note':'note',noteId:String(event.payload?.note_id||''),revision:String(event.payload?.revision||'')}}))
         } catch {
           // A malformed event cannot be classified safely. Keep the REST snapshot as
@@ -4267,7 +4266,8 @@ export function App() {
       const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
       state = null
       if (!slot) return
-      const command = resolveGestureCommand(slot, mobileGestures, overlayPanels.current, swipeAwayClose, { depth: dismissStack.depth(), enabled: overlayBack })
+      const panels = overlayPanels.current
+      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, { depth: gestureOverlayDepth(dismissStack.depth(), panels), enabled: overlayBack })
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }
@@ -4818,7 +4818,6 @@ export function App() {
       {/* Quota sits beside nav, at the start of the bar: it is glanced at constantly, and the
           two edges are where a thumb reaching for a toggle lands, so it takes neither. */}
       <AccountSwitcher variant="compact" onManage={()=>openSettings('Accounts')}/>
-      <ScanSpendStatus session={active||null} onOpen={()=>showDrawerTab('timeline')}/>
       {/* The toolbar title is the Project menu's trigger. Single tap opens it on
           touch: a long-press was the only way in, and holding a text node is what
           raised the selection UI. Long-press/right-click still work for parity.
@@ -4861,7 +4860,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong><ScanSpendStatus session={active||null} onOpen={()=>showDrawerTab('timeline')}/>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root

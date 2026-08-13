@@ -11,6 +11,7 @@ import {
   parseCommitChanges,
   parseGitGraph,
   parseGitOverview,
+  parseGitProvenance,
   parsePatchSnapshot,
   parseWorktrees,
   pathTail,
@@ -246,6 +247,23 @@ test('commit graph parsing keeps Git connector rows and typed commits', () => {
   assert.equal(graph.lines[1].kind, 'connector')
   assert.equal(graph.limit, 80)
   assert.equal(graph.hasMore, true)
+})
+
+test('session Git provenance parsing keeps evidence strength and rejects malformed rows', () => {
+  const rows = parseGitProvenance({ items: [
+    {
+      id: 'edge-1', session_id: 'session-1', session_name: 'Builder', agent_run_id: 'run-1',
+      project_id: 'project-1', worktree_root: '/repo', commit_oid: 'a'.repeat(40),
+      parent_oids: ['b'.repeat(40)], subject: 'Add provenance', committed_at: 12,
+      previous_head: 'b'.repeat(40), relationship: 'created', confidence: 'exact',
+      ambiguous: false, source: 'session_tool', observed_at: 13,
+    },
+    { id: 'bad', relationship: 'invented' },
+  ] })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].sessionName, 'Builder')
+  assert.equal(rows[0].confidence, 'exact')
+  assert.deepEqual(rows[0].parentOids, ['b'.repeat(40)])
 })
 
 test('file status labels fit the narrow change list', () => {

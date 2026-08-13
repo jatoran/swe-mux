@@ -37,9 +37,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
+import math
 import secrets
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -63,17 +66,20 @@ log = logging.getLogger(__name__)
 MCP_PROTOCOL_VERSION = "2025-06-18"
 _SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
 
-# Bounds. A tool call must never pull an unbounded transcript into an agent's
-# context; these mirror the automation slice service's budget.
+# Bounds. Search keeps the corpus server-side and returns small retrieval hits.
+# Full transcript browsing remains available when explicitly requested.
 TRANSCRIPT_MAX_BYTES = 512 * 1024
-
-
 TRANSCRIPT_MAX_MESSAGES = 200
-TRANSCRIPT_DEFAULT_MESSAGES = 50
+TRANSCRIPT_DEFAULT_MESSAGES = 12
+TRANSCRIPT_DEFAULT_OUTPUT_BYTES = 32 * 1024
+HIT_DEFAULT_OUTPUT_BYTES = 16 * 1024
 LIST_MAX_SESSIONS = 25
 LIST_HISTORY_SCAN_LIMIT = 100
 LIST_MAX_BYTES = 32 * 1024
+SEARCH_DEFAULT_LIMIT = 8
 SEARCH_MAX_LIMIT = 50
+SEARCH_DEFAULT_OUTPUT_BYTES = 16 * 1024
+SEARCH_MAX_OUTPUT_BYTES = 64 * 1024
 PARSE_TIMEOUT_SECONDS = 2.0
 NOTE_MAX_BYTES = 512 * 1024
 RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
@@ -220,6 +226,67 @@ def _bounded_utf8(text: str, limit: int) -> tuple[str, bool]:
     return raw[:limit].decode("utf-8", "ignore"), True
 
 
+def _parse_time_bound(value: Any, label: str) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be an epoch timestamp or ISO-8601 date-time")
+    if isinstance(value, (int, float)):
+        stamp = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            stamp = float(text)
+        except ValueError:
+            try:
+                stamp = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+            except ValueError as exc:
+                raise ValueError(
+                    f"{label} must be an epoch timestamp or ISO-8601 date-time"
+                ) from exc
+    else:
+        raise ValueError(f"{label} must be an epoch timestamp or ISO-8601 date-time")
+    if not math.isfinite(stamp):
+        raise ValueError(f"{label} must be finite")
+    return stamp
+
+
+def _string_list(value: Any, label: str, *, maximum: int = 50) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{label} must be an array of strings")
+    cleaned = tuple(dict.fromkeys(item.strip() for item in value if item.strip()))
+    if len(cleaned) > maximum:
+        raise ValueError(f"{label} accepts at most {maximum} values")
+    return cleaned
+
+
+def _query_signature(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:20]
+
+
+def _bounded_message_texts(
+    messages: list[dict[str, Any]], max_output_bytes: int
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """Keep every selected message while sharing a hard text budget fairly."""
+    if not messages:
+        return [], False, 0
+    output: list[dict[str, Any]] = []
+    truncated = False
+    used = 0
+    for index, message in enumerate(messages):
+        remaining_messages = len(messages) - index
+        quota = max(0, (max_output_bytes - used) // remaining_messages)
+        text, cut = _bounded_utf8(str(message.get("text") or ""), quota)
+        item = {**message, "text": text, "text_truncated": cut}
+        output.append(item)
+        truncated = truncated or cut
+        used += len(text.encode("utf-8"))
+    return output, truncated, used
+
+
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "list_sessions",
@@ -274,7 +341,9 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_transcript",
         "description": (
-            "A bounded, pageable head or tail of one agent run's conversation. "
+            "Read a small window around a search_history hit, or a bounded, pageable "
+            "head or tail of one agent run's conversation. Prefer hit_id after search "
+            "so unrelated transcript text never enters context. "
             "Omit session_id or use 'self' for the caller. Supply agent_run_id "
             "to read one of the caller's superseded runs unambiguously. "
             "Every message names its agent_run_id and sequence; cursors cannot "
@@ -293,6 +362,20 @@ TOOLS: list[dict[str, Any]] = [
                     "description": (
                         "Exact current run id, or one of the caller's superseded run ids"
                     ),
+                },
+                "hit_id": {
+                    "type": "string",
+                    "description": (
+                        "Opaque message hit returned by search_history; reads around that hit"
+                    ),
+                },
+                "before": {
+                    "type": "integer",
+                    "description": "Messages before a hit (default 1, max 20)",
+                },
+                "after": {
+                    "type": "integer",
+                    "description": "Messages after a hit (default 2, max 20)",
                 },
                 "max_messages": {
                     "type": "integer",
@@ -314,6 +397,14 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "description": "Include system/meta records (default false)",
                 },
+                "max_output_bytes": {
+                    "type": "integer",
+                    "description": (
+                        "Maximum message text returned "
+                        f"(default {TRANSCRIPT_DEFAULT_OUTPUT_BYTES}, "
+                        f"max {TRANSCRIPT_MAX_BYTES})"
+                    ),
+                },
             },
             "additionalProperties": False,
         },
@@ -326,7 +417,10 @@ TOOLS: list[dict[str, Any]] = [
             "an active turn, never answers an approval prompt, and by default "
             "lands as an inert draft a human must approve. Use it to hand off "
             "or to flag something the other session needs; do not use it to "
-            "issue instructions you would not want a human to read first."
+            "issue instructions you would not want a human to read first. "
+            "You may reply to a session that messaged you: pass its session id "
+            "as the target and the reply continues the same bounded exchange. "
+            "The result reports how many messages that exchange has left."
         ),
         "inputSchema": {
             "type": "object",
@@ -384,29 +478,96 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_history",
         "description": (
-            "Full-text search over your Project's archived agent conversations, "
-            "with match excerpts. Returns nothing rather "
-            "than weak matches."
+            "Context-efficient search over your Project's indexed agent conversations. "
+            "Filtering and relevance ranking happen server-side; results are compact message "
+            "excerpts with opaque hit ids. Pass a hit id to read_transcript for nearby messages."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "FTS query text"},
+                "query": {
+                    "type": "string",
+                    "description": "Literal search text; may be omitted for filter-only browsing",
+                },
                 "scope": {
                     "type": "string",
                     "enum": ["all", "user", "assistant", "metadata"],
                     "description": "Which side of the conversation to search (default all)",
                 },
+                "query_mode": {
+                    "type": "string",
+                    "enum": ["hybrid", "all_terms", "any_terms", "phrase", "substring"],
+                    "description": (
+                        "Matching strategy (default hybrid: token-prefix plus substring)"
+                    ),
+                },
+                "roles": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["user", "assistant"]},
+                    "description": "Message roles to include; clearer replacement for scope",
+                },
+                "title_query": {
+                    "type": "string",
+                    "description": "Require the raw or generated session title to contain text",
+                },
+                "backends": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(agent_harnesses())},
+                },
+                "states": {"type": "array", "items": {"type": "string"}},
+                "run_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Restrict a follow-up search to exact agent run ids",
+                },
+                "session_after": {
+                    "type": ["string", "number"],
+                    "description": "Inclusive session-start boundary (ISO-8601 or epoch seconds)"
+                },
+                "session_before": {
+                    "type": ["string", "number"],
+                    "description": "Exclusive session-start boundary (ISO-8601 or epoch seconds)"
+                },
+                "message_after": {
+                    "type": ["string", "number"],
+                    "description": "Inclusive matching-message boundary (ISO-8601 or epoch seconds)"
+                },
+                "message_before": {
+                    "type": ["string", "number"],
+                    "description": "Exclusive matching-message boundary (ISO-8601 or epoch seconds)"
+                },
+                "order": {
+                    "type": "string",
+                    "enum": ["relevance", "recent"],
+                    "description": "Default relevance when query is present, otherwise recent",
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["compact", "full"],
+                    "description": "Compact by default; full adds operational run metadata",
+                },
+                "max_hits_per_session": {
+                    "type": "integer",
+                    "description": "Result diversity cap per conversation (default 2, max 5)",
+                },
+                "max_output_bytes": {
+                    "type": "integer",
+                    "description": (
+                        f"Aggregate result budget (default {SEARCH_DEFAULT_OUTPUT_BYTES}, "
+                        f"max {SEARCH_MAX_OUTPUT_BYTES})"
+                    ),
+                },
                 "limit": {
                     "type": "integer",
-                    "description": f"Maximum entries (default 10, max {SEARCH_MAX_LIMIT})",
+                    "description": (
+                        f"Maximum hits (default {SEARCH_DEFAULT_LIMIT}, max {SEARCH_MAX_LIMIT})"
+                    ),
                 },
                 "cursor": {
                     "type": "string",
                     "description": "Opaque pagination cursor from a previous result",
                 },
             },
-            "required": ["query"],
             "additionalProperties": False,
         },
     },
@@ -538,6 +699,7 @@ class McpService:
         self.calls = 0
         self.denied = 0
         self.writes = 0
+        self.tool_stats: dict[str, dict[str, int]] = {}
 
     # ------------------------------------------------------------ identity
 
@@ -583,6 +745,25 @@ class McpService:
             if run_id in run_ids and title and run_id not in titles:
                 titles[run_id] = title
         return titles
+
+    async def _matching_generated_title_ids(
+        self, project_id: str, query: str
+    ) -> tuple[str, ...]:
+        """Run ids whose latest generated title contains a literal query."""
+        folded = query.strip().casefold()
+        if not folded or self.automation_store is None:
+            return ()
+        kwargs: dict[str, Any] = {"tag": "title", "limit": 1000}
+        if project_id:
+            kwargs["project_id"] = project_id
+        annotations = await self.automation_store.annotations(**kwargs)
+        latest: dict[str, str] = {}
+        for annotation in annotations:
+            run_id = str(annotation.get("agent_run_id") or "")
+            title = str(annotation.get("content") or "").strip()
+            if run_id and title and run_id not in latest:
+                latest[run_id] = title
+        return tuple(run_id for run_id, title in latest.items() if folded in title.casefold())
 
     @staticmethod
     def _record_run_id(record: Any) -> str:
@@ -914,6 +1095,87 @@ class McpService:
         }
 
     async def read_transcript(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        hit_id = str(args.get("hit_id") or "").strip()
+        if hit_id:
+            incompatible = {
+                "session_id",
+                "agent_run_id",
+                "cursor",
+                "from",
+                "max_messages",
+                "include_system",
+            }
+            if incompatible.intersection(args):
+                raise ValueError(
+                    "hit_id cannot be combined with session, cursor, direction, or system options"
+                )
+            hit = _decode_cursor(hit_id, label="history hit")
+            if hit.get("kind") != "history-hit":
+                raise ValueError("invalid history hit")
+            project_id, scope_id = self._scope(caller)
+            if str(hit.get("project") or "") != project_id or str(
+                hit.get("scope") or ""
+            ) != scope_id:
+                raise KeyError(str(hit.get("run") or ""))
+            run_id = str(hit.get("run") or "")
+            hit_row, display_name = await self._resolve_history(caller, run_id)
+            try:
+                ordinal = int(hit["ordinal"])
+                watermark = (
+                    int(hit["mtime"]),
+                    int(hit["size"]),
+                    int(hit["parser"]),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("invalid history hit") from exc
+            before = max(0, min(int(args.get("before", 1)), 20))
+            after = max(0, min(int(args.get("after", 2)), 20))
+            max_output_bytes = max(
+                1024,
+                min(
+                    int(args.get("max_output_bytes") or HIT_DEFAULT_OUTPUT_BYTES),
+                    TRANSCRIPT_MAX_BYTES,
+                ),
+            )
+            window = await self.history.history_message_window(
+                run_id,
+                ordinal,
+                watermark=watermark,
+                before=before,
+                after=after,
+            )
+            if window.get("stale"):
+                raise RuntimeError(
+                    "stale_hit: this transcript changed after search; run search_history again"
+                )
+            messages = [
+                {
+                    "ordinal": int(item["ordinal"]),
+                    "role": item.get("role"),
+                    "ts": item.get("ts"),
+                    "text": _redact(str(item.get("text") or "")),
+                    "is_match": int(item["ordinal"]) == ordinal,
+                    "agent_run_id": run_id,
+                    "agent_run_seq": int(hit_row.get("agent_run_seq") or 0),
+                }
+                for item in window.get("messages", [])
+            ]
+            bounded, truncated, returned_bytes = _bounded_message_texts(
+                messages, max_output_bytes
+            )
+            return {
+                "session_id": str(hit_row.get("id") or run_id),
+                "agent_run_id": run_id,
+                "agent_run_seq": int(hit_row.get("agent_run_seq") or 0),
+                "display_name": display_name,
+                "around_hit": True,
+                "match_ordinal": ordinal,
+                "message_count": len(bounded),
+                "returned_text_bytes": returned_bytes,
+                "content_truncated": truncated,
+                "messages": bounded,
+            }
+
         identity = str(args.get("session_id") or "self").strip() or "self"
         max_messages = max(
             1,
@@ -928,6 +1190,13 @@ class McpService:
         if direction not in {"head", "tail"}:
             raise ValueError("from must be head or tail")
         include_system = bool(args.get("include_system", False))
+        max_output_bytes = max(
+            1024,
+            min(
+                int(args.get("max_output_bytes") or TRANSCRIPT_DEFAULT_OUTPUT_BYTES),
+                TRANSCRIPT_MAX_BYTES,
+            ),
+        )
         if cursor is not None:
             if "from" in args and cursor.get("from") != direction:
                 raise ValueError("transcript cursor direction does not match from")
@@ -1056,7 +1325,21 @@ class McpService:
                     "anchor": page["next_anchor"],
                 }
             )
-        messages = list(page.get("messages") or [])
+        messages = [
+            {
+                "ordinal": index,
+                "message_id": item.get("message_id"),
+                "role": item.get("role"),
+                "ts": item.get("ts"),
+                "text": _redact(str(item.get("text") or "")),
+                "agent_run_id": run_id,
+                "agent_run_seq": run_seq,
+            }
+            for index, item in enumerate(page.get("messages") or [])
+        ]
+        bounded, truncated, returned_bytes = _bounded_message_texts(
+            messages, max_output_bytes
+        )
         return {
             "session_id": resolved_session_id,
             "agent_run_id": run_id,
@@ -1064,59 +1347,208 @@ class McpService:
             "own_superseded_run": own_superseded_run,
             "from": direction,
             "include_system": include_system,
-            "message_count": len(messages),
+            "message_count": len(bounded),
+            "returned_text_bytes": returned_bytes,
+            "content_truncated": truncated,
             "next_cursor": next_cursor,
-            "messages": [
-                {
-                    "ordinal": index,
-                    "message_id": item.get("message_id"),
-                    "role": item.get("role"),
-                    "ts": item.get("ts"),
-                    "text": _redact(str(item.get("text") or "")),
-                    "agent_run_id": run_id,
-                    "agent_run_seq": run_seq,
-                }
-                for index, item in enumerate(messages)
-            ],
+            "messages": bounded,
         }
 
     async def search_history(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         query = str(args.get("query") or "").strip()
-        if not query:
-            raise ValueError("query is required")
         scope = str(args.get("scope") or "all")
         if scope not in {"all", "user", "assistant", "metadata"}:
             raise ValueError(f"unknown scope: {scope}")
-        limit = max(1, min(int(args.get("limit") or 10), SEARCH_MAX_LIMIT))
-        project_id, _scope_id = self._scope(caller)
-        page = await self.history.history_page(
+        roles = _string_list(args.get("roles"), "roles", maximum=2)
+        roles_provided = bool(roles)
+        if roles:
+            unknown_roles = set(roles) - {"user", "assistant"}
+            if unknown_roles:
+                raise ValueError(f"unknown roles: {', '.join(sorted(unknown_roles))}")
+            if scope != "all":
+                raise ValueError("roles cannot be combined with the legacy scope filter")
+            scope = roles[0] if len(roles) == 1 else "all"
+        query_mode = str(args.get("query_mode") or "hybrid")
+        if query_mode not in {"hybrid", "all_terms", "any_terms", "phrase", "substring"}:
+            raise ValueError(f"unknown query_mode: {query_mode}")
+        backends = _string_list(args.get("backends"), "backends")
+        unknown_backends = set(backends) - set(agent_harnesses())
+        if unknown_backends:
+            raise ValueError(f"unknown backends: {', '.join(sorted(unknown_backends))}")
+        states = _string_list(args.get("states"), "states")
+        run_ids_value = args.get("run_ids")
+        run_ids = (
+            _string_list(run_ids_value, "run_ids", maximum=100)
+            if run_ids_value is not None
+            else None
+        )
+        title_query = str(args.get("title_query") or "").strip()
+        session_after = _parse_time_bound(args.get("session_after"), "session_after")
+        session_before = _parse_time_bound(args.get("session_before"), "session_before")
+        message_after = _parse_time_bound(args.get("message_after"), "message_after")
+        message_before = _parse_time_bound(args.get("message_before"), "message_before")
+        for lower, upper, label in (
+            (session_after, session_before, "session"),
+            (message_after, message_before, "message"),
+        ):
+            if lower is not None and upper is not None and lower >= upper:
+                raise ValueError(f"{label}_after must be earlier than {label}_before")
+        if not query and not any(
+            (
+                title_query,
+                backends,
+                states,
+                run_ids_value is not None,
+                session_after is not None,
+                session_before is not None,
+                message_after is not None,
+                message_before is not None,
+            )
+        ):
+            raise ValueError("query or at least one filter is required")
+        if scope == "metadata" and (message_after is not None or message_before is not None):
+            raise ValueError("message time boundaries cannot be used with metadata-only search")
+        order = str(args.get("order") or ("relevance" if query else "recent"))
+        if order not in {"relevance", "recent"}:
+            raise ValueError(f"unknown order: {order}")
+        detail = str(args.get("detail") or "compact")
+        if detail not in {"compact", "full"}:
+            raise ValueError(f"unknown detail: {detail}")
+        limit = max(
+            1, min(int(args.get("limit") or SEARCH_DEFAULT_LIMIT), SEARCH_MAX_LIMIT)
+        )
+        max_output_bytes = max(
+            2048,
+            min(
+                int(args.get("max_output_bytes") or SEARCH_DEFAULT_OUTPUT_BYTES),
+                SEARCH_MAX_OUTPUT_BYTES,
+            ),
+        )
+        max_per_session = max(1, min(int(args.get("max_hits_per_session") or 2), 5))
+        project_id, scope_id = self._scope(caller)
+        normalized = {
+            "query": query,
+            "scope": scope,
+            "roles_provided": roles_provided,
+            "query_mode": query_mode,
+            "title_query": title_query,
+            "backends": backends,
+            "states": states,
+            "run_ids": run_ids,
+            "session_after": session_after,
+            "session_before": session_before,
+            "message_after": message_after,
+            "message_before": message_before,
+            "order": order,
+            "detail": detail,
+            "limit": limit,
+            "max_output_bytes": max_output_bytes,
+            "max_per_session": max_per_session,
+        }
+        signature = _query_signature(normalized)
+        offset = 0
+        cursor_text = str(args.get("cursor") or "").strip()
+        if cursor_text:
+            cursor = _decode_cursor(cursor_text, label="history search")
+            if cursor.get("kind") != "history-search" or cursor.get("sig") != signature:
+                raise ValueError("history search cursor does not match this query")
+            offset = max(0, int(cursor.get("offset") or 0))
+        generated_query_ids = await self._matching_generated_title_ids(project_id, query)
+        generated_title_ids = await self._matching_generated_title_ids(
+            project_id, title_query
+        )
+        page = await self.history.search_history_index(
             query=query,
             search_scope=scope,
+            include_metadata=not roles_provided,
+            query_mode=query_mode,
             project_id=project_id or "__ungrouped__",
+            backends=backends,
+            states=states,
+            title_query=title_query,
+            generated_query_run_ids=generated_query_ids,
+            generated_title_run_ids=generated_title_ids,
+            run_ids=run_ids,
+            session_after=session_after,
+            session_before=session_before,
+            message_after=message_after,
+            message_before=message_before,
+            order=order,
+            offset=offset,
             limit=limit,
-            cursor=str(args.get("cursor") or "") or None,
+            max_per_session=max_per_session,
         )
-        items = []
-        rows = list(page.get("items", []))
+        rows = list(page.get("items") or [])
         display_names = await self._history_display_names(rows)
+        hits: list[dict[str, Any]] = []
+        returned_bytes = 0
+        output_truncated = False
         for row in rows:
-            summary = _history_summary(
-                row,
-                display_name=display_names[str(row.get("id") or "")],
-            )
-            summary["ended"] = row.get("final_state") not in (None, "", "running")
-            matches = row.get("matches") or []
-            summary["matches"] = [
+            run_id = str(row.get("id") or "")
+            ordinal = row.get("match_ordinal")
+            hit_id = None
+            if ordinal is not None:
+                hit_id = _encode_cursor(
+                    {
+                        "v": 1,
+                        "kind": "history-hit",
+                        "project": project_id,
+                        "scope": scope_id,
+                        "run": run_id,
+                        "ordinal": int(ordinal),
+                        "mtime": int(row.get("match_mtime_ns") or 0),
+                        "size": int(row.get("match_size") or 0),
+                        "parser": int(row.get("match_parser_version") or 0),
+                    }
+                )
+            hit: dict[str, Any] = {
+                "hit_id": hit_id,
+                "agent_run_id": run_id,
+                "title": display_names[run_id],
+                "backend": row.get("backend"),
+                "role": row.get("match_role"),
+                "timestamp": row.get("match_ts"),
+                "excerpt": _redact(str(row.get("excerpt") or "")),
+                "match_kind": row.get("match_kind"),
+            }
+            if detail == "full":
+                hit.update(_history_summary(row, display_name=display_names[run_id]))
+                hit["match_ordinal"] = ordinal
+                hit["relevance"] = row.get("relevance")
+            encoded_size = len(json.dumps(hit, default=str).encode("utf-8"))
+            if hits and returned_bytes + encoded_size > max_output_bytes:
+                output_truncated = True
+                break
+            if not hits and encoded_size > max_output_bytes:
+                excerpt, cut = _bounded_utf8(str(hit["excerpt"]), max_output_bytes // 2)
+                hit["excerpt"] = excerpt
+                hit["excerpt_truncated"] = cut
+                encoded_size = len(json.dumps(hit, default=str).encode("utf-8"))
+                output_truncated = cut
+            hits.append(hit)
+            returned_bytes += encoded_size
+        consumed = len(hits)
+        has_more = bool(page.get("has_more")) or consumed < len(rows)
+        next_cursor = (
+            _encode_cursor(
                 {
-                    "role": match.get("role"),
-                    "ts": match.get("ts"),
-                    "excerpt": _redact(str(match.get("excerpt") or "")),
+                    "v": 1,
+                    "kind": "history-search",
+                    "sig": signature,
+                    "offset": offset + consumed,
                 }
-                for match in matches
-            ]
-            summary["match_count"] = row.get("match_count")
-            items.append(summary)
-        return {"entries": items, "next_cursor": page.get("next_cursor")}
+            )
+            if has_more and consumed
+            else None
+        )
+        return {
+            "hits": hits,
+            "hit_count": len(hits),
+            "returned_bytes": returned_bytes,
+            "truncated": output_truncated or bool(page.get("candidate_truncated")),
+            "next_cursor": next_cursor,
+            "search_index_ready": bool(page.get("search_index_ready", True)),
+        }
 
     def _caller_project(self, caller: Any) -> Any:
         project_id = str(caller.record.project_id or "")
@@ -1315,6 +1747,10 @@ class McpService:
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
         self.calls += 1
+        stats = self.tool_stats.setdefault(
+            name, {"calls": 0, "response_bytes": 0, "truncated_results": 0}
+        )
+        stats["calls"] += 1
         log.info(
             "MCP tool call tool=%s caller_session=%s project=%s",
             name,
@@ -1431,10 +1867,24 @@ class McpService:
                 return error(-32602, str(exc))
             except RuntimeError as exc:
                 return ok({"content": [{"type": "text", "text": str(exc)}], "isError": True})
+            encoded = json.dumps(result, default=str)
+            stats = self.tool_stats.setdefault(
+                name, {"calls": 0, "response_bytes": 0, "truncated_results": 0}
+            )
+            stats["response_bytes"] += len(encoded.encode("utf-8"))
+            if bool(result.get("truncated")) or bool(result.get("content_truncated")):
+                stats["truncated_results"] += 1
+            log.info(
+                "MCP tool result tool=%s caller_session=%s response_bytes=%s truncated=%s",
+                name,
+                caller.record.id,
+                len(encoded.encode("utf-8")),
+                bool(result.get("truncated")) or bool(result.get("content_truncated")),
+            )
             return ok(
                 {
                     "content": [
-                        {"type": "text", "text": json.dumps(result, default=str)}
+                        {"type": "text", "text": encoded}
                     ],
                     "isError": False,
                 }
@@ -1442,4 +1892,9 @@ class McpService:
         return error(-32601, f"method not found: {method}")
 
     def status(self) -> dict[str, Any]:
-        return {"calls": self.calls, "denied": self.denied, "writes": self.writes}
+        return {
+            "calls": self.calls,
+            "denied": self.denied,
+            "writes": self.writes,
+            "tools": {name: dict(values) for name, values in sorted(self.tool_stats.items())},
+        }

@@ -17,6 +17,7 @@ import {
   transcriptEmptyMessage,
   transcriptMatchesQuery,
   transcriptSearchParts,
+  transcriptSelectionActive,
   transcriptSpeaker,
   transcriptTimestampIso,
   transcriptTimestampLabel,
@@ -102,12 +103,14 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const [copied, setCopied] = useState<number | null>(null)
   const [expansion, setExpansion] = useState<{ scope: string; messageIds: string[] }>({ scope: '', messageIds: [] })
   const [search, setSearch] = useState<{ sessionId: string; value: string }>({ sessionId: '', value: '' })
+  const [selectionLive, setSelectionLive] = useState(false)
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
   const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
   // Refs rather than state: the scroll placement below runs in a layout effect and
   // must read the value this render was laid out with, not a queued update.
   const pinned = useRef(true)
+  const selecting = useRef(false)
   const placedFor = useRef('')
   const shown = useRef(0)
   const requestSequence = useRef(0)
@@ -140,8 +143,35 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     setData(null); setUnseen(0); setError('')
     placedFor.current = ''
     shown.current = 0
+    selecting.current = false
+    setSelectionLive(false)
     if (sessionId) void load(sessionId)
   }, [sessionId, runId])
+
+  // A manual selection held over the column freezes the follow-scroll below.
+  //
+  // `selectionchange` is the only signal a native selection-handle drag produces: the
+  // handles are browser chrome drawn outside the page, so their movement never arrives
+  // as a pointer or touch event and there is nothing else to watch. It fires
+  // continuously for the length of a drag, hence the flip check before touching state.
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const element = body.current
+      const active = transcriptSelectionActive(document.getSelection(), element)
+      if (active === selecting.current) return
+      selecting.current = active
+      // Releasing a selection re-reads where the column actually is. Messages that
+      // arrived during the freeze can have pushed the bottom out of view without ever
+      // firing a scroll event, and carrying the stale "still pinned" answer forward
+      // would jump the reader on the next arrival instead of offering the pill.
+      if (!active && element) {
+        pinned.current = isPinnedToBottom(element.scrollTop, element.scrollHeight, element.clientHeight)
+      }
+      setSelectionLive(active)
+    }
+    document.addEventListener('selectionchange', onSelectionChange)
+    return () => document.removeEventListener('selectionchange', onSelectionChange)
+  }, [])
 
   // Explicitly unfolded messages follow their session and agent run across drawer
   // unmounts and navigation. Search showing a full message never enters this path.
@@ -197,7 +227,12 @@ export function TranscriptTab({ session }: { session: Session | null }) {
       if (arrived > 0) setUnseen(current => current + arrived)
       return
     }
-    if (pinned.current) {
+    // Following the bottom is suspended while the reader is holding a selection. Moving
+    // the column out from under a half-made selection destroys it, and an agent
+    // finishing a turn is exactly the moment someone is selecting what it just said.
+    // The arrival is offered as the pill instead, which is the same answer this tab
+    // already gives a reader who scrolled up.
+    if (pinned.current && !selecting.current) {
       element.scrollTop = element.scrollHeight
       setUnseen(0)
     } else if (arrived > 0) {
@@ -289,7 +324,7 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery))
     : messages
   const stale = data?.observation_stale_since
-  return <div class="transcript-tab">
+  return <div class={selectionLive ? 'transcript-tab transcript-selecting' : 'transcript-tab'}>
     <div class="transcript-tab-head">
       <div class="transcript-tab-meta">
         <strong>{agentTargetName(session)}</strong>

@@ -74,13 +74,31 @@ def live_session(sid: str, *, token: str = "", transcript: Path | None = None, *
 
 
 class HistoryStub:
-    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]] | None = None,
+        *,
+        window: dict[str, Any] | None = None,
+    ) -> None:
         self.rows = rows or []
+        self.window = window or {"stale": True, "messages": []}
         self.page_calls: list[dict[str, Any]] = []
 
     async def history_page(self, **kwargs: Any) -> dict[str, Any]:
         self.page_calls.append(kwargs)
         return {"items": list(self.rows), "next_cursor": None}
+
+    async def search_history_index(self, **kwargs: Any) -> dict[str, Any]:
+        self.page_calls.append(kwargs)
+        limit = int(kwargs.get("limit") or len(self.rows))
+        return {
+            "items": list(self.rows[:limit]),
+            "has_more": len(self.rows) > limit,
+            "candidate_truncated": False,
+        }
+
+    async def history_message_window(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return self.window
 
     async def history_entry(self, session_id: str) -> dict[str, Any] | None:
         return next((row for row in self.rows if row.get("id") == session_id), None)
@@ -372,6 +390,130 @@ async def test_search_history_passes_the_caller_project_filter() -> None:
     assert history.page_calls[0]["limit"] <= 50
 
 
+@pytest.mark.asyncio
+async def test_search_history_returns_compact_hits_then_reads_only_hit_context() -> None:
+    row = {
+        "id": "run-1",
+        "note_id": "session-1",
+        "name": "claude-run",
+        "backend": "claude",
+        "project_id": "p1",
+        "project_scope_id": "scope-1",
+        "agent_visible": 1,
+        "agent_run_seq": 3,
+        "match_ordinal": 7,
+        "match_role": "assistant",
+        "match_ts": "2026-08-01T00:00:01Z",
+        "match_mtime_ns": 123,
+        "match_size": 456,
+        "match_parser_version": 2,
+        "excerpt": "the deployment needle is here",
+        "match_kind": "message",
+        "relevance": 0.9,
+        "cwd": "D:/private/path",
+    }
+    history = HistoryStub(
+        [row],
+        window={
+            "stale": False,
+            "messages": [
+                {"ordinal": 6, "role": "user", "ts": None, "text": "before"},
+                {
+                    "ordinal": 7,
+                    "role": "assistant",
+                    "ts": "2026-08-01T00:00:01Z",
+                    "text": "the deployment needle is here",
+                },
+                {"ordinal": 8, "role": "user", "ts": None, "text": "after"},
+            ],
+        },
+    )
+    caller = live_session("s1", token="tok")
+    service = service_for(
+        caller,
+        history=history,
+        titles={"run-1": "Desktop packaging"},
+    )
+
+    search = await service.search_history(
+        caller,
+        {
+            "query": "deployment needle",
+            "roles": ["assistant"],
+            "title_query": "packaging",
+            "session_after": "2026-01-01T00:00:00Z",
+            "message_before": "2027-01-01T00:00:00Z",
+        },
+    )
+
+    assert search["hit_count"] == 1
+    hit = search["hits"][0]
+    assert hit["title"] == "Desktop packaging"
+    assert hit["role"] == "assistant"
+    assert hit["hit_id"]
+    assert "cwd" not in hit
+    assert history.page_calls[0]["search_scope"] == "assistant"
+    assert history.page_calls[0]["title_query"] == "packaging"
+    assert history.page_calls[0]["generated_title_run_ids"] == ("run-1",)
+
+    context = await service.read_transcript(caller, {"hit_id": hit["hit_id"]})
+
+    assert context["around_hit"] is True
+    assert [message["text"] for message in context["messages"]] == [
+        "before",
+        "the deployment needle is here",
+        "after",
+    ]
+    assert [message["is_match"] for message in context["messages"]] == [
+        False,
+        True,
+        False,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_history_requires_filters_and_binds_cursor_to_query() -> None:
+    caller = live_session("s1", token="tok")
+    rows = [
+        {
+            "id": f"run-{index}",
+            "name": f"run-{index}",
+            "backend": "claude",
+            "project_id": "p1",
+            "project_scope_id": "scope-1",
+            "match_ordinal": index,
+            "match_role": "user",
+            "match_ts": None,
+            "match_mtime_ns": 1,
+            "match_size": 2,
+            "match_parser_version": 2,
+            "excerpt": "needle",
+            "match_kind": "message",
+        }
+        for index in range(3)
+    ]
+    history = HistoryStub(rows)
+    service = service_for(caller, history=history)
+
+    with pytest.raises(ValueError, match="query or at least one filter"):
+        await service.search_history(caller, {})
+
+    await service.search_history(
+        caller, {"roles": ["user", "assistant"], "run_ids": ["run-0"]}
+    )
+    assert history.page_calls[-1]["include_metadata"] is False
+
+    first = await service.search_history(
+        caller, {"query": "needle", "limit": 2, "max_output_bytes": 2048}
+    )
+    assert first["next_cursor"]
+    with pytest.raises(ValueError, match="does not match"):
+        await service.search_history(
+            caller,
+            {"query": "different", "limit": 2, "cursor": first["next_cursor"]},
+        )
+
+
 # ------------------------------------------------- output shape and redaction
 
 
@@ -411,6 +553,44 @@ async def test_read_transcript_is_bounded_and_redacts_credential_shapes(
     assert "redacted" in last
     ordinary = result["messages"][0]["text"]
     assert ordinary.startswith("message ")
+
+
+@pytest.mark.asyncio
+async def test_read_transcript_defaults_to_a_small_window_and_text_budget(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "large.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {"content": f"message {index} " + ("x" * 4_000)},
+                }
+            )
+            for index in range(30)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok", transcript=transcript)
+    service = service_for(caller)
+
+    result = await service.read_transcript(
+        caller, {"session_id": "s1", "max_output_bytes": 1_024}
+    )
+
+    assert result["message_count"] == 12
+    assert result["messages"][0]["text"].startswith("message 18 ")
+    assert result["returned_text_bytes"] <= 1_024
+    assert result["content_truncated"] is True
+
+    explicit = await service.read_transcript(
+        caller,
+        {"session_id": "s1", "max_messages": 200, "max_output_bytes": 1_024},
+    )
+    assert explicit["message_count"] == 30
+    assert explicit["returned_text_bytes"] <= 1_024
 
 
 @pytest.mark.asyncio
@@ -888,6 +1068,12 @@ async def test_tool_call_wraps_results_and_not_found_is_a_soft_error() -> None:
     payload = json.loads(good["result"]["content"][0]["text"])
     assert payload["sessions"][0]["session_id"] == "s1"
     assert good["result"]["isError"] is False
+    stats = service.status()["tools"]["list_sessions"]
+    assert stats["calls"] == 1
+    assert stats["response_bytes"] == len(
+        good["result"]["content"][0]["text"].encode("utf-8")
+    )
+    assert stats["truncated_results"] == 0
 
     miss = await service.handle_rpc(
         caller,

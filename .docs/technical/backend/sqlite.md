@@ -99,6 +99,13 @@ gets the same guarantee.
   backfill did exactly that, resurrecting every quarantined misattributed run on each restart;
   it is now gated on the column having just been added and additionally excludes the
   quarantine exit reasons.
+- History message-search upgrades keep only bounded schema changes on the startup path.
+  Adding `history_messages.ts_epoch`, installing maintenance state, and replacing triggers do not scan or rewrite message rows.
+  A post-startup task resets both external-content FTS indexes, captures a fixed row-id watermark, and populates token, trigram, and epoch data in committed 250-row batches.
+  Its cursor is durable, rows inserted above the watermark are maintained by triggers, and deletes below the cursor are indexed while deletes ahead of it wait for the batch scan.
+  Until the cursor reaches its watermark, search uses bounded literal `LIKE` queries and exposes `search_index_ready=false` instead of consulting a partial or inconsistent FTS index.
+  Any optional search-schema or maintenance failure is logged and leaves the daemon available on that fallback.
+  FTS update triggers are `AFTER UPDATE OF text`; an update of `ts_epoch` or other metadata must never churn external-content index terms.
 - A proven session-identity repair may atomically delete that session's rebuildable
   tool/compaction/coverage rows and reassign its retained process fingerprints. This remains an
   operational-telemetry transaction through the shared coordinator; History does not mutate
@@ -128,14 +135,14 @@ regression is valuable because these user-visible paths historically exposed lea
   Writes are `INSERT OR IGNORE` against the `(session_id, agent_run_id, seq)` key, so a
   replayed batch after a failed flush cannot duplicate rows.
 - `src/swe_mux/tier0_store.py`, `src/swe_mux/deterministic_consumers.py`
-- `src/swe_mux/project_card.py` — writes one `project_cards` row per Project through
-  `AutomationStore`. The row is a cache whose validity is a source fingerprint, not an age,
-  so it is deliberately excluded from the retention prune (like `automation_model_cache`,
-  it is bounded by construction).
+- `src/swe_mux/project_context.py` writes no SQLite rows.
+  The Project-owned Markdown file is its only active store.
+- The `project_cards` table remains for compatibility with existing databases, but no active runtime service reads or writes it.
 - `src/swe_mux/scan_timeline.py` - writes run grants, records, rollover boundaries, and bounded
   read metrics through `AutomationStore`.
   Scan records and boundaries use the durable retention window; run state and the one-row metrics
   table are bounded by run count and construction.
+  Backfill inserts use the same record table, record reads order by source time, and run-cursor updates take the maximum existing/source timestamp.
   The shared budget ledger's nullable Project/run dimensions let failed billable calls count
   toward scan budgets without fabricating a semantic record.
 - `tests/test_automation_phase6.py`

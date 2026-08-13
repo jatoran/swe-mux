@@ -75,8 +75,8 @@ The hidden mobile textarea is not used as a document mirror: it remains an end-p
 
 ### Wheel scroll to an application-owned viewport
 
-When the application holds the mouse, a scroll gesture becomes a run of SGR scroll reports, one per row of travel, and each report is a full repaint by the CLI (~2-20 KB of output).
-xterm emits exactly one report per wheel event whatever magnitude that event carries, so the pane dispatches one line-mode wheel event per row it means to scroll (`forwardApplicationScroll`), bounded at `APPLICATION_SCROLL_MAX_ROWS` per gesture event against a degenerate row-height measurement.
+When the application holds the mouse, a scroll gesture becomes a run of SGR scroll reports, and each report is a full repaint by the CLI (~2-20 KB of output).
+xterm emits exactly one report per wheel event whatever magnitude that event carries, so the pane dispatches one line-mode wheel event per report (`forwardApplicationScroll`), bounded at `APPLICATION_SCROLL_MAX_ROWS` per gesture event against a degenerate row-height measurement.
 Line mode also steps around xterm's pixel branch, which divides by the measured row height and then damps any delta under 50 pixels to 30% of itself: a touch drag reports 10-40 pixels per move, so every one of them was cut to a third.
 A full-width Claude pane was measured consuming ~230 reports per second; a free-spinning wheel or trackpad flick emits thousands, and nothing else in the pipeline sheds load, so the excess was banked scrolling the terminal kept performing for 4-12 seconds after the gesture ended.
 The pane therefore paces wheel reports through `terminalWheelPacing.ts`: batches of at most `WHEEL_BATCH_MAX` per animation frame, each released only after the previous batch's repaint arrived (`noteOutput`, the PTY output ack) or after `WHEEL_ACK_TIMEOUT_MS` of silence (an application at its buffer edge repaints nothing), with the queue capped at `WHEEL_QUEUE_MAX` reports.
@@ -89,10 +89,13 @@ Only plain vertical wheel reports (`CSI < 64/65 … M`) are paced: clicks, drags
 
 A one-finger vertical drag scrolls whichever viewport owns the session: xterm's scrollback, or the application's own when it holds the mouse.
 `mobile_vertical_drag` picks the target through `mobileDragTarget`, whose `smart` default follows mouse tracking.
-Both targets convert one pixel budget with `terminalScrollSteps`, which carries the sub-row remainder into the next move event.
+Terminal scrollback converts its pixel budget with `terminalScrollSteps`, which carries the sub-row remainder into the next move event.
 Truncating each event on its own discards up to a row of travel per event, which at a 120 Hz pointer rate is most of the gesture; the fallback it replaces ("any movement scrolls at least one row") corrected for that by over-scrolling every slow drag instead.
-Travel is scaled only by the user's `mobile_scroll_sensitivity`; the default `1.0` tracks the finger 1:1 with no velocity-dependent acceleration.
-The carried pixel budget makes the total independent of the device's pointer-event rate without decoupling content from the finger during a drag.
+Application-owned scrolling passes the same travel through `applicationTouchScroll` because wheel reports are not a universal row unit.
+Claude Code 2.1.229 starts xterm.js wheel input at three rows per report and raises the multiplier for reports less than 80 ms apart, so its declared harness profile emits one report per three finger rows and separates reports by 120 ms to absorb downstream repaint-pacer delay.
+The daemon publishes `touch_scroll_rows_per_report` and `touch_scroll_report_interval_ms` through the harness registry; the browser never selects this behavior from a harness name.
+Fast-flick excess is discarded instead of banked, preventing delayed or accelerated scrolling after the finger stops; other mouse-aware applications retain one report per row.
+Travel is first scaled by the user's `mobile_scroll_sensitivity`, and each completed application gesture records aggregate input pixels, report count, and discarded pixels in `mobile_application_scroll` without terminal content.
 
 ### Geometry
 

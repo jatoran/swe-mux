@@ -23,6 +23,13 @@ from swe_mux.desktop import (
     local_url,
     startup_command,
 )
+from swe_mux.desktop_window_state import (
+    DesktopWindowState,
+    WindowStateRecorder,
+    fit_window_state,
+    load_window_state,
+    save_window_state,
+)
 from swe_mux.server import desktop_shutdown, is_loopback_peer
 
 pytestmark = pytest.mark.filterwarnings(
@@ -60,6 +67,74 @@ def test_desktop_control_token_is_private_and_persistent(tmp_path: Path) -> None
     assert len(first) >= 32
     assert second == first
     assert (tmp_path / "desktop-control.token").read_text(encoding="ascii").strip() == first
+
+
+def test_desktop_window_state_round_trips_and_rejects_malformed_data(tmp_path: Path) -> None:
+    path = tmp_path / "desktop-window-state.json"
+    expected = DesktopWindowState(x=-1200, y=80, width=1180, height=760, maximized=True)
+
+    save_window_state(path, expected)
+
+    assert load_window_state(path) == expected
+    path.write_text('{"version": 1, "x": true}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_window_state(path)
+
+
+def test_desktop_window_state_fits_the_current_monitor_topology() -> None:
+    screens = [
+        SimpleNamespace(x=-1920, y=0, width=1920, height=1040),
+        SimpleNamespace(x=0, y=0, width=1920, height=1040),
+    ]
+
+    on_secondary = fit_window_state(
+        DesktopWindowState(x=-1700, y=100, width=1200, height=800), screens
+    )
+    assert on_secondary == DesktopWindowState(x=-1700, y=100, width=1200, height=800)
+
+    missing_monitor = fit_window_state(
+        DesktopWindowState(x=3000, y=1200, width=2400, height=1400), screens
+    )
+    assert missing_monitor == DesktopWindowState(x=0, y=0, width=1920, height=1040)
+
+
+def test_desktop_window_recorder_preserves_normal_bounds_across_window_states(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "desktop-window-state.json"
+    initial = DesktopWindowState(x=100, y=120, width=1100, height=700)
+    recorder = WindowStateRecorder(path, initial, debounce_seconds=60)
+
+    recorder.moved(140, 160)
+    recorder.resized(1240, 810)
+    assert recorder.flush() == DesktopWindowState(140, 160, 1240, 810)
+
+    recorder.maximized()
+    recorder.moved(0, 0)
+    recorder.resized(1920, 1040)
+    assert recorder.flush() == DesktopWindowState(140, 160, 1240, 810, maximized=True)
+
+    recorder.minimized()
+    recorder.moved(-32000, -32000)
+    assert recorder.flush() == DesktopWindowState(140, 160, 1240, 810, maximized=True)
+
+    recorder.restored()
+    recorder.moved(180, 200)
+    recorder.resized(1280, 840)
+    assert recorder.flush() == DesktopWindowState(180, 200, 1280, 840)
+    recorder.close()
+    assert load_window_state(path) == DesktopWindowState(180, 200, 1280, 840)
+
+
+def test_desktop_window_recorder_seeds_first_launch_from_shown_geometry(tmp_path: Path) -> None:
+    path = tmp_path / "desktop-window-state.json"
+    recorder = WindowStateRecorder(path, None, debounce_seconds=60)
+
+    recorder.moved(240, 160)
+    recorder.resized(1440, 920)
+
+    assert recorder.flush() == DesktopWindowState(240, 160, 1440, 920)
+    assert load_window_state(path) == DesktopWindowState(240, 160, 1440, 920)
 
 
 def test_frontend_publish_never_empties_live_static_tree(tmp_path: Path) -> None:

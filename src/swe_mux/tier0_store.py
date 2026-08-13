@@ -420,7 +420,12 @@ class Tier0Store:
         return await self._run(op)
 
     async def facts_for_run(
-        self, agent_run_id: str, *, since: float | None = None, limit: int = 2000
+        self,
+        agent_run_id: str,
+        *,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 2000,
     ) -> list[dict[str, Any]]:
         """Facts owned by one agent run, oldest first.
 
@@ -430,11 +435,14 @@ class Tier0Store:
         """
 
         def op() -> list[dict[str, Any]]:
-            rows = self._db.execute(
-                "SELECT * FROM tier0_facts WHERE agent_run_id=? AND created_at>=? "
-                "ORDER BY created_at ASC LIMIT ?",
-                (agent_run_id, since or 0.0, max(1, min(limit, 5000))),
-            ).fetchall()
+            sql = "SELECT * FROM tier0_facts WHERE agent_run_id=? AND created_at>=?"
+            args: list[Any] = [agent_run_id, since or 0.0]
+            if until is not None:
+                sql += " AND created_at<=?"
+                args.append(until)
+            sql += " ORDER BY created_at ASC LIMIT ?"
+            args.append(max(1, min(limit, 5000)))
+            rows = self._db.execute(sql, args).fetchall()
             return [dict(row) for row in rows]
 
         return await self._run(op)

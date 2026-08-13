@@ -94,6 +94,13 @@ def test_project_config_rejects_non_boolean_automation() -> None:
         parse_project_config(b'version = 1\nautomations = { tier0 = "yes" }\n')
 
 
+def test_project_config_ignores_retired_generated_project_card_toggle() -> None:
+    parsed = parse_project_config(
+        b'version = 1\nautomations = { project_card = true, scan_timeline = true }\n'
+    )
+    assert parsed["automations"] == {"scan_timeline": True}
+
+
 def test_project_automations_reads_root(tmp_path: Path) -> None:
     mux_dir = tmp_path / ".swe-mux"
     mux_dir.mkdir()

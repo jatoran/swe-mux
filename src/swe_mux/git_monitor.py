@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
+import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import asdict, dataclass
@@ -27,6 +29,11 @@ GIT_CONCURRENCY = 4
 DIFFSTAT_CACHE_LIMIT = 256
 
 T = TypeVar("T")
+_FULL_OID = re.compile(r"^[0-9a-fA-F]{40,64}$")
+
+
+def _normalized_path(value: str) -> str:
+    return os.path.normcase(os.path.normpath(value))
 
 
 async def _git(
@@ -99,6 +106,55 @@ class GitEvidence:
 class GitReading:
     state: GitState
     evidence: GitEvidence
+
+
+@dataclass(slots=True, frozen=True)
+class GitPosition:
+    root: str
+    head: str
+
+
+@dataclass(slots=True, frozen=True)
+class GitCommitMetadata:
+    oid: str
+    parents: tuple[str, ...]
+    committed_at: float
+    subject: str
+
+
+async def read_git_position(cwd: str) -> GitPosition | None:
+    """Read only the worktree root and HEAD used at a command boundary."""
+    (root_code, root), (head_code, head) = await asyncio.gather(
+        _git(cwd, "rev-parse", "--show-toplevel"),
+        _git(cwd, "rev-parse", "HEAD"),
+    )
+    oid = head.strip()
+    if root_code or head_code or not root or not _FULL_OID.fullmatch(oid):
+        return None
+    return GitPosition(root=root, head=oid.lower())
+
+
+async def read_commit_metadata(cwd: str, oid: str) -> GitCommitMetadata | None:
+    """Read bounded immutable metadata for one exact commit object."""
+    if not _FULL_OID.fullmatch(oid):
+        return None
+    code, value = await _git(cwd, "show", "-s", "--format=%H%x00%P%x00%ct%x00%s", oid)
+    if code:
+        return None
+    parts = value.split("\0", 3)
+    if len(parts) != 4 or not _FULL_OID.fullmatch(parts[0]):
+        return None
+    try:
+        committed_at = float(parts[2])
+    except ValueError:
+        return None
+    parents = tuple(parent.lower() for parent in parts[1].split() if _FULL_OID.fullmatch(parent))
+    return GitCommitMetadata(
+        oid=parts[0].lower(),
+        parents=parents,
+        committed_at=committed_at,
+        subject=parts[3][:512],
+    )
 
 
 def _dirty_hash(porcelain: str) -> str | None:
@@ -384,6 +440,7 @@ async def read_git_reading(cwd: str, compare_override: str | None = None) -> Git
             compare_added=compare_added,
             compare_removed=compare_removed,
             compare_files=compare_files,
+            head=commit,
         ),
         GitEvidence(head=commit, dirty_hash=dirty_hash),
     )
@@ -513,6 +570,14 @@ class GitMonitor:
             state = reading.state
             for session in sessions:
                 if session.record.git != state:
+                    previous = session.record.git
+                    previous_head = (
+                        previous.head
+                        if previous.root
+                        and state.root
+                        and _normalized_path(previous.root) == _normalized_path(state.root)
+                        else None
+                    )
                     session.record.git = state
                     session.publish_update()
                     await self.events.emit(
@@ -524,5 +589,6 @@ class GitMonitor:
                         # working-tree change set. The UI ignores them.
                         content_hash=reading.evidence.head,
                         target=cwd,
+                        previous_head=previous_head,
                         **reading.evidence.as_payload(),
                     )

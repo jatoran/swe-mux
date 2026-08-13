@@ -2,10 +2,9 @@
 
 ## What it is
 
-- Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is
-  available) for branch, dirty count, upstream divergence, linked-worktree identity, working-tree
-  root, lines changed against HEAD, and lines and files changed against the comparison ref.
+- Attached sessions poll the latest accepted live cwd (or spawn cwd until live telemetry is available) for HEAD, branch, dirty count, upstream divergence, linked-worktree identity, working-tree root, lines changed against HEAD, and lines and files changed against the comparison ref.
 - User-initiated worktree API wraps `git worktree` without performing other mutating git operations.
+- Durable provenance connects a commit to the session and agent run whose evidence observed or created it without changing the repository.
 
 ## Operations
 
@@ -78,6 +77,30 @@ two rows can be known to be quoting one measurement.
 The sidebar marks a quantity whose root carries more than one live session
 (`design/features/ui.md`, "Configurable session rows").
 
+### Session-to-commit provenance
+
+- `GitProvenanceService` consumes existing `tool_use`, `tool_result`, and `git_changed` events and never writes a hook, trailer, ref, note, or repository file.
+- A recognized successful `git commit` command snapshots the session, run, Project, checkout root, and starting HEAD at tool start, then reads the resulting HEAD after the paired tool result.
+- Command recognition is deliberately narrow.
+  It accepts explicit ordinary `git commit` and `git commit --amend` invocations from command tools and rejects repository-redirection flags such as `-C`, `--git-dir`, and `--work-tree` rather than interpreting shell quoting.
+- A changed HEAD at an isolated checkout records `created` or `rewrote` with `exact` confidence.
+  Exact means swe-mux observed that commit appear across that session's successful commit-tool boundary; it is session provenance, not a cryptographic claim about the Git author identity.
+- A HEAD transition first found by the checkout monitor records `observed` with `correlated` confidence.
+  It proves that the session occupied that checkout when the transition was observed, not that the session ran the mutating command.
+- More than one live session on the checkout forces either source to `ambiguous` confidence.
+  One checkout has one HEAD, so Git cannot distinguish which attached terminal caused the transition.
+  Sessions whose first Git poll has not completed are resolved on demand before claiming exclusivity.
+- The monitor emits `previous_head` only when the old and new observations name the same checkout.
+  The initial daemon poll establishes a baseline and does not create provenance for commits that predate the session evidence.
+- Rows are unique by session, run, checkout root, and commit.
+  A later stronger observation promotes the existing row while retaining its earliest observation time, so polling cannot duplicate or downgrade exact tool evidence.
+- Commit metadata is copied into the row at capture time: full OID, parent OIDs, subject, Git commit time, previous HEAD, checkout root, session label, Project, run, evidence source, tool-call id, and source event sequence.
+  This keeps the association readable after a branch moves or the worktree is removed.
+- Provenance follows History lifecycle rather than the optional Tier 0 retention window.
+  Deleting a Project removes its rows, and deleting a History run removes the rows bound to that run.
+- Capture status is part of daemon background health and reports running state, captured rows, dropped observations, pending commit calls, and the last error.
+  Failures are rate-limited in logs and never interrupt Git polling or terminal event delivery.
+
 ### Branch-scoped comparison
 
 `compare_ref`, `compare_added`, `compare_removed`, and `compare_files` measure the working tree
@@ -112,8 +135,12 @@ uncommitted work together.
 
 ## Git drawer tab
 
-- The Project-scoped Git tab has Map and Log readings of one repository.
+- The Project-scoped Git tab has Map, Log, and Provenance readings of one repository.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
+- Each collapsed Map row gives the branch identity its own bounded line and wraps status metrics on a separate line, so divergence and state cannot overlap the title at narrow drawer widths.
+  The worktree indicator is inline with the identity, while the left-aligned expand control is inline with the metrics; neither control reserves an otherwise empty row.
+  The worktree leaf appears beside the branch only when it adds information; the exact root remains in expanded detail.
+  Zero comparison divergence is omitted rather than rendered as separate ahead and behind labels.
 - Local changes are separate `CONFLICTS`, `UNSTAGED`, and `STAGED` groups.
 - Unstaged means working tree versus index, staged means index versus `HEAD`, and conflicted means unresolved index state.
 - A path changed on both sides of the index appears independently in staged and unstaged groups.
@@ -143,6 +170,15 @@ uncommitted work together.
 - An ordinary or merge commit defaults to its first parent.
 - A merge commit permits selecting another actual parent and caches immutable summaries by full commit and parent OID.
 - A root commit uses Git's initial-commit comparison support and has no hardcoded empty-tree object ID.
+- Commits with recorded provenance show their session-link count in the collapsed row and the associated session, relationship, and confidence when expanded.
+
+### Provenance ledger
+
+- Provenance lists durable session-to-commit associations newest first for the selected Project.
+- Each row shows the short commit OID, copied subject, session label, run-id prefix, relationship, confidence, checkout root, and first observation time.
+- Ambiguous rows state why swe-mux cannot identify one author.
+- The ledger is read-only and refreshes on both Git state and provenance events.
+- Opening a History transcript queries the same ledger by History run id and shows a bounded `Commits from this run` strip.
 
 ### Patch review
 
@@ -156,7 +192,7 @@ uncommitted work together.
 - Annotations, selected file, loaded patch snapshots, layout override, and wrapping choice live only in the mounted modal.
 - Local Git events mark an open local review stale without replacing frozen patches or moving annotations.
 - Commit reviews are immutable by full commit and parent OID.
-- Review packets include Project and repository identity, scope, comparison or commit identity, local `HEAD`, patch hashes, ordered annotations, and bounded hunk excerpts.
+- Review packets include Project and repository identity, scope, comparison or commit identity, local `HEAD`, available session provenance, patch hashes, ordered annotations, and bounded hunk excerpts.
 - Copying review packets or raw patches bypasses clipboard-history capture.
 - Sending opens the existing explicit agent picker and never writes directly to a PTY.
 
@@ -226,9 +262,10 @@ and provider-managed worktrees may live outside that root.
 ## Key files
 
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
+- Durable session-to-commit capture: `src/swe_mux/git_provenance.py`, `src/swe_mux/history.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - Routes: `src/swe_mux/server.py`
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`
-- Drawer tab, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
+- Drawer Map, Log, Provenance ledger, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`

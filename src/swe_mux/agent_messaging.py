@@ -8,7 +8,16 @@ transport, and only through it):
   (`CONTROL_PLANE_ROADMAP.md` §7.1): head-of-line ordering, revision checks,
   readiness, identity, and the audit trail all still belong to the queue. What
   this module adds is the relay policy the queue has no opinion about — who may
-  address whom, how large, how often, how deep, and never in a cycle.
+  address whom, how large, how often, how far it propagates, and how long one
+  exchange may run.
+
+  Answering the session that messaged you is an ordinary turn, not a cycle.
+  The two bounds are deliberately separate because they stop different things:
+  ``chain_depth`` bounds *propagation* (how many sessions one thread may reach)
+  and grows only when a message lands on a session that has not spoken in the
+  thread, while ``max_thread_turns`` bounds *volume* inside a thread and is what
+  actually stops two agents talking forever. Cycle detection survives for what
+  it was really for — a ring (A→B→C→A) that routes around the depth bound.
 - ``request_spawn`` - write an inert request surfaced in Fleet Queue. It
   starts nothing. Approval is a separate human act (§7.2/§16): an agent that
   can create actors turns one prompt injection into unbounded fan-out, so the
@@ -63,6 +72,7 @@ def _notification_body(
     sender_name: str,
     sender_backend: str,
     reason: str,
+    replies_left: int,
     body: str,
 ) -> str:
     headers = [
@@ -77,6 +87,15 @@ def _notification_body(
     clean_reason = _envelope_value(reason)
     if clean_reason:
         headers.append(f"reason: {clean_reason}")
+    # The receiver is the one who needs to know a reply is allowed, and the
+    # envelope is the only surface they see. Without this an agent discovers the
+    # answer from a refusal, which is how a reply gets abandoned as impossible.
+    headers.append(
+        f"reply_with: notify(target=\"{_envelope_value(sender_id)}\")"
+        f" — {replies_left} message(s) left in this exchange"
+        if replies_left > 0
+        else "reply_with: this exchange has no messages left; tell your human instead"
+    )
     return "\n".join([*headers, "[/mux notification]", "", body])
 
 
@@ -211,27 +230,65 @@ class AgentMessagingService:
             )
 
         inbound = await self.queue.store.inbound_relay_context(
-            caller_id, getattr(caller.record, "agent_run_id", None)
+            caller_id, getattr(caller.record, "agent_run_id", None), peer_id=target_id
         )
-        depth = int(inbound.get("depth") or 0) + 1
-        max_depth = int(self.config.agent_message_max_chain_depth)
-        if depth > max_depth:
-            raise QueueError(
-                "chain_depth_exceeded",
-                f"relay chain would be {depth} hops deep (limit {max_depth})",
-                status=429,
-            )
-        path = [str(entry) for entry in inbound.get("path") or []]
-        path.append(caller_id)
-        if target_id in path:
-            # Cycle detection over the recorded relay path, not a heuristic:
-            # A→B→A is how a pair of agents burn a plan's worth of tokens
-            # talking to each other.
+        inbound_path = [str(entry) for entry in inbound.get("path") or []]
+        # Who sent me the message I am continuing. `sender_id` is authoritative;
+        # the path's tail should agree, and is the fallback for rows written
+        # before the thread model existed.
+        replying_to = str(inbound.get("from_session") or "") or (
+            inbound_path[-1] if inbound_path else ""
+        )
+        is_reply = bool(replying_to) and target_id == replying_to
+        # Everything strictly upstream of that sender. Reaching back past the
+        # session that just spoke to you is a ring (A→B→C→A), which is the loop
+        # the relay bound exists to stop — answering the session that spoke to
+        # you is a conversation, which is not.
+        ancestors = inbound_path[:-1] if inbound_path else []
+        if target_id in ancestors:
             raise QueueError(
                 "relay_cycle",
-                "that session is already upstream in this relay chain",
+                "that session is upstream of the one that messaged you; reply to the"
+                " sender instead of reaching back around the chain",
                 status=409,
             )
+
+        # The chain's lineage, most recent sender last. A reply moves the caller
+        # to the tail rather than appending a duplicate, so the receiver can
+        # always read the sender off the end.
+        path = [entry for entry in inbound_path if entry != caller_id]
+        path.append(caller_id)
+        # Depth counts the distinct sessions that have *spoken* in the thread,
+        # which for a linear chain is the hop count it has always been. It is
+        # bounded only when the message reaches a session that has not spoken
+        # yet, because that is what propagation means. A back-and-forth between
+        # sessions already in the thread holds its depth and answers to the turn
+        # budget below instead.
+        depth = len(set(path))
+        max_depth = int(self.config.agent_message_max_chain_depth)
+        if target_id not in path and depth > max_depth:
+            raise QueueError(
+                "chain_depth_exceeded",
+                f"this would carry the thread through {depth} relaying sessions"
+                f" (limit {max_depth}); it may continue between the sessions"
+                " already in it",
+                status=429,
+            )
+
+        thread_id = str(inbound.get("thread_id") or "") or None
+        max_turns = int(self.config.agent_message_max_thread_turns)
+        turns = 0
+        if thread_id:
+            turns = await self.queue.store.thread_message_count(thread_id)
+            if turns >= max_turns:
+                raise QueueError(
+                    "thread_budget_exhausted",
+                    f"this exchange already holds {turns} agent messages (limit"
+                    f" {max_turns}); summarise for a human rather than continuing it",
+                    status=429,
+                )
+        else:
+            thread_id = str(uuid.uuid4())
 
         armed = bool(await self.auto.accepts_agent_messages(target_id))
         ttl_seconds = DEFAULT_MESSAGE_TTL_HOURS * 3600
@@ -249,6 +306,7 @@ class AgentMessagingService:
             sender_name=sender_name,
             sender_backend=sender_backend,
             reason=reason,
+            replies_left=max(0, max_turns - (turns + 1)),
             body=text,
         )
         message = await self.queue.enqueue(
@@ -261,9 +319,12 @@ class AgentMessagingService:
             sender_label=sender_name,
             origin_session_id=caller_id,
             correlation_id=correlation,
+            thread_id=thread_id,
             chain_depth=depth,
             origin={
                 "path": path,
+                "thread_id": thread_id,
+                "in_reply_to": replying_to or None,
                 "from_session": caller_id,
                 "from_name": getattr(caller.record, "name", None),
                 "from_run_id": getattr(caller.record, "agent_run_id", None),
@@ -276,13 +337,15 @@ class AgentMessagingService:
         )
         log.info(
             "agent notification staged sender=%s sender_run=%s target=%s message=%s"
-            " correlation=%s chain_depth=%d deduplicated=%s",
+            " correlation=%s thread=%s chain_depth=%d reply=%s deduplicated=%s",
             caller_id,
             sender_run_id,
             target_id,
             message["id"],
             correlation,
+            thread_id,
             depth,
+            is_reply,
             bool(message.get("deduplicated")),
         )
         self.queue.events.emit_background(
@@ -299,7 +362,10 @@ class AgentMessagingService:
             "state": str(message["state"]),
             "target_session_id": target_id,
             "target_name": getattr(destination.record, "name", None),
+            "thread_id": thread_id,
+            "is_reply": is_reply,
             "chain_depth": depth,
+            "thread_messages_remaining": max(0, max_turns - (turns + 1)),
             "deduplicated": bool(message.get("deduplicated")),
             "expires_at": (message.get("constraints") or {}).get(
                 "expires_at", expires_at

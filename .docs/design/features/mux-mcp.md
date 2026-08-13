@@ -4,7 +4,7 @@
 
 A streamable-HTTP MCP endpoint (`POST /mcp`) hosted in the daemon that gives every spawned
 agent session visibility into its own Project — sibling sessions, their live status,
-bounded transcript reads, full-text search over archived conversation history, exact Agent
+bounded transcript reads, indexed search over Project conversation history, exact Agent
 Context sources, Project notes, and request outcomes, plus two bounded write tools added in Phase 5.
 Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), and Phase 5
 (`notify`, `request_spawn`) / control-plane build-order step 2.5
@@ -19,11 +19,9 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 
 ## Key concepts
 
-- **MCP is transport, not authority (CP §7.1).** Every tool is a thin caller over the same
-  services the browser routes use (`SessionManager`, `HistoryIndex`,
-  `parse_transcript_cached`). Nothing is implemented inside the MCP layer, and status read
-  through it is bit-identical to what the UI shows (the Phase 3.5 status contract:
-  `SessionRecord.state` has one writer, `apply_state_transition`).
+- **MCP is transport, not authority (CP §7.1).** Every tool reads through the same services the browser routes use (`SessionManager`, `HistoryIndex`, `parse_transcript_cached`).
+  The MCP layer owns only its agent-facing request validation, progressive result shape, redaction, and output budgets.
+  Status read through it is bit-identical to what the UI shows because `SessionRecord.state` still has one writer, `apply_state_transition`.
 - **Caller identity is injected, never claimed (CP §7.4).** A per-session bearer token is
   minted at spawn (`MUX_MCP_TOKEN`, beside `MUX_MCP_URL`), mirrored into the supervisor's
   session meta, and recovered at adoption — so it survives daemon restarts the same way the
@@ -32,17 +30,22 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 - **Scope is the caller's Project.** Every tool filters to the caller's `project_id`
   (falling back to the git `project_scope_id` for ungrouped sessions). A target outside the
   scope answers exactly like a target that never existed — confirming existence is itself a
-  leak. History queries go through `history_page`, which keeps the `agent_visible=1`
+  leak. History queries go through `search_history_index`, which keeps the `agent_visible=1`
   quarantine predicate.
 - **Return nothing over a weak match (CP §7).** Empty results are fine;
   plausible-but-wrong teaches an agent to stop calling.
 - **Bounded and redacted.** Transcript, Project-note, and Agent Context source reads are capped at 512 KiB.
-  Transcript results are also message-capped and pageable in either direction through run-bound opaque cursors.
+  Ordinary transcript reads default to 12 messages and 32 KiB of message text, remain explicitly expandable to 200 messages and 512 KiB, and are pageable in either direction through run-bound opaque cursors.
   `list_sessions` returns at most 25 compact entries and 32 KiB across live and ended rows combined, with query filtering and an opaque continuation cursor.
-  Search results carry at most the FTS excerpts `history_page` already bounds. Detailed session
-  records go out through an explicit field allowlist (`session_summary`) - never
-  `record.snapshot()`, which carries `spawn_env`. Any message or excerpt that trips the
-  clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
+  History search defaults to eight compact hits and a 16 KiB hit-payload budget, with explicit bounds for larger calls.
+  Detailed session records go out only when `detail=full` and still use the `session_summary` allowlist, never `record.snapshot()`, which carries `spawn_env`.
+  Any message or excerpt that trips the clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
+- **History retrieval is progressive.** `search_history` filters and ranks indexed messages server-side, returning only a title, role, timestamp, bounded excerpt, and opaque `hit_id` by default.
+  During a post-upgrade FTS repair it uses bounded literal database filtering and returns `search_index_ready=false`; this preserves complete retrieval while explicitly withholding ranked-index readiness.
+  The caller passes that `hit_id` to `read_transcript`, which returns one message before and two after the match by default instead of loading an entire transcript.
+  The hit embeds the Project scope, run, message ordinal, and transcript-index watermark.
+  A changed index makes the hit stale and requires a new search, so a remembered pointer cannot silently select different text.
+  Agents may widen either stage explicitly with result count, byte budget, detail, and before/after controls.
 - **Session names match the UI.** Session summaries preserve the backend-generated `name`
   and also expose `display_name`, computed with the browser's rule: the latest title annotation
   wins only while the session is auto-named. Exact, unique display names resolve anywhere a
@@ -77,15 +80,15 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 |---|---|
 | `list_sessions` | a compact, queryable, pageable list of live and optionally recent ended sessions; the 25-row and 32 KiB caps apply to the combined result |
 | `get_session` | status + metadata and a run brief by id, exact name, or `self`; the caller's own row also lists superseded run ids |
-| `read_transcript` | bounded, pageable head or tail of exactly one run; `self` is the default and `agent_run_id` unambiguously selects the caller's retired run |
-| `search_history` | FTS over the Project's archived Claude/Codex conversations, with raw and display names, keyset-paginated |
+| `read_transcript` | a small indexed window around a `search_history` hit, or a bounded pageable head/tail of exactly one run; `self` is the default and `agent_run_id` unambiguously selects the caller's retired run |
+| `search_history` | globally ranked compact hits across the Project's indexed Claude/Codex conversations, with role, title, backend, state, run, session-date, message-date, matching-mode, diversity, detail, output-budget, and cursor controls |
 | `memory_sources` | the caller Project's descriptor-driven instruction and provider-memory inventory, including source attribution, capability, revision, modification time, and entrypoint kind |
 | `read_memory` | one bounded inventoried Agent Context source by opaque `source_id`, never by a caller-supplied filesystem path |
 | `project_notes` | read-only inventory of the caller Project's notes, excluding the global Scratchpad and every other Project |
 | `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
 | `message_status` | current outcome of one `notify`, visible only to its attributed sending session |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
-| `notify` | stages a message with a visible sender/message/correlation envelope; returns the message id, correlation id, state, and chain depth |
+| `notify` | stages a message with a visible sender/message/correlation envelope; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
 | `request_spawn` | writes an inert spawn approval row into Fleet Queue; returns the request id and starts nothing |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
@@ -119,7 +122,7 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - Loopback-only, like hook ingress; the Host allowlist of `security_middleware` applies.
 - Per-session sliding-window rate limit (120 calls/min) with the same sweep pattern as
   `hook_ingress_windows`; 256 KiB request-body cap.
-- `calls`/`denied`/`writes` counters under `mcp` in `GET /api/diagnostics/background`.
+- `calls`/`denied`/`writes` counters and per-tool call/response-byte/truncation totals appear under `mcp` in `GET /api/diagnostics/background`.
 - Read-tool logs contain tool, caller, and Project metadata only.
   Source contents, prompt text, and SSH credential text are never logged.
 - JSON-RPC methods: `initialize` (protocol 2025-06-18, older versions negotiated),

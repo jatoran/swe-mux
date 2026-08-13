@@ -6,7 +6,7 @@ import { useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import type { Project } from './types'
-import { parsePatchSnapshot, type GitPatchSnapshot, type ReviewFileChange } from './gitWorktrees'
+import { parsePatchSnapshot, type GitPatchSnapshot, type GitProvenance, type ReviewFileChange } from './gitWorktrees'
 import {
   annotationKey, deleteAnnotation, effectiveDiffView, extendAnnotationRange, generateReviewPacket,
   markReviewStale, patchRequestQuery, upsertAnnotation,
@@ -20,6 +20,7 @@ type Props={
   locator:ReviewLocator
   initialPath:string
   truncated:boolean
+  provenance?:GitProvenance[]
   onClose:()=>void
   onOpenFile:(worktree:string,path:string)=>void
   onSendToAgent?:(request:SendToAgentRequest)=>void
@@ -109,7 +110,7 @@ export function GitReviewModal(props:Props) {
   </div>
   const packet=()=>generateReviewPacket({
     projectName:props.project.name,projectId:props.project.id,repositoryRoot:props.repositoryRoot,locator:props.locator,
-    headOid:[...patches.values()].find(item=>item.headOid)?.headOid||null,stale,files:props.files,fileListTruncated:props.truncated,snapshots:patches,annotations,includeFullPatches:includePatches,
+    headOid:[...patches.values()].find(item=>item.headOid)?.headOid||null,stale,files:props.files,fileListTruncated:props.truncated,snapshots:patches,annotations,includeFullPatches:includePatches,provenance:props.provenance,
   }).text
   const copy=async(text:string,label:string)=>{
     setRecovery('')

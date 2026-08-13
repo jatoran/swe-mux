@@ -6,7 +6,7 @@ import {
   REVIEW_PACKET_MAX_CHARS,
   type AnnotationAnchor,
 } from '../src/gitReview.ts'
-import type { GitPatchSnapshot, ReviewFileChange } from '../src/gitWorktrees.ts'
+import type { GitPatchSnapshot, GitProvenance, ReviewFileChange } from '../src/gitWorktrees.ts'
 
 const anchor=(over:Partial<AnnotationAnchor>={}):AnnotationAnchor=>({path:'src/a.ts',side:'new',start:4,end:4,patchHash:'hash-a',...over})
 
@@ -44,7 +44,8 @@ test('only mutable local reviews become stale on Git events',()=>{
 test('review packets are deterministic, bounded, and omit full patches by default',()=>{
   const file:ReviewFileChange={path:'src/a.ts',oldPath:null,status:'M',additions:1,deletions:1,binary:false,submodule:false,currentExists:true}
   const snapshot:GitPatchSnapshot={scope:'unstaged',path:file.path,oldPath:null,worktree:'/repo',commit:null,parent:null,comparisonRef:null,headOid:'head',patchSha256:'hash-a',patch:'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -3,3 +3,3 @@\n old\n-before\n+after\n tail\n',binary:false,tooLarge:false,unavailableReason:null,additions:1,deletions:1}
-  const context={projectName:'Mux',projectId:'project',repositoryRoot:'/repo',locator:{scope:'unstaged' as const,worktree:'/repo',commit:null,parent:null,comparisonRef:null},headOid:'head',stale:true,files:[file],fileListTruncated:true,snapshots:new Map([[file.path,snapshot]]),annotations:upsertAnnotation([],anchor(),'replace this'),includeFullPatches:false}
+  const provenance:GitProvenance={id:'edge',sessionId:'session',sessionName:'Builder',agentRunId:'run',projectId:'project',worktreeRoot:'/repo',commitOid:'a'.repeat(40),parentOids:[],subject:'Add provenance',committedAt:1,previousHead:null,relationship:'created',confidence:'exact',ambiguous:false,source:'session_tool',observedAt:2}
+  const context={projectName:'Mux',projectId:'project',repositoryRoot:'/repo',locator:{scope:'unstaged' as const,worktree:'/repo',commit:null,parent:null,comparisonRef:null},headOid:'head',stale:true,files:[file],fileListTruncated:true,snapshots:new Map([[file.path,snapshot]]),annotations:upsertAnnotation([],anchor(),'replace this'),includeFullPatches:false,provenance:[provenance]}
   const first=generateReviewPacket(context)
   const second=generateReviewPacket(context)
   assert.equal(first.text,second.text)
@@ -52,6 +53,8 @@ test('review packets are deterministic, bounded, and omit full patches by defaul
   assert.match(first.text,/File list: truncated/)
   assert.match(first.text,/new line 4/)
   assert.match(first.text,/replace this/)
+  assert.match(first.text,/Session provenance/)
+  assert.match(first.text,/Builder \(session, run run\): created, exact/)
   assert.match(first.text,/Full patches omitted/)
   assert.equal(first.text.includes(snapshot.patch.repeat(2)),false)
 

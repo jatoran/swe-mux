@@ -509,7 +509,14 @@ class Config:
     agent_message_max_chars: int = 4000
     agent_message_hourly_budget: int = 20
     agent_message_pending_per_target: int = 5
+    # Two separate relay bounds, because they answer different questions.
+    # `max_chain_depth` bounds *propagation* - how many distinct sessions one
+    # relay thread may reach - and only grows when a message reaches a session
+    # that has not spoken in it yet. `max_thread_turns` bounds *volume* within a
+    # single thread, which is what actually stops two agents talking forever.
+    # Replying to whoever messaged you is an ordinary turn under both.
     agent_message_max_chain_depth: int = 3
+    agent_message_max_thread_turns: int = 6
     # `mux.requestSpawn` creates an inert Fleet Queue approval draft and nothing
     # else; approval is a human act.
     request_spawn_enabled: bool = True
@@ -536,7 +543,7 @@ class Config:
     # Flash revision without silently changing model family.
     scan_timeline_enabled: bool = False
     scan_timeline_model: str = "deepseek/deepseek-v4-flash"
-    scan_timeline_run_token_budget: int = 5_000
+    scan_timeline_run_token_budget: int = 100_000
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
@@ -850,6 +857,8 @@ def _validate(config: Config) -> None:
         errors["agent_message_pending_per_target"] = "must be between 1 and 100 messages"
     if not 1 <= config.agent_message_max_chain_depth <= 10:
         errors["agent_message_max_chain_depth"] = "must be between 1 and 10 hops"
+    if not 1 <= config.agent_message_max_thread_turns <= 100:
+        errors["agent_message_max_thread_turns"] = "must be between 1 and 100 messages"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

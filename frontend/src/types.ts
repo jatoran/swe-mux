@@ -73,6 +73,7 @@ export interface Session {
     root?: string | null; compare_ref?: string | null
     compare_added?: number | null; compare_removed?: number | null
     compare_files?: number | null
+    head?: string | null
   }
   pinned_attention: boolean; broadcast: boolean
   startup_timing_ms?: Record<string, number>

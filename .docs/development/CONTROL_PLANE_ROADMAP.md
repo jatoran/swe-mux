@@ -325,28 +325,16 @@ window, claim, or no-progress gate that spans a `/clear` is comparing two
 conversations. Cross-run and cross-session queries stay possible and are the point
 of §6.1 and §6.6 — they are just never *implicit*.
 
-### 5.4 Project card
+### 5.4 Project context card
 
-A distilled, cached description of the project — what it is, its main subsystems,
-a file→area map — built once from the existing `.docs` (`00_OVERVIEW.md`, the
-`.docs/CLAUDE.md` routing table). A few hundred tokens, prepended to every model
-call. Without it, a scan model sees "edited `processes.py`" and is working blind;
-with it, the model judges against real architecture. The same card feeds
-screenshot-to-agent and any Tier 2 analysis — build once, several consumers use it.
+Shipped as one user-owned Markdown file at `.swe-mux/project-context.md`.
+It starts blank, is Project-scoped, and is prepended to scan-timeline calls as untrusted reference context.
+swe-mux does not crawl `.docs`, `docs`, README files, routing tables, source files, or any other repository content to construct it.
 
-Shipped (§9 step 4); three properties are load-bearing enough to restate here:
-
-- **The map is deterministic, the prose is not.** File → area comes from each doc's
-  literal "Key files" section, copied verbatim; the model writes only `summary` and
-  `subsystems`. Artifact/file tracking is the weakest dimension of every compactor
-  measured (§2), so a paraphrased path list would be worse than no list.
-- **Invalidation is content, not clock.** The card is valid only for a `sha256` over
-  its source bytes + model + prompt version + schema version, and a mismatched card is
-  never served. No TTL: "old" and "wrong" are not the same question, and a stale
-  architecture summary served as current is the silent-omission failure mode.
-- **No provider, no card.** Every failure yields nothing rather than a heuristic. A
-  usually-wrong card poisons every consumer that prepends it — the same trust-gate
-  argument as §7's retrieval precision, applied one layer down.
+The Timeline drawer exposes the file directly with a bounded editor, revision-checked atomic save, and a copyable setup prompt that asks an agent inside the Project to populate only that file from verified evidence.
+Enabling Scan timeline for a Project creates the blank file lazily but does not generate content, authorize a run, or backfill history.
+The active contract is in `design/features/project-card.md`.
+The earlier generated, cached, model-written design is retired and archived at `development/archive/PROJECT_CARD_GENERATED_DESIGN.md`; its compatibility code and SQLite rows have no active consumer.
 
 ### 5.5 Scan timeline (Tier 1)
 
@@ -358,7 +346,7 @@ transcript tokens become ~120 records (~5k tokens) that a strong model can read 
 one cheap pass.
 
 **What it reads.** The *delta* since the last scan (not the whole transcript),
-plus its own last 2–3 records for continuity, plus the cached project card and the
+plus its own last 2–3 records for continuity, plus the user-owned Project context and the
 session's originating task. Tool calls are paired with their results (a Read alone
 means nothing; Read+result means something), and the fat is stripped — file
 bodies, full diffs, huge command output become "edited `layouts.py`, tests
@@ -830,6 +818,37 @@ never interrupts an active turn or bypasses approvals/Q&A, and carries the calli
 session as provenance. Session A gains no knowledge of or authority over session B
 beyond what the target allowlist grants.
 
+**A reply is a notify, and it is bounded rather than forbidden (2026-08-13).** The
+first implementation treated any message to a session already in the relay path as a
+cycle. A reply *is* A→B→A, so this refused the very first reply every time: B could
+receive a handoff and act on it, but could never acknowledge or correct it, and the
+originator was left with a delivery receipt and no answer. That was over-enforcement,
+not posture — a single bounded reply creates no autonomy that the one-way message did
+not already create, since it is still an inert queue item under the receiver's arming
+policy, the readiness predicate, and the audit trail.
+
+The bound that was actually wanted is now stated as two, because they stop different
+things:
+
+- **Propagation** — `chain_depth`, default 3 — how many distinct sessions one thread
+  may reach. It grows only when a message lands on a session that has not spoken in
+  the thread yet. This is the fan-out bound, and it is unchanged in strength: a linear
+  chain still refuses at exactly the same hop it always did.
+- **Volume** — `max_thread_turns`, default 6 — how many agent messages one thread may
+  hold. This is what stops two agents talking forever, and it is the bound chain depth
+  was being misused for. Depth cannot do this job once replies exist: a two-party
+  exchange reaches nobody new, so its depth is constant however long it runs.
+
+Cycle detection survives for the case it was really for: a **ring** that reaches past
+the session that spoke to you (A→B→C→A) to route around the propagation bound.
+Answering the session that spoke to you is a conversation and is allowed; reaching
+back around it is not. The refusals stay typed (`chain_depth_exceeded`,
+`thread_budget_exhausted`, `relay_cycle`) and each now names what the agent may do
+instead, and the receiver's envelope carries a `reply_with` line — an agent that must
+learn from a refusal whether it may answer will conclude it cannot, which is exactly
+what happened in practice. Mechanism and derivation:
+`design/features/agent-messaging.md`.
+
 Spawn stays out of agent reach, but a flat refusal loses the workflow actually
 wanted. The middle path is the §13 queue-draft pattern applied to spawn:
 `mux.requestSpawn(...)` creates an **inert draft in the observation inbox**, not a
@@ -891,8 +910,12 @@ re-examination concluded the proposed enforcement (token check on mutating route
 daemon-local browser bearer) cannot deliver the property: a same-user process on this host
 can request whatever credential the browser is given, so the only real boundary is OS-level
 isolation (an ACL'd per-user pipe the browser holds and sessions do not). Consequence to
-carry forward: **the budgets, allowlists, depth caps, and cycle detection in §7.2 bound
-well-behaved callers, not a compromised one.** What compensates is that agent-reachable
+carry forward: **the budgets, allowlists, depth caps, thread turn budgets, and cycle
+detection in §7.2 bound well-behaved callers, not a compromised one.** This is also why the
+2026-08-13 reply change costs nothing here: relaxing an over-tight rule for well-behaved
+callers does not move a boundary that never rested on it. The thread identity is still
+daemon-assigned rather than caller-supplied, so no caller can reset its own budget by
+renaming its exchange. What compensates is that agent-reachable
 authority is strictly narrower than the browser's — no tool delivers, spawns, or writes to a
 PTY. Full reasoning: `design/features/agent-messaging.md`.
 
@@ -1108,6 +1131,13 @@ another agent can pick up mid-plan. Section links point to the design detail.
     act and is what spawns). One audit trail with the browser path; sender derived from the
     token. Design: `design/features/agent-messaging.md`. The same-host boundary was
     re-examined and re-affirmed with its limits written down (§7.4).
+  - [x] **Replies unblocked 2026-08-13.** The shipped cycle rule refused every reply,
+    because a reply is A→B→A: a session could receive a handoff and act on it but never
+    answer. Split into a propagation bound (`chain_depth`, grows only on reaching a session
+    new to the thread) and a volume bound (`max_thread_turns`), with cycle detection kept
+    for rings that reach past the sender. Relay context now follows the peer and filters the
+    run in SQL, so one deep unrelated thread no longer wedges a session's other exchanges.
+    Rationale and the two-bound model: §7.2.
 - [x] **2.6 · mux MCP v0.5: situational-awareness reads** (§7.5). Shipped as `ROADMAP.md`
   Phase 5.6. Tool-surface work only: every item is a read over a service that already
   shipped, so it adds no substrate and no authority. Needs step 3.5's run boundary.
@@ -1144,9 +1174,9 @@ another agent can pick up mid-plan. Section links point to the design detail.
     session is a CLI with shell access: `git status` and `git diff --stat` are one command away,
     and a sibling's worktree path already comes from `get_session`. Design law 6 still holds
     (condition on the diff, not on the sibling's story about it); it does not need a tool to
-    hold. The project card remains an internal operation with its own consumers. Reopen
-    `project_card()` only with evidence that a distilled card answers something the repository
-    itself does not.
+    hold.
+    The former generated internal Project card was retired on 2026-08-13 in favor of the user-owned `.swe-mux/project-context.md` file.
+    A future `project_card()` MCP read would expose only that reviewed file and still requires evidence that it answers something the caller cannot read directly.
   - [x] Decide the cross-Project read question (§18) explicitly. Default stays own-Project;
     "what else am I working on right now" is inherently cross-Project and needs a named grant
     if it is ever answered, not a quiet scope widening.
@@ -1181,37 +1211,15 @@ another agent can pick up mid-plan. Section links point to the design detail.
   becomes a new `agent_run_id` (`agent_conversation_rolled` on the event log) instead of a
   silent conversation swap under a live run. Steps 4–8 inherit their boundary from it and
   must not implement conversation-change detection themselves.
-- [x] **4 · Project card** (§5.4). Distilled architecture, cached; feeds scan timeline + Tier 2.
-  Shipped as `ROADMAP.md` Phase 5.5 (first slice). Design:
-  `design/features/project-card.md`.
-  - [x] Sources are the project's own docs: the first available of `.docs/00_OVERVIEW.md` /
-    `OVERVIEW.md` / `design/architecture.md` / `README.md`, plus `.docs/CLAUDE.md`, plus every
-    doc's **"Key files"** section — the same inversion (and hub limit) the doc-debt ledger
-    uses, because the routing table is keyed by change *type* and no machine can match that
-    to a path.
-  - [x] **The file → area map is deterministic and never model-written.** Compaction evals
-    rank artifact/file tracking last among every summarizer's abilities (§2), so the paths
-    are copied verbatim and the model is told not to restate them. It writes only the prose
-    half (`summary`, `subsystems`).
-  - [x] **Invalidation is by source content, not by clock.** The card carries a `sha256`
-    over its source bytes plus the model id, prompt version, and card schema version; a card
-    whose fingerprint no longer matches is never served. There is no TTL — a clock cannot
-    tell "old" from "wrong", and serving a stale architecture summary as current is the
-    silent-omission failure this design exists to avoid. A cheap mtime/size stamp gates the
-    re-read so the unchanged case costs a stat walk.
-  - [x] Per-project opt-in (`project_card`, no dependencies — it reads the repository, not
-    Tier 0) and budget-bounded: one cheap-model call per fingerprint, metered on the shared
-    ledger under `builtin:project-card` with its own daily dollar budget, the same pattern
-    the read-aloud summarizer uses.
-  - [x] **Degrades to no card, never to a guess.** No model configured, no key, provider
-    error, empty answer, exhausted budget, undocumented project, project not opted in — all
-    yield nothing, with a 5-minute backoff so a keyless project does not re-ask on every
-    call. Consumers that always prepend call `prompt_prefix`, which returns "".
-  - [x] Internal API for the consumers that follow (scan timeline, screenshot-to-agent):
-    `card_for_session` / `card_for_project` / `prompt_prefix`, each resolving the gate
-    itself. No route and no UI; build health is under `project_cards` in
-    `GET /api/diagnostics/background`.
-- [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
+- [x] **4 · Project context card** (§5.4).
+  Shipped as `ROADMAP.md` Phase 5.5 (first slice).
+  Design: `design/features/project-card.md`.
+  - [x] One fixed user-owned `.swe-mux/project-context.md` file; blank by default and never inferred from repository docs or source.
+  - [x] Bounded UTF-8 reads, fixed contained path, unsafe symlink/type rejection, atomic revision-checked writes, and empty-context degradation.
+  - [x] Timeline-drawer editor with configured/empty state, byte count, Save, and **Copy setup prompt** for an agent-assisted user workflow.
+  - [x] Enabling Project timeline creates the blank file lazily but does not generate content, authorize a run, or backfill history.
+  - [x] HTTP read/write routes and background diagnostics; legacy generated-card storage and code are inert compatibility artifacts.
+- [x] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
   timeline + dead-end memory (§6.2). Instrument the rehydration rate from commit one. Records
   carry `agent_run_id`; delta window, continuity context, and `novelty` all reset at a rollover.
   The continuous title is **not** part of this step: §6.11 abandoned it, and titling is one call
@@ -1219,6 +1227,9 @@ another agent can pick up mid-plan. Section links point to the design detail.
   **Gated 2026-08-10 on step 2.6 evidence.** This is the first continuously costing feature and
   step 2.6's free reads overlap part of what the timeline was meant to provide, so ship the
   reads first and let their observed usage justify or retire this step.
+  - [x] The Timeline drawer owns Project permission, Project context, run permission, current scan, full-session scan, spend, records, and source expansion; the topbar owns none of them.
+  - [x] Full-session scans process uncovered current-run messages oldest first under ordinary gates and budgets, keep the live cursor monotonic, and expose running/completed/partial/failed progress.
+  - [x] Global and built-in automation enablement is centralized in the Automation dashboard; Settings retains configuration only.
 - [ ] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
   A narration slice never spans two agent runs.
 - [ ] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
@@ -1271,8 +1282,11 @@ another agent can pick up mid-plan. Section links point to the design detail.
   `implemented` flag and the route refuses `409 automation_not_implemented`).
 - [x] **Per-project scope affordance.** The toggle lives in the one per-Project editor, so
   scope is structural rather than a label; global config remains an inherited default.
-- [ ] **Persistent spend/budget line.** Tokens/cost today + the coming daily interrupt
-  budget belong in an always-on status line (like the message bar), not one tab.
+- [x] **Persistent scan-timeline spend/budget line.** Timeline tokens/cost today and the
+  current run budget are visible in the always-on active-session status line, not only in
+  the timeline tab.
+- [ ] **Daily interrupt budget extension.** Add the interrupt budget to that status line when
+  Phase 6.5 ships the interrupt-ranking policy that owns it.
 - [ ] **Progressive disclosure on rule rows.** Show name + state + one-line summary by
   default; expand for `when::trigger · reads::slice · model → result · setting::key`.
 

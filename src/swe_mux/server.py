@@ -53,6 +53,7 @@ from .automation import (
     validate_observer_result,
 )
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
+from .automation_registry import dependency_closure
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
@@ -67,6 +68,7 @@ from .fleet_intelligence import FleetIntelligence
 from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor, _git
 from .git_projects import ProjectIdentity, resolve_project
+from .git_provenance import GitProvenanceService
 from .harness import (
     AGENT_BACKENDS,
     HARNESSES,
@@ -137,7 +139,7 @@ from .preview_capture import (
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_actions import ProjectActionService, action_spawn_body
-from .project_card import ProjectCardContext, ProjectCardService
+from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
     GLOBAL_SCRATCHPAD_ID,
     ObservationsUnreadableError,
@@ -675,6 +677,8 @@ def create_app(
             ),
             web.get("/api/projects/{project_id}/automations", get_project_automations),
             web.put("/api/projects/{project_id}/automations", put_project_automations),
+            web.get("/api/projects/{project_id}/project-context", get_project_context),
+            web.put("/api/projects/{project_id}/project-context", put_project_context),
             web.get("/api/projects/{project_id}/agent-context", get_agent_context),
             web.get(
                 "/api/projects/{project_id}/agent-context/sources/{source_id}",
@@ -736,7 +740,15 @@ def create_app(
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
             web.put("/api/sessions/{sid}/scan-timeline", put_session_scan_timeline),
+            web.put(
+                "/api/sessions/{sid}/scan-timeline/project",
+                put_session_scan_timeline_project,
+            ),
             web.post("/api/sessions/{sid}/scan-timeline/scan", scan_session_now),
+            web.post(
+                "/api/sessions/{sid}/scan-timeline/backfill",
+                backfill_session_scan_timeline,
+            ),
             web.get(
                 "/api/sessions/{sid}/scan-timeline/{record_id}",
                 session_scan_timeline_record,
@@ -840,6 +852,7 @@ def create_app(
             web.post("/mcp", mcp_endpoint),
             web.get("/api/git/worktrees", list_worktrees),
             web.get("/api/git/graph", git_graph),
+            web.get("/api/git/provenance", git_provenance),
             web.get("/api/git/commits/{oid}/changes", git_commit_changes),
             web.get("/api/git/diff", git_diff),
             web.post("/api/git/worktrees", create_worktree),
@@ -1031,6 +1044,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     git_monitor = GitMonitor(
         sessions, events, config.git_poll_seconds, compare_override=_project_compare_ref
     )
+    git_provenance_service = GitProvenanceService(history, sessions, events)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)
@@ -1123,6 +1137,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     telemetry.start(events, sessions=sessions, history=history)
 
     automation_gate_cache: dict[str, tuple[float, frozenset[str]]] = {}
+    app["automation_gate_cache"] = automation_gate_cache
 
     async def _enabled_automations(root: str) -> frozenset[str]:
         """Per-project opt-in closure, resolved off-loop with a short TTL cache.
@@ -1184,22 +1199,14 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             project_id=record.project_id or None,
         )
 
-    async def project_card_context(session_id: str) -> ProjectCardContext | None:
-        # Same gate, same TTL cache as Tier 0: a session's card is only built
-        # when its owning project opted the card in. The card is per *project*,
-        # so the session lookup exists only to name one.
+    async def project_context(session_id: str) -> ProjectContext | None:
         resolved = _session_project_root(session_id)
         if resolved is None:
             return None
         record, root = resolved
         if not record.project_id:
             return None
-        if "project_card" not in await _enabled_automations(root):
-            return None
-        return ProjectCardContext(project_id=record.project_id, project_root=root)
-
-    async def project_card_enabled(root: str) -> bool:
-        return "project_card" in await _enabled_automations(root)
+        return ProjectContext(project_id=record.project_id, project_root=root)
 
     async def scan_context(session_id: str) -> ScanContext | None:
         resolved = _session_project_root(session_id)
@@ -1226,16 +1233,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             dead_end_memory_enabled="dead_end_memory" in enabled,
         )
 
-    # Control-plane step 4: built lazily on the first consumer request, cached
-    # per documentation fingerprint, and absent rather than guessed when no
-    # provider is available.
-    project_cards = ProjectCardService(
-        automation_store,
-        config,
-        openrouter,
-        resolve_session=project_card_context,
-        resolve_project=project_card_enabled,
-    )
+    project_contexts = ProjectContextService(resolve_session=project_context)
     scan_timeline = ScanTimelineService(
         store=automation_store,
         tier0=tier0,
@@ -1243,7 +1241,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         events=events,
         config=config,
         provider=openrouter,
-        project_cards=project_cards,
+        project_contexts=project_contexts,
         resolve_context=scan_context,
         history=history,
     )
@@ -1255,6 +1253,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     consumers.start()
     scan_timeline.start()
+    git_provenance_service.start()
     git_monitor.start()
     hooks.start()
     automation.start()
@@ -1298,6 +1297,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         decision_store=telemetry,
     )
     background.start(PUSH_SENDER_LOOP, push_sender.run)
+    history_search_maintenance_task = asyncio.create_task(
+        history.maintain_message_search_indexes(), name="history-message-search-maintenance"
+    )
+    history_search_maintenance_task.add_done_callback(_log_task_failure)
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
         reconcile_task = asyncio.create_task(
@@ -1323,6 +1326,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         reaper=reaper,
         supervisor=supervisor_client,
         git_monitor=git_monitor,
+        git_provenance=git_provenance_service,
         hooks=hooks,
         automation=automation,
         automation_store=automation_store,
@@ -1333,7 +1337,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         status_timeline=status_timeline,
         tier0=tier0,
         deterministic_consumers=consumers,
-        project_cards=project_cards,
+        project_contexts=project_contexts,
         scan_timeline=scan_timeline,
         provider_accounts=provider_accounts,
         process_inspector=process_inspector,
@@ -1381,6 +1385,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         if not reconcile_task.done():
             reconcile_task.cancel()
         await asyncio.gather(reconcile_task, return_exceptions=True)
+    if not history_search_maintenance_task.done():
+        history_search_maintenance_task.cancel()
+    await asyncio.gather(history_search_maintenance_task, return_exceptions=True)
     await history_backfills.stop()
     for task in tuple(app["automation_tasks"]):
         task.cancel()
@@ -1407,6 +1414,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await process_inspector.stop()
     await ghost_windows.stop()
     await git_monitor.stop()
+    await git_provenance_service.stop()
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
     # (today's behavior, and always the case without a supervisor); "detach"
     # leaves supervisor-owned sessions running so the next daemon reattaches.
@@ -2366,6 +2374,12 @@ async def automation_dashboard(request: web.Request) -> web.Response:
     return json_response(
         {
             **await store.dashboard(),
+            "controls": {
+                "automation_enabled": bool(request.app["config"].automation_enabled),
+                "scan_timeline_enabled": bool(
+                    request.app["config"].scan_timeline_enabled
+                ),
+            },
             "engine": request.app["automation"].status(),
             "provider": await _provider_status(request),
             "recent_firings": await store.firings(limit=25),
@@ -3628,8 +3642,53 @@ async def put_project_automations(request: web.Request) -> web.Response:
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
+    if gate_cache := request.app.get("automation_gate_cache"):
+        gate_cache.clear()
+    if requested.get("scan_timeline") and request.app.get("project_contexts") is not None:
+        await asyncio.to_thread(
+            request.app["project_contexts"].ensure,
+            ProjectContext(project_id=project.id, project_root=project.root),
+        )
     await request.app["events"].emit("project_configuration_changed", project_id=project.id)
     return await get_project_automations(request)
+
+
+async def get_project_context(request: web.Request) -> web.Response:
+    project = _observations_project(request)
+    service: ProjectContextService = request.app["project_contexts"]
+    payload = await asyncio.to_thread(
+        service.read,
+        ProjectContext(project_id=project.id, project_root=project.root),
+    )
+    return json_response(payload)
+
+
+async def put_project_context(request: web.Request) -> web.Response:
+    project = _observations_project(request)
+    body = await request.json()
+    if not isinstance(body.get("markdown"), str):
+        raise ValueError("markdown must be a string")
+    if not isinstance(body.get("revision"), str):
+        raise ValueError("revision must be a string")
+    service: ProjectContextService = request.app["project_contexts"]
+    try:
+        payload = await asyncio.to_thread(
+            service.write,
+            ProjectContext(project_id=project.id, project_root=project.root),
+            body["markdown"],
+            body["revision"],
+        )
+    except ValueError as exc:
+        if "changed externally" in str(exc):
+            return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
+        raise
+    await request.app["events"].emit(
+        "project_context_changed",
+        source="user",
+        project_id=project.id,
+        revision=payload["revision"],
+    )
+    return json_response(payload)
 
 
 async def resolve_project_scope(request: web.Request) -> web.Response:
@@ -4407,12 +4466,11 @@ async def get_background_health(request: web.Request) -> web.Response:
             "loop_lag": loop_lag.snapshot(),
             "event_bus": events.drop_stats(),
             "tier0_capture": tier0.capture_stats(),
+            "git_provenance": request.app["git_provenance"].status(),
             # A detector that stopped producing findings is indistinguishable from
             # a quiet fleet unless the loop's own liveness is reported.
             "deterministic_consumers": consumers.status(),
-            # "no card" is a legitimate outcome, so the reason a project has none
-            # has to be readable somewhere or it looks like nothing was enabled.
-            "project_cards": request.app["project_cards"].status(),
+            "project_contexts": request.app["project_contexts"].status(),
             "scan_timeline": request.app["scan_timeline"].status(),
             "mcp": request.app["mcp"].status(),
         }
@@ -6881,14 +6939,83 @@ async def put_session_scan_timeline(request: web.Request) -> web.Response:
     if not isinstance(body.get("enabled"), bool):
         raise ValueError("enabled must be a boolean")
     service: ScanTimelineService = request.app["scan_timeline"]
+    if body["enabled"]:
+        session = request.app["sessions"].resolve(request.match_info["sid"])
+        project = request.app["projects"].projects.get(session.record.project_id or "")
+        if project is not None:
+            await asyncio.to_thread(
+                request.app["project_contexts"].ensure,
+                ProjectContext(project_id=project.id, project_root=project.root),
+            )
     await service.set_enabled(request.match_info["sid"], bool(body["enabled"]))
     return json_response(await service.snapshot(request.match_info["sid"]))
+
+
+async def put_session_scan_timeline_project(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body.get("enabled"), bool):
+        raise ValueError("enabled must be a boolean")
+    sid = request.match_info["sid"]
+    session = request.app["sessions"].resolve(sid)
+    project = request.app["projects"].projects.get(session.record.project_id or "")
+    if project is None:
+        raise ValueError("the session has no registered Project")
+    identity = _registered_identity(project)
+    current = await read_project_config(project.root, project=identity)
+    if current["status"] == "malformed":
+        raise ValueError("the Project config is malformed")
+    values = dict(current["values"])
+    requested = {
+        key
+        for key, value in (values.get("automations") or {}).items()
+        if value and key in AUTOMATION_REGISTRY
+    }
+    enabled = bool(body["enabled"])
+    if enabled:
+        requested.add("scan_timeline")
+        requested.update(dependency_closure("scan_timeline"))
+    else:
+        requested = {
+            key
+            for key in requested
+            if key != "scan_timeline"
+            and "scan_timeline" not in dependency_closure(key)
+        }
+        run = await request.app["automation_store"].scan_run(
+            str(session.record.agent_run_id or "")
+        )
+        if run and run.get("enabled"):
+            await request.app["scan_timeline"].set_enabled(sid, False)
+    values["automations"] = {key: True for key in sorted(requested)}
+    await write_project_config(
+        project.root,
+        values,
+        current["revision"],
+        project=identity,
+    )
+    request.app["automation_gate_cache"].clear()
+    if enabled:
+        await asyncio.to_thread(
+            request.app["project_contexts"].ensure,
+            ProjectContext(project_id=project.id, project_root=project.root),
+        )
+    await request.app["events"].emit(
+        "project_configuration_changed",
+        source="user",
+        project_id=project.id,
+    )
+    return json_response(await request.app["scan_timeline"].snapshot(sid))
 
 
 async def scan_session_now(request: web.Request) -> web.Response:
     service: ScanTimelineService = request.app["scan_timeline"]
     record = await service.scan_now(request.match_info["sid"], "manual")
     return json_response({"record": record})
+
+
+async def backfill_session_scan_timeline(request: web.Request) -> web.Response:
+    service: ScanTimelineService = request.app["scan_timeline"]
+    return json_response(await service.start_backfill(request.match_info["sid"]), 202)
 
 
 async def session_scan_timeline_record(request: web.Request) -> web.Response:
@@ -8338,6 +8465,39 @@ async def git_graph(request: web.Request) -> web.Response:
     if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
         return json_response({"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400)
     return json_response(await git_review.git_graph(project.id, project.root, limit))
+
+
+async def git_provenance(request: web.Request) -> web.Response:
+    """Return durable commit associations for one Project, session, run, or OID set."""
+    extras = set(request.query) - {"project_id", "session_id", "agent_run_id", "commit", "limit"}
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
+        )
+    project_id = request.query.get("project_id", "")
+    project = request.app["projects"].projects.get(project_id)
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    raw_limit = request.query.get("limit") or "200"
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return json_response({"error": "limit must be an integer"}, 400)
+    if not 1 <= limit <= 500:
+        return json_response({"error": "limit must be between 1 and 500"}, 400)
+    commit_oids = [value for value in request.query.getall("commit", []) if value]
+    if len(commit_oids) > 500 or any(
+        not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
+    ):
+        return json_response({"error": "commit must contain full Git object IDs"}, 400)
+    items = await request.app["history"].git_provenance(
+        project_id=project.id,
+        session_id=request.query.get("session_id") or None,
+        agent_run_id=request.query.get("agent_run_id") or None,
+        commit_oids=commit_oids or None,
+        limit=limit,
+    )
+    return json_response({"items": items})
 
 
 async def git_commit_changes(request: web.Request) -> web.Response:

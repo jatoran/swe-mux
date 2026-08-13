@@ -39,7 +39,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "owns_scroll_viewport": true,
         "width_envelope": true,
         "min_desktop_columns": null,
-        "suppresses_late_color_response": false
+        "suppresses_late_color_response": false,
+        "touch_scroll_rows_per_report": 3,
+        "touch_scroll_report_interval_ms": 120
       }
     },
     {
@@ -73,7 +75,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "owns_scroll_viewport": false,
         "width_envelope": false,
         "min_desktop_columns": 80,
-        "suppresses_late_color_response": true
+        "suppresses_late_color_response": true,
+        "touch_scroll_rows_per_report": 1,
+        "touch_scroll_report_interval_ms": 0
       }
     },
     {
@@ -107,7 +111,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "owns_scroll_viewport": false,
         "width_envelope": false,
         "min_desktop_columns": null,
-        "suppresses_late_color_response": false
+        "suppresses_late_color_response": false,
+        "touch_scroll_rows_per_report": 1,
+        "touch_scroll_report_interval_ms": 0
       }
     },
     {
@@ -141,7 +147,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "owns_scroll_viewport": false,
         "width_envelope": false,
         "min_desktop_columns": null,
-        "suppresses_late_color_response": false
+        "suppresses_late_color_response": false,
+        "touch_scroll_rows_per_report": 1,
+        "touch_scroll_report_interval_ms": 0
       }
     },
     {
@@ -173,7 +181,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "owns_scroll_viewport": false,
         "width_envelope": false,
         "min_desktop_columns": null,
-        "suppresses_late_color_response": false
+        "suppresses_late_color_response": false,
+        "touch_scroll_rows_per_report": 1,
+        "touch_scroll_report_interval_ms": 0
       }
     }
   ]

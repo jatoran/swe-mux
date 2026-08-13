@@ -5,6 +5,7 @@ import {
   classifyGesture,
   defaultMobileGestureSettings,
   GESTURE_SLOTS,
+  gestureOverlayDepth,
   mobileGestureSettings,
   overlayBackEnabled,
   pathOwnsHorizontalScroll,
@@ -124,10 +125,29 @@ test('swipe-away override closes the open panel instead of running the binding',
   assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, drawer, true), 'mobileTab.next')
   const sidebar = { sidebarOpen: true, drawerOpen: false }
   assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, sidebar, true), 'sidebar.close')
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, sidebar, true), 'sidebar.close')
   assert.equal(resolveGestureCommand('two_finger_swipe_left', defaultMobileGestureSettings, sidebar, true), 'sidebar.close')
-  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, sidebar, true), 'sidebar.toggle')
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, sidebar, true), 'sidebar.close')
   // Non-horizontal slots are never overridden.
   assert.equal(resolveGestureCommand('two_finger_tap', defaultMobileGestureSettings, drawer, true), 'palette.open')
+})
+
+test('the sidebar dismiss level does not shadow either sidebar-close direction', () => {
+  const sidebar = { sidebarOpen: true, drawerOpen: false }
+  const settings = {
+    ...defaultMobileGestureSettings,
+    swipe_left: 'drawer.toggle',
+    swipe_right: 'sidebar.toggle',
+  }
+  const layeredSidebar = { depth: gestureOverlayDepth(1, sidebar), enabled: true }
+  assert.equal(resolveGestureCommand('swipe_left', settings, sidebar, true, layeredSidebar), 'sidebar.close')
+  assert.equal(resolveGestureCommand('swipe_right', settings, sidebar, true, layeredSidebar), 'sidebar.close')
+})
+
+test('gesture overlay depth excludes slide-in panel dismiss levels only', () => {
+  assert.equal(gestureOverlayDepth(1, { sidebarOpen: true, drawerOpen: false }), 0)
+  assert.equal(gestureOverlayDepth(2, { sidebarOpen: true, drawerOpen: true }), 0)
+  assert.equal(gestureOverlayDepth(2, { sidebarOpen: true, drawerOpen: false }), 1)
 })
 
 test('swipe-away override covers unbound slots, prefers the drawer when both are open, and can be turned off', () => {

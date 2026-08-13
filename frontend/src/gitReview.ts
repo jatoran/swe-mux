@@ -1,4 +1,4 @@
-import type { GitPatchSnapshot, ReviewFileChange } from './gitWorktrees.ts'
+import type { GitPatchSnapshot, GitProvenance, ReviewFileChange } from './gitWorktrees.ts'
 
 export type GitReviewScope='unstaged'|'staged'|'conflicted'|'branch'|'commit'
 export type AnnotationSide='old'|'new'
@@ -23,6 +23,7 @@ export type ReviewPacketContext={
   snapshots:Map<string,GitPatchSnapshot>
   annotations:GitAnnotation[]
   includeFullPatches:boolean
+  provenance?:GitProvenance[]
 }
 
 export const REVIEW_PACKET_MAX_CHARS=200_000
@@ -124,6 +125,13 @@ export function generateReviewPacket(context:ReviewPacketContext):{text:string;t
     `File list: ${context.fileListTruncated?'truncated to the bounded API result':'complete'}`,
     '',
   ]
+  if(context.provenance?.length){
+    lines.push('## Session provenance','')
+    for(const item of context.provenance){
+      lines.push(`- ${item.sessionName} (${item.sessionId}${item.agentRunId?`, run ${item.agentRunId}`:''}): ${item.relationship}, ${item.confidence}${item.ambiguous?' (shared checkout)':''}`)
+    }
+    lines.push('')
+  }
   const annotations=[...context.annotations].sort(compareAnnotations)
   if(!annotations.length)lines.push('No annotations.','')
   let activePath=''

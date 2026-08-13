@@ -49,6 +49,7 @@ automatic fallback whenever the supervisor is unreachable.
 - `server.py`: transport composition and Project-bound session operations.
 - `desktop.py`: Windows single-instance shell, tray/window lifecycle, login startup, daemon
   supervision, and desktop control token.
+- `desktop_window_state.py`: versioned desktop geometry persistence and monitor-safe restore.
 - `__main__.py`: reusable aiohttp runner and standalone/desktop-child daemon entry.
 - `projects.py`: explicit Project and Group lifecycle.
 - `git_projects.py`: derived Git worktree/repository identity.
