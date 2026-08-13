@@ -1609,7 +1609,7 @@ responsive controls.
   available). Depth is capped so a malformed tree cannot spin a handler that runs on every gesture.
 - The panels also dismiss any keyboard already visible at **touchstart, as soon as a second
   finger lands**, rather than waiting for the resolved command at touchend. Two fingers are never
-  text entry, so the early blur is safe. Continuity 0.2.35 separately owns single-finger note-touch
+  text entry, so the early blur is safe. Continuity 0.2.36 separately owns single-finger note-touch
   arbitration and the editor's Android soft-keyboard gate. swe-mux adds no shadow-DOM or caret
   hit-testing workaround; single-finger touches pass to the editor unchanged.
 - Continuity tracks explicit typing intent and visual-viewport keyboard occlusion per editor.
