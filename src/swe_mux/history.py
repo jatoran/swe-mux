@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE TABLE IF NOT EXISTS history_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   history_id TEXT NOT NULL, ordinal INTEGER NOT NULL, role TEXT NOT NULL,
-  ts TEXT, text TEXT NOT NULL, source_mtime_ns INTEGER NOT NULL,
+  ts TEXT, ts_epoch REAL, text TEXT NOT NULL, source_mtime_ns INTEGER NOT NULL,
   source_size INTEGER NOT NULL, parser_version INTEGER NOT NULL,
   UNIQUE(history_id, ordinal)
 );
@@ -110,6 +110,9 @@ CREATE TABLE IF NOT EXISTS history_transcript_index (
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS history_messages_fts USING fts5(
   text, content='history_messages', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS history_messages_trigram USING fts5(
+  text, content='history_messages', content_rowid='id', tokenize='trigram case_sensitive 0'
 );
 CREATE TRIGGER IF NOT EXISTS history_messages_ai AFTER INSERT ON history_messages BEGIN
   INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
@@ -122,6 +125,18 @@ CREATE TRIGGER IF NOT EXISTS history_messages_au AFTER UPDATE ON history_message
   INSERT INTO history_messages_fts(history_messages_fts,rowid,text)
   VALUES('delete',old.id,old.text);
   INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS history_messages_trigram_ai AFTER INSERT ON history_messages BEGIN
+  INSERT INTO history_messages_trigram(rowid,text) VALUES(new.id,new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS history_messages_trigram_ad AFTER DELETE ON history_messages BEGIN
+  INSERT INTO history_messages_trigram(history_messages_trigram,rowid,text)
+  VALUES('delete',old.id,old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS history_messages_trigram_au AFTER UPDATE ON history_messages BEGIN
+  INSERT INTO history_messages_trigram(history_messages_trigram,rowid,text)
+  VALUES('delete',old.id,old.text);
+  INSERT INTO history_messages_trigram(rowid,text) VALUES(new.id,new.text);
 END;
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, session_id TEXT,
@@ -156,10 +171,46 @@ CREATE INDEX IF NOT EXISTS idx_history_messages_source
 """
 
 
-def _fts_query(value: str) -> str:
-    """Create a literal prefix-token FTS query; never expose raw FTS syntax."""
+def _fts_query(value: str, mode: str = "all_terms") -> str:
+    """Create a literal FTS query; never expose raw FTS syntax."""
     tokens = re.findall(r"\w+", value, flags=re.UNICODE)
-    return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"*' for token in tokens)
+    escaped = [token.replace(chr(34), chr(34) * 2) for token in tokens]
+    if mode == "phrase":
+        return f'"{" ".join(escaped)}"' if escaped else ""
+    separator = " OR " if mode == "any_terms" else " AND "
+    return separator.join(f'"{token}"*' for token in escaped)
+
+
+def _trigram_query(value: str) -> str:
+    """Literal substring query for the FTS5 trigram index."""
+    text = value.strip()
+    if len(text) < 3:
+        return ""
+    return f'"{text.replace(chr(34), chr(34) * 2)}"'
+
+
+def _like_pattern(value: str) -> str:
+    """Literal case-insensitive LIKE pattern with wildcard characters escaped."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _search_excerpt(text: str, query: str, max_chars: int = 480) -> str:
+    """Return a bounded literal window centered on the first useful match."""
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    if len(collapsed) <= max_chars:
+        return collapsed
+    folded = collapsed.casefold()
+    needles = [query.strip(), *re.findall(r"\w+", query, flags=re.UNICODE)]
+    positions = [folded.find(needle.casefold()) for needle in needles if needle.strip()]
+    found = [position for position in positions if position >= 0]
+    center = min(found) if found else 0
+    start = max(0, center - max_chars // 3)
+    end = min(len(collapsed), start + max_chars)
+    start = max(0, end - max_chars)
+    prefix = "... " if start else ""
+    suffix = " ..." if end < len(collapsed) else ""
+    return f"{prefix}{collapsed[start:end].strip()}{suffix}"
 
 
 def _message_timestamp(value: Any) -> float | None:
@@ -220,8 +271,19 @@ class HistoryIndex:
         # ``_db`` directly, a fallback close) without weakening that guarantee.
         with self._operation_lock:
             self._db = connect_or_quarantine(self._path, self._open)
+            had_trigram_index = self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='history_messages_trigram'"
+            ).fetchone()
             self._db.executescript(SCHEMA)
             self._migrate_schema()
+            if had_trigram_index is None:
+                # External-content FTS tables do not backfill pre-existing rows
+                # when first created. Rebuild exactly once at migration time.
+                self._db.execute(
+                    "INSERT INTO history_messages_trigram(history_messages_trigram) "
+                    "VALUES('rebuild')"
+                )
             self._db.commit()
 
     def _open(self) -> sqlite3.Connection:
@@ -348,6 +410,22 @@ class HistoryIndex:
                 f"AND (exit_reason IS NULL OR exit_reason NOT IN ({_QUARANTINE_REASON_SQL}))",
                 _AGENT_BACKEND_ARGS,
             )
+        message_columns = {
+            row["name"] for row in self._db.execute("PRAGMA table_info(history_messages)")
+        }
+        if "ts_epoch" not in message_columns:
+            self._db.execute("ALTER TABLE history_messages ADD COLUMN ts_epoch REAL")
+            rows = self._db.execute(
+                "SELECT id,ts FROM history_messages WHERE ts IS NOT NULL"
+            ).fetchall()
+            self._db.executemany(
+                "UPDATE history_messages SET ts_epoch=? WHERE id=?",
+                [(_message_timestamp(row["ts"]), row["id"]) for row in rows],
+            )
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_history_messages_time "
+            "ON history_messages(history_id,ts_epoch)"
+        )
         self._db.execute(
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
             "(transcript_path IS NULL OR transcript_path='')"
@@ -1321,14 +1399,15 @@ class HistoryIndex:
                 self._db.execute("DELETE FROM history_messages WHERE history_id=?", (history_id,))
                 self._db.executemany(
                     "INSERT INTO history_messages"
-                    "(history_id,ordinal,role,ts,text,source_mtime_ns,source_size,parser_version) "
-                    "VALUES(?,?,?,?,?,?,?,?)",
+                    "(history_id,ordinal,role,ts,ts_epoch,text,source_mtime_ns,source_size,"
+                    "parser_version) VALUES(?,?,?,?,?,?,?,?,?)",
                     [
                         (
                             history_id,
                             int(item["ordinal"]),
                             str(item["role"]),
                             None if item.get("ts") is None else str(item["ts"]),
+                            _message_timestamp(item.get("ts")),
                             str(item["text"]),
                             mtime_ns,
                             size,
@@ -1547,6 +1626,377 @@ class HistoryIndex:
             self._db.commit()
 
         await self._run(op)
+
+    async def search_history_index(
+        self,
+        *,
+        query: str = "",
+        search_scope: str = "all",
+        include_metadata: bool = True,
+        query_mode: str = "hybrid",
+        project_id: str | None = None,
+        backends: tuple[str, ...] = (),
+        states: tuple[str, ...] = (),
+        title_query: str = "",
+        generated_query_run_ids: tuple[str, ...] = (),
+        generated_title_run_ids: tuple[str, ...] = (),
+        run_ids: tuple[str, ...] | None = None,
+        session_after: float | None = None,
+        session_before: float | None = None,
+        message_after: float | None = None,
+        message_before: float | None = None,
+        order: str = "relevance",
+        offset: int = 0,
+        limit: int = 8,
+        max_per_session: int = 2,
+    ) -> dict[str, Any]:
+        """Search indexed messages as compact, globally ranked retrieval hits.
+
+        Native transcripts remain authoritative. This method reads only the
+        rebuildable index so filtering, ranking, and excerpt extraction happen
+        before any transcript text crosses the MCP boundary.
+        """
+        if search_scope not in {"all", "user", "assistant", "metadata"}:
+            raise ValueError("history search scope must be all, user, assistant, or metadata")
+        if query_mode not in {"hybrid", "all_terms", "any_terms", "phrase", "substring"}:
+            raise ValueError(
+                "history query mode must be hybrid, all_terms, any_terms, phrase, or substring"
+            )
+        if order not in {"relevance", "recent"}:
+            raise ValueError("history search order must be relevance or recent")
+        offset = max(0, offset)
+        limit = max(1, min(limit, 50))
+        max_per_session = max(1, min(max_per_session, 5))
+        requested = offset + limit + 1
+        candidate_limit = min(2000, max(80, requested * 10))
+
+        def history_filters(alias: str = "h") -> tuple[list[str], list[Any]]:
+            clauses = [
+                f"{alias}.agent_visible=1",
+                f"{alias}.backend IN ({_AGENT_BACKEND_SQL})",
+            ]
+            args: list[Any] = list(_AGENT_BACKEND_ARGS)
+            if project_id == "__ungrouped__":
+                clauses.append(f"{alias}.project_id IS NULL")
+            elif project_id:
+                clauses.append(f"{alias}.project_id=?")
+                args.append(project_id)
+            if backends:
+                clauses.append(f"{alias}.backend IN ({','.join('?' for _ in backends)})")
+                args.extend(backends)
+            if states:
+                ordinary = tuple(state for state in states if state != "running")
+                state_parts: list[str] = []
+                if ordinary:
+                    state_parts.append(
+                        f"{alias}.final_state IN ({','.join('?' for _ in ordinary)})"
+                    )
+                    args.extend(ordinary)
+                if "running" in states:
+                    state_parts.append(
+                        f"({alias}.final_state IS NULL OR {alias}.final_state='' "
+                        f"OR {alias}.final_state='running')"
+                    )
+                clauses.append(f"({' OR '.join(state_parts)})")
+            if run_ids is not None:
+                if not run_ids:
+                    clauses.append("0")
+                else:
+                    clauses.append(f"{alias}.id IN ({','.join('?' for _ in run_ids)})")
+                    args.extend(run_ids)
+            session_time = f"COALESCE({alias}.native_started_at,{alias}.spawned_at)"
+            if session_after is not None:
+                clauses.append(f"{session_time}>=?")
+                args.append(session_after)
+            if session_before is not None:
+                clauses.append(f"{session_time}<?")
+                args.append(session_before)
+            if title_query:
+                title_parts = [f"{alias}.name LIKE ? ESCAPE '\\'"]
+                title_args: list[Any] = [_like_pattern(title_query)]
+                if generated_title_run_ids:
+                    title_parts.append(
+                        f"({alias}.auto_named=1 AND {alias}.id IN "
+                        f"({','.join('?' for _ in generated_title_run_ids)}))"
+                    )
+                    title_args.extend(generated_title_run_ids)
+                clauses.append(f"({' OR '.join(title_parts)})")
+                args.extend(title_args)
+            return clauses, args
+
+        def message_filters() -> tuple[list[str], list[Any]]:
+            clauses, args = history_filters()
+            if search_scope in {"user", "assistant"}:
+                clauses.append("hm.role=?")
+                args.append(search_scope)
+            else:
+                clauses.append("hm.role IN ('user','assistant')")
+            if message_after is not None:
+                clauses.append("hm.ts_epoch>=?")
+                args.append(message_after)
+            if message_before is not None:
+                clauses.append("hm.ts_epoch<?")
+                args.append(message_before)
+            return clauses, args
+
+        def message_rows(table: str, fts_query: str) -> list[sqlite3.Row]:
+            clauses, args = message_filters()
+            sql = (
+                "SELECT h.*,hm.ordinal AS match_ordinal,hm.role AS match_role,"
+                "hm.ts AS match_ts,hm.ts_epoch AS match_ts_epoch,hm.text AS match_text,"
+                "hm.source_mtime_ns AS match_mtime_ns,hm.source_size AS match_size,"
+                "hm.parser_version AS match_parser_version,"
+                f"bm25({table}) AS search_rank FROM {table} "
+                f"JOIN history_messages hm ON hm.id={table}.rowid "
+                "JOIN history h ON h.id=hm.history_id "
+                f"WHERE {table} MATCH ? AND {' AND '.join(clauses)} "
+                f"ORDER BY bm25({table}),hm.history_id,hm.ordinal LIMIT ?"
+            )
+            return self._db.execute(sql, [fts_query, *args, candidate_limit]).fetchall()
+
+        def recent_message_rows() -> list[sqlite3.Row]:
+            clauses, args = message_filters()
+            sql = (
+                "SELECT h.*,hm.ordinal AS match_ordinal,hm.role AS match_role,"
+                "hm.ts AS match_ts,hm.ts_epoch AS match_ts_epoch,hm.text AS match_text,"
+                "hm.source_mtime_ns AS match_mtime_ns,hm.source_size AS match_size,"
+                "hm.parser_version AS match_parser_version,0.0 AS search_rank "
+                "FROM history_messages hm JOIN history h ON h.id=hm.history_id "
+                f"WHERE {' AND '.join(clauses)} ORDER BY COALESCE(hm.ts_epoch,0) DESC,"
+                "hm.history_id DESC,hm.ordinal DESC LIMIT ?"
+            )
+            return self._db.execute(sql, [*args, candidate_limit]).fetchall()
+
+        def literal_substring_rows() -> list[sqlite3.Row]:
+            clauses, args = message_filters()
+            sql = (
+                "SELECT h.*,hm.ordinal AS match_ordinal,hm.role AS match_role,"
+                "hm.ts AS match_ts,hm.ts_epoch AS match_ts_epoch,hm.text AS match_text,"
+                "hm.source_mtime_ns AS match_mtime_ns,hm.source_size AS match_size,"
+                "hm.parser_version AS match_parser_version,0.0 AS search_rank "
+                "FROM history_messages hm JOIN history h ON h.id=hm.history_id "
+                f"WHERE hm.text LIKE ? ESCAPE '\\' AND {' AND '.join(clauses)} "
+                "ORDER BY hm.history_id,hm.ordinal LIMIT ?"
+            )
+            return self._db.execute(
+                sql, [_like_pattern(query), *args, candidate_limit]
+            ).fetchall()
+
+        def metadata_rows() -> list[sqlite3.Row]:
+            clauses, args = history_filters()
+            if query:
+                pattern = _like_pattern(query)
+                metadata_parts = [
+                    "h.name LIKE ? ESCAPE '\\'",
+                    "h.cwd LIKE ? ESCAPE '\\'",
+                    "COALESCE(h.project_label,'') LIKE ? ESCAPE '\\'",
+                ]
+                metadata_args: list[Any] = [pattern, pattern, pattern]
+                if generated_query_run_ids:
+                    metadata_parts.append(
+                        "(h.auto_named=1 AND h.id IN "
+                        f"({','.join('?' for _ in generated_query_run_ids)}))"
+                    )
+                    metadata_args.extend(generated_query_run_ids)
+                clauses.append(f"({' OR '.join(metadata_parts)})")
+                args.extend(metadata_args)
+            sql = (
+                "SELECT h.* FROM history h WHERE "
+                f"{' AND '.join(clauses)} ORDER BY h.spawned_at DESC,h.id DESC LIMIT ?"
+            )
+            return self._db.execute(sql, [*args, candidate_limit]).fetchall()
+
+        def op() -> dict[str, Any]:
+            ranked: dict[tuple[str, int | None, str], dict[str, Any]] = {}
+            candidate_truncated = False
+
+            if query and search_scope != "metadata":
+                ordinary_mode = query_mode if query_mode != "hybrid" else "all_terms"
+                if ordinary_mode != "substring":
+                    ordinary = _fts_query(query, ordinary_mode)
+                    rows = message_rows("history_messages_fts", ordinary) if ordinary else []
+                    candidate_truncated = candidate_truncated or len(rows) == candidate_limit
+                    for position, row in enumerate(rows, 1):
+                        item = _public_history_row(row)
+                        key = (str(item["id"]), int(item["match_ordinal"]), "message")
+                        item["relevance"] = 1.0 / (60 + position)
+                        ranked[key] = item
+                trigram = _trigram_query(query)
+                if query_mode in {"hybrid", "substring"} and trigram:
+                    rows = message_rows("history_messages_trigram", trigram)
+                    candidate_truncated = candidate_truncated or len(rows) == candidate_limit
+                    for position, row in enumerate(rows, 1):
+                        item = _public_history_row(row)
+                        key = (str(item["id"]), int(item["match_ordinal"]), "message")
+                        if key in ranked:
+                            ranked[key]["relevance"] += 0.85 / (60 + position)
+                        else:
+                            item["relevance"] = 0.85 / (60 + position)
+                            ranked[key] = item
+                elif query_mode == "substring":
+                    # FTS5's trigram tokenizer cannot match one- or two-character
+                    # literals. Keep explicit substring mode complete with a
+                    # bounded LIKE fallback for those rare short queries.
+                    rows = literal_substring_rows()
+                    candidate_truncated = candidate_truncated or len(rows) == candidate_limit
+                    for position, row in enumerate(rows, 1):
+                        item = _public_history_row(row)
+                        key = (str(item["id"]), int(item["match_ordinal"]), "message")
+                        item["relevance"] = 0.85 / (60 + position)
+                        ranked[key] = item
+
+            filter_requests_messages = (
+                not include_metadata
+                or search_scope in {"user", "assistant"}
+                or message_after is not None
+                or message_before is not None
+            )
+            if not query and filter_requests_messages:
+                rows = recent_message_rows()
+                candidate_truncated = candidate_truncated or len(rows) == candidate_limit
+                for row in rows:
+                    item = _public_history_row(row)
+                    key = (str(item["id"]), int(item["match_ordinal"]), "message")
+                    item["relevance"] = 0.0
+                    ranked[key] = item
+
+            search_metadata = include_metadata and search_scope in {"all", "metadata"} and (
+                (bool(query) and message_after is None and message_before is None)
+                or search_scope == "metadata"
+            )
+            include_filter_only = not query and not filter_requests_messages
+            if search_metadata or include_filter_only:
+                rows = metadata_rows()
+                candidate_truncated = candidate_truncated or len(rows) == candidate_limit
+                folded = query.casefold()
+                generated_ids = set(generated_query_run_ids)
+                for row in rows:
+                    item = _public_history_row(row)
+                    run_id = str(item["id"])
+                    metadata_key = (run_id, None, "metadata" if query else "session")
+                    title_match = folded and (
+                        folded in str(item.get("name") or "").casefold()
+                        or run_id in generated_ids
+                    )
+                    item.update(
+                        {
+                            "match_ordinal": None,
+                            "match_role": "metadata" if query else None,
+                            "match_ts": None,
+                            "match_ts_epoch": None,
+                            "match_text": "",
+                            "match_mtime_ns": None,
+                            "match_size": None,
+                            "match_parser_version": None,
+                            "relevance": (0.05 if title_match else 0.02)
+                            if query
+                            else 0.0,
+                        }
+                    )
+                    ranked[metadata_key] = item
+
+            values = list(ranked.values())
+            if order == "recent" or not query:
+                values.sort(
+                    key=lambda item: (
+                        float(
+                            item.get("match_ts_epoch")
+                            or item.get("last_message_at")
+                            or item.get("spawned_at")
+                            or 0
+                        ),
+                        str(item.get("id") or ""),
+                        int(item.get("match_ordinal") or -1),
+                    ),
+                    reverse=True,
+                )
+            else:
+                values.sort(
+                    key=lambda item: (
+                        float(item.get("relevance") or 0),
+                        float(item.get("match_ts_epoch") or item.get("spawned_at") or 0),
+                        str(item.get("id") or ""),
+                    ),
+                    reverse=True,
+                )
+
+            per_session: dict[str, int] = {}
+            diverse: list[dict[str, Any]] = []
+            for item in values:
+                run_id = str(item.get("id") or "")
+                count = per_session.get(run_id, 0)
+                if count >= max_per_session:
+                    continue
+                per_session[run_id] = count + 1
+                text = str(item.pop("match_text", "") or "")
+                item["excerpt"] = _search_excerpt(text, query) if text else ""
+                item["match_kind"] = (
+                    "message" if item.get("match_ordinal") is not None else "metadata"
+                )
+                item.pop("search_rank", None)
+                diverse.append(item)
+
+            page = diverse[offset : offset + limit]
+            has_more = candidate_truncated or len(diverse) > offset + len(page)
+            return {
+                "items": page,
+                "has_more": has_more,
+                "candidate_truncated": candidate_truncated,
+            }
+
+        return await self._run(op)
+
+    async def history_message_window(
+        self,
+        history_id: str,
+        ordinal: int,
+        *,
+        watermark: tuple[int, int, int],
+        before: int,
+        after: int,
+    ) -> dict[str, Any]:
+        """Read a small indexed conversation window around one search hit."""
+
+        def op() -> dict[str, Any]:
+            current = self._db.execute(
+                "SELECT source_mtime_ns,source_size,parser_version "
+                "FROM history_transcript_index WHERE history_id=?",
+                (history_id,),
+            ).fetchone()
+            if current is None:
+                return {"stale": True, "messages": []}
+            actual = (
+                int(current["source_mtime_ns"]),
+                int(current["source_size"]),
+                int(current["parser_version"]),
+            )
+            if actual != watermark:
+                return {"stale": True, "messages": [], "watermark": actual}
+            anchor = self._db.execute(
+                "SELECT ordinal,role,ts,text FROM history_messages "
+                "WHERE history_id=? AND ordinal=?",
+                (history_id, ordinal),
+            ).fetchone()
+            if anchor is None:
+                return {"stale": True, "messages": [], "watermark": actual}
+            earlier = self._db.execute(
+                "SELECT ordinal,role,ts,text FROM history_messages "
+                "WHERE history_id=? AND ordinal<? ORDER BY ordinal DESC LIMIT ?",
+                (history_id, ordinal, before),
+            ).fetchall()
+            later = self._db.execute(
+                "SELECT ordinal,role,ts,text FROM history_messages "
+                "WHERE history_id=? AND ordinal>? ORDER BY ordinal LIMIT ?",
+                (history_id, ordinal, after),
+            ).fetchall()
+            rows = [*reversed(earlier), anchor, *later]
+            return {
+                "stale": False,
+                "watermark": actual,
+                "messages": [dict(row) for row in rows],
+            }
+
+        return await self._run(op)
 
     async def history_page(
         self,

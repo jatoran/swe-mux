@@ -53,10 +53,10 @@
   native identity, transcript pointer, derived Git metadata, context/model telemetry, explicit
   compaction summary, exit state, materialized chronological native start/final conversational message
   time and role, plus source mtime/size watermarks for bounded timestamp-summary refreshes.
-- `history_messages` + `history_messages_fts`: derived role-aware user/assistant text and
-  provider-native optional timestamp plus FTS5 lookup surface. `history_transcript_index` stores
-  source mtime/size, parser version, message count, and index time so empty/unchanged transcripts
-  remain incremental.
+- `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
+  `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
+  Both FTS5 tables are external-content derivatives of `history_messages` and stay synchronized by triggers.
+  `history_transcript_index` stores source mtime/size, parser version, message count, and index time so empty/unchanged transcripts remain incremental and MCP hit watermarks can reject stale pointers.
 - `events`: monotonically sequenced mux events.
 - `process_evidence`: bounded PID+creation-time fingerprints, owner/lineage/Job Object
   evidence, stable attribution version/source and confirmation times, mutable state/reason/confidence, and exit or ownership-rejection evidence; command text is never stored.

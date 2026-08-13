@@ -1190,12 +1190,19 @@ Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-sess
 The Project-scoped tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `message_status`, `spawn_requests`, `notify`, and `request_spawn`.
 Session results expose the stable id, backend-generated `name`, and UI-equivalent `display_name`; an exact unique display name is accepted wherever a tool targets a session.
 `list_sessions` filters by query and pages a combined live/ended result capped at 25 compact rows and 32 KiB per call.
-`read_transcript` pages from either end through an opaque cursor bound to one `agent_run_id`, labels every message with run id/sequence, and includes system/meta records only by explicit opt-in.
+`search_history` performs server-side message ranking over the Project history index and returns compact hits by default.
+It supports literal hybrid/all-term/any-term/phrase/substring matching plus role, raw/generated title, backend, persisted state, exact run, session-start, and matching-message time filters.
+Its lower date boundaries are inclusive, upper date boundaries are exclusive, default limit is eight hits, default hit-payload budget is 16 KiB, and cursors are bound to the normalized query.
+`read_transcript(hit_id=...)` reads a bounded indexed neighborhood around one search hit, defaulting to one message before and two after.
+The opaque hit is bound to the caller's Project scope, run, message ordinal, and transcript-index watermark; a changed transcript reports a stale hit instead of returning shifted text.
+Without a hit, `read_transcript` pages from either end through an opaque cursor bound to one `agent_run_id`, labels every message with run id/sequence, and includes system/meta records only by explicit opt-in.
+Ordinary reads default to 12 messages and 32 KiB of message text while preserving explicit expansion to 200 messages and 512 KiB.
 An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
 `get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
 All reads remain own-Project only; v0.5 defines no cross-Project grant.
 Claude's generated settings allow the ten declared read tools without a prompt, while both write tools remain permission-gated.
 Tool annotations declare the same read/write split.
+Successful MCP calls record content-free per-tool call, serialized-response-byte, and truncation counters in background diagnostics.
 `notify` only stages a queue message with a visible sender/message/correlation envelope and `request_spawn` only creates an inert Fleet Queue approval row.
 The full contract is `features/mux-mcp.md`.
 An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.

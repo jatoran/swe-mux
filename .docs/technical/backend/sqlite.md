@@ -99,6 +99,9 @@ gets the same guarantee.
   backfill did exactly that, resurrecting every quarantined misattributed run on each restart;
   it is now gated on the column having just been added and additionally excludes the
   quarantine exit reasons.
+- History's MCP retrieval migration follows that rule twice.
+  Adding `history_messages.ts_epoch` backfills provider timestamps only when the column is first added.
+  Creating the external-content `history_messages_trigram` table issues its FTS5 `rebuild` command only when the table did not exist before schema creation; later connects rely on the insert/update/delete triggers.
 - A proven session-identity repair may atomically delete that session's rebuildable
   tool/compaction/coverage rows and reassign its retained process fingerprints. This remains an
   operational-telemetry transaction through the shared coordinator; History does not mutate

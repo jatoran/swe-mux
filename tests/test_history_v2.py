@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -231,6 +232,193 @@ async def test_history_message_search_is_role_aware_and_composes_with_filters(
     assert await history.refresh_time_summaries(refreshed["items"]) == 1
     assert refreshed["items"][0]["last_message_at"] == 1_767_225_605
     history.close()
+
+
+async def test_context_search_ranks_globally_and_supports_substrings_and_message_dates(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    root = tmp_path / "project"
+    root.mkdir()
+    try:
+        for identity, created, body in (
+            ("older-relevant", 100.0, "useEffect cleanup useEffect cleanup exact-marker"),
+            ("newer-weak", 200.0, "a passing reference to useEffect"),
+        ):
+            transcript = tmp_path / f"{identity}.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": "2026-01-02T00:00:00Z",
+                        "message": {"content": body},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            record = session(identity, "claude", root, "project-id")
+            record.created_at = created
+            await history.session_started(record, str(transcript))
+            await history.index_transcript(identity, transcript, "claude")
+
+        ranked = await history.search_history_index(
+            query="useEffect cleanup",
+            project_id="project-id",
+            order="relevance",
+        )
+        assert ranked["items"][0]["id"] == "older-relevant"
+        assert ranked["items"][0]["match_ordinal"] == 0
+
+        substring = await history.search_history_index(
+            query="Effect clean",
+            query_mode="substring",
+            project_id="project-id",
+        )
+        assert substring["items"][0]["id"] == "older-relevant"
+
+        short_substring = await history.search_history_index(
+            query="Ef",
+            query_mode="substring",
+            project_id="project-id",
+        )
+        assert {item["id"] for item in short_substring["items"]} == {
+            "older-relevant",
+            "newer-weak",
+        }
+
+        bounded = await history.search_history_index(
+            query="useEffect",
+            project_id="project-id",
+            message_after=1_767_312_001,
+        )
+        assert bounded["items"] == []
+    finally:
+        history.close()
+
+
+async def test_context_search_filters_titles_roles_runs_and_reads_stable_hit_windows(
+    tmp_path: Path,
+) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    root = tmp_path / "project"
+    root.mkdir()
+    transcript = tmp_path / "conversation.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": "2026-03-01T00:00:00Z",
+                        "message": {"content": "before context"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": "2026-03-01T00:00:01Z",
+                        "message": {"content": "the deployment needle is here"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "timestamp": "2026-03-01T00:00:02Z",
+                        "message": {"content": "after context"},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    try:
+        record = session("run", "claude", root, "project-id")
+        record.name = "Desktop Packaging"
+        await history.session_started(record, str(transcript))
+        await history.index_transcript("run", transcript, "claude")
+
+        page = await history.search_history_index(
+            query="deployment needle",
+            search_scope="assistant",
+            title_query="packaging",
+            project_id="project-id",
+            run_ids=("run",),
+        )
+        hit = page["items"][0]
+        watermark = (
+            int(hit["match_mtime_ns"]),
+            int(hit["match_size"]),
+            int(hit["match_parser_version"]),
+        )
+        window = await history.history_message_window(
+            "run", int(hit["match_ordinal"]), watermark=watermark, before=1, after=1
+        )
+        assert [item["text"] for item in window["messages"]] == [
+            "before context",
+            "the deployment needle is here",
+            "after context",
+        ]
+
+        await history.replace_history_messages(
+            "run",
+            [{"role": "user", "content": [{"type": "text", "text": "changed"}]}],
+            mtime_ns=watermark[0] + 1,
+            size=watermark[1] + 1,
+        )
+        stale = await history.history_message_window(
+            "run", int(hit["match_ordinal"]), watermark=watermark, before=1, after=1
+        )
+        assert stale["stale"] is True
+    finally:
+        history.close()
+
+
+async def test_context_search_migration_rebuilds_trigram_for_existing_messages(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "mux.db"
+    root = tmp_path / "project"
+    root.mkdir()
+    transcript = tmp_path / "conversation.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "message": {"content": "prefix-middle-suffix"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    history = HistoryIndex(database)
+    record = session("run", "claude", root, "project-id")
+    await history.session_started(record, str(transcript))
+    await history.index_transcript("run", transcript, "claude")
+    history.close()
+
+    connection = sqlite3.connect(database)
+    for trigger in (
+        "history_messages_trigram_ai",
+        "history_messages_trigram_ad",
+        "history_messages_trigram_au",
+    ):
+        connection.execute(f"DROP TRIGGER {trigger}")
+    connection.execute("DROP TABLE history_messages_trigram")
+    connection.commit()
+    connection.close()
+
+    migrated = HistoryIndex(database)
+    try:
+        result = await migrated.search_history_index(
+            query="middle",
+            query_mode="substring",
+            project_id="project-id",
+        )
+        assert result["items"][0]["id"] == "run"
+    finally:
+        migrated.close()
 
 
 async def test_history_time_bounds_are_chronological_when_native_lines_are_not(
