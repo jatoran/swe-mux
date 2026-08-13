@@ -15,6 +15,7 @@ from swe_mux.models import MuxEvent
 from swe_mux.openrouter import OpenRouterError, OpenRouterResult
 from swe_mux.scan_timeline import (
     DEFAULT_SCAN_MODEL,
+    MAX_INPUT_BYTES,
     ScanContext,
     ScanTimelineService,
     mechanical_novelty,
@@ -40,9 +41,9 @@ class FakeTier0:
         ]
 
 
-class FakeCards:
+class FakeProjectContexts:
     async def prompt_prefix(self, session_id: str) -> str:
-        return "Project card: test project"
+        return "Project context: test project"
 
 
 class FakeProvider:
@@ -144,7 +145,7 @@ async def build_service(
         events=EventBus(),
         config=config(tmp_path),
         provider=provider,
-        project_contexts=FakeCards(),
+        project_contexts=FakeProjectContexts(),
         resolve_context=resolve,
     )
 
@@ -387,6 +388,28 @@ async def test_full_session_scan_chunks_oldest_first_and_reports_completion(
     finally:
         await service.stop()
         store.close()
+
+
+def test_full_session_chunks_strip_ignored_tool_input_and_bound_large_text() -> None:
+    messages = [
+        {
+            "role": "assistant",
+            "ts": 1.0,
+            "content": [
+                {"type": "tool_use", "name": "shell", "input": "x" * 200_000},
+                {"type": "text", "text": "y" * 200_000},
+            ],
+        }
+    ]
+    chunks = ScanTimelineService._backfill_chunks(messages)
+    assert len(chunks) == 1
+    assert chunks[0].bytes <= MAX_INPUT_BYTES
+    assert chunks[0].truncated is True
+    assert chunks[0].messages[0]["content"][0] == {
+        "type": "tool_use",
+        "name": "shell",
+    }
+    assert "input" not in chunks[0].messages[0]["content"][0]
 
 
 def test_novelty_is_mechanical_and_run_local() -> None:

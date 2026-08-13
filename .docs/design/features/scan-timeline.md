@@ -45,6 +45,7 @@ Provider failure, missing output, or invalid output produces no scan record.
 
 **Scan full session** is an explicit drawer action that scans uncovered messages from the beginning of the current run to a fixed current watermark.
 It parses the authoritative transcript once, removes intervals already represented by stored records, chunks the remaining messages oldest first under the ordinary 32-message and 24 KiB input limits, and uses only earlier records for continuity and novelty.
+Chunking strips native tool arguments because the scan representation carries tool names only, and bounds oversized text while recording truncated coverage instead of aborting the job.
 The operation runs in a background task under the same per-session lock as live scans.
 The drawer polls its in-process job state and shows running progress plus `completed`, `partial`, or `failed` outcomes.
 Budgets, provider availability, observation health, all three gates, and strict output validation remain in force.

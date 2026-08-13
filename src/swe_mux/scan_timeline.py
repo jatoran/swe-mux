@@ -464,36 +464,88 @@ class ScanTimelineService:
         )
 
     @classmethod
+    def _backfill_message(
+        cls, message: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        """Reduce one parsed message to exactly what ``TranscriptSlice.render`` uses.
+
+        Native tool inputs can be hundreds of kilobytes even though the scan prompt
+        represents a tool call by name only. Keeping those ignored fields in the
+        byte accounting made one large call abort an otherwise valid full scan.
+        """
+        role = utf8_safe_value(str(message.get("role") or "unknown"))
+        raw_ts = message.get("ts")
+        timestamp = (
+            raw_ts
+            if isinstance(raw_ts, int | float) or raw_ts is None
+            else str(utf8_safe_value(str(raw_ts)))[:80]
+        )
+        content: list[dict[str, Any]] = []
+        raw_content = message.get("content")
+        blocks = raw_content if isinstance(raw_content, list) else []
+        for raw_block in blocks[:64]:
+            if not isinstance(raw_block, dict):
+                continue
+            block_type = raw_block.get("type")
+            if block_type == "text" and raw_block.get("text"):
+                content.append(
+                    {
+                        "type": "text",
+                        "text": str(utf8_safe_value(str(raw_block["text"]))),
+                    }
+                )
+            elif block_type == "tool_use":
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "name": str(
+                            utf8_safe_value(str(raw_block.get("name") or "tool"))
+                        )[:200],
+                    }
+                )
+        normalized = {"role": str(role)[:40], "ts": timestamp, "content": content}
+        truncated = len(blocks) > 64
+        while cls._slice([normalized]).bytes > MAX_INPUT_BYTES:
+            text_blocks = [
+                block
+                for block in content
+                if block.get("type") == "text" and block.get("text")
+            ]
+            if not text_blocks:
+                normalized = {
+                    "role": str(role)[:40],
+                    "ts": timestamp,
+                    "content": [{"type": "text", "text": "[oversized message truncated]"}],
+                }
+                truncated = True
+                break
+            longest = max(text_blocks, key=lambda block: len(str(block["text"])))
+            encoded = str(longest["text"]).encode("utf-8")
+            longest["text"] = encoded[: max(1, len(encoded) // 2)].decode(
+                "utf-8", errors="ignore"
+            )
+            truncated = True
+        return normalized, truncated
+
+    @classmethod
     def _backfill_chunks(cls, messages: list[dict[str, Any]]) -> list[TranscriptSlice]:
         chunks: list[TranscriptSlice] = []
         current: list[dict[str, Any]] = []
         current_truncated = False
         for message in messages:
-            candidate = cls._slice([*current, message])
+            bounded, message_truncated = cls._backfill_message(message)
+            if not bounded["content"]:
+                continue
+            candidate = cls._slice([*current, bounded])
             if current and (
                 len(candidate.messages) > MAX_INPUT_MESSAGES or candidate.bytes > MAX_INPUT_BYTES
             ):
                 chunks.append(cls._slice(current, truncated=current_truncated))
-                current = [message]
-                current_truncated = False
+                current = [bounded]
+                current_truncated = message_truncated
             else:
-                current.append(message)
-            while current and cls._slice(current).bytes > MAX_INPUT_BYTES:
-                oversized = cast(dict[str, Any], utf8_safe_value(current[0]))
-                shortened = False
-                for block in oversized.get("content") or []:
-                    if block.get("type") == "text" and isinstance(block.get("text"), str):
-                        block["text"] = block["text"][: MAX_INPUT_BYTES // 2]
-                        shortened = True
-                current[0] = oversized
-                current_truncated = True
-                if cls._slice(current).bytes > MAX_INPUT_BYTES:
-                    if shortened:
-                        for block in oversized.get("content") or []:
-                            if block.get("type") == "text" and isinstance(block.get("text"), str):
-                                block["text"] = block["text"][: MAX_INPUT_BYTES // 4]
-                    if cls._slice(current).bytes > MAX_INPUT_BYTES:
-                        raise ValueError("a transcript message cannot fit the scan input bound")
+                current.append(bounded)
+                current_truncated = current_truncated or message_truncated
         if current:
             chunks.append(cls._slice(current, truncated=current_truncated))
         return chunks
