@@ -10,7 +10,7 @@ import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { api, openWebSocket, uploadTerminalAttachment } from './api'
 import type { Session } from './types'
-import { assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
+import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
 import { keyChord } from './keys'
 import { resolvedTheme, terminalThemes, type ThemeName } from './theme'
 import { terminalKeyDecision } from './terminalKeys'
@@ -2703,7 +2703,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       const budget=applicationTouchScroll(
         {pixels:touch.pixels,lastReportAt:touch.applicationLastReportAt},
-        delta,rowHeight,backendRef.current,event.timeStamp,
+        delta,rowHeight,applicationTouchScrollProfile(backendRef.current),event.timeStamp,
       )
       touch.pixels=budget.remainder
       touch.applicationLastReportAt=budget.lastReportAt

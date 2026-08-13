@@ -92,7 +92,8 @@ A one-finger vertical drag scrolls whichever viewport owns the session: xterm's 
 Terminal scrollback converts its pixel budget with `terminalScrollSteps`, which carries the sub-row remainder into the next move event.
 Truncating each event on its own discards up to a row of travel per event, which at a 120 Hz pointer rate is most of the gesture; the fallback it replaces ("any movement scrolls at least one row") corrected for that by over-scrolling every slow drag instead.
 Application-owned scrolling passes the same travel through `applicationTouchScroll` because wheel reports are not a universal row unit.
-Claude Code 2.1.229 starts xterm.js wheel input at three rows per report and raises the multiplier for reports less than 80 ms apart, so its mobile path emits one report per three finger rows and separates reports by 120 ms to absorb downstream repaint-pacer delay.
+Claude Code 2.1.229 starts xterm.js wheel input at three rows per report and raises the multiplier for reports less than 80 ms apart, so its declared harness profile emits one report per three finger rows and separates reports by 120 ms to absorb downstream repaint-pacer delay.
+The daemon publishes `touch_scroll_rows_per_report` and `touch_scroll_report_interval_ms` through the harness registry; the browser never selects this behavior from a harness name.
 Fast-flick excess is discarded instead of banked, preventing delayed or accelerated scrolling after the finger stops; other mouse-aware applications retain one report per row.
 Travel is first scaled by the user's `mobile_scroll_sensitivity`, and each completed application gesture records aggregate input pixels, report count, and discarded pixels in `mobile_application_scroll` without terminal content.
 

@@ -63,22 +63,22 @@ export type ApplicationTouchScrollResult = TerminalScrollSteps & {
   droppedPixels: number
 }
 
-/**
- * Claude Code's xterm.js wheel path currently starts at three rows per wheel report and
- * raises that multiplier again when reports arrive less than 80ms apart. Mobile touch
- * therefore needs a different unit from xterm scrollback: three finger rows per report,
- * with enough separation to keep Claude on its base multiplier even after the downstream
- * repaint pacer adds a frame. Excess fast-flick travel is shed instead of queued, because
- * replaying it later is the runaway-scroll failure.
- */
-export const CLAUDE_TOUCH_ROWS_PER_REPORT = 3
-export const CLAUDE_TOUCH_REPORT_INTERVAL_MS = 120
+export type ApplicationTouchScrollProfile = {
+  rowsPerReport: number
+  reportIntervalMs: number
+}
 
+/**
+ * Some application-owned viewports consume several rows per wheel report or accelerate
+ * reports that arrive too close together. The harness registry publishes that measured
+ * profile. Excess fast-flick travel is shed instead of queued, because replaying it later
+ * is the runaway-scroll failure.
+ */
 export function applicationTouchScroll(
   state: ApplicationTouchScrollState,
   deltaPixels: number,
   rowHeight: number,
-  backend: string,
+  profile: ApplicationTouchScrollProfile,
   now: number,
 ): ApplicationTouchScrollResult {
   if (rowHeight <= 0 || !deltaPixels) {
@@ -91,7 +91,9 @@ export function applicationTouchScroll(
     ? deltaPixels
     : state.pixels + deltaPixels
 
-  if (backend.toLowerCase() !== 'claude') {
+  const rowsPerReport = Math.max(1, Math.trunc(profile.rowsPerReport))
+  const reportIntervalMs = Math.max(0, Math.trunc(profile.reportIntervalMs))
+  if (rowsPerReport === 1 && reportIntervalMs === 0) {
     const budget = terminalScrollSteps(carried, rowHeight)
     return {
       ...budget,
@@ -101,10 +103,10 @@ export function applicationTouchScroll(
     }
   }
 
-  const reportDistance = rowHeight * CLAUDE_TOUCH_ROWS_PER_REPORT
+  const reportDistance = rowHeight * rowsPerReport
   const bounded = Math.max(-reportDistance, Math.min(reportDistance, carried))
   const droppedPixels = Math.max(0, Math.abs(carried) - Math.abs(bounded))
-  const intervalElapsed = now < state.lastReportAt || now - state.lastReportAt >= CLAUDE_TOUCH_REPORT_INTERVAL_MS
+  const intervalElapsed = now < state.lastReportAt || now - state.lastReportAt >= reportIntervalMs
   if (Math.abs(bounded) < reportDistance || !intervalElapsed) {
     return { steps: 0, remainder: bounded, lastReportAt: state.lastReportAt, distance: 0, droppedPixels }
   }

@@ -454,6 +454,8 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         "width_envelope",
         "min_desktop_columns",
         "suppresses_late_color_response",
+        "touch_scroll_rows_per_report",
+        "touch_scroll_report_interval_ms",
     }
     for name, harness in HARNESSES.items():
         item = items[name]

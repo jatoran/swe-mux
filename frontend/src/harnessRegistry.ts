@@ -50,6 +50,10 @@ export interface HarnessCapabilities {
   /** A late OSC 10/11 reply must be dropped: this CLI's startup palette probe
    *  would treat it as composer input. */
   suppresses_late_color_response?: boolean
+  /** Finger rows represented by one wheel report forwarded during a touch drag. */
+  touch_scroll_rows_per_report?: number
+  /** Minimum delay between forwarded touch-drag wheel reports. */
+  touch_scroll_report_interval_ms?: number
 }
 
 export interface HarnessDescriptor {
@@ -174,6 +178,17 @@ export const minDesktopColumns = (name: string | undefined): number =>
 /** Whether a late OSC 10/11 reply must be dropped rather than delivered. */
 export const suppressesLateColorResponse = (name: string | undefined): boolean =>
   Boolean(harnessDescriptor(name)?.capabilities.suppresses_late_color_response)
+
+export function applicationTouchScrollProfile(name: string | undefined): {
+  rowsPerReport: number
+  reportIntervalMs: number
+} {
+  const capabilities = harnessDescriptor(name)?.capabilities
+  return {
+    rowsPerReport: Math.max(1, Math.trunc(capabilities?.touch_scroll_rows_per_report ?? 1)),
+    reportIntervalMs: Math.max(0, Math.trunc(capabilities?.touch_scroll_report_interval_ms ?? 0)),
+  }
+}
 
 /** Whether the daemon implements a fork strategy for this harness. */
 export const supportsBranch = (name: string | undefined): boolean =>
