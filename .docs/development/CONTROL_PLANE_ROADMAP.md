@@ -1211,7 +1211,7 @@ another agent can pick up mid-plan. Section links point to the design detail.
     `card_for_session` / `card_for_project` / `prompt_prefix`, each resolving the gate
     itself. No route and no UI; build health is under `project_cards` in
     `GET /api/diagnostics/background`.
-- [ ] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
+- [x] **5 · Scan timeline (Tier 1)** (§5.5). First model-cost layer. Capture-first: readable
   timeline + dead-end memory (§6.2). Instrument the rehydration rate from commit one. Records
   carry `agent_run_id`; delta window, continuity context, and `novelty` all reset at a rollover.
   The continuous title is **not** part of this step: §6.11 abandoned it, and titling is one call
@@ -1271,8 +1271,11 @@ another agent can pick up mid-plan. Section links point to the design detail.
   `implemented` flag and the route refuses `409 automation_not_implemented`).
 - [x] **Per-project scope affordance.** The toggle lives in the one per-Project editor, so
   scope is structural rather than a label; global config remains an inherited default.
-- [ ] **Persistent spend/budget line.** Tokens/cost today + the coming daily interrupt
-  budget belong in an always-on status line (like the message bar), not one tab.
+- [x] **Persistent scan-timeline spend/budget line.** Timeline tokens/cost today and the
+  current run budget are visible in the always-on active-session status line, not only in
+  the timeline tab.
+- [ ] **Daily interrupt budget extension.** Add the interrupt budget to that status line when
+  Phase 6.5 ships the interrupt-ranking policy that owns it.
 - [ ] **Progressive disclosure on rule rows.** Show name + state + one-line summary by
   default; expand for `when::trigger · reads::slice · model → result · setting::key`.
 
