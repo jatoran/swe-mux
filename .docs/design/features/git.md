@@ -114,6 +114,9 @@ uncommitted work together.
 
 - The Project-scoped Git tab has Map and Log readings of one repository.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
+- Each collapsed Map row gives the branch identity its own bounded line and wraps status metrics on a separate line, so divergence and state cannot overlap the title at narrow drawer widths.
+  The worktree leaf appears beside the branch only when it adds information; the exact root remains in expanded detail.
+  Zero comparison divergence is omitted rather than rendered as separate ahead and behind labels.
 - Local changes are separate `CONFLICTS`, `UNSTAGED`, and `STAGED` groups.
 - Unstaged means working tree versus index, staged means index versus `HEAD`, and conflicted means unresolved index state.
 - A path changed on both sides of the index appears independently in staged and unstaged groups.

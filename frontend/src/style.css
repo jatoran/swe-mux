@@ -2611,15 +2611,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-state.error{color:var(--red);text-align:left;overflow-wrap:anywhere}
 .git-map-row{border-bottom:1px solid var(--line);background:var(--panel)}
 .git-map-row.expanded{box-shadow:inset 2px 0 var(--accent)}
-.git-map-row-toggle{width:100%;min-height:47px;display:grid;grid-template-columns:max-content minmax(74px,1fr) minmax(0,auto) 12px;align-items:center;gap:7px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
-.git-map-row-toggle:hover{background:var(--panel2)}
 .git-map-rail{width:31px;color:var(--muted);font-size:11px;white-space:pre}
 .git-map-rail.main{color:var(--accent)}
-.git-map-identity{min-width:0;display:grid;gap:2px}
-.git-map-identity strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
+.git-map-identity{min-width:0;display:flex;align-items:baseline;gap:6px}
+.git-map-identity strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400}
 .git-map-identity strong.detached{color:var(--amber)}
-.git-map-identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
-.git-map-metrics{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:2px 7px}
+.git-map-identity small{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
+.git-map-metrics{min-width:0;display:flex;flex-wrap:wrap;justify-content:flex-start;gap:2px 7px}
 .git-map-metrics em{font-style:normal;font-size:8px;white-space:nowrap}
 .git-map-metrics .clean{color:var(--muted)}
 .git-map-metrics .local,.git-map-metrics .unlanded,.git-map-metrics .warn{color:var(--amber)}
@@ -2682,7 +2680,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .git-trunk{display:none}
   .git-add-form input{min-height:38px;font-size:16px}
   .git-add-form button,.git-map-actions button{min-height:36px;padding:0 12px}
-  .git-map-row-toggle{min-height:56px}
+  .git-map-summary{min-height:56px}
   .git-map-detail{padding-left:20px}
   /* No rail on touch, so the strip is the only tab control. It remains one row and scrolls;
      the selected tab auto-scrolls into view while the close target stays fixed. */
@@ -2811,8 +2809,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
 .git-compare small{color:var(--muted);font-size:8px;overflow-wrap:anywhere}
-.git-review-tab .git-map-summary{width:100%;min-height:48px;display:grid;grid-template-columns:max-content minmax(70px,1fr) minmax(0,auto) 12px;align-items:center;gap:7px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.git-review-tab .git-map-summary{width:100%;min-height:48px;display:grid;grid-template-columns:max-content minmax(0,1fr) 12px;grid-template-rows:auto auto;align-items:center;column-gap:7px;row-gap:3px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .git-review-tab .git-map-summary:hover{background:var(--panel2)}
+.git-review-tab .git-map-rail,.git-review-tab .git-map-chevron{grid-row:1/-1;align-self:center}
+.git-review-tab .git-map-identity,.git-review-tab .git-map-metrics{grid-column:2}
 .git-review-tab .git-change-group h4{align-items:center}
 .git-review-tab .git-change-group h4 small{color:var(--muted);font-weight:400;letter-spacing:0;text-align:right}
 .git-review-file-row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
