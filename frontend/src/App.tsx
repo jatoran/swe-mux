@@ -129,7 +129,7 @@ import { defaultMobileInputSettings, mobileInputSettings, type MobileInputSettin
 import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
-import { classifyGesture, defaultMobileGestureSettings, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
@@ -4263,7 +4263,8 @@ export function App() {
       const slot = classifyGesture({ pointerCount: state.maxPointers, dx: state.lastX - state.startX, dy: state.lastY - state.startY, durationMs: Date.now() - state.start })
       state = null
       if (!slot) return
-      const command = resolveGestureCommand(slot, mobileGestures, overlayPanels.current, swipeAwayClose, { depth: dismissStack.depth(), enabled: overlayBack })
+      const panels = overlayPanels.current
+      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, { depth: gestureOverlayDepth(dismissStack.depth(), panels), enabled: overlayBack })
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }

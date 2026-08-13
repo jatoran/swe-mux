@@ -710,15 +710,10 @@ responsive controls.
 - A recognized gesture gives a short haptic tick, and tab navigation shows a transient label
   pill naming the tab it landed on. Both exist because a swipe that lands on an unbound slot,
   or a tab change the eye misses, is otherwise indistinguishable from "nothing happened".
-- While a slide-in panel (sidebar or utility drawer) is open, the horizontal swipe pointing
-  back toward the edge it slid in from closes the panel instead of running that slot's binding
-  — dismissing the right-edge drawer can never open the left sidebar on top of it. The
-  override applies to one- and two-finger horizontal swipes alike, even to unbound slots
-  (an open panel with a scrim makes the swipe-away motion unambiguous); the drawer wins when
-  both panels are open because it overlays the sidebar. Resolution is a pure layer between
-  recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable
-  `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input →
-  touch gestures).
+- While the left sidebar is open, either horizontal swipe direction closes it instead of running that slot's binding; while the right utility drawer is open, a rightward swipe closes it.
+  The override applies to one- and two-finger horizontal swipes alike, even to unbound slots; the drawer wins when both panels are open because it overlays the sidebar.
+  Slide-in panels are dismiss-stack levels for system Back and Escape, but `gestureOverlayDepth` excludes their entries from modal-overlay gesture precedence.
+  Resolution is a pure layer between recognition and dispatch (`resolveGestureCommand`), toggled by the hot-reloadable `mobile_gesture_swipe_away_close` config bool (default on, checkbox in Settings → Input → touch gestures).
 - **The platform back gesture closes one overlay level.**
   swe-mux installs as a `display: standalone` PWA, where back is the primary navigation control, and the app keeps no route history of its own (the URL is only ever `replaceState`d to track the focused session).
   With nothing to pop, Android's back backgrounded the whole app while a modal was open.
