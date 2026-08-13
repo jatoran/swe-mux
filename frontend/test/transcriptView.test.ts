@@ -17,11 +17,13 @@ import {
   transcriptEmptyMessage,
   transcriptMatchesQuery,
   transcriptSearchParts,
+  transcriptSelectionActive,
   transcriptSpeaker,
   transcriptTimestampIso,
   transcriptTimestampLabel,
   transcriptToolBoundaryLabel,
   type TranscriptMessage,
+  type TranscriptSelectionLike,
 } from '../src/transcriptView.ts'
 
 const message = (over: Partial<TranscriptMessage> = {}): TranscriptMessage =>
@@ -151,6 +153,30 @@ test('drawer search is literal, case-insensitive, and highlights every occurrenc
     { text: 'İ', match: false },
     { text: 'A', match: true },
   ])
+})
+
+test('a manual selection over the column is recognised from either endpoint', () => {
+  const inside = { id: 'inside' } as unknown as Node
+  const outside = { id: 'outside' } as unknown as Node
+  const body = { contains: (node: Node | null) => node === inside }
+  const selection = (over: Partial<TranscriptSelectionLike> = {}): TranscriptSelectionLike =>
+    ({ isCollapsed: false, rangeCount: 1, anchorNode: inside, focusNode: inside, ...over })
+
+  assert.equal(transcriptSelectionActive(selection(), body), true)
+  // Mid-drag a browser routinely reports one end outside the column, and that is exactly
+  // when the follow-scroll must not fire. Erring toward "yes, they are selecting" is the
+  // whole point of reading either endpoint rather than both.
+  assert.equal(transcriptSelectionActive(selection({ focusNode: outside }), body), true)
+  assert.equal(transcriptSelectionActive(selection({ anchorNode: outside }), body), true)
+  // A selection wholly in another surface is not this column's business.
+  assert.equal(transcriptSelectionActive(selection({ anchorNode: outside, focusNode: outside }), body), false)
+  // A caret is what every tap in the column leaves behind, so it must not freeze anything.
+  assert.equal(transcriptSelectionActive(selection({ isCollapsed: true }), body), false)
+  assert.equal(transcriptSelectionActive(selection({ rangeCount: 0 }), body), false)
+  assert.equal(transcriptSelectionActive(selection({ anchorNode: null, focusNode: null }), body), false)
+  // No selection, or a body that has not mounted yet.
+  assert.equal(transcriptSelectionActive(null, body), false)
+  assert.equal(transcriptSelectionActive(selection(), null), false)
 })
 
 test('every empty state says which kind of nothing it is', () => {

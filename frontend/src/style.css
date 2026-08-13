@@ -2364,6 +2364,19 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .transcript-copy{pointer-events:auto;flex:none;min-height:20px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .transcript-copy:hover{color:var(--text)}
 .transcript-copy.copied{border-color:var(--accent);color:var(--accent)}
+/* Nothing in the column's chrome may host a selection endpoint.
+   The head bar is a sibling *above* the scroller, so it sits before every message in
+   document order. A selection dragged past the top of the body used to resolve its
+   caret into the head, and the highlight became "the whole transcript above my anchor":
+   the mobile handle-drag bug, and the same drag with a mouse. `user-select:none`
+   makes the browser skip these and land on the nearest selectable text, which is back
+   inside the body. It also keeps speaker labels, timestamps, the seam counts, and the
+   Copy button's own label out of a manual selection, so what reaches the clipboard is
+   the prose the reader dragged over and nothing else. */
+.transcript-tab-head,.transcript-copy-anchor,.transcript-message>header,
+.transcript-tool-boundary,.transcript-expand{-webkit-user-select:none;user-select:none}
+/* The search field lives inside that head and still has to be selectable to be edited. */
+.transcript-search input{-webkit-user-select:text;user-select:text}
 /* `pre-wrap` keeps the agent's own line breaks and indentation, which is as close to
    rendering its markdown as this column goes; `anywhere` stops one long path or URL from
    forcing the whole drawer to scroll sideways. */
@@ -2386,6 +2399,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .transcript-tab-head>button{min-height:32px}
   .transcript-search input{height:36px;font-size:16px}
   .transcript-search>button{width:35px;height:34px}
+}
+/* Touch-only, because it costs a pointer reader something and buys them nothing: a mouse
+   drag has no handles to trap and Ctrl+C needs no button, while on a phone the sticky
+   Copy control slides through the exact band a selection handle travels and is the one
+   thing left in that path with `pointer-events:auto`. Nothing to grab means nothing
+   grabbed by accident; it returns the moment the selection collapses. The callout
+   suppression is the same rule the app's other chrome follows: a long press meant for
+   the button must not raise the native selection UI over it. */
+@media(hover:none){
+  .transcript-copy-anchor{-webkit-touch-callout:none}
+  .transcript-tab.transcript-selecting .transcript-copy-anchor{opacity:0;pointer-events:none}
 }
 
 /* Agent Context: an inventory and viewer, never an editor. Mutations are isolated to the

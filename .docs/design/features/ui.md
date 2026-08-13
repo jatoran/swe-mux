@@ -1208,6 +1208,12 @@ responsive controls.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
+  **A manual selection is a first-class way to copy from this column, not only the buttons.**
+  None of the column's chrome can hold a selection endpoint: not the head bar, the sticky copy control, the message headers, the seams, or Show more.
+  The head bar is the one that mattered, because it is a sibling above the scroller and therefore precedes every message in document order, so a drag that wandered past the top of the body resolved its caret into it and the highlight swallowed the whole transcript above the anchor.
+  Making the chrome unselectable both removes that trap and keeps speaker labels, timestamps, and seam counts off the clipboard, so a dragged selection yields the prose and nothing else.
+  On touch the sticky copy control also hides for as long as a selection is held, since it is the last thing in the path a selection handle travels that still accepts a tap.
+  Holding a selection over the column suspends the follow-scroll below for its duration; the arrival becomes the same "N new" pill a reader who scrolled up gets, and releasing the selection re-reads whether the column is still at its bottom rather than trusting the answer from before the freeze.
   Every message header shows its full local date and time, not only a time-of-day.
   An explicit Show more or Show less choice is device-local and keyed by session, agent run, and stable message identity, so appending messages, a moving transcript window, or navigating away does not reset it or apply it to a different message.
   Search temporarily showing a full matching message does not change that saved choice.
@@ -1255,6 +1261,9 @@ responsive controls.
   speaks cannot be read at all, which is the failure this tab exists to fix. Returning to a
   session still focused restores where reading stopped; moving to another session starts at its
   newest message, and nothing is remembered per session beyond the one you are on.
+  A held selection counts as "not at the bottom" for as long as it is held, on the same
+  principle: an agent finishing a turn is precisely when someone is selecting what it just said,
+  and moving the column then destroys the selection outright.
 - It refreshes when the transcript observer consumes a user message (`transcript_message`) and at
   the assistant turn boundary (`turn_ended`), never on a timer. The first event makes a submitted
   prompt appear without waiting for the response; the second collects the completed answer.
