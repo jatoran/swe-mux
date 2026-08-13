@@ -333,7 +333,9 @@ class ScanTimelineService:
             "model": str(getattr(self.config, "scan_timeline_model", DEFAULT_SCAN_MODEL)),
             "daily_budget_usd": context.daily_budget_usd if context else 0.0,
             "spend_today": spend,
-            "run_token_budget": int(getattr(self.config, "scan_timeline_run_token_budget", 5_000)),
+            "run_token_budget": int(
+                getattr(self.config, "scan_timeline_run_token_budget", 100_000)
+            ),
             "run_spend": run_spend,
             "metrics": await self.store.scan_metrics(),
             "records": await self.store.scan_records(session_id=session_id),
@@ -837,7 +839,7 @@ class ScanTimelineService:
             self._skip(session_id, "the per-rule daily token budget is exhausted")
             return None
         if int(run_spend["tokens"]) + max_tokens > int(
-            getattr(self.config, "scan_timeline_run_token_budget", 5_000)
+            getattr(self.config, "scan_timeline_run_token_budget", 100_000)
         ):
             self._skip(session_id, "the run Scan timeline token budget is exhausted")
             return None

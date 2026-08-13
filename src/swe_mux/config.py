@@ -536,7 +536,7 @@ class Config:
     # Flash revision without silently changing model family.
     scan_timeline_enabled: bool = False
     scan_timeline_model: str = "deepseek/deepseek-v4-flash"
-    scan_timeline_run_token_budget: int = 5_000
+    scan_timeline_run_token_budget: int = 100_000
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0

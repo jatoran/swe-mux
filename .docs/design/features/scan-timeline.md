@@ -67,6 +67,7 @@ Changing the algorithm later does not change the persisted field or its rollover
 ## Budgets and visibility
 
 The scanner enforces the shared global and per-rule daily token and dollar budgets, shared hourly call caps, the Project's `scan_timeline_daily_budget_usd`, and `scan_timeline_run_token_budget`.
+The per-run token budget defaults to 100,000 so ordinary full-session scans can backfill substantial conversations while the independent daily, hourly, and dollar gates remain effective.
 Successful calls and provider failures that report billable usage enter the shared spend ledger with Project and run attribution.
 An unpriced billable call reserves the conservative preflight estimate so missing provider accounting cannot weaken a budget.
 
