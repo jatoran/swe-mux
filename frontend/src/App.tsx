@@ -29,7 +29,6 @@ import { ResourceUsageSummary } from './ResourceUsage'
 import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './ProjectsManager'
 import { MenuGroup } from './MenuGroup'
 import { PreviewPane } from './PreviewPane'
-import { Observations } from './Observations'
 import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { UsageDashboard } from './UsageDashboardView'
@@ -561,7 +560,6 @@ export function App() {
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
   // The inbox is per-Project, so it carries its Project rather than following the
   // active one — it opens from a Project's own context menu.
-  const [observationsProject,setObservationsProject]=useState<Project|null>(null)
   // The Queue drawer tab's deliberate-open counter focuses the composer even when the
   // same chip is clicked twice.
   const [queueOpenToken,setQueueOpenToken]=useState(0)
@@ -1692,6 +1690,7 @@ export function App() {
           if(event.type==='agent_context_changed')window.dispatchEvent(new CustomEvent('mux:agent-context-changed',{detail:{projectId:event.payload?.project_id}}))
           // Queue tabs and pane chips live-update off these; payloads carry ids/counts only.
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
+          if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
           // The drawer's Git tab refetches its worktree list off this. Branch/dirty/upstream
           // already ride the session snapshots, so `git_changed` needs no payload here.
           if(event.type==='worktree_created'||event.type==='worktree_removed'||event.type==='git_changed')window.dispatchEvent(new CustomEvent('mux:git-changed'))
@@ -3730,7 +3729,6 @@ export function App() {
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
-    { id:'observations.open',label:'Open selected project’s observation inbox',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setObservationsProject(commandProject||null);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'queue.fleet',label:'Open fleet queue (every session’s queued messages)',category:'input',available:true,run:()=>openFleetQueue() },
     { id:'queue.fleetProject',label:'Open fleet queue for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>commandProject&&openFleetQueue(commandProject.id) },
     // The emergency stop, reachable with nothing open. Its label names the act, not the
@@ -4546,8 +4544,13 @@ export function App() {
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">{session.pending_label||'starting terminal…'}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
       <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>{session.pending_label||'Starting terminal'}</strong><small>{session.pending_detail||'Resolving the project and opening the shell…'}</small></div>
     </section>
-    const displayedCwd=session.runtime_cwd||session.spawn_cwd||session.cwd
-    const cwdIsLive=session.runtime_cwd_live
+    const remoteBoundary=session.runtime_boundary==='remote'
+    const boundaryUnknown=session.runtime_boundary==='unknown'
+    const nonLocalBoundary=remoteBoundary||boundaryUnknown
+    const displayedCwd=remoteBoundary
+      ?`ssh://${session.remote_authority||'remote'}`
+      :boundaryUnknown?'unavailable':session.runtime_cwd||session.spawn_cwd||session.cwd
+    const cwdIsLive=session.runtime_cwd_live&&!nonLocalBoundary
     const openPaneMenu=(event:{clientX:number;clientY:number;preventDefault?:()=>void;stopPropagation?:()=>void})=>{event.preventDefault?.();event.stopPropagation?.();openSessionMenu(session,event.clientX,event.clientY,'pane')}
     const agentVoice=agentSession
     const voiceMode=voiceStatus?.enabled&&agentVoice?effectiveVoiceMode(session):'off'
@@ -4587,8 +4590,8 @@ export function App() {
             below is being read off a conversation this PTY may no longer be running (an
             unfollowable /clear or /new). Marked visibly, not just in the tooltip, because the
             whole failure mode is that nothing looks wrong. */}
-        <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
-        {!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`} title={cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
+        <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[nonLocalBoundary&&'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable',session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
+        {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
         <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
             on a phone it cost 40px of a bar that also has to fit the session name and path. What it
@@ -5136,7 +5139,6 @@ export function App() {
       <button onClick={()=>{const target=projectMenu.project;setProjectMenu(null);openNotesBrowser(target)}}>Notes…</button>
       <button onClick={() => runNamedCommand('processes.project')}>Processes…</button>
       <button onClick={() => runNamedCommand('prompts.openProject')}>Prompt library…</button>
-      <button onClick={() => runNamedCommand('observations.open')}>Observation inbox…</button>
       <button onClick={() => runNamedCommand('queue.fleetProject')}>Fleet queue…</button>
       <button onClick={()=>{openProjectFiles(projectMenu.project);setProjectMenu(null)}}>Browse files…</button>
       <div class="context-subtitle">PROJECT</div>
@@ -5346,8 +5348,6 @@ export function App() {
     {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
-
-    {observationsProject&&<Observations project={observationsProject} onClose={()=>setObservationsProject(null)} onInsertBatch={activeId?text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:activeId,action:'insertText',text}})):undefined}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {networkUsageOpen&&<NetworkUsageModal onClose={()=>setNetworkUsageOpen(false)}/>}

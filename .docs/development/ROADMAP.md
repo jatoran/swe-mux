@@ -140,18 +140,18 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
 ```text
 Phase 1  Evidence replay + delivery-readiness contract                      [done]
   -> Phase 2  Durable process/quota/session telemetry                       [done]
-    -> Phase 3  Daily-workflow UX, prompts, config, and notifications       [2 notification items open]
+    -> Phase 3  Daily-workflow UX, prompts, config, and notifications       [done]
       -> Phase 3.5  Agent status-detection hardening + regression defense   [done]
         -> Phase 3.7  Control-plane deterministic consumers                 [done: CP step 3]
           -> Phase 4  Persistent manual prompt queue                        [done]
             -> Phase 4.5  mux MCP v0: read + discovery surface              [done: CP step 2.5, §7.5]
               -> Phase 5  Gated auto-delivery + fleet queue + bounded agent communication
                  (incl. mux.notify / mux.requestSpawn over the queue)       [done: CP §7.2]
-                -> Phase 5.4  Agent conversation rollover                   [built; 4 live checks open]
-                  -> Phase 5.6  mux MCP v0.5: situational-awareness reads   [open: CP step 2.6]
+                -> Phase 5.4  Agent conversation rollover                   [done: CP step 3.5]
+                  -> Phase 5.6  mux MCP v0.5: situational-awareness reads   [done]
                     -> Phase 5.5  Project card + scan timeline              [card done; timeline gated on 5.6]
-                      -> Phase 5.8  SSH boundary handling in terminals      [correctness open; profiles deferred]
-                        -> Phase 6  Agent Context + instruction coverage    [coverage open; rest deferred/culled]
+                      -> Phase 5.8  SSH boundary handling in terminals      [correctness done; profiles deferred]
+                        -> Phase 6  Agent Context + instruction coverage    [coverage done; rest deferred/culled]
                            (return-path channel 2: standing context, not pull) [CP §7]
                           -> Phase 6.5  Attention ranking + narration       [ranking open; narration gated]
                             -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
@@ -197,7 +197,7 @@ document and are not duplicated here.
 |---|---|---|
 | 0 · Enablement framework | shipped (Implemented baseline) | — |
 | 1 · Tier 0 + raw store | shipped | write/read hashes are not equality-joinable; §6.1's edge is restated as `target` + time order (CP §9 step 1) |
-| 2 · Helps-today siblings | shipped (Implemented baseline) | `requestSpawn` drafts land in the observation inbox today; **Phase 5.6 moves them into the fleet queue** and retires the inbox as a surface a human monitors |
+| 2 · Helps-today siblings | shipped (Implemented baseline) | `requestSpawn` drafts appear as targetless Fleet Queue approval rows; the old observation file is compatibility storage only |
 | 2.5 · mux MCP v0 | **Phase 4.5** | needs Phase 3.5 status contract; independent of Phase 4 |
 | 2.6 · mux MCP v0.5 reads | **Phase 5.6** | needs **Phase 5.4** (a read across a rollover must name the run it came from); reads shipped substrate only, and now runs **before** Phase 5.5 so its usage can justify or retire the timeline |
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
@@ -452,16 +452,17 @@ attribution.
   device presence and a leading-device rule so one alert reaches the device the user is
   actually at, and a per-session mute.
   `design/features/notifications.md`, `design/features/device-presence.md`.
-- [ ] Re-measure the residual `waiting` volume, then decide it.
-  The last measurement (62 true alerts per 10 hours on a 17-session fleet) predates the
-  2026-08-02 fix to the dead suppression guards and the `WAITING_SETTLE_SECONDS` gate, so the
-  number that motivated the question is no longer the number the system produces.
-  Recency scoping and rate limiting were both measured and **rejected** against the old
-  volume; read `archive/NOTIFICATION_SCOPING_PROPOSAL.md` before proposing either again.
-- [ ] Persist one row per notification decision (session, category, plan verdict, outcome).
-  The sender logs only failures, so its behavior is reconstructable only by simulation over
-  `status_timeline`, and the re-measurement above needs this to be anything better than a
-  hand count.
+- [x] Re-measure the residual `waiting` volume, then decide it.
+  A 2026-08-12 replay over all retained events from 2026-08-08 22:51 through 2026-08-12 21:19 covered 94.5 hours and 107 sessions.
+  The current classifier admitted 509 `waiting` candidates; 254 resumed or received human input inside the 120-second settle, leaving 255 residual candidates, or 27.0 per 10 hours.
+  That is 56% below the prior 62-per-10-hour measurement before the suppression and settle fixes.
+  Keep the 120-second settle and current default policy without adding recency scoping or rate limiting.
+  This replay cannot reconstruct historical subscriptions, preferences, device presence, or push-service outcomes, so it is an upper bound on delivered alerts rather than a delivery count.
+  The decision ledger below now measures actual future delivery.
+  Read `archive/NOTIFICATION_SCOPING_PROPOSAL.md` before reopening recency or rate limits.
+- [x] Persist one row per notification decision (session, category, plan verdict, outcome).
+  The append-only, content-free `notification_decisions` ledger records classifier suppressions, settle holds/cancellations, per-profile route verdicts, and final delivery outcomes under one candidate id.
+  `GET /api/diagnostics/notifications?days=N` reports category breakdowns and the actual `waiting` delivery rate over a retained window.
 
 ### Voice boundary
 
@@ -1007,10 +1008,10 @@ implementation of it (`CONTROL_PLANE_ROADMAP.md` §7.1–7.2).
   argument, so per-origin budgets and cycle detection are enforceable. Pinned by
   `tests/test_agent_messaging.py::test_the_mcp_tools_derive_the_sender_from_the_token`
   (a forged `from_session` argument is simply ignored).
-- [x] Add `mux.requestSpawn(...)` as a **draft producer only**: it writes an inert entry into
-  the observation inbox with the proposed target Project, prompt, and calling-session
-  provenance, and starts nothing. Approving the draft is an explicit human action (available
-  on mobile) and is what actually spawns the session — `POST …/observations/{id}/decide`,
+- [x] Add `mux.requestSpawn(...)` as a **draft producer only**: it writes an inert typed request
+  that now appears as a Fleet Queue approval row with the proposed target Project, prompt,
+  and calling-session provenance, and starts nothing. Approving the draft is an explicit human
+  action (available on mobile) and is what actually spawns the session - `POST …/observations/{id}/decide`,
   which seeds the new session through the ordinary spawn path and can be decided once.
 - [x] Keep the queue path and the MCP path on one audit trail. A message that arrived through
   MCP is distinguishable by sender provenance but is otherwise an ordinary queue item.
@@ -1057,7 +1058,7 @@ does not let one agent create another.
   automatic one), in head-of-line order, with the body appearing only in `queue_messages`.
 - [x] `mux.requestSpawn` has produced no session without an explicit human approval, and
   disabling the tool leaves the rest of Phase 5 intact. Live: the tool wrote a `pending`
-  observation-inbox draft and started nothing; `POST …/observations/{id}/decide` with
+  Fleet Queue approval row and started nothing; `POST …/observations/{id}/decide` with
   `approve` created the session with the drafted prompt seeded and marked the request
   `approved`; a second decision was refused `409 already_decided`. `request_spawn_enabled=false`
   yields a typed refusal and touches nothing else (`tests/test_agent_messaging.py`).
@@ -1207,11 +1208,10 @@ delivery path, no model cost, and no new user surface beyond diagnostics.
 
 ### Phase 5.4 exit criteria
 
-Implementation, fixtures, and docs are complete (`tests/test_conversation_rollover.py`, 27
-cases). The criteria below are the **live** pass and are deliberately still open: every one of
-them is a claim about a real CLI replacing a real conversation under a real PTY, and this
-phase exists precisely because that path is where the fixtures had been agreeing with a wrong
-model of the world.
+Implementation, fixtures, docs, and live verification are complete
+(`tests/test_conversation_rollover.py`, 27 cases).
+The frozen desktop app live pass completed 2026-08-12 against real Claude and Codex
+conversation replacements under live PTYs.
 
 - [x] `/clear` in a live Claude session rolls the run within one hook round-trip, with and
   without sibling agents in the same cwd, and the session keeps reporting accurate status,
@@ -1226,18 +1226,26 @@ model of the world.
   `exit_reason='conversation_rolled'`, `final_state='idle'`, keeping its own `native_id`,
   transcript path, and final tokens; the successor row opened under the new run id and native
   id with its own transcript path. Both `agent_visible=1`, sharing the terminal `note_id`.
-Each remaining criterion is a live check on the frozen desktop app, not a fixture.
-
-- [ ] A queue item armed before a `/clear` is stranded, not delivered, and an auto-delivery
+- [x] A queue item armed before a `/clear` is stranded, not delivered, and an auto-delivery
   grant does not survive the rollover.
-- [ ] Branch after a `/clear` reopens the conversation the user was in, not its predecessor.
-- [ ] Codex `/new` either rolls the run or marks observation stale and blocks delivery, and
+  **Live-verified 2026-08-12**: the armed item moved to `stranded` with
+  `target agent conversation was replaced`, produced no delivery row, and the successor run
+  received a fresh grant with zero sends used.
+- [x] Branch after a `/clear` reopens the conversation the user was in, not its predecessor.
+  **Live-verified 2026-08-12**: the branched history retained the post-clear marker
+  `ROLLOVER-5831` and returned it exactly from the branch.
+- [x] Codex `/new` either rolls the run or marks observation stale and blocks delivery, and
   never continues reporting the replaced conversation as live.
   Re-check this against the 2026-08-06 thread-id binding rather than the sibling-corroboration
   path the criterion was written for: a Codex resume now continues its rollout, so `/new` is
   the only Codex event that should produce a new run at all.
-- [ ] Every rolled run survives `POST /api/daemon/restart` with its identity intact and no
+  **Live-verified 2026-08-12**: `/new` emitted `agent_conversation_rolled`, opened distinct
+  predecessor and successor history rows and transcript paths, and the successor returned to
+  `idle` without stale observation state.
+- [x] Every rolled run survives `POST /api/daemon/restart` with its identity intact and no
   misattribution quarantine.
+  **Operator-confirmed 2026-08-12** on the frozen desktop app after the Claude and Codex
+  rollover checks.
 
 ## Phase 5.5 — Control-plane project card and scan timeline
 
@@ -1312,18 +1320,18 @@ Use this phase's observed usage as evidence for or against Phase 5.5.
 
 ### Transcript reads: both ends, and your own past
 
-- [ ] Make `read_transcript` bidirectional and pageable: a `from` selector (`tail` default,
+- [x] Make `read_transcript` bidirectional and pageable: a `from` selector (`tail` default,
   `head`) plus an opaque cursor, so a caller can read the **beginning** of a session's
   conversation, not only its tail. The opening request is what identifies a run's work (the
   same finding that made the one-shot titler correct and killed the continuous title,
   CP §6.11), and it is currently unreachable through MCP on any session long enough to
   matter.
-- [ ] Keep paging inside one `agent_run_id`. A cursor never walks off the end of a run into
+- [x] Keep paging inside one `agent_run_id`. A cursor never walks off the end of a run into
   its predecessor; two conversations are never concatenated into one read (Phase 5.4).
-- [ ] Exclude system/meta records by default, with an explicit opt-in argument for the caller
+- [x] Exclude system/meta records by default, with an explicit opt-in argument for the caller
   that wants them. Existing byte/message caps and the `looks_like_secret` redaction gate are
   unchanged and apply to head reads identically.
-- [ ] Let a caller read **its own superseded runs**. After a `/clear` the agent retains
+- [x] Let a caller read **its own superseded runs**. After a `/clear` the agent retains
   nothing its predecessor run did, and the daemon has all of it; this is the cheapest
   possible self-continuity and it needs no new substrate. Every message is labelled with its
   `agent_run_id`/`agent_run_seq`, and a result from the caller's own earlier run is marked as
@@ -1332,7 +1340,7 @@ Use this phase's observed usage as evidence for or against Phase 5.5.
 
 ### Cheap answers that avoid a transcript read entirely
 
-- [ ] Put the run brief on `get_session`: the run's pinned title and opening request
+- [x] Put the run brief on `get_session`: the run's pinned title and opening request
   (`builtin.session-titler-initial` already pins one per `agent_run_id`) beside the existing
   status, `agent_run_id`, and `agent_run_seq`. "What is that session actually working on"
   should cost one small call, not a paged transcript read.
@@ -1356,29 +1364,31 @@ command in a directory it already knows is not a daemon capability, it is a wrap
 
 These are thin callers over shipped Agent Context reads, so they belong with the cheap tools
 rather than hostage to the Phase 7.5 semantic layer.
-Both are blocked on the Phase 6 harness-coverage fix, because a bridge over a two-harness
-inventory would be harness-general in name only.
+The Phase 6 harness-coverage fix shipped with these tools, so both read the same
+descriptor-driven inventory as the Agent Context drawer.
 
-- [ ] `memory_sources()` - Project-scoped inventory of the same root-instruction and
+- [x] `memory_sources()` - Project-scoped inventory of the same root-instruction and
   learned-memory sources the Agent Context drawer reads, with harness, scope, capability,
   content hash, modified time, and entrypoint kind.
-- [ ] `read_memory(source_id)` - exact bounded read of one inventoried source, resolved through
+- [x] `read_memory(source_id)` - exact bounded read of one inventoried source, resolved through
   the typed daemon operation, never a caller-supplied filesystem path.
 
 ### Closing the loops that Phase 5 left open
 
-- [ ] Add `message_status(message_id)` so the sender of an `mux.notify` can see whether it is
+- [x] Add `message_status(message_id)` so the sender of an `mux.notify` can see whether it is
   drafted, armed, delivered, stranded, expired, or refused. Today the write is
   fire-and-forget from the sender's side, which forces an agent to either assume delivery or
   re-send; both are worse than a read.
-- [ ] Expose the Project's **notes** read-only, and the state of the caller's own
+- [x] Expose the Project's **notes** read-only, and the state of the caller's own
   `request_spawn` drafts. This is the human-to-agent channel with no new trust boundary: notes a
   human captured while testing are exactly the context the agent lacks.
   Retargeted from the observation inbox to Project notes, because that is where humans actually
   write (see the consolidation item).
-- [ ] Decide the cross-Project read question (CP §18) explicitly rather than by default. "What
+- [x] Decide the cross-Project read question (CP §18) explicitly rather than by default. "What
   else am I working on right now" is inherently cross-Project; the default stays own-Project
   only, and any widening is a named grant with its own surface, not a quiet scope change.
+  Decision 2026-08-12: v0.5 has no cross-Project grant.
+  Every tool remains own-Project only; widening requires a separately designed, named grant and surface.
 
 ### Consolidate the observation inbox out of existence
 
@@ -1390,17 +1400,17 @@ editors that are already open.
 A surface you must remember to check is worse than no surface, because entries rot and you stop
 trusting it.
 
-- [ ] Land pending `request_spawn` drafts in the **fleet queue** as an approval row, so one
+- [x] Land pending `request_spawn` drafts in the **fleet queue** as an approval row, so one
   surface holds everything an agent wants from a human.
   A spawn request names no target session because the session does not exist yet; that is a
   grouping problem in a view that already renders sender provenance, not a reason for a second
   surface.
-- [ ] Drop the human-notes half and point at Project notes and the Scratchpad, which are
+- [x] Drop the human-notes half and point at Project notes and the Scratchpad, which are
   Project-scoped, searchable, editable, and already carry "send to agent".
-- [ ] Retire the inbox as a place a human goes. `.swe-mux/observations.json` may survive as
+- [x] Retire the inbox as a place a human goes. `.swe-mux/observations.json` may survive as
   storage if that is cheaper than migrating; the `observations.open` command and the standalone
   view do not.
-- [ ] Keep approval an explicit human act with the once-only decision and the `seed_text` spawn
+- [x] Keep approval an explicit human act with the once-only decision and the `seed_text` spawn
   path unchanged. This moves where a request appears, never what approving it means.
 
 ### Construction rules
@@ -1414,18 +1424,18 @@ Scope misses and true misses stay indistinguishable, and empty beats a weak matc
 
 ### Phase 5.6 exit criteria
 
-- [ ] An agent can read the first messages of a sibling's conversation and of its own
+- [x] An agent can read the first messages of a sibling's conversation and of its own
   superseded run, and can always tell which run any message came from.
-- [ ] No read tool crosses a Project boundary, and none returns a record the browser's own
+- [x] No read tool crosses a Project boundary, and none returns a record the browser's own
   allowlist would have withheld.
-- [ ] The surface remains read-only: nothing added in this phase can enqueue, deliver, spawn,
+- [x] The surface remains read-only: nothing added in this phase can enqueue, deliver, spawn,
   interrupt, end a session, or write to a PTY. Pinned by the tool-set allowlist test.
-- [ ] Adding these tools costs no new substrate: each one is traceable to a service that
+- [x] Adding these tools costs no new substrate: each one is traceable to a service that
   shipped in an earlier phase.
-- [ ] A session on one harness can read an available memory source produced by another through
+- [x] A session on one harness can read an available memory source produced by another through
   the same Project-scoped inventory, with exact attribution and no prompt-time bulk injection or
   store mutation.
-- [ ] No tool here duplicates something the calling session could answer with a shell command in
+- [x] No tool here duplicates something the calling session could answer with a shell command in
   a directory it already knows.
 
 ## Phase 5.8 - SSH boundary handling in terminals
@@ -1451,6 +1461,9 @@ The convenience half (named SSH profiles) makes retyping `ssh box` unnecessary a
 dropped without losing anything.
 Ship the correctness half on its own.
 
+**Correctness half completed 2026-08-12.** Named SSH profiles and their doctor check remain
+deferred convenience work.
+
 Standing boundary across both halves: mux never persists an SSH password or key passphrase and
 never prompts for one outside the PTY.
 Authentication happens where the user can see it, and key and agent auth are the supported
@@ -1458,28 +1471,28 @@ paths.
 
 ### Correctness: remote-boundary detection and honest degradation
 
-- [ ] Detect that a session has crossed an SSH boundary. An OSC 7 URI with a non-local
+- [x] Detect that a session has crossed an SSH boundary. An OSC 7 URI with a non-local
   authority is already parsed and discarded by `runtime_cwd.py`; it becomes the signal instead
   of being dropped. Detection is best-effort and its absence never asserts a local boundary.
-- [ ] Report cwd, agent promotion, transcript following, hook ingress, and shim PATH repair as
+- [x] Report cwd, agent promotion, transcript following, hook ingress, and shim PATH repair as
   **unavailable** for a crossed session rather than stale, reusing the existing
   `agent-bridge-unavailable` vocabulary rather than inventing a second one.
-- [ ] Freeze runtime cwd with an explicit reason and surface "remote" in the UI instead of a
+- [x] Freeze runtime cwd with an explicit reason and surface "remote" in the UI instead of a
   stale local path. A frozen value presented as current is the failure mode this phase exists
   to remove.
-- [ ] Keep a crossed session out of any inference-driven target set: it never becomes an
+- [x] Keep a crossed session out of any inference-driven target set: it never becomes an
   auto-delivery or queue target by promotion, and remains a manual send target exactly as any
   shell is.
 
 ### Correctness: status detection for SSH prompts
 
-- [ ] Classify `ssh` authentication prompts as blocked on a human rather than `idle`: password,
+- [x] Classify `ssh` authentication prompts as blocked on a human rather than `idle`: password,
   key passphrase, host-key `yes/no` confirmation, and keyboard-interactive/MFA challenges.
   `idle` is the state delivery arms against, so a blocked prompt read as idle is the one
   failure here with a safety consequence.
-- [ ] Classify disconnect output (`Connection closed`, `Connection reset`, `Broken pipe`,
+- [x] Classify disconnect output (`Connection closed`, `Connection reset`, `Broken pipe`,
   `Timeout, server not responding`) as a terminated transport, not a quiet session.
-- [ ] Add captured screens for each prompt and disconnect class to the detection golden corpus,
+- [x] Add captured screens for each prompt and disconnect class to the detection golden corpus,
   and verify SSH sessions against the standing-activity axis: a quiet remote shell is idle, a
   remote long-running command is not.
 
@@ -1498,7 +1511,7 @@ The matching `mux doctor` SSH check in Phase 7 is deferred with it.
 
 ### Documentation
 
-- [ ] Document reaching mux over `ssh -L` in `design/features/remote-access.md`. This carries
+- [x] Document reaching mux over `ssh -L` in `design/features/remote-access.md`. This carries
   forward the documentation half of original Roadmap Phase 10 and describes shipped behavior:
   a loopback-addressed forward on any local port passes `allowed_browser_host` and the
   Origin/Host authority check, while a forward addressed by a LAN name returns
@@ -1508,15 +1521,15 @@ The matching `mux doctor` SSH check in Phase 7 is deferred with it.
 - [ ] Document SSH profiles and their compatibility limits in
   `design/features/shell-profiles.md` beside the existing WSL and CMD entries, if and when the
   deferred profile half ships.
-- [ ] Document the prompt classes and the remote-boundary unavailability vocabulary in
+- [x] Document the prompt classes and the remote-boundary unavailability vocabulary in
   `design/features/status-detection.md`.
 
 ### Phase 5.8 exit criteria
 
-- [ ] `ssh` from a mux terminal survives, resizes, pastes, and scrolls exactly as a local
+- [x] `ssh` from a mux terminal survives, resizes, pastes, and scrolls exactly as a local
   shell, and every integration it disables is visibly unavailable rather than silently stale.
-- [ ] No SSH authentication prompt is ever reported as `idle`, proven by golden-corpus cases.
-- [ ] No SSH credential is stored by mux in configuration, history, telemetry, diagnostics, or
+- [x] No SSH authentication prompt is ever reported as `idle`, proven by golden-corpus cases.
+- [x] No SSH credential is stored by mux in configuration, history, telemetry, diagnostics, or
   a diagnostic bundle.
 
 ## Phase 6 - Agent Context and instruction coverage
@@ -1599,20 +1612,20 @@ Both decisions are recorded so they are not re-proposed as scheduled work.
 - [x] Project switching, focused-session switching, worktrees, nested Projects, disabled memory,
   stale inventories, remote viewing, and the narrowest supported mobile drawer are covered.
 
-### The open item: harness coverage
+### Completed item: harness coverage
 
 This is a defect in shipped behavior rather than new scope, and it is the whole of Phase 6's
 remaining work.
 
-- [ ] Make Agent Context descriptor-driven instead of a two-harness special case.
-  `agent_context.py` enumerates `claude` and `codex` by name (`instruction:claude` →
+- [x] Make Agent Context descriptor-driven instead of a two-harness special case.
+  Previously, `agent_context.py` enumerated `claude` and `codex` by name (`instruction:claude` →
   `CLAUDE.md`, `instruction:codex` → `AGENTS.md`, plus two hardcoded memory roots), so a focused
-  `omp` session shows a neighbouring harness's inventory or nothing.
+  `omp` session showed a neighbouring harness's inventory or nothing.
   Agent *Environment* was generalized through the registry and covers `omp`, which is what makes
   this an omission rather than a scope choice.
   Resolve it on the descriptor: which harnesses declare a root instruction file, which declare a
   memory inventory, and `unsupported` stays an explicit typed result.
-- [ ] Extend the shipped whole-file copy along the same axis, so the operation is "copy between
+- [x] Extend the shipped whole-file copy along the same axis, so the operation is "copy between
   two declared instruction files" rather than "copy between `CLAUDE.md` and `AGENTS.md`".
   Preview, hash-checked commit, conflict refusal, backup, and line-ending preservation are
   unchanged; only target selection generalizes.
@@ -1660,7 +1673,7 @@ similarity.
   without making any body editable, and reports exact harness/scope/capability.
 - [x] Manual `CLAUDE.md ↔ AGENTS.md` overwrite remains bidirectional, previewed, conflict-safe,
   recoverable, and user-triggered only.
-- [ ] Every registered harness that declares an instruction file or a memory inventory is
+- [x] Every registered harness that declares an instruction file or a memory inventory is
   covered by both surfaces, and one that declares neither reports `unsupported` rather than
   showing a neighbour's sources.
 

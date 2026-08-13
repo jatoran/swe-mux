@@ -245,8 +245,87 @@ def conversation_records(
     return records
 
 
+def conversation_record_page(
+    database: Path,
+    session_id: str,
+    *,
+    direction: str,
+    anchor: tuple[int, str] | None = None,
+    limit: int = TAIL_MESSAGE_LIMIT,
+) -> tuple[list[dict[str, Any]], bool]:
+    """One bounded page of stored messages plus whether more exist that way.
+
+    ``anchor`` is the exclusive ``(time_created, id)`` edge from the previous
+    page. The pair is stable under appends and disambiguates messages written in
+    the same millisecond. Rows are always returned in chronological order.
+    """
+    if not session_id or direction not in {"head", "tail"}:
+        return [], False
+    connection = _connect(database)
+    if connection is None:
+        return [], False
+    bounded = max(1, min(int(limit), TAIL_MESSAGE_LIMIT))
+    conditions = ["session_id = ?"]
+    parameters: list[Any] = [session_id]
+    if anchor is not None:
+        operator = ">" if direction == "head" else "<"
+        conditions.append(
+            f"(time_created {operator} ? OR (time_created = ? AND id {operator} ?))"
+        )
+        parameters.extend([int(anchor[0]), int(anchor[0]), str(anchor[1])])
+    order = "ASC" if direction == "head" else "DESC"
+    try:
+        rows = connection.execute(
+            f"SELECT id, time_created, data FROM message WHERE {' AND '.join(conditions)}"
+            f" ORDER BY time_created {order}, id {order} LIMIT ?",
+            (*parameters, bounded + 1),
+        ).fetchall()
+        has_more = len(rows) > bounded
+        rows = rows[:bounded]
+        if direction == "tail":
+            rows = list(reversed(rows))
+        if not rows:
+            return [], False
+        message_ids = [str(row["id"]) for row in rows]
+        placeholders = ",".join("?" * len(message_ids))
+        parts = connection.execute(
+            f"SELECT message_id, id, data FROM part WHERE message_id IN ({placeholders})"
+            " ORDER BY message_id, id",
+            message_ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return [], False
+    finally:
+        connection.close()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for part in parts:
+        payload = _json_object(part["data"])
+        if payload:
+            grouped.setdefault(str(part["message_id"]), []).append(payload)
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        message = _json_object(row["data"])
+        if not message:
+            continue
+        identifier = str(row["id"])
+        records.append(
+            {
+                "type": "message",
+                "id": identifier,
+                "timestamp": row["time_created"],
+                "message": message,
+                "parts": grouped.get(identifier, []),
+                "__swe_mux_page_time": int(row["time_created"] or 0),
+                "__swe_mux_page_id": identifier,
+            }
+        )
+    return records, has_more
+
+
 __all__ = [
     "TAIL_MESSAGE_LIMIT",
+    "conversation_record_page",
     "conversation_records",
     "conversation_watermark",
     "session_measurements",

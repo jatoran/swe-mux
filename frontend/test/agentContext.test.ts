@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  AGENT_CONTEXT_SYNC_OPTIONS,
   AGENT_CONTEXT_DESKTOP_MENU_QUERY,
   AGENT_CONTEXT_DISCLOSURE_DEFAULTS,
   agentContextSourceMenuEnabled,
@@ -10,15 +9,17 @@ import {
   memoryFileCount,
   statusLabel,
   type AgentContextProvider,
+  type AgentContextSyncOption,
 } from '../src/agentContext.ts'
 
-test('instruction sync exposes only the two explicit whole-file directions', () => {
-  assert.deepEqual(AGENT_CONTEXT_SYNC_OPTIONS, [
-    { direction: 'claude_to_agents', source: 'CLAUDE.md', target: 'AGENTS.md' },
-    { direction: 'agents_to_claude', source: 'AGENTS.md', target: 'CLAUDE.md' },
-  ])
-  for (const option of AGENT_CONTEXT_SYNC_OPTIONS) {
+test('instruction sync accepts descriptor-supplied whole-file directions', () => {
+  const options: AgentContextSyncOption[] = [
+    { direction: 'instruction:claude->instruction:codex', source_id: 'instruction:claude', source: 'CLAUDE.md', target_id: 'instruction:codex', target: 'AGENTS.md' },
+    { direction: 'instruction:codex->instruction:claude', source_id: 'instruction:codex', source: 'AGENTS.md', target_id: 'instruction:claude', target: 'CLAUDE.md' },
+  ]
+  for (const option of options) {
     assert.notEqual(option.source, option.target)
+    assert.match(option.direction, /^instruction:\w+->instruction:\w+$/)
   }
 })
 

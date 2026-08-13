@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import {
-  AGENT_CONTEXT_SYNC_OPTIONS,
   AGENT_CONTEXT_DESKTOP_MENU_QUERY,
   AGENT_CONTEXT_DISCLOSURE_DEFAULTS,
   agentContextSourceMenuEnabled,
@@ -347,7 +346,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
       </summary>
       <div class="agent-context-disclosure-body">
         <div class="agent-context-disclosure-intro">
-          <p>Root instruction files read by Claude and Codex. Viewing never edits them.</p>
+          <p>Root instruction files declared by registered agent harnesses. Viewing never edits them.</p>
           <button disabled={!inventory || !!busy} onClick={() => setSyncOpen(true)}>sync…</button>
         </div>
         <div class="agent-context-sources">
@@ -461,7 +460,7 @@ export function AgentContextTab({ project, session }: { project?: Project; sessi
             </header>
             <p>Choose a direction, review the diff, then confirm the whole-file overwrite.</p>
             <div class="agent-context-sync">
-              {AGENT_CONTEXT_SYNC_OPTIONS.map(option => <button
+              {(inventory?.sync_options || []).map(option => <button
                 key={option.direction}
                 disabled={!sourceExists.get(option.source) || !!busy}
                 onClick={() => void openPreview(option.direction)}

@@ -11,7 +11,7 @@ SessionState = Literal["starting", "running", "working", "idle", "awaiting", "ex
 # Typed sub-reason for the "awaiting" state: a blocking permission approval, a
 # question the agent asked (Q&A), an MCP/elicitation dialog, or a provider rate
 # limit. Free-text state_detail stays display-only; this field is the contract.
-AwaitingReason = Literal["approval", "question", "elicitation", "rate_limit"]
+AwaitingReason = Literal["approval", "question", "elicitation", "rate_limit", "authentication"]
 
 # The standing-activity axis: an engagement that outlives the current turn — an
 # armed /loop wakeup, a cron schedule, running background tasks, live subagents.
@@ -208,6 +208,14 @@ class SessionRecord:
     runtime_cwd_updated_at: float | None = None
     runtime_project_scope_id: str | None = None
     runtime_cwd_dropped: int = 0
+    # Best-effort execution boundary derived from positive OSC 7 evidence or a
+    # narrowly classified SSH authentication/transport frame. ``remote`` disables
+    # local integrations and automatic delivery; malformed or absent telemetry
+    # never asserts a boundary change.
+    runtime_boundary: Literal["local", "remote", "unknown"] = "local"
+    remote_authority: str | None = None
+    remote_since: float | None = None
+    remote_transport_state: Literal["connected", "authentication", "ended"] | None = None
     agent_run_id: str | None = None
     agent_run_started_at: float | None = None
     # Start of the current CLI process generation. Unlike agent_run_started_at,

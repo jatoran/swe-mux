@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import deque
 from pathlib import Path
@@ -17,8 +18,19 @@ from swe_mux.meta_hooks import HookRule, MetaHookEngine
 from swe_mux.models import MuxEvent, SessionRecord
 from swe_mux.profiles import resolve_profile
 from swe_mux.project_files import DEFAULT_NOTE_STORAGE_ID, read_note, write_note
-from swe_mux.runtime_cwd import Osc7Parser, OscSignalParser, local_directory_from_osc7
-from swe_mux.session import ScrollbackBuffer, Session, SessionManager
+from swe_mux.runtime_cwd import (
+    Osc7Parser,
+    OscSignalParser,
+    classify_osc7_location,
+    local_directory_from_osc7,
+)
+from swe_mux.session import (
+    ScrollbackBuffer,
+    Session,
+    SessionManager,
+    note_remote_shell_submission,
+    pty_tail_explain,
+)
 
 
 def test_osc7_parser_handles_fragmentation_and_rejects_remote_or_missing_paths(
@@ -32,6 +44,88 @@ def test_osc7_parser_handles_fragmentation_and_rejects_remote_or_missing_paths(
     assert local_directory_from_osc7(tmp_path.as_uri()) == tmp_path.resolve()
     assert local_directory_from_osc7("file://attacker.example/tmp") is None
     assert local_directory_from_osc7((tmp_path / "missing").as_uri()) is None
+
+
+def test_osc7_location_classifies_local_remote_and_invalid_boundaries(
+    tmp_path: Path,
+) -> None:
+    local = classify_osc7_location(tmp_path.as_uri())
+    assert local.kind == "local"
+    assert local.path == tmp_path.resolve()
+    remote = classify_osc7_location("file://example.test/home/builder/repo")
+    assert remote.kind == "remote"
+    assert remote.authority == "example.test"
+    assert classify_osc7_location("https://example.test/repo").kind == "invalid"
+    assert classify_osc7_location("file://user:secret@example.test/repo").kind == "invalid"
+    assert classify_osc7_location("file://example.test:not-a-port/repo").kind == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("screen_text", "outcome"),
+    [
+        ("Are you sure you want to continue connecting (yes/no/[fingerprint])?", "authentication"),
+        ("builder@example.test's password: ", "authentication"),
+        ("Enter passphrase for key 'C:/Users/me/.ssh/id_ed25519': ", "authentication"),
+        ("Verification code: ", "authentication"),
+        ("Connection to example.test closed.", "transport_ended"),
+        ("client_loop: send disconnect: Broken pipe", "transport_ended"),
+    ],
+)
+def test_ssh_terminal_boundaries_are_typed_without_prompt_diagnostics(
+    screen_text: str, outcome: str
+) -> None:
+    explanation = pty_tail_explain(screen_text, backend="shell")
+    assert explanation["outcome"] == outcome
+    if outcome == "authentication":
+        assert {item["preview"] for item in explanation["rules"]} == {
+            "[SSH authentication prompt withheld]"
+        }
+
+
+def test_generic_local_password_prompt_is_not_misclassified_as_ssh() -> None:
+    assert pty_tail_explain("[sudo] password for builder: ", backend="shell")[
+        "outcome"
+    ] == "unknown"
+
+
+def test_ssh_boundary_golden_corpus() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "ssh-boundaries-v1.json"
+    corpus = json.loads(fixture.read_text(encoding="utf-8"))
+    assert corpus["schema_version"] == 1
+    for case in corpus["cases"]:
+        explanation = pty_tail_explain(case["screen"], backend="shell")
+        assert explanation["outcome"] == case["outcome"], case["id"]
+        if case["outcome"] == "authentication":
+            assert all(
+                item["preview"] == "[SSH authentication prompt withheld]"
+                for item in explanation["rules"]
+            ), case["id"]
+    standing = {
+        case["id"]: case.get("session_state")
+        for case in corpus["cases"]
+        if case.get("session_state")
+    }
+    assert standing == {
+        "quiet-remote-shell": "idle",
+        "remote-long-running-command": "running",
+    }
+
+
+def test_remote_boundary_survives_session_snapshot_adoption(tmp_path: Path) -> None:
+    record = SessionRecord(
+        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
+    )
+    record.runtime_boundary = "remote"
+    record.remote_authority = "example.test"
+    record.remote_since = 123.5
+    record.remote_transport_state = "ended"
+
+    adopted = SessionRecord.from_snapshot(record.snapshot())
+
+    assert adopted.runtime_boundary == "remote"
+    assert adopted.remote_authority == "example.test"
+    assert adopted.remote_since == 123.5
+    assert adopted.remote_transport_state == "ended"
 
 
 def test_osc_signal_parser_handles_split_title_and_progress_channels() -> None:
@@ -190,6 +284,58 @@ async def test_runtime_cwd_switch_rate_limit_prevents_poll_target_churn(
     await manager._accept_runtime_cwd(fake, tmp_path)
     assert record.runtime_cwd_live is False
     assert record.runtime_cwd_dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_remote_osc7_marks_boundary_and_disables_local_integrations(
+    tmp_path: Path,
+) -> None:
+    record = SessionRecord(
+        "pty", "shell", "default", "shell", "pty", str(tmp_path), "pwsh", []
+    )
+    record.runtime_cwd = str(tmp_path)
+    record.runtime_cwd_live = True
+    record.runtime_project_scope_id = "scope"
+    session = SimpleNamespace(
+        record=record,
+        tasks=set(),
+        stopping=False,
+        stop_event=asyncio.Event(),
+        cwd_debounce_task=None,
+        state_source_priority=-1,
+        publish_update=lambda: None,
+    )
+    manager = cast(Any, SessionManager.__new__(SessionManager))
+    manager.events = SimpleNamespace(emit=AsyncMock())
+
+    manager._queue_runtime_cwd(
+        session, "file://example.test/home/builder/repo"
+    )
+    await asyncio.gather(*session.tasks)
+
+    assert record.runtime_boundary == "remote"
+    assert record.remote_authority == "example.test"
+    assert record.state == "idle"
+    assert record.runtime_cwd_live is False
+    assert record.runtime_project_scope_id is None
+    assert record.git.branch is None
+    manager.note_hook_cwd(session, {"cwd": str(tmp_path)})
+    assert session.cwd_debounce_task is None
+
+    assert note_remote_shell_submission(session, "build\r") is True
+    assert record.state == "running"
+    assert record.state_detail == "Remote command running"
+
+    session.cwd_switches = deque()
+    session.cwd_telemetry_dropped = 0
+    manager.history = SimpleNamespace(project_scope=AsyncMock(return_value=None))
+    await manager._accept_runtime_cwd(session, tmp_path, debounce=0)
+
+    assert record.runtime_boundary == "local"
+    assert record.remote_authority is None
+    assert record.remote_transport_state is None
+    assert record.runtime_cwd == str(tmp_path)
+    assert record.runtime_cwd_live is True
 
 
 def hook_cwd_session(tmp_path: Path) -> tuple[Any, Any, SessionRecord]:

@@ -76,6 +76,25 @@ async def test_shell_sessions_are_refused_rather_than_answered_emptily(tmp_path:
         assert "agent sessions" in (await response.json())["error"]
 
 
+async def test_remote_boundary_refuses_local_agent_integrations(tmp_path: Path) -> None:
+    app = build(
+        record(
+            cwd=str(tmp_path),
+            runtime_boundary="remote",
+            remote_authority="example.test",
+        )
+    )
+    async with TestClient(TestServer(app)) as client:
+        for endpoint in ("skills", "agent-environment"):
+            response = await client.get(f"/api/sessions/sess-1/{endpoint}")
+            assert response.status == 409
+            payload = await response.json()
+            assert payload["code"] == "agent_bridge_unavailable"
+            assert payload["capability"] == "agent-bridge-unavailable"
+            assert payload["reason"] == "remote_terminal_boundary"
+            assert payload["authority"] == "example.test"
+
+
 async def test_repo_skills_follow_the_live_cwd_not_the_spawn_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

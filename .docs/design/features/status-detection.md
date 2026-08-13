@@ -90,7 +90,7 @@ Codex publishes no equivalent side state; this layer is Claude-only.
 | `starting` | daemon | Spawn/promotion of an agent backend (lifecycle ownership). |
 | `running` | daemon | Shell lifecycle (spawn or demotion back to shell). |
 | `working` | transcript, hook, watchdog-pty | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work except under the two narrow `watchdog-pty` rules below. The unwitnessed first-turn rule also requires a submit from the current input owner before it may read a working marker. |
-| `awaiting` | transcript, hook, watchdog-pty | A stabilized approval request, immediate `request_user_input` question, elicitation dialog, or rate limit, always with a typed `awaiting_reason`. `watchdog-pty` covers exactly one case: the startup-dialog rule below, on a session no turn has ever run. |
+| `awaiting` | transcript, hook, watchdog-pty | A stabilized approval request, immediate `request_user_input` question, elicitation dialog, rate limit, or SSH authentication prompt, always with a typed `awaiting_reason`. `watchdog-pty` covers startup dialogs and SSH authentication prompts classified from the bounded PTY tail. |
 | `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). A catch-up settle over a session already idle also emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
 | `exited` / `crashed` | pty, daemon | Process ground truth: the exit code through `terminal_exit_outcome`. |
 
@@ -232,6 +232,7 @@ session sits displayed as "working" until the 900s no-evidence alarm.
 | `question` | Codex `request_user_input` |
 | `elicitation` | `elicitation_dialog` notification |
 | `rate_limit` | rate-limit hooks/records |
+| `authentication` | SSH password, key-passphrase, host-key confirmation, keyboard-interactive, verification-code, or MFA prompt in the bounded PTY tail |
 
 `idle_prompt` maps to `idle` (ready), never `awaiting`. It does not clobber a pending
 approval unless this session's own screen proves the dialog is gone (see below).
@@ -251,6 +252,35 @@ The effective PTY approval result vetoes unidentified cancellation evidence.
 The candidate timestamp and evidence are mirrored into supervisor-owned metadata, so a session-preserving daemon reload resumes the remaining delay instead of losing or restarting it.
 Once stabilized, the active approval retains the same tool identity until it leaves `awaiting(approval)`, so parallel hook completions remain unable to clear the visible status.
 Questions, elicitation prompts, and rate limits remain immediate because they are not routinely auto-approved.
+
+### SSH boundary and prompt classification
+
+A non-local authority in an OSC 7 `file` URI changes the session runtime boundary from `local`
+to `remote` without treating the remote path as a host filesystem path.
+The session records the authority, boundary time, and remote transport state while clearing the
+last local runtime cwd and Git telemetry.
+A later valid local OSC 7 directory is the only positive signal that restores the local boundary.
+Hook cwd reports are ignored while the boundary is non-local because remote hook ingress is unavailable.
+Transcript reads, hook ingress, skills, environment discovery, Project promotion, local cwd, and Git telemetry report an explicit unavailable result while the boundary is remote or unknown.
+Manual PTY input remains available.
+
+SSH prompt classification is deliberately narrow and runs before generic quiet-shell recovery.
+It recognizes host-key confirmation, OpenSSH password prompts, private-key passphrases,
+keyboard-interactive prompts, verification codes, OTP, MFA, and Duo challenges.
+A generic `Password:` line is not enough because it may be a local `sudo` prompt.
+An authentication match transitions to `awaiting(authentication)` and sets the transport state
+to `authentication`; its diagnostic preview is always the fixed
+`[SSH authentication prompt withheld]` marker.
+The daemon never logs or stores the matched prompt body.
+
+`Connection closed`, `Connection reset`, `Broken pipe`, and SSH timeout variants set the remote
+transport state to `ended`.
+They do not turn the session into a generic quiet `idle` result.
+A remote OSC 7 prompt marks the connected remote shell idle.
+Submitting a newline-terminated command from that prompt marks it running until a later remote prompt arrives.
+This separates a quiet remote prompt from a long-running remote command without treating arbitrary output as a prompt.
+`tests/fixtures/ssh-boundaries-v1.json` pins every supported authentication and disconnect class,
+the quiet-remote case, and the expected typed state.
 
 **Delegated approvals.**
 Codex can hand every approval to an automated reviewer instead of the user (`approvals_reviewer: auto_review`, the CLI's "Automatic approval").

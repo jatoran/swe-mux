@@ -479,10 +479,12 @@ def project_note_summaries(
     default_note_id: str,
     default_title: str,
     legacy_titles: dict[str, str] | None = None,
+    migrate_legacy: bool = True,
 ) -> list[dict[str, Any]]:
     """List every Project-owned note, newest first, including empty explicit notes."""
     project_root = Path(root).resolve()
-    migrate_legacy_notes(project_root, legacy_titles=legacy_titles)
+    if migrate_legacy:
+        migrate_legacy_notes(project_root, legacy_titles=legacy_titles)
     notes_root = project_root / ".swe-mux" / "notes"
     entries: list[tuple[Path, str, str]] = []
     default_path = notes_root / "project.md"

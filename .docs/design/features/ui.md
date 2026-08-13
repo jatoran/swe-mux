@@ -205,7 +205,7 @@ responsive controls.
   surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
   the no-Project case and matches the app menu.
 - The app menu holds **nothing that acts on a single Project**. Per-Project actions — the
-  observation inbox, Project settings, files, notes — live on the Project itself: right-click a
+  Project settings, files, notes, and Project-scoped Fleet Queue approval rows live on the Project itself: right-click a
   sidebar row, or tap the Project title in the mobile top bar (both open the same menu). The
   lead block is therefore deliberately unlabeled; a `BROWSE ALL PROJECTS` heading described
   neither the clipboard nor notifications, and the old `CURRENT PROJECT` section duplicated the
@@ -1337,9 +1337,9 @@ responsive controls.
   When the text landed in the note the panel is hosting, it stays open and returns to the note
   instead — closing would hide the result that was just asked for. Desktop does not move at all,
   because the column sits beside the workspace and a second insert is the common next action.
-- **Context** is titled **Instructions & Memory** and remains the Agent Context surface (`agent-context.md`). It shows Project-root
-  `CLAUDE.md`/`AGENTS.md` in an initially expanded disclosure, fixed global
-  `~/.claude/CLAUDE.md`/`~/.codex/AGENTS.md` in an initially collapsed disclosure, and one
+- **Context** is titled **Instructions & Memory** and remains the Agent Context surface (`agent-context.md`). It shows descriptor-declared Project-root
+  instruction sources in an initially expanded disclosure, descriptor-declared global
+  instruction sources in an initially collapsed disclosure, and one
   initially collapsed **Memories** disclosure badged with the provider file count. All three
   share the same high-contrast file-row surface; bodies are read-only.
   Fine-pointer desktop rows backed by real files expose **Open in default explorer** on

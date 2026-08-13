@@ -12,7 +12,7 @@ It does not type into a PTY or authorize automation.
   positively known, and nothing contradicts the screen the agent draws its prompt on.
 - `blocked` means current evidence positively forbids delivery, such as working, approval,
   elicitation, rate limit, a screen that is not the agent's own, recent/post-completion
-  input, interrupted turn, demotion, exit, or a stale transcript.
+  input, interrupted turn, demotion, exit, a stale transcript, or a non-local terminal boundary.
 - `transcript_stale` blocks rather than degrading to unknown. When the followed transcript is
   no longer this PTY's conversation (an unfollowable in-CLI `/clear`/`/new` — `backends.md`),
   every positive signal here is being read off a retired conversation, so the evidence is not
@@ -21,6 +21,15 @@ It does not type into a PTY or authorize automation.
   Because it is a hard block with no softer degradation, the cost of raising it wrongly is
   paid entirely by the operator — see the 2026-08-06 correction.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
+
+`local_terminal_boundary` is a required readiness check.
+A session whose runtime boundary is `remote` is hard-blocked with `remote_terminal_boundary`, regardless of an otherwise idle-looking prompt.
+An unrecognized or unavailable boundary is hard-blocked with `terminal_boundary_unknown`.
+Only an explicit `local` boundary satisfies the check.
+This keeps SSH authentication and remote shells out of inferred auto-delivery target sets while
+preserving ordinary manual terminal input.
+The readiness evidence records the boundary, remote authority, and remote transport state but
+never terminal bytes or authentication prompt text.
 
 Standing-activity annotations (`status-detection.md` § Standing-activity annotations) are
 deliberately invisible to this classification: an idle session with an armed `/loop`, a

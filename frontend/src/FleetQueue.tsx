@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
-  cancelQueueMessage, deleteQueueMessage, fetchAutoStatus, fetchFleetQueue, scheduleStatus, senderLabel,
-  type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus, type QueueMessage,
+  cancelQueueMessage, decideSpawnRequest, deleteQueueMessage, fetchAutoStatus, fetchFleetQueue,
+  scheduleStatus, senderLabel, type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus,
+  type QueueMessage, type SpawnRequestRow,
 } from './queueApi'
 import { useModalFocus } from './modalFocus'
 import type { Project } from './types'
@@ -58,7 +59,9 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   const [author, setAuthor] = useState<FleetQueueAuthor>('non_human')
   const [projectId, setProjectId] = useState(initialProjectId || '')
   const [targetSessionId, setTargetSessionId] = useState('')
-  const [view, setView] = useState<FleetQueueView>({ author: 'non_human', messages: [], targets: [] })
+  const [view, setView] = useState<FleetQueueView>({
+    author: 'non_human', messages: [], spawn_requests: [], spawn_request_errors: [], targets: [],
+  })
   const [auto, setAuto] = useState<QueueAutoStatus | null>(null)
   const [busyId, setBusyId] = useState('')
   const [deleteConfirmId, setDeleteConfirmId] = useState('')
@@ -101,8 +104,9 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   )
   const projectOptions = useMemo(() => {
     const ids = new Set(view.targets.map(target => target.project_id).filter((id): id is string => !!id))
+    for (const request of view.spawn_requests) ids.add(request.project_id)
     return [...ids].sort((a, b) => (projectNames.get(a) || a).localeCompare(projectNames.get(b) || b))
-  }, [projectNames, view.targets])
+  }, [projectNames, view.spawn_requests, view.targets])
   const targetOptions = useMemo(
     () => view.targets.filter(target => !projectId || target.project_id === projectId),
     [projectId, view.targets],
@@ -124,6 +128,14 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   const copyBody = async (message: QueueMessage) => {
     try {
       await navigator.clipboard.writeText(message.body)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const copyPrompt = async (request: SpawnRequestRow) => {
+    try {
+      await navigator.clipboard.writeText(request.prompt)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -220,9 +232,55 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
         </div>
 
         {error && <p class="usage-error" role="alert">{error}</p>}
+        {!!view.spawn_request_errors.length && (
+          <p class="usage-error" role="alert">
+            Spawn requests could not be read for {view.spawn_request_errors.length} Project(s).
+          </p>
+        )}
 
         <main>
           <ul class="queue-list">
+            {!targetSessionId && view.spawn_requests.map(request => {
+              const busy = busyId === request.id
+              const pending = request.status === 'pending'
+              return (
+                <li key={`spawn:${request.project_id}:${request.id}`} class={`observation-request${pending ? '' : ' done'}`}>
+                  <div class="observation-request-head">
+                    <span class="observation-request-tag">spawn request</span>
+                    <span>{request.from_name || request.from_session || 'an agent'}</span>
+                    {request.backend && <span>{request.backend}</span>}
+                    <span class="fleet-queue-project">
+                      Project: {projectNames.get(request.project_id) || request.project_name || request.project_id}
+                    </span>
+                    <span class="observation-request-status">{request.status}</span>
+                  </div>
+                  {request.reason && <p class="observation-request-reason">{request.reason}</p>}
+                  <pre class="observation-request-prompt">{request.prompt}</pre>
+                  <div class="observation-request-actions">
+                    {pending ? <>
+                      <button
+                        type="button"
+                        class="primary"
+                        disabled={busy}
+                        onClick={() => void run(request.id, () => decideSpawnRequest(request.project_id, request.id, 'approve'))}
+                      >
+                        Approve and start session
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void run(request.id, () => decideSpawnRequest(request.project_id, request.id, 'dismiss'))}
+                      >
+                        Dismiss
+                      </button>
+                    </> : (
+                      <span>{request.status === 'approved' ? 'Session started' : 'Nothing was started'}</span>
+                    )}
+                    <button type="button" disabled={busy} onClick={() => void copyPrompt(request)}>Copy prompt</button>
+                  </div>
+                </li>
+              )
+            })}
             {view.messages.map(message => {
               const busy = busyId === message.id
               return (
@@ -282,8 +340,8 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                 </li>
               )
             })}
-            {!view.messages.length && (
-              <li class="queue-empty">No messages match these authorship and target filters.</li>
+            {!view.messages.length && (!view.spawn_requests.length || !!targetSessionId) && (
+              <li class="queue-empty">No messages or spawn requests match these filters.</li>
             )}
           </ul>
         </main>

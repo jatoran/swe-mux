@@ -10,7 +10,7 @@ import { classifySoundEvent } from '../src/sessionSounds.ts'
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 
 const ALL_STATES: SessionState[] = ['starting', 'running', 'working', 'idle', 'awaiting', 'exited', 'crashed']
-const ALL_AWAITING: AwaitingReason[] = ['approval', 'question', 'elicitation', 'rate_limit']
+const ALL_AWAITING: AwaitingReason[] = ['approval', 'question', 'elicitation', 'rate_limit', 'authentication']
 
 const agent = (state: SessionState, extra: Partial<Session> = {}) =>
   ({ id: 's1', name: 's1', backend: 'claude', state, context_pct: 0, compaction_count: 0, ...extra }) as unknown as Session
@@ -38,12 +38,13 @@ test('terminal states never render the blinking working indicator', () => {
   }
 })
 
-test('awaiting distinguishes approval, question, elicitation, and rate limit', () => {
+test('awaiting distinguishes approval, question, elicitation, rate limit, and SSH auth', () => {
   const labels = new Set(ALL_AWAITING.map(reason => awaitingLabel(agent('awaiting', { awaiting_reason: reason }))))
   assert.equal(labels.size, ALL_AWAITING.length, 'each awaiting sub-reason needs a distinct affordance')
   assert.equal(awaitingLabel(agent('awaiting', { awaiting_reason: 'question' })), 'awaiting answer')
   assert.equal(awaitingLabel(agent('awaiting', { awaiting_reason: 'elicitation' })), 'awaiting input')
   assert.equal(awaitingLabel(agent('awaiting', { awaiting_reason: 'rate_limit' })), 'rate limited')
+  assert.equal(awaitingLabel(agent('awaiting', { awaiting_reason: 'authentication' })), 'awaiting SSH authentication')
   // Missing sub-reason keeps the conservative historical default.
   assert.equal(awaitingLabel(agent('awaiting')), 'awaiting approval')
   assert.ok(sessionStatus(agent('awaiting', { awaiting_reason: 'question' })).startsWith('awaiting answer'))
@@ -105,6 +106,25 @@ test('a session settling after startup does not fire the ready sound', () => {
 test('shell sessions render the raw state', () => {
   const shell = { ...agent('running'), backend: 'shell' } as unknown as Session
   assert.equal(sessionStatus(shell), 'running')
+})
+
+test('remote boundaries and SSH authentication are prominent', () => {
+  assert.equal(
+    sessionStatus(agent('idle', { runtime_boundary: 'unknown' })),
+    'terminal boundary unknown',
+  )
+  assert.equal(
+    sessionStatus(agent('idle', { runtime_boundary: 'remote', remote_authority: 'example.test' })),
+    'remote boundary · idle',
+  )
+  assert.equal(
+    sessionStatus(agent('awaiting', { runtime_boundary: 'remote', awaiting_reason: 'authentication' })),
+    'awaiting SSH authentication',
+  )
+  assert.equal(
+    sessionStatus(agent('running', { runtime_boundary: 'remote', remote_transport_state: 'ended' })),
+    'SSH connection ended',
+  )
 })
 
 test('dense status chrome omits compaction counts', () => {

@@ -58,6 +58,7 @@ def test_disabling_substrate_disables_dependents() -> None:
 def test_no_dependency_consumer_enables_alone() -> None:
     resolution = registry.resolve({"observation_inbox"})
     assert resolution.is_enabled("observation_inbox")
+    assert registry.REGISTRY["observation_inbox"].label == "Spawn request review"
 
 
 def test_defaults_are_inherited_and_overridden() -> None:

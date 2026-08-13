@@ -60,6 +60,7 @@ export function hasRunningActivity(session: Session): boolean {
  */
 export function awaitingLabel(session: Session): string {
   switch (session.awaiting_reason) {
+    case 'authentication': return 'awaiting SSH authentication'
     case 'question': return 'awaiting answer'
     case 'elicitation': return 'awaiting input'
     case 'rate_limit': return 'rate limited'
@@ -127,6 +128,12 @@ export function activityBadges(session: Session): ActivityBadge[] {
 
 /** Status line text shown next to a session; total over SessionState. */
 export function sessionStatus(session: Session): string {
+  if (session.runtime_boundary === 'unknown') return 'terminal boundary unknown'
+  if (session.runtime_boundary === 'remote') {
+    if (session.awaiting_reason === 'authentication') return 'awaiting SSH authentication'
+    if (session.remote_transport_state === 'ended') return 'SSH connection ended'
+    return `remote boundary · ${session.state}`
+  }
   if (!isAgentBackend(session.backend)) return session.state
   if (!isObservedHarness(session.backend)) return 'not observed by mux'
   const context = session.parser_status === 'degraded'

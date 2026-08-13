@@ -41,7 +41,13 @@ def test_agent_pane_headers_omit_the_working_directory() -> None:
 
     assert "const agentSession=isAgent(session)" in source
     assert "{!agentSession&&<div class=\"pane-path\">{session.cwd}</div>}" in source
-    assert "{!agentSession&&<div class={`pane-path ${cwdIsLive?'live':'last-known'}`}" in source
+    assert (
+        "{!agentSession&&<div class={`pane-path "
+        "${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`}"
+        in source
+    )
+    assert "const remoteBoundary=session.runtime_boundary==='remote'" in source
+    assert "const boundaryUnknown=session.runtime_boundary==='unknown'" in source
     assert "pane-bar ${agentSession?'agent-pane-bar':''}" in source
     assert ".pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }" in css
 

@@ -476,7 +476,7 @@ class Config:
     agent_message_hourly_budget: int = 20
     agent_message_pending_per_target: int = 5
     agent_message_max_chain_depth: int = 3
-    # `mux.requestSpawn` creates an inert observation-inbox draft and nothing
+    # `mux.requestSpawn` creates an inert Fleet Queue approval draft and nothing
     # else; approval is a human act.
     request_spawn_enabled: bool = True
     automation_concurrency: int = 2

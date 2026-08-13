@@ -476,6 +476,8 @@ class DeliveryReadinessTracker:
             partial_input_absent = input_revision == memory.input_revision_at_completion
         operator_quiet = now - last_input_event_ts >= READINESS_DEBOUNCE_SECONDS
         checks: dict[str, bool | None] = {
+            "local_terminal_boundary": getattr(record, "runtime_boundary", "local")
+            == "local",
             "live_agent_run": bool(
                 record.agent_run_id and record.backend in ADAPTER_DELIVERY_ETIQUETTE
             ),
@@ -499,6 +501,12 @@ class DeliveryReadinessTracker:
         }
 
         hard_block_reasons: list[str] = []
+        if not checks["local_terminal_boundary"]:
+            hard_block_reasons.append(
+                "remote_terminal_boundary"
+                if getattr(record, "runtime_boundary", "local") == "remote"
+                else "terminal_boundary_unknown"
+            )
         if not checks["live_agent_run"]:
             hard_block_reasons.append("not_live_agent_run")
         if record.state in {"working", "starting", "running"} or memory.phase == "working":
@@ -572,6 +580,11 @@ class DeliveryReadinessTracker:
                 "screen_mode": screen_mode or "unknown",
                 "screen_source": screen_source,
                 "pty_state": pty_state,
+                "runtime_boundary": getattr(record, "runtime_boundary", "local"),
+                "remote_authority": getattr(record, "remote_authority", None),
+                "remote_transport_state": getattr(
+                    record, "remote_transport_state", None
+                ),
                 "expected_screen": self._expected_screen(record, memory),
                 "completion_screen": memory.screen_at_completion,
                 "terminal_mode": terminal_mode or "unknown",

@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any, assert_never
 
 from .harness import conversation_store_path, transcript_dialect
-from .opencode_store import TAIL_MESSAGE_LIMIT, conversation_records
+from .opencode_store import TAIL_MESSAGE_LIMIT, conversation_record_page, conversation_records
 from .opencode_store import conversation_watermark as store_watermark
 
 TRANSCRIPT_PARSER_VERSION = 3
 _SOURCE_OFFSET_KEY = "__swe_mux_source_offset"
+_SOURCE_END_KEY = "__swe_mux_source_end"
 
 
 def _blocks(content: Any) -> list[dict[str, Any]]:
@@ -264,8 +265,289 @@ def read_transcript_events(path: Path, max_bytes: int | None = None) -> list[dic
                 # byte offset is unique and stable for an append-only run, and
                 # never leaves this module except as the opaque reader id below.
                 event[_SOURCE_OFFSET_KEY] = offset
+                event[_SOURCE_END_KEY] = handle.tell()
                 events.append(event)
     return events
+
+
+def _file_event_page(
+    path: Path,
+    *,
+    direction: str,
+    anchor: int | None,
+    max_bytes: int,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """Read one raw-record window from either edge of an append-only file."""
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if direction == "head":
+            start = max(0, min(int(anchor or 0), size))
+            handle.seek(start)
+            data = handle.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                cut = data.rfind(b"\n", 0, max_bytes + 1)
+                if cut < 0:
+                    # A single oversized native record is not useful to a bounded
+                    # reader. Skip it without retaining its body in the result.
+                    handle.seek(start)
+                    handle.readline()
+                    end = handle.tell()
+                    data = b""
+                else:
+                    end = start + cut + 1
+                    data = data[: cut + 1]
+            else:
+                end = start + len(data)
+            window_start = start
+            has_more = end < size
+            next_boundary = end
+        else:
+            end = max(0, min(int(anchor if anchor is not None else size), size))
+            start = max(0, end - max_bytes)
+            handle.seek(start)
+            data = handle.read(end - start)
+            if start:
+                split = data.find(b"\n")
+                if split < 0:
+                    return [], start > 0, start
+                data = data[split + 1 :]
+                start += split + 1
+            window_start = start
+            has_more = start > 0
+            next_boundary = start
+
+    events: list[dict[str, Any]] = []
+    offset = window_start
+    for line in data.splitlines(keepends=True):
+        line_end = offset + len(line)
+        try:
+            event = json.loads(line.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            offset = line_end
+            continue
+        if isinstance(event, dict):
+            event[_SOURCE_OFFSET_KEY] = offset
+            event[_SOURCE_END_KEY] = line_end
+            events.append(event)
+        offset = line_end
+    return events, has_more, next_boundary
+
+
+def _raw_message_text(content: Any) -> str:
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in _blocks(content)
+        if block.get("type") in {"text", "input_text", "output_text"}
+        and block.get("text")
+    ).strip()
+
+
+def _meta_record(event: dict[str, Any], backend: str) -> dict[str, Any] | None:
+    """A human-readable system/meta record, excluding tool traffic."""
+    dialect = transcript_dialect(backend)
+    if dialect is None:
+        return None
+    role = "meta"
+    text = ""
+    if dialect == "claude":
+        native = event.get("message") or {}
+        native_role = str(native.get("role") or event.get("type") or "")
+        if native_role in {"system", "developer"}:
+            role = "system"
+            text = _raw_message_text(native.get("content"))
+        elif event.get("isMeta") is True or event.get("interruptedMessageId") is not None:
+            text = _raw_message_text(native.get("content"))
+        elif isinstance(event.get("origin"), dict) and event["origin"].get("kind") != "human":
+            text = _raw_message_text(native.get("content"))
+    elif dialect == "codex":
+        payload = event.get("payload") or {}
+        if event.get("type") == "response_item" and payload.get("type") == "message":
+            native_role = str(payload.get("role") or "")
+            if native_role in {"system", "developer"}:
+                role = "system"
+                text = _raw_message_text(payload.get("content"))
+        elif event.get("type") == "event_msg":
+            candidate = payload.get("message") or payload.get("text") or payload.get("content")
+            text = _raw_message_text(candidate)
+            if not text and isinstance(candidate, str):
+                text = candidate.strip()
+            if text and not text.startswith(_CODEX_MACHINERY_PREFIXES):
+                text = ""
+    elif dialect == "pi":
+        native = event.get("message") or {}
+        if native.get("role") in {"system", "developer"}:
+            role = "system"
+            text = _raw_message_text(native.get("content"))
+    elif dialect == "opencode":
+        native = event.get("message") or {}
+        if native.get("role") in {"system", "developer"}:
+            role = "system"
+            text = _raw_message_text(event.get("parts"))
+    else:
+        assert_never(dialect)
+    if not text:
+        return None
+    return {
+        "message_id": _record_identity(event),
+        "role": role,
+        "ts": event.get("timestamp"),
+        "text": text,
+        "_source_start": event.get(_SOURCE_OFFSET_KEY),
+        "_source_end": event.get(_SOURCE_END_KEY),
+        "_source_time": event.get("__swe_mux_page_time"),
+        "_source_id": event.get("__swe_mux_page_id"),
+    }
+
+
+def _page_records(
+    events: list[dict[str, Any]], backend: str, *, include_system: bool
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    dialect = transcript_dialect(backend)
+    if dialect is None:
+        return records
+    codex_response_messages = dialect == "codex" and any(
+        event.get("type") == "response_item"
+        and (event.get("payload") or {}).get("type") == "message"
+        and (event.get("payload") or {}).get("role") in {"user", "assistant"}
+        for event in events
+    )
+    for event in events:
+        message = _native_conversation_message(event, backend)
+        text = _message_text(message.get("content")) if message is not None else ""
+        machinery = False
+        if message is not None and message.get("role") == "user":
+            if dialect == "claude":
+                machinery = _claude_user_is_machinery(event, text)
+            elif dialect == "codex":
+                machinery = text.startswith(_CODEX_MACHINERY_PREFIXES)
+            elif dialect == "pi":
+                machinery = False
+            elif dialect == "opencode":
+                machinery = False
+            else:
+                assert_never(dialect)
+        duplicate = bool(
+            dialect == "codex"
+            and codex_response_messages
+            and event.get("type") != "response_item"
+        )
+        if (
+            message is not None
+            and text
+            and not machinery
+            and not duplicate
+            and not (
+                message.get("role") == "assistant"
+                and text.casefold() in _ASSISTANT_ACKNOWLEDGEMENTS
+            )
+        ):
+            records.append(
+                {
+                    "message_id": _record_identity(event),
+                    "role": message["role"],
+                    "ts": message.get("ts"),
+                    "text": text,
+                    "_source_start": event.get(_SOURCE_OFFSET_KEY),
+                    "_source_end": event.get(_SOURCE_END_KEY),
+                    "_source_time": event.get("__swe_mux_page_time"),
+                    "_source_id": event.get("__swe_mux_page_id"),
+                }
+            )
+        elif include_system and not duplicate:
+            meta = _meta_record(event, backend)
+            if meta is not None:
+                records.append(meta)
+    return records
+
+
+def transcript_message_page(
+    path: Path | None,
+    backend: str,
+    *,
+    direction: str,
+    anchor: dict[str, Any] | None,
+    max_bytes: int,
+    max_messages: int,
+    include_system: bool = False,
+    native_id: str | None = None,
+) -> dict[str, Any]:
+    """A bounded, stable page of readable records from one native conversation."""
+    if direction not in {"head", "tail"}:
+        raise ValueError("transcript direction must be head or tail")
+    store = conversation_store_path(backend)
+    if store is not None:
+        store_anchor = None
+        if anchor is not None:
+            if anchor.get("kind") != "store":
+                raise ValueError("transcript cursor does not match this conversation store")
+            store_anchor = (int(anchor["time"]), str(anchor["id"]))
+        events, has_more = conversation_record_page(
+            store,
+            native_id or "",
+            direction=direction,
+            anchor=store_anchor,
+            limit=TAIL_MESSAGE_LIMIT,
+        )
+        boundary: dict[str, Any] | None = None
+    else:
+        if path is None:
+            return {"messages": [], "next_anchor": None, "has_more": False}
+        file_anchor = None
+        if anchor is not None:
+            if anchor.get("kind") != "file":
+                raise ValueError("transcript cursor does not match this conversation file")
+            file_anchor = int(anchor["offset"])
+        events, has_more, offset = _file_event_page(
+            path,
+            direction=direction,
+            anchor=file_anchor,
+            max_bytes=max_bytes,
+        )
+        boundary = {"kind": "file", "offset": offset}
+
+    records = _page_records(events, backend, include_system=include_system)
+    selected = records[:max_messages] if direction == "head" else records[-max_messages:]
+    trimmed = len(selected) < len(records)
+    if store is not None:
+        edge = selected[-1] if direction == "head" and selected else None
+        if direction == "tail" and selected:
+            edge = selected[0]
+        if edge is None and events:
+            edge_event = events[-1] if direction == "head" else events[0]
+            boundary = {
+                "kind": "store",
+                "time": int(edge_event.get("__swe_mux_page_time") or 0),
+                "id": str(edge_event.get("__swe_mux_page_id") or ""),
+            }
+        elif edge is not None:
+            boundary = {
+                "kind": "store",
+                "time": int(edge.get("_source_time") or 0),
+                "id": str(edge.get("_source_id") or ""),
+            }
+    elif trimmed and selected:
+        edge = selected[-1] if direction == "head" else selected[0]
+        boundary = {
+            "kind": "file",
+            "offset": int(
+                (
+                    edge.get("_source_end")
+                    if direction == "head"
+                    else edge.get("_source_start")
+                )
+                or 0
+            ),
+        }
+    more = bool(trimmed or has_more)
+    return {
+        "messages": [
+            {key: value for key, value in record.items() if not key.startswith("_source_")}
+            for record in selected
+        ],
+        "next_anchor": boundary if more else None,
+        "has_more": more,
+    }
 
 
 def conversation_is_readable(

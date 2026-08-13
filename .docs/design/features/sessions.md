@@ -16,6 +16,12 @@ and reattachable browser viewports.
 - The daemon starts every new, split, stacked, resumed, or review session at the owning Project's canonical root unless the request names a contained subdirectory or exact Git-listed worktree root of the same repository.
 - Validated OSC 7/runtime cwd is display and Git telemetry only. Navigating elsewhere does
   not change Project membership, layout, note, file browser, defaults, or history ownership.
+- Runtime terminal boundary is explicit: `local`, `remote`, or `unknown`.
+  A non-local OSC 7 authority clears local cwd and Git telemetry and records only the remote
+  authority and transport state.
+  A later validated local OSC 7 directory restores local integration availability.
+  Agent promotion, transcript following, hook cwd, shim assumptions, and inferred delivery
+  targeting are unavailable across a remote boundary; manual PTY input remains available.
 
 ## Operations
 

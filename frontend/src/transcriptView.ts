@@ -22,7 +22,7 @@ export type TranscriptMessage = {
 }
 
 /** Why there is nothing to read. `null` means the transcript loaded. */
-export type TranscriptReason = 'not_agent' | 'no_transcript' | 'unreadable' | null
+export type TranscriptReason = 'not_agent' | 'no_transcript' | 'unreadable' | 'agent_bridge_unavailable' | null
 
 export type SessionTranscript = {
   session_id: string
@@ -235,6 +235,7 @@ export function transcriptConversationText(messages: TranscriptMessage[]): strin
 
 /** The sentence shown in place of a conversation, per daemon-reported reason. */
 export function transcriptEmptyMessage(reason: TranscriptReason, backend?: string): string {
+  if (reason === 'agent_bridge_unavailable') return 'Transcript following is unavailable across this terminal boundary.'
   if (reason === 'not_agent') return backend === 'shell'
     ? 'This is a shell session, so it has no agent conversation to read.'
     : 'This session has no agent conversation to read.'

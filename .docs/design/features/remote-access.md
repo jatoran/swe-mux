@@ -19,6 +19,15 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   loopback fetch/XHR/WebSocket calls between services in one Project are remapped to the
   destination service's registered route, never to the remote device's loopback.
 - `0.0.0.0`, LAN interfaces, port forwarding, and Tailscale Funnel are unsupported.
+- An SSH local forward is supported when its browser-facing address is loopback.
+  For example, `ssh -L 9876:127.0.0.1:8765 workstation` exposes mux at
+  `http://127.0.0.1:9876/` on the SSH client.
+  The local port may differ from the daemon port because loopback Host and Origin authorities
+  remain allowed.
+  Addressing that forward through a LAN hostname or non-loopback address is rejected as
+  `unsupported Host`.
+  This is an authenticated SSH tunnel to the existing loopback listener, not router port
+  forwarding and not Tailscale Funnel.
 - Direct tailnet HTTP remains the supported remote transport and fallback. Browser microphone
   capture requires a secure context, so swe-mux provisions a private Tailscale Serve listener on
   HTTPS 443 (`https://<device>.ts.net/`) that proxies to the loopback port. 443 is required, not
@@ -88,6 +97,8 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 
 - Restrict the Tailscale grant to the owning user/devices and this host. Remove a device
   or revoke its tailnet access immediately when it should no longer control swe-mux.
+- Treat access through `ssh -L` as terminal and code-execution authority on the mux host.
+  The SSH account controls tunnel admission, and swe-mux adds no separate login inside it.
 - Direct tailnet HTTP is encrypted by Tailscale, but browsers may restrict Clipboard API
   operations because the URL is not a browser secure context. OSC-52 copy failures retain the
   prepared text for a one-tap retry/selectable fallback. A browser-delivered paste event can

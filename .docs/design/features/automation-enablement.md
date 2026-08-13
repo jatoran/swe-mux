@@ -27,6 +27,8 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
   `observation_inbox`, `screenshot_to_agent`).
+  `observation_inbox` is a persisted compatibility id whose current label and surface are
+  spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
 - **Enablement DAG**: `requires` edges. Import-time validation rejects cycles, dangling
   deps, and substrate depending on a consumer.
 - **Resolution**: a requested opt-in set → `enabled` (deps satisfied) + `blocked`

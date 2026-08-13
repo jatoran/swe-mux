@@ -113,6 +113,8 @@ separately opt-in.
   It is a modal because it has no send button: the Queue tab is docked so the target terminal stays visible while the operator decides to interrupt, and a view that decides nothing needs no terminal beside it.
   It is reached from the app menu, `queue.fleet`, the Project menu, and the Queue tab's `fleet` control, which carries the fleet-wide pending count.
   It reports install-wide auto-delivery state and owns none of it.
+  It also projects pending and decided `request_spawn` records as targetless approval rows.
+  Approve and dismiss remain explicit human acts; Fleet Queue does not gain general spawn authority and message rows still have no send control.
 - **Built for the drawer's 300 px minimum as well as its viewport-derived maximum.** Rows carry only `Send now` (head) and the arm toggle
   inline; edit, move, cancel/skip, delete, the schedule presets and copy live behind a per-row `⋯`
   that opens a tray under the row rather than a floating menu. Terminal-state items

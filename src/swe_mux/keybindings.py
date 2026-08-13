@@ -40,7 +40,6 @@ KEYBINDING_COMMANDS = (
     ("processes.open", "Inspect session processes and previews", "view"),
     ("processes.project", "Inspect selected project's processes", "view"),
     ("prompts.openProject", "Open prompt library for selected project", "input"),
-    ("observations.open", "Open selected project's observation inbox", "input"),
     ("session.spawnShell", "New terminal in current project", "session"),
     ("session.quickLaunch", "New terminal custom", "session"),
     ("session.open", "Open selected session", "session"),

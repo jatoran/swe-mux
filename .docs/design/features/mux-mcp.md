@@ -4,8 +4,9 @@
 
 A streamable-HTTP MCP endpoint (`POST /mcp`) hosted in the daemon that gives every spawned
 agent session visibility into its own Project — sibling sessions, their live status,
-bounded transcript reads, full-text search over the archived conversation history — plus
-two bounded write tools added in Phase 5. Roadmap Phase 4.5 (reads) and Phase 5
+bounded transcript reads, full-text search over archived conversation history, exact Agent
+Context sources, Project notes, and request outcomes, plus two bounded write tools added in Phase 5.
+Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), and Phase 5
 (`notify`, `request_spawn`) / control-plane build-order step 2.5
 (`CONTROL_PLANE_ROADMAP.md` §7.1–7.5). Registered automatically into every spawned Claude
 and Codex session — no user setup — and reachable by a user-typed `claude`/`codex` inside a
@@ -13,7 +14,7 @@ mux shell session via the agent shims.
 
 **No tool delivers anything.** `notify` stages a message in another session's Phase 4
 queue, where head-of-line order, receiver readiness, and (by default) human arming still
-apply; `request_spawn` writes an inert observation-inbox draft and starts nothing. The v1
+apply; `request_spawn` writes an inert Fleet Queue approval draft and starts nothing. The v1
 memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plane step 8.
 
 ## Key concepts
@@ -35,7 +36,8 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   quarantine predicate.
 - **Return nothing over a weak match (CP §7).** Empty results are fine;
   plausible-but-wrong teaches an agent to stop calling.
-- **Bounded and redacted.** Transcript reads are byte- (512 KiB tail) and message-capped;
+- **Bounded and redacted.** Transcript, Project-note, and Agent Context source reads are capped at 512 KiB.
+  Transcript results are also message-capped and pageable in either direction through run-bound opaque cursors.
   search results carry at most the FTS excerpts `history_page` already bounds. Session
   records go out through an explicit field allowlist (`session_summary`) — never
   `record.snapshot()`, which carries `spawn_env`. Any message or excerpt that trips the
@@ -51,6 +53,10 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   session, a conversation later" — and the second means the agent it is reasoning about
   retains nothing it was previously told. `read_transcript` follows the live run and never
   splices two conversations into one read.
+- **Past self is explicit.** A caller can address its own retired `agent_run_id` after an in-place conversation rollover.
+  Every returned message carries that run id and its persisted `agent_run_seq`, and the result says `own_superseded_run: true` rather than presenting it as current memory.
+- **Cross-Project access remains absent.** Phase 5.6 resolved the grant question by keeping every read own-Project only.
+  There is no implicit widening and no named cross-Project grant in v0.5.
 - **Same-host callers are fully trusted (decided 2026-07-28, re-affirmed for Phase 5 on
   2026-07-29).** The token is identity and read scope, not an authorization boundary. The
   Phase 5 re-examination concluded that a token check on the mutating routes cannot deliver
@@ -68,11 +74,17 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 | Tool | Returns |
 |---|---|
 | `list_sessions` | live sessions in the caller's Project (caller marked `you`), with raw and display names; optionally recently ended agent sessions |
-| `get_session` | status + metadata for one session by id, exact backend name, or exact display name, live or recently ended, including `agent_run_id` + `agent_run_seq` |
-| `read_transcript` | bounded tail of a session's transcript (role, ts, text), addressed by id, backend name, or display name |
+| `get_session` | status + metadata and a run brief (pinned title + opening request) by id, exact backend name, or exact display name; the caller's own row also lists superseded run ids |
+| `read_transcript` | bounded, pageable head or tail of exactly one run; every message names `agent_run_id` + `agent_run_seq`, system/meta is opt-in, and remote/unknown terminal boundaries return explicit unavailability |
 | `search_history` | FTS over the Project's archived Claude/Codex conversations, with raw and display names, keyset-paginated |
+| `memory_sources` | the caller Project's descriptor-driven instruction and provider-memory inventory, including source attribution, capability, revision, modification time, and entrypoint kind |
+| `read_memory` | one bounded inventoried Agent Context source by opaque `source_id`, never by a caller-supplied filesystem path |
+| `project_notes` | read-only inventory of the caller Project's notes, excluding the global Scratchpad and every other Project |
+| `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
+| `message_status` | current outcome of one `notify`, visible only to its attributed sending session |
+| `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
 | `notify` | stages a message in another Project session's queue addressed by id, backend name, or display name; returns the message id, state, and chain depth |
-| `request_spawn` | writes an inert spawn draft into the Project's observation inbox; returns the request id and starts nothing |
+| `request_spawn` | writes an inert spawn approval row into Fleet Queue; returns the request id and starts nothing |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is
@@ -106,6 +118,8 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - Per-session sliding-window rate limit (120 calls/min) with the same sweep pattern as
   `hook_ingress_windows`; 256 KiB request-body cap.
 - `calls`/`denied`/`writes` counters under `mcp` in `GET /api/diagnostics/background`.
+- Read-tool logs contain tool, caller, and Project metadata only.
+  Source contents, prompt text, and SSH credential text are never logged.
 - JSON-RPC methods: `initialize` (protocol 2025-06-18, older versions negotiated),
   `ping`, `tools/list`, `tools/call`; notifications get 202. Batching is rejected.
 
@@ -123,11 +137,11 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 
 - `agent-messaging.md` — what the write tools may do, and every bound behind them.
 - `prompt-queue.md` — where a `notify` lands and how it is delivered.
-- `observations.md` — the inbox `request_spawn` drafts into.
+- `observations.md` - compatibility storage retained after the human Observation Inbox was retired.
 - `delivery-readiness.md` — the operator-input evidence contract this phase also closed.
 - `status-detection.md` — the status contract MCP reads through.
 - `history.md` — the archive `search_history` queries.
 - `../development/CONTROL_PLANE_ROADMAP.md` §7 - the full return-path design: §7.5 for the
-  planned v0.5 situational-awareness reads (`ROADMAP.md` Phase 5.6) and the v1 memory tools
+  v0.5 situational-awareness reads (`ROADMAP.md` Phase 5.6) and the v1 memory tools
   (Phase 7.5), §7.6 for the planned session-control tools and their authority grant
-  (Phase 7.6). None of that is implemented; this document describes what ships today.
+  (Phase 7.6). Phase 5.6 is complete; later semantic-memory and control tools remain planned.

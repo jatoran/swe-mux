@@ -2,8 +2,9 @@
 
 The browser never supplies filesystem paths to this module.  It receives opaque source
 and backup ids from ``inventory`` and can only read or restore those allowlisted shapes.
-The sole ordinary write is an explicit whole-file copy between root ``CLAUDE.md`` and
-``AGENTS.md``, guarded by the revisions returned by ``preview_sync``.
+The sole ordinary write is an explicit whole-file copy between distinct root
+instruction files declared by registered harness descriptors, guarded by the
+revisions returned by ``preview_sync``.
 """
 
 from __future__ import annotations
@@ -24,13 +25,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .harness import descriptor, instruction_harnesses
+from .harness import HARNESSES, descriptor, instruction_harnesses
 
 MAX_SOURCE_BYTES = 512 * 1024
 MAX_MEMORY_ITEMS = 128
 MAX_DIFF_CHARS = 256 * 1024
 MAX_BACKUPS_RETURNED = 20
 MAX_BACKUP_SCAN = 2_000
+
 
 def _project_instruction_sources() -> dict[str, tuple[str, str, tuple[str, ...]]]:
     """Project-root instruction files, one entry per distinct file.
@@ -77,10 +79,30 @@ def _global_instruction_sources() -> dict[str, tuple[str, tuple[str, ...], str]]
 
 INSTRUCTION_SOURCES = _project_instruction_sources()
 GLOBAL_INSTRUCTION_SOURCES = _global_instruction_sources()
-SYNC_DIRECTIONS = {
+LEGACY_SYNC_DIRECTIONS = {
     "claude_to_agents": ("CLAUDE.md", "AGENTS.md"),
     "agents_to_claude": ("AGENTS.md", "CLAUDE.md"),
 }
+
+
+def _sync_direction(source_id: str, target_id: str) -> str:
+    return f"{source_id}->{target_id}"
+
+
+def _sync_options() -> list[dict[str, str]]:
+    sources = list(INSTRUCTION_SOURCES)
+    return [
+        {
+            "direction": _sync_direction(source_id, target_id),
+            "source_id": source_id,
+            "source": INSTRUCTION_SOURCES[source_id][1],
+            "target_id": target_id,
+            "target": INSTRUCTION_SOURCES[target_id][1],
+        }
+        for source_id in sources
+        for target_id in sources
+        if source_id != target_id
+    ]
 
 
 class AgentContextConflict(ValueError):
@@ -197,7 +219,7 @@ class AgentContextService:
 
     def capture_project(self, root: str | Path) -> None:
         project_root = Path(root).resolve()
-        for filename in ("CLAUDE.md", "AGENTS.md"):
+        for _provider, filename, _readers in INSTRUCTION_SOURCES.values():
             self._start_revisions[(str(project_root), filename)] = self._file_revision(
                 project_root / filename
             )
@@ -233,6 +255,7 @@ class AgentContextService:
         item: dict[str, Any] = {
             "id": source_id,
             "provider": provider,
+            "harness": provider,
             # Every harness that reads this file. A project-root instruction file is
             # shared, so naming only the harness the id was minted from would
             # under-report who a change reaches.
@@ -245,6 +268,11 @@ class AgentContextService:
             "revision": "missing",
             "size": 0,
             "modified_at": None,
+            "entrypoint_kind": (
+                "project_root_instructions"
+                if scope == "project"
+                else "global_instructions"
+            ),
         }
         if path.is_symlink():
             item.update(status="unsupported", detail="Symbolic links are not followed.")
@@ -311,7 +339,7 @@ class AgentContextService:
         directory, settings_error = self._claude_memory_directory(root)
         provider: dict[str, Any] = {
             "id": "claude",
-            "label": "Claude",
+            "label": descriptor("claude").display_name,
             "status": "missing",
             "detail": "No learned project memory directory was found.",
             "items": [],
@@ -345,6 +373,7 @@ class AgentContextService:
             item: dict[str, Any] = {
                 "id": source_id,
                 "provider": "claude",
+                "harness": "claude",
                 "kind": "memory",
                 "scope": "project",
                 "label": path.name,
@@ -352,6 +381,8 @@ class AgentContextService:
                 "revealable": False,
                 "size": 0,
                 "modified_at": None,
+                "revision": "missing",
+                "entrypoint_kind": "entrypoint" if path.name.casefold() == "memory.md" else "topic",
             }
             if path.is_symlink():
                 item.update(status="unsupported", detail="Symbolic links are not followed.")
@@ -372,7 +403,11 @@ class AgentContextService:
                         else:
                             data = path.read_bytes()
                             _decode_text(data, label=path.name)
-                            item.update(size=len(data), modified_at=info.st_mtime)
+                            item.update(
+                                size=len(data),
+                                modified_at=info.st_mtime,
+                                revision=_revision(data),
+                            )
                 except (OSError, ValueError) as exc:
                     item.update(status="unreadable", detail=f"Unreadable: {exc}")
             provider["items"].append(item)
@@ -388,7 +423,7 @@ class AgentContextService:
         )
         return provider
 
-    def _codex_provider(self) -> dict[str, Any]:
+    def _codex_provider(self, unsupported_detail: str) -> dict[str, Any]:
         config = self.home / ".codex" / "config.toml"
         enabled = False
         if config.is_file() and not config.is_symlink():
@@ -399,7 +434,7 @@ class AgentContextService:
             except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
                 return {
                     "id": "codex",
-                    "label": "Codex",
+                    "label": descriptor("codex").display_name,
                     "status": "unreadable",
                     "detail": f"Codex memory configuration is unreadable: {exc}",
                     "items": [],
@@ -408,11 +443,10 @@ class AgentContextService:
                 }
         return {
             "id": "codex",
-            "label": "Codex",
+            "label": descriptor("codex").display_name,
             "status": "unsupported" if enabled else "disabled",
             "detail": (
-                "Memory is enabled, but Codex does not expose a stable "
-                "project-memory file inventory."
+                unsupported_detail
                 if enabled
                 else "Codex project memory is disabled or not configured."
             ),
@@ -420,6 +454,25 @@ class AgentContextService:
             "item_count": 0,
             "truncated": False,
         }
+
+    def _memory_provider(self, harness_name: str, root: Path) -> dict[str, Any]:
+        harness = descriptor(harness_name)
+        capability = harness.memory_inventory
+        if capability is None:
+            return {
+                "id": harness_name,
+                "label": harness.display_name,
+                "status": "unsupported",
+                "detail": "This harness declares no stable learned-memory file inventory.",
+                "items": [],
+                "item_count": 0,
+                "truncated": False,
+            }
+        if capability.kind == "claude_project_markdown":
+            return self._claude_provider(root)
+        if capability.kind == "codex_feature_flag":
+            return self._codex_provider(capability.detail)
+        raise AssertionError(f"unhandled memory inventory kind: {capability.kind}")
 
     def inventory(self, project_id: str, project_name: str, root: str | Path) -> dict[str, Any]:
         project_root = Path(root).resolve()
@@ -430,11 +483,11 @@ class AgentContextService:
         if len(available) < 2:
             comparison = "missing"
         else:
-            left = self.read_source(project_root, str(instructions[0]["id"]))["text"]
-            right = self.read_source(project_root, str(instructions[1]["id"]))["text"]
-            comparison = (
-                "in_sync" if _normalized_text(left) == _normalized_text(right) else "different"
-            )
+            normalized = {
+                _normalized_text(self.read_source(project_root, str(item["id"]))["text"])
+                for item in available
+            }
+            comparison = "in_sync" if len(normalized) == 1 else "different"
         return {
             "project": {"id": project_id, "name": project_name},
             "generated_at": time.time(),
@@ -445,7 +498,10 @@ class AgentContextService:
                     for source_id in GLOBAL_INSTRUCTION_SOURCES
                 ]
             },
-            "providers": [self._claude_provider(project_root), self._codex_provider()],
+            "providers": [
+                self._memory_provider(name, project_root) for name in HARNESSES
+            ],
+            "sync_options": _sync_options(),
             "backups": self._backups(project_id),
         }
 
@@ -465,13 +521,19 @@ class AgentContextService:
             filename = path.name
             kind = "instructions"
             scope = "global"
-        elif source_id.startswith("memory:claude:"):
-            filename = _source_filename(source_id.removeprefix("memory:claude:"))
+        elif source_id.startswith("memory:"):
+            parts = source_id.split(":", 2)
+            if len(parts) != 3 or parts[1] not in HARNESSES:
+                raise ValueError("unknown agent context source")
+            provider = parts[1]
+            capability = descriptor(provider).memory_inventory
+            if capability is None or capability.kind != "claude_project_markdown":
+                raise ValueError("unknown agent context source")
+            filename = _source_filename(parts[2])
             directory, settings_error = self._claude_memory_directory(project_root)
             if settings_error:
                 raise ValueError(settings_error)
             path = directory / filename
-            provider = "claude"
             kind = "memory"
             scope = "project"
             label = filename
@@ -502,10 +564,26 @@ class AgentContextService:
         if not path.exists():
             raise ValueError(f"{filename} is missing")
         data = _bounded_bytes(path, label=filename)
+        readers = (
+            list(INSTRUCTION_SOURCES[source_id][2])
+            if source_id in INSTRUCTION_SOURCES
+            else [provider]
+        )
+        entrypoint_kind = (
+            "project_root_instructions"
+            if kind == "instructions" and scope == "project"
+            else "global_instructions"
+            if kind == "instructions"
+            else "entrypoint"
+            if filename.casefold() == "memory.md"
+            else "topic"
+        )
         return {
             "source": {
                 "id": source_id,
                 "provider": provider,
+                "harness": provider,
+                "readers": readers,
                 "kind": kind,
                 "scope": scope,
                 "label": label,
@@ -513,15 +591,22 @@ class AgentContextService:
                 "revision": _revision(data),
                 "size": len(data),
                 "modified_at": path.stat().st_mtime,
+                "entrypoint_kind": entrypoint_kind,
             },
             "text": _decode_text(data, label=filename),
         }
 
     def _sync_paths(self, root: Path, direction: str) -> tuple[Path, Path]:
-        try:
-            source_name, target_name = SYNC_DIRECTIONS[direction]
-        except KeyError as exc:
-            raise ValueError("direction must be claude_to_agents or agents_to_claude") from exc
+        legacy = LEGACY_SYNC_DIRECTIONS.get(direction)
+        if legacy is not None and set(legacy).issubset(set(instruction_filenames())):
+            source_name, target_name = legacy
+            return root / source_name, root / target_name
+        options = {item["direction"]: item for item in _sync_options()}
+        option = options.get(direction)
+        if option is None:
+            raise ValueError("direction must name two declared instruction sources")
+        source_name = option["source"]
+        target_name = option["target"]
         return root / source_name, root / target_name
 
     def _sync_snapshot(self, root: Path, direction: str) -> tuple[Path, Path, bytes, bytes | None]:
@@ -608,7 +693,7 @@ class AgentContextService:
                 if (
                     isinstance(item, dict)
                     and item.get("id") == path.stem
-                    and item.get("target") in {"CLAUDE.md", "AGENTS.md"}
+                    and item.get("target") in set(instruction_filenames())
                 ):
                     manifests.append(item)
             except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
@@ -674,10 +759,9 @@ class AgentContextService:
         if not isinstance(raw, dict):
             raise ValueError("invalid agent context backup")
         manifest: dict[str, Any] = {str(key): value for key, value in raw.items()}
-        if manifest.get("id") != backup_id or manifest.get("target") not in {
-            "CLAUDE.md",
-            "AGENTS.md",
-        }:
+        if manifest.get("id") != backup_id or manifest.get("target") not in set(
+            instruction_filenames()
+        ):
             raise ValueError("invalid agent context backup")
         return manifest
 
@@ -722,4 +806,4 @@ class AgentContextService:
 def instruction_filenames() -> Iterable[str]:
     """Expose the tiny allowlist for focused tests and documentation tooling."""
 
-    return ("CLAUDE.md", "AGENTS.md")
+    return tuple(dict.fromkeys(item[1] for item in INSTRUCTION_SOURCES.values()))

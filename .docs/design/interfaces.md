@@ -208,16 +208,16 @@ GET|PUT /project/config               typed portable Project options
 GET     /projects/{project_id}/observations
 POST    /projects/{project_id}/observations   {body}                append one
 PUT     /projects/{project_id}/observations   {observations, revision}   replace
+POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
 ```
 
-The observation inbox is a project-owned capture list (`.swe-mux/observations.json`, no AI).
-Append is conflict-free; replace (toggle done, delete, reorder) is revision checked and
-returns `409 revision_conflict`. Bounded to 500 items of 2,000 characters. An inbox file
-that exists but cannot be parsed reports `status: "malformed"` and refuses both writes with
-`409 observations_unreadable` — reading it as empty meant the next captured note rewrote the
-file with one item and destroyed the rest. See `features/observations.md`.
+The old observation endpoints and `.swe-mux/observations.json` remain compatibility storage.
+The current frontend has no Observation Inbox command or mounted view.
+Typed `spawn_request` rows are projected into `GET /queue/mailbox` and decided once by a human through the decision route.
+Malformed storage reports `observations_unreadable` and is never rewritten as empty.
+See `features/observations.md`.
 
 The automations routes are the per-project control-plane opt-in surface. `GET` returns the
 registry (id, kind, label, `requires`, `implemented`), the project's `requested` table, and
@@ -296,10 +296,9 @@ POST /projects/{project_id}/agent-context/sync           {direction, source_revi
 POST /projects/{project_id}/agent-context/restore        {backup_id, target_revision}
 ```
 
-`direction` is exactly `claude_to_agents | agents_to_claude`. Inventory returns the two
-Project-root instruction items, their normalized `in_sync | different | missing` comparison,
-`global_instructions.items` for the fixed read-only `~/.claude/CLAUDE.md` and
-`~/.codex/AGENTS.md` sources, provider rows with complete `item_count`, and the newest valid
+`direction` is a descriptor-declared synchronization pair such as `claude_to_agents | agents_to_claude`.
+Inventory returns every harness-declared Project-root instruction item, their normalized `in_sync | different | missing` comparisons,
+descriptor-declared global instruction sources, provider rows with complete `item_count`, and the newest valid
 restore-point manifests. Source/provider status is typed:
 `available | missing | disabled | unsupported | unreadable | too_large`. Claude learned memory
 items and root instructions carry opaque source ids; `revealable` marks an existing regular
@@ -900,6 +899,7 @@ false. Prompt bodies and terminal bytes are never included.
 ```text
 GET /api/diagnostics/status-health
 GET /api/diagnostics/background
+GET /api/diagnostics/notifications[?days=7]
 GET /api/diagnostics/network
 DELETE /api/diagnostics/network
 ```
@@ -950,6 +950,11 @@ response behind it, and no per-subsystem metric reports that. Investigation proc
 This is the surface that makes a poller which died — the
 audited failure mode where a feature silently stops for the rest of the process lifetime —
 visible instead of merely absent.
+
+`diagnostics/notifications` reports append-only notification planner and delivery outcomes over a recent retained window.
+`days` defaults to 7 and must be positive and no greater than the configured operational-telemetry retention.
+The response carries `since`, `until`, `hours`, record and candidate totals, grouped rows under `by_category`, and a `waiting` aggregate with candidate, hold, suppression, settle, delivered push, delivered candidate, failure, and delivered-push-per-10-hour counts.
+Rows are content-free and include no notification body, terminal content, endpoint, preference payload, or credential.
 
 `diagnostics/network` reports a daemon-local measurement window with totals, per-peer HTTP and WebSocket counters, normalized HTTP route templates, named WebSocket channels, and `websocket_sent_payloads[]` rows keyed by `peer`, `channel`, and `kind`.
 Each classified row contains `frames` and `bytes`; PTY kinds are `attach_replay`, `resync_replay`, and `live_output`.
@@ -1170,9 +1175,12 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The Project-scoped tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `notify`, and `request_spawn`.
+The Project-scoped tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `message_status`, `spawn_requests`, `notify`, and `request_spawn`.
 Session results expose the stable id, backend-generated `name`, and UI-equivalent `display_name`; an exact unique display name is accepted wherever a tool targets a session.
-`notify` only stages a queue message and `request_spawn` only creates an inert draft.
+`read_transcript` pages from either end through an opaque cursor bound to one `agent_run_id`, labels every message with run id/sequence, and includes system/meta records only by explicit opt-in.
+`get_session` includes the run's pinned title and opening request, and exposes the caller's own superseded run ids.
+All reads remain own-Project only; v0.5 defines no cross-Project grant.
+`notify` only stages a queue message and `request_spawn` only creates an inert Fleet Queue approval row.
 The full contract is `features/mux-mcp.md`.
 An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.
 

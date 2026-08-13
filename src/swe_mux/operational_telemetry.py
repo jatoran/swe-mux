@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 TELEMETRY_EVENT_LOOP = "operational-telemetry"
 TELEMETRY_RETENTION_LOOP = "telemetry-retention"
 
-TELEMETRY_SCHEMA_VERSION = 5
+TELEMETRY_SCHEMA_VERSION = 6
 TOOL_PARSER_VERSION = "phase2-v1"
 # Parser revisions, keyed by transcript *dialect* rather than by harness.
 #
@@ -341,6 +341,26 @@ CREATE TABLE IF NOT EXISTS transcript_telemetry_coverage (
   reconciled_at REAL NOT NULL,
   diagnostic TEXT
 );
+
+CREATE TABLE IF NOT EXISTS notification_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id TEXT NOT NULL,
+  decided_at REAL NOT NULL,
+  event_ts REAL NOT NULL,
+  event_seq INTEGER NOT NULL DEFAULT 0,
+  session_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  category TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  profile TEXT,
+  plan_verdict TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notification_decisions_time_category
+  ON notification_decisions(decided_at,category);
+CREATE INDEX IF NOT EXISTS idx_notification_decisions_candidate
+  ON notification_decisions(candidate_id,id);
 """
 
 
@@ -2003,6 +2023,134 @@ class OperationalTelemetryStore:
 
         return await self._run(op)
 
+    async def record_notification_decision(
+        self,
+        *,
+        candidate_id: str,
+        event_ts: float,
+        event_seq: int,
+        session_id: str,
+        event_type: str,
+        category: str,
+        stage: str,
+        plan_verdict: str,
+        outcome: str,
+        profile: str | None = None,
+        reason: str | None = None,
+        decided_at: float | None = None,
+    ) -> None:
+        """Append one content-free notification planning or delivery decision."""
+
+        bounded = {
+            "candidate_id": (candidate_id, 64),
+            "session_id": (session_id, 256),
+            "event_type": (event_type, 64),
+            "category": (category, 32),
+            "stage": (stage, 32),
+            "plan_verdict": (plan_verdict, 32),
+            "outcome": (outcome, 32),
+        }
+        for name, (value, limit) in bounded.items():
+            if not value or len(value) > limit:
+                raise ValueError(f"{name} must contain 1-{limit} characters")
+        if profile not in {None, "desktop", "mobile"}:
+            raise ValueError("profile must be desktop, mobile, or null")
+        if reason is not None and (not reason or len(reason) > 64):
+            raise ValueError("reason must contain 1-64 characters when present")
+        recorded_at = time.time() if decided_at is None else decided_at
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO notification_decisions"
+                "(candidate_id,decided_at,event_ts,event_seq,session_id,event_type,category,"
+                "stage,profile,plan_verdict,outcome,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    candidate_id,
+                    recorded_at,
+                    event_ts,
+                    event_seq,
+                    session_id,
+                    event_type,
+                    category,
+                    stage,
+                    profile,
+                    plan_verdict,
+                    outcome,
+                    reason,
+                ),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def notification_decision_summary(
+        self,
+        *,
+        since: float,
+        until: float | None = None,
+    ) -> dict[str, Any]:
+        """Summarize notification candidates and outcomes over a bounded window."""
+
+        end = time.time() if until is None else until
+        if not math.isfinite(since) or not math.isfinite(end) or since >= end:
+            raise ValueError("notification summary requires a finite, increasing time range")
+
+        def op() -> dict[str, Any]:
+            totals = self._db.execute(
+                "SELECT COUNT(*) records,COUNT(DISTINCT candidate_id) candidates "
+                "FROM notification_decisions WHERE decided_at>=? AND decided_at<?",
+                (since, end),
+            ).fetchone()
+            grouped = self._db.execute(
+                "SELECT category,stage,profile,plan_verdict,outcome,reason,COUNT(*) decisions,"
+                "COUNT(DISTINCT candidate_id) candidates FROM notification_decisions "
+                "WHERE decided_at>=? AND decided_at<? "
+                "GROUP BY category,stage,profile,plan_verdict,outcome,reason "
+                "ORDER BY category,stage,profile,plan_verdict,outcome,reason",
+                (since, end),
+            ).fetchall()
+            waiting = self._db.execute(
+                "SELECT "
+                "COUNT(DISTINCT CASE WHEN stage='classification' THEN candidate_id END) candidates,"
+                "COUNT(DISTINCT CASE WHEN stage='classification' AND outcome='held' "
+                "THEN candidate_id END) held,"
+                "COUNT(DISTINCT CASE WHEN stage='classification' AND outcome='suppressed' "
+                "THEN candidate_id END) classification_suppressed,"
+                "COUNT(DISTINCT CASE WHEN stage='settle' AND outcome='cancelled' "
+                "THEN candidate_id END) settle_cancelled,"
+                "COUNT(DISTINCT CASE WHEN stage='settle' AND outcome='survived' "
+                "THEN candidate_id END) settle_survived,"
+                "SUM(CASE WHEN outcome='delivered' THEN 1 ELSE 0 END) delivered,"
+                "COUNT(DISTINCT CASE WHEN outcome='delivered' THEN candidate_id END) "
+                "delivered_candidates,"
+                "SUM(CASE WHEN outcome='failed' THEN 1 ELSE 0 END) failed "
+                "FROM notification_decisions WHERE category='waiting' "
+                "AND decided_at>=? AND decided_at<?",
+                (since, end),
+            ).fetchone()
+            by_category: dict[str, list[dict[str, Any]]] = {}
+            for row in grouped:
+                item = dict(row)
+                category = str(item.pop("category"))
+                by_category.setdefault(category, []).append(item)
+            waiting_summary = dict(waiting)
+            hours = (end - since) / 3600
+            waiting_summary["delivered_per_10_hours"] = round(
+                float(waiting_summary["delivered"]) * 10 / hours, 3
+            )
+            return {
+                "schema_version": 1,
+                "since": since,
+                "until": end,
+                "hours": round(hours, 3),
+                "records": int(totals["records"]),
+                "candidates": int(totals["candidates"]),
+                "by_category": by_category,
+                "waiting": waiting_summary,
+            }
+
+        return await self._run(op)
+
     async def prune(self, *, process_retention_days: int = 30) -> dict[str, int]:
         now = time.time()
         quota_cutoff = now - self.retention_days * 86400
@@ -2060,6 +2208,9 @@ class OperationalTelemetryStore:
             self._db.execute("DELETE FROM context_compactions WHERE observed_at<?", (quota_cutoff,))
             self._db.execute("DELETE FROM quota_reset_events WHERE observed_at<?", (quota_cutoff,))
             self._db.execute("DELETE FROM quota_attributions WHERE interval_end<?", (quota_cutoff,))
+            deleted_notification_decisions = self._db.execute(
+                "DELETE FROM notification_decisions WHERE decided_at<?", (quota_cutoff,)
+            ).rowcount
             rollup_cutoff = time.strftime(
                 "%Y-%m-%d",
                 time.gmtime(now - min(3650, self.retention_days * 10) * 86400),
@@ -2073,7 +2224,11 @@ class OperationalTelemetryStore:
             except sqlite3.OperationalError:
                 pass
             self._db.commit()
-            return {"quota_samples": deleted_samples, "processes": deleted_processes}
+            return {
+                "quota_samples": deleted_samples,
+                "processes": deleted_processes,
+                "notification_decisions": deleted_notification_decisions,
+            }
 
         return await self._run(op)
 

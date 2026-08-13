@@ -122,9 +122,29 @@ export interface FleetQueueTarget {
   project_id: string | null
 }
 
+export interface SpawnRequestRow {
+  id: string
+  project_id: string
+  project_name: string
+  created_at: number
+  done: boolean
+  status: string
+  prompt: string
+  backend: string
+  name: string
+  reason: string
+  from_session: string
+  from_name: string
+  from_run_id: string
+  session_id: string | null
+  decided_by: string | null
+}
+
 export interface FleetQueueView {
   author: FleetQueueAuthor
   messages: QueueMessage[]
+  spawn_requests: SpawnRequestRow[]
+  spawn_request_errors: { project_id: string; error: string }[]
   targets: FleetQueueTarget[]
 }
 
@@ -251,6 +271,16 @@ export const fetchFleetQueue = (
     { timeoutMs: 10_000 },
   )
 }
+
+export const decideSpawnRequest = (
+  projectId: string,
+  requestId: string,
+  decision: 'approve' | 'dismiss',
+) => api<{ session?: { id: string; name: string } }>(
+  'POST',
+  `/api/projects/${encodeURIComponent(projectId)}/observations/${encodeURIComponent(requestId)}/decide`,
+  { decision },
+)
 
 /** `due` | `scheduled` | `expired` — mirrors the daemon's `schedule_status`. */
 export function scheduleStatus(message: QueueMessage, now = Date.now() / 1000): string {

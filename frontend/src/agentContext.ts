@@ -1,12 +1,14 @@
 export type AgentContextStatus = 'available' | 'missing' | 'disabled' | 'unsupported' | 'unreadable' | 'too_large'
 export type AgentContextComparison = 'in_sync' | 'different' | 'missing'
-export type AgentContextDirection = 'claude_to_agents' | 'agents_to_claude'
+export type AgentContextDirection = string
 
 export interface AgentContextSource {
   id: string
   // A harness name from the registry; open because the daemon's inventory
   // decides which harnesses contribute context sources, not this type.
   provider: string
+  harness?: string
+  readers?: string[]
   kind: 'instructions' | 'memory'
   scope: 'project' | 'global'
   label: string
@@ -18,6 +20,7 @@ export interface AgentContextSource {
   modified_at: number | null
   line_ending?: 'lf' | 'crlf'
   changed_since_start?: boolean
+  entrypoint_kind?: 'project_root_instructions' | 'global_instructions' | 'entrypoint' | 'topic'
 }
 
 export const AGENT_CONTEXT_DESKTOP_MENU_QUERY = '(pointer:fine) and (min-width:761px)'
@@ -46,7 +49,7 @@ export interface AgentContextProvider {
 
 export interface AgentContextBackup {
   id: string
-  target: 'CLAUDE.md' | 'AGENTS.md'
+  target: string
   created_at: number
   existed: boolean
   revision: string
@@ -64,7 +67,16 @@ export interface AgentContextInventory {
     items: AgentContextSource[]
   }
   providers: AgentContextProvider[]
+  sync_options: AgentContextSyncOption[]
   backups: AgentContextBackup[]
+}
+
+export interface AgentContextSyncOption {
+  direction: AgentContextDirection
+  source_id: string
+  source: string
+  target_id: string
+  target: string
 }
 
 export interface AgentContextRead {
@@ -80,15 +92,6 @@ export interface AgentContextSyncPreview {
   diff: string
   diff_truncated: boolean
 }
-
-export const AGENT_CONTEXT_SYNC_OPTIONS: Array<{
-  direction: AgentContextDirection
-  source: 'CLAUDE.md' | 'AGENTS.md'
-  target: 'CLAUDE.md' | 'AGENTS.md'
-}> = [
-  { direction: 'claude_to_agents', source: 'CLAUDE.md', target: 'AGENTS.md' },
-  { direction: 'agents_to_claude', source: 'AGENTS.md', target: 'CLAUDE.md' },
-]
 
 export function comparisonLabel(value: AgentContextComparison): string {
   if (value === 'in_sync') return 'In sync'

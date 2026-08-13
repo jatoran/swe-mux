@@ -516,7 +516,6 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
         "history.openProject",
         "processes.project",
         "prompts.openProject",
-        "observations.open",
         "project.settings",
     ):
         assert scoped not in main_menu

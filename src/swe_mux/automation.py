@@ -278,6 +278,12 @@ EVENT_PAYLOAD_FIELDS: dict[str, set[str]] = {
     "queue_auto_policy": {"enabled", "reason"},
     "queue_message_received": {"message_id", "sender_kind", "from_session", "chain_depth"},
     "spawn_request_drafted": {"request_id", "project_id", "from_session"},
+    "spawn_request_decided": {
+        "request_id",
+        "project_id",
+        "decision",
+        "spawned_session_id",
+    },
     "capability_degraded": {"capability", "reason", "minimum"},
     "annotation_created": {"annotation_id", "tag", "rule_id"},
     "notification_created": {"notification_id", "kind"},

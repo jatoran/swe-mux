@@ -3,13 +3,13 @@
 ## What it is
 
 Bounded messaging *between sessions that already exist*, plus a way for an agent to ask a
-human to create one. Roadmap Phase 5; `CONTROL_PLANE_ROADMAP.md` §7.2. Three surfaces over
-one message store:
+human to create one. Roadmap Phase 5; `CONTROL_PLANE_ROADMAP.md` §7.2. Fleet Queue is the
+one human review surface for both kinds of request:
 
 - `mux.notify(target, body)` — an agent stages a message in a sibling session's prompt
   queue. A caller over `PromptQueueService.enqueue`, never a second delivery path.
-- `mux.requestSpawn(prompt, …)` — an agent writes an **inert draft** into the Project's
-  observation inbox. It starts nothing; a human approving it is what spawns the session.
+- `mux.request_spawn(prompt, …)` - an agent writes an **inert draft** that appears in Fleet Queue.
+  It starts nothing; a human approving it is what spawns the session.
 - The **fleet queue** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, and revocation.
   It reviews; it does not deliver and does not carry the auto-delivery brakes.
 
@@ -64,6 +64,10 @@ session outside its Project, and cannot claim to be anyone else.
   with the prompt as `seed_text`; dismissing marks it decided. A request can only be decided
   once. An agent holding real spawn authority turns one prompt injection into unbounded
   fan-out — that is the failure mode a queue purge cannot undo.
+- **Write status is readable by the attributed caller.** `message_status(message_id)` exposes
+  drafted, armed, delivered, stranded, expired, or refused outcomes only when the MCP token
+  owns the message's `sender_id`.
+  `spawn_requests()` similarly returns only requests whose `from_session` is the caller.
 
 ## The same-host boundary (decided 2026-07-28, re-affirmed 2026-07-29)
 
@@ -98,12 +102,14 @@ reasoning recorded so it is not rediscovered:
   It partitions by author (`all | non_human | human`), not message direction, because the operator observes messages sent between agents rather than being every message's recipient.
   It opens on `non_human`: the rows the operator wrote are the ones they already know about.
   Project and target-session filters are applied by the daemon before the result limit.
-  Rows show sender and target labels, delivery state, per-item revoke, and an "Open queue" transition to the target's session-scoped Queue.
+  Message rows show sender and target labels, delivery state, per-item revoke, and an "Open queue" transition to the target's session-scoped Queue.
+  Spawn rows name no target session, show requesting-session provenance and the proposed prompt, and expose the explicit once-only approve or dismiss act.
   It reports install-wide auto-delivery state and the proving-period counters, and owns neither: the brakes are on the Queue tab and `autodelivery.pause` (`auto-delivery.md`).
   It is not a transcript and shows only delivery state and provenance.
 - **Queue rows** show `from <sender>` and the hop number for relayed messages.
-- **Observation inbox** renders `spawn_request` items with the prompt, the requesting
-  session, and `approve & start session` / `dismiss`.
+- **Project notes and Scratchpad replace human observation capture.**
+  The retired Observation Inbox is not a command or mounted view.
+  Its JSON file remains compatibility storage for typed spawn requests.
 
 ## API surface
 
@@ -114,6 +120,8 @@ POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
 MCP  notify(target, body, reason?, correlation_id?)
 MCP  request_spawn(prompt, backend?, name?, reason?)
+MCP  message_status(message_id)
+MCP  spawn_requests()
 ```
 
 ## Configuration
@@ -135,7 +143,6 @@ state that has to be flippable instantly and per session.
 - `src/swe_mux/server.py` — `queue_mailbox` route, spawn-request decision handler.
 - `frontend/src/FleetQueue.tsx` - the modal: authorship and target filters, provenance rows, revocation.
 - `frontend/src/QueuePane.tsx` - the target session's ordered queue reached by "Open queue", and the control that opens the fleet queue.
-- `frontend/src/Observations.tsx` - drafted spawn requests.
 - `frontend/src/queueApi.ts` - typed fleet-queue query and response.
 - Tests: `tests/test_agent_messaging.py`, `tests/test_mcp.py`,
   `tests/test_frontend_phase5_contract.py`.
@@ -145,5 +152,5 @@ state that has to be flippable instantly and per session.
 - `mux-mcp.md` — the transport and caller identity.
 - `prompt-queue.md` — the message model and delivery contract.
 - `auto-delivery.md` — the receiver-side machinery that may deliver an armed message.
-- `observations.md` — the inbox spawn requests draft into.
+- `observations.md` - compatibility storage after the human inbox surface was retired.
 - `../development/CONTROL_PLANE_ROADMAP.md` §7.1–7.2, §16.

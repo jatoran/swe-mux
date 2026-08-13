@@ -2,30 +2,30 @@
 
 ## Purpose
 
-Agent Context is the Project-selected, read-only view of Project/global instruction files and
-learned-memory files that Claude Code or Codex may carry between conversations. It makes
+Agent Context is the Project-selected, read-only view of descriptor-declared Project/global
+instruction files and learned-memory files that a registered harness may carry between conversations. It makes
 otherwise hidden provider state inspectable before switching agents. It does not inject context
 into a session, infer what an already-running process loaded, or create a second memory authority.
 
-The only ordinary mutation in the feature is a user-triggered whole-file copy between the two
-root instruction files. There is no automatic, watched, scheduled, or startup sync.
+The only ordinary mutation in the feature is a user-triggered whole-file copy between two
+distinct descriptor-declared Project-root instruction files. There is no automatic, watched,
+scheduled, or startup sync.
 
 ## Surface
 
 The utility drawer's **Context** tab is titled **Instructions & Memory** in its body and follows Notes in
 the project-scoped block. It contains:
 
-- an initially expanded **Project instructions** disclosure for Project-root `CLAUDE.md` and
-  `AGENTS.md`, including typed availability, byte size, modification time, line-ending style,
+- an initially expanded **Project instructions** disclosure for every distinct Project-root
+  instruction file declared by a registered harness, including the declaring harnesses, typed
+  availability, entrypoint kind, byte size, modification time, line-ending style,
   and whether each revision changed since this daemon run began;
-- an initially collapsed **Global instructions** disclosure for fixed
-  `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, with the same read-only metadata;
+- an initially collapsed **Global instructions** disclosure for the corresponding
+  descriptor-declared global files, with the same read-only metadata;
 - an `in_sync | different | missing` comparison after normalizing CRLF/CR to LF;
 - one initially collapsed **Memories** disclosure whose badge counts the complete provider
-  inventory; expanding it shows Claude's learned `MEMORY.md` and Markdown topic files plus
-  provider status, using the same high-contrast file rows as the instruction disclosures;
-- an explicit Codex state (`disabled`, `unsupported`, or `unreadable`) rather than an empty list
-  that implies no memory exists;
+  inventory; expanding it shows each harness's declared memory provider and explicit capability
+  state, with harness and entrypoint attribution on each available source, using the same high-contrast file rows as the instruction disclosures;
 - a read-only preformatted viewer and manual rescan; one `sync…` button opens a focus-trapped
   modal containing both copy directions, diff confirmation, and recent restore points.
 
@@ -39,10 +39,13 @@ inventory.
 
 ## Source discovery
 
-Only four instruction sources are recognized: `<Project>/CLAUDE.md`, `<Project>/AGENTS.md`,
-`~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md`. Nested instruction files are outside the
-contract. Global files are inspectable only; manual synchronization remains between the two
-Project-root files.
+Instruction discovery comes from the harness registry.
+Harnesses may declare a Project-root instruction filename, a corresponding global instruction
+path, both, or neither.
+Harnesses that share a filename share one inventory row with every reader attributed.
+Nested instruction files are outside the contract.
+Global files are inspectable only; manual synchronization is offered only between distinct
+declared Project-root files.
 
 Claude learned memory comes from `~/.claude/settings.json:autoMemoryDirectory` when explicitly
 configured. Otherwise the daemon derives Claude's project directory under
@@ -51,31 +54,31 @@ primary checkout obtained from `git rev-parse --git-common-dir`, so sibling work
 same provider memory. Outside Git it uses the registered Project root. Only direct `.md` children
 are listed, with `MEMORY.md` first.
 
-Codex is intentionally conservative. The daemon reads only `[features].memories` from
+Codex is intentionally conservative. Its descriptor tells the daemon to read only `[features].memories` from
 `~/.codex/config.toml`. When enabled it reports `unsupported`: Codex currently exposes no stable,
 documented project-memory file inventory. swe-mux does not reverse-engineer or read its private
 SQLite memory store. When the flag is absent/false it reports `disabled`; malformed config is
 `unreadable`.
 
-Provider paths never cross the HTTP boundary. The two global rows use fixed `~/…` display labels,
+Harness descriptors that declare no stable memory inventory return an explicit `unsupported`
+provider result rather than inheriting another harness's source or appearing empty.
+
+Provider paths never cross the HTTP boundary. Global rows use stable `~/...` display labels,
 not resolved host paths. Browser reads address opaque source IDs that the daemon maps back through
-the fixed instruction allowlist or the freshly validated Claude memory filename shape. Source
+the descriptor-derived instruction allowlist or the freshly validated Claude memory filename shape. Source
 reads are UTF-8, regular-file only, reject symlinks, and cap each file at 512 KiB. An inventory
 contains at most 128 Claude memory rows while retaining the complete count. Blocking Git and
 filesystem work runs off the aiohttp event loop.
 
-Reveal also accepts only an opaque source ID. The daemon re-resolves the fixed instruction or
+Reveal also accepts only an opaque source ID. The daemon re-resolves the declared instruction or
 validated memory source, requires an existing non-symlink regular file, then delegates to the
 shared OS file-manager launcher. Resolved host paths still never cross HTTP.
 
 ## Manual instruction sync
 
-The two allowed directions are:
-
-```text
-CLAUDE.md → AGENTS.md
-AGENTS.md → CLAUDE.md
-```
+The daemon returns the currently allowed source-to-target directions in each inventory.
+Each direction is between two distinct descriptor-declared Project-root instruction files.
+The UI does not own a fixed filename matrix.
 
 The source must exist and be readable. The destination may be missing, in which case it is
 created. A first click asks the daemon for a bounded unified diff and the SHA-256 revisions of
@@ -110,11 +113,11 @@ can manually rescan; no filesystem watcher is kept alive for hidden provider dir
 - no editing of instructions or learned memory in the drawer;
 - no provider-memory writes, deletion, migration, or merge;
 - no claim that a running agent has loaded a newly changed file;
-- no MCP exposure in this wave.
+- no semantic search or bulk prompt injection through the MCP bridge.
 
-The planned MCP bridge may later expose the same project-scoped inventory/read contract so agents
-can inspect all providers' memories. It must remain read-only and must not silently inject, copy,
-or synchronize provider state.
+The MCP `memory_sources` and `read_memory` tools expose the same Project-scoped inventory/read
+contract so agents can inspect available provider sources.
+They remain read-only and never silently inject, copy, or synchronize provider state.
 
 ## Code map
 

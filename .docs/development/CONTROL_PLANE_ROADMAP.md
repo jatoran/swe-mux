@@ -1104,39 +1104,39 @@ another agent can pick up mid-plan. Section links point to the design detail.
     before Phase 5 reads them.
   - [x] **§7.2 write tools shipped 2026-07-29** with `ROADMAP.md` Phase 5: `notify` (a thin
     caller over the queue's typed enqueue — every bound lives in `agent_messaging.py`, not
-    in the tool) and `request_spawn` (an inert observation-inbox draft; approval is a human
+    in the tool) and `request_spawn` (an inert Fleet Queue approval row; approval is a human
     act and is what spawns). One audit trail with the browser path; sender derived from the
     token. Design: `design/features/agent-messaging.md`. The same-host boundary was
     re-examined and re-affirmed with its limits written down (§7.4).
-- [ ] **2.6 · mux MCP v0.5: situational-awareness reads** (§7.5). Scheduled as `ROADMAP.md`
+- [x] **2.6 · mux MCP v0.5: situational-awareness reads** (§7.5). Shipped as `ROADMAP.md`
   Phase 5.6. Tool-surface work only: every item is a read over a service that already
   shipped, so it adds no substrate and no authority. Needs step 3.5's run boundary.
-  - [ ] `read_transcript` reads from **either end** with an opaque cursor, so an agent can read
+  - [x] `read_transcript` reads from **either end** with an opaque cursor, so an agent can read
     the *beginning* of a conversation. The opening request is what identifies a run's work
     (the finding that killed §6.11), and it is currently unreachable on any session long enough
     to matter. Paging stays inside one `agent_run_id`; system/meta records are excluded by
     default with an explicit opt-in; caps and credential redaction are unchanged.
-  - [ ] A caller may read **its own superseded runs**. After a `/clear` the agent retains
+  - [x] A caller may read **its own superseded runs**. After a `/clear` the agent retains
     nothing its predecessor did and the daemon has all of it. Every message names its
     `agent_run_id`/`agent_run_seq`, and a result from the caller's own earlier run is labelled
     rather than blended into the present: §7's attribution rule applied where it matters most.
-  - [ ] Run brief on `get_session`: the run's pinned title and opening request, so "what is
+  - [x] Run brief on `get_session`: the run's pinned title and opening request, so "what is
     that session working on" costs one small call instead of a paged transcript read.
-  - [ ] `message_status(id)` closes the `notify` loop for the sender, and the Project's **notes**
+  - [x] `message_status(id)` closes the `notify` loop for the sender, and the Project's **notes**
     become readable, which is the human-to-agent channel with no new trust boundary. Retargeted
     2026-08-10 from the observation inbox to notes, because notes are where humans actually
     write: Project-scoped, searchable, editable, already carrying "send to agent".
-  - [ ] **Consolidate the observation inbox out of existence.** It exists because `requestSpawn`
+  - [x] **Consolidate the observation inbox out of existence.** It exists because `requestSpawn`
     needed somewhere inert to land, and note capture was retrofitted onto it, leaving a third
     surface to monitor beside the per-session queue and the fleet queue that notifies nothing.
     Pending spawn drafts move into the fleet queue as an approval row, so one place holds
     everything an agent wants from a human; a spawn request naming no target session is a
     grouping problem in a view that already renders sender provenance, not a second surface.
     Approval stays an explicit once-only human act over the unchanged `seed_text` spawn path.
-  - [ ] `memory_sources()` and `read_memory(source_id)` over the Phase 6 Agent Context
+  - [x] `memory_sources()` and `read_memory(source_id)` over the Phase 6 Agent Context
     inventory, pulled forward from step 8 (2026-08-10) because they are thin callers over a
-    shipped read and do not need this step's semantic substrate. Blocked on Agent Context
-    becoming harness-declared rather than a claude/codex special case. Raw memory stays
+    shipped read and do not need this step's semantic substrate. Agent Context is now
+    harness-declared rather than a claude/codex special case. Raw memory stays
     unverified, pull-only, Project-scoped, and attributed; never bulk-injected, written by MCP,
     or copied into another harness's private store.
   - **Dropped 2026-08-10: `project_card()` and the bounded ground-truth Git read.** A tool earns
@@ -1147,9 +1147,10 @@ another agent can pick up mid-plan. Section links point to the design detail.
     hold. The project card remains an internal operation with its own consumers. Reopen
     `project_card()` only with evidence that a distilled card answers something the repository
     itself does not.
-  - [ ] Decide the cross-Project read question (§18) explicitly. Default stays own-Project;
+  - [x] Decide the cross-Project read question (§18) explicitly. Default stays own-Project;
     "what else am I working on right now" is inherently cross-Project and needs a named grant
     if it is ever answered, not a quiet scope widening.
+    Decision 2026-08-12: v0.5 ships no cross-Project grant.
 - [x] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
   Design: `design/features/deterministic-consumers.md`.
   - [x] Annotation anchor + evidence schema: `automation_annotations.agent_run_id` is now
@@ -1175,7 +1176,7 @@ another agent can pick up mid-plan. Section links point to the design detail.
     Calibrated live 2026-07-28: one annotation per edge with a per-edge dedupe key
     (writer_fact > reader_fact) — the original set-hash key restated the whole growing
     graph every evaluation (quadratic storage, edges double-counted by ranking).
-- [ ] **3.5 · Run boundary contract** — `ROADMAP.md` Phase 5.4, not a control-plane step of
+- [x] **3.5 · Run boundary contract** - `ROADMAP.md` Phase 5.4, not a control-plane step of
   its own but a hard prerequisite for everything below it. An in-CLI `/clear` or `/new`
   becomes a new `agent_run_id` (`agent_conversation_rolled` on the event log) instead of a
   silent conversation swap under a live run. Steps 4–8 inherit their boundary from it and

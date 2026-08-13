@@ -16,6 +16,8 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux.agent_context import AgentContextService
+from swe_mux.git_projects import ProjectIdentity
 from swe_mux.mcp import (
     TOOLS,
     TRANSCRIPT_MAX_MESSAGES,
@@ -23,6 +25,7 @@ from swe_mux.mcp import (
     McpService,
     session_summary,
 )
+from swe_mux.project_files import create_note, write_note
 
 
 def record(
@@ -80,16 +83,27 @@ class HistoryStub:
     async def history_entry(self, session_id: str) -> dict[str, Any] | None:
         return next((row for row in self.rows if row.get("id") == session_id), None)
 
+    async def agent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        return [row for row in self.rows if row.get("note_id") == session_id]
+
 
 class AutomationStoreStub:
-    def __init__(self, titles: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        titles: dict[str, str] | None = None,
+        checkpoints: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.titles = titles or {}
+        self.checkpoints = checkpoints or {}
 
     async def annotations(self, **_kwargs: Any) -> list[dict[str, Any]]:
         return [
             {"agent_run_id": run_id, "content": title}
             for run_id, title in self.titles.items()
         ]
+
+    async def checkpoint(self, key: str) -> dict[str, Any] | None:
+        return self.checkpoints.get(key)
 
 
 class MessagingStub:
@@ -119,13 +133,18 @@ def service_for(
     *sessions: Any,
     history: HistoryStub | None = None,
     titles: dict[str, str] | None = None,
+    automation_store: Any = None,
     messaging: Any = None,
+    agent_context: Any = None,
+    projects: Any = None,
 ) -> McpService:
     return McpService(
         manager_for(*sessions),
         history or HistoryStub(),
         messaging=messaging,
-        automation_store=AutomationStoreStub(titles),
+        automation_store=automation_store or AutomationStoreStub(titles),
+        agent_context=agent_context,
+        projects=projects,
     )
 
 
@@ -350,6 +369,148 @@ async def test_read_transcript_accepts_the_display_name(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_transcript_pages_from_both_ends_and_binds_cursor_to_run(
+    tmp_path: Path,
+) -> None:
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps({"type": "user", "message": {"content": f"message {index}"}})
+            for index in range(6)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok", transcript=transcript)
+    other = live_session("s2", transcript=transcript)
+    service = service_for(caller, other)
+
+    head = await service.read_transcript(
+        caller, {"session_id": "s1", "from": "head", "max_messages": 2}
+    )
+    head_next = await service.read_transcript(
+        caller,
+        {"session_id": "s1", "cursor": head["next_cursor"], "max_messages": 2},
+    )
+    tail = await service.read_transcript(
+        caller, {"session_id": "s1", "from": "tail", "max_messages": 2}
+    )
+
+    assert [item["text"] for item in head["messages"]] == ["message 0", "message 1"]
+    assert [item["text"] for item in head_next["messages"]] == ["message 2", "message 3"]
+    assert [item["text"] for item in tail["messages"]] == ["message 4", "message 5"]
+    assert {item["agent_run_id"] for item in head["messages"]} == {"s1"}
+    with pytest.raises(ValueError, match="different agent run"):
+        await service.read_transcript(
+            caller, {"session_id": "s2", "cursor": head["next_cursor"]}
+        )
+
+
+@pytest.mark.asyncio
+async def test_read_transcript_system_records_require_explicit_opt_in(tmp_path: Path) -> None:
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "isMeta": True,
+                        "message": {
+                            "content": "<system-reminder>internal context</system-reminder>"
+                        },
+                    }
+                ),
+                json.dumps({"type": "user", "message": {"content": "real request"}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok", transcript=transcript)
+    service = service_for(caller)
+
+    ordinary = await service.read_transcript(caller, {"session_id": "s1", "from": "head"})
+    explicit = await service.read_transcript(
+        caller,
+        {"session_id": "s1", "from": "head", "include_system": True},
+    )
+
+    assert [item["text"] for item in ordinary["messages"]] == ["real request"]
+    assert [item["role"] for item in explicit["messages"]] == ["meta", "user"]
+
+
+@pytest.mark.asyncio
+async def test_get_session_includes_run_brief_and_own_superseded_runs(tmp_path: Path) -> None:
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "user", "message": {"content": "opening request"}}) + "\n",
+        encoding="utf-8",
+    )
+    caller = live_session("s1", token="tok", transcript=transcript)
+    caller.record.agent_run_id = "run-current"
+    caller.record.agent_run_seq = 1
+    history = HistoryStub(
+        [
+            {
+                "id": "run-old",
+                "note_id": "s1",
+                "agent_run_seq": 0,
+                "name": "claude-s1",
+                "backend": "claude",
+                "project_id": "p1",
+                "project_scope_id": "scope-1",
+                "agent_visible": 1,
+            },
+            {
+                "id": "run-current",
+                "note_id": "s1",
+                "agent_run_seq": 1,
+                "name": "claude-s1",
+                "backend": "claude",
+                "project_id": "p1",
+                "project_scope_id": "scope-1",
+                "agent_visible": 1,
+            },
+        ]
+    )
+    service = service_for(caller, history=history, titles={"run-current": "Pinned work"})
+
+    result = await service.get_session(caller, {"session_id": "s1"})
+
+    assert result["run_brief"]["pinned_title"] == "Pinned work"
+    assert result["run_brief"]["opening_request"] == "opening request"
+    assert result["superseded_runs"][0]["agent_run_id"] == "run-old"
+    assert result["superseded_runs"][0]["agent_run_seq"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_ended_session_uses_persisted_opening_request() -> None:
+    caller = live_session("s1", token="tok")
+    row = {
+        "id": "run-old",
+        "agent_run_id": "run-old",
+        "name": "claude-old",
+        "backend": "claude",
+        "project_id": "p1",
+        "project_scope_id": "scope-1",
+        "agent_visible": 1,
+    }
+    store = AutomationStoreStub(
+        checkpoints={"run-prompt:run-old": {"text": "persisted opening request"}}
+    )
+    service = service_for(
+        caller,
+        history=HistoryStub([row]),
+        automation_store=store,
+    )
+
+    result = await service.get_session(caller, {"session_id": "run-old"})
+
+    assert result["run_brief"]["opening_request"] == "persisted opening request"
+
+
+@pytest.mark.asyncio
 async def test_read_transcript_reports_absence_instead_of_fabricating(
     tmp_path: Path,
 ) -> None:
@@ -360,11 +521,132 @@ async def test_read_transcript_reports_absence_instead_of_fabricating(
     assert "no transcript" in result["note"]
 
 
+@pytest.mark.asyncio
+async def test_read_transcript_refuses_a_stale_local_source_across_remote_boundary(
+    tmp_path: Path,
+) -> None:
+    caller = live_session("s1", token="tok", transcript=tmp_path / "local.jsonl")
+    caller.record.runtime_boundary = "remote"
+    service = service_for(caller)
+
+    result = await service.read_transcript(caller, {"session_id": "s1"})
+
+    assert result["messages"] == []
+    assert result["capability"] == "agent-bridge-unavailable"
+    assert result["reason"] == "remote_terminal_boundary"
+    assert result["agent_run_id"] == "s1"
+    assert result["agent_run_seq"] == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_tools_share_the_project_agent_context_inventory(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    home = tmp_path / "home"
+    memory = home / "memory"
+    root.mkdir()
+    memory.mkdir(parents=True)
+    (root / "AGENTS.md").write_text("project rules\n", encoding="utf-8")
+    (memory / "MEMORY.md").write_text("learned fact\n", encoding="utf-8")
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text(
+        '{"autoMemoryDirectory": "~/memory"}', encoding="utf-8"
+    )
+    context = AgentContextService(tmp_path / "backups", home=home)
+    project = SimpleNamespace(id="p1", name="Work", root=str(root))
+    projects = SimpleNamespace(projects={project.id: project})
+    caller = live_session("s1", token="tok")
+    service = service_for(
+        caller,
+        agent_context=context,
+        projects=projects,
+    )
+
+    inventory = await service.memory_sources(caller, {})
+    by_label = {item["label"]: item for item in inventory["sources"]}
+    assert by_label["AGENTS.md"]["readers"] == ["codex", "omp", "pi", "opencode"]
+    assert by_label["AGENTS.md"]["harness"] == "codex"
+    assert by_label["AGENTS.md"]["entrypoint_kind"] == "project_root_instructions"
+    assert by_label["MEMORY.md"]["harness"] == "claude"
+    assert by_label["MEMORY.md"]["entrypoint_kind"] == "entrypoint"
+    providers = {item["id"]: item for item in inventory["providers"]}
+    assert providers["claude"]["status"] == "available"
+    assert providers["pi"]["status"] == "unsupported"
+
+    read = await service.read_memory(
+        caller, {"source_id": by_label["MEMORY.md"]["id"]}
+    )
+    assert read["text"].replace("\r\n", "\n") == "learned fact\n"
+    assert read["source"]["revision"] == by_label["MEMORY.md"]["revision"]
+    assert read["source"]["harness"] == "claude"
+    assert read["source"]["entrypoint_kind"] == "entrypoint"
+    assert read["redacted"] is False
+    with pytest.raises(ValueError, match="unknown agent context source"):
+        await service.read_memory(caller, {"source_id": "memory:claude:.."})
+
+
+@pytest.mark.asyncio
+async def test_read_memory_withholds_credential_shaped_content(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "AGENTS.md").write_text(
+        "api_key = sk-live-abcdef1234567890\n", encoding="utf-8"
+    )
+    context = AgentContextService(tmp_path / "backups", home=tmp_path / "home")
+    project = SimpleNamespace(id="p1", name="Work", root=str(root))
+    caller = live_session("s1", token="tok")
+    service = service_for(
+        caller,
+        agent_context=context,
+        projects=SimpleNamespace(projects={project.id: project}),
+    )
+
+    read = await service.read_memory(caller, {"source_id": "instruction:codex"})
+    assert read["redacted"] is True
+    assert "sk-live" not in read["text"]
+
+
+@pytest.mark.asyncio
+async def test_project_notes_are_bounded_read_only_and_project_scoped(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    other_root = tmp_path / "other"
+    root.mkdir()
+    other_root.mkdir()
+    identity = ProjectIdentity("p1", "Work", str(root), "registered")
+    created = await create_note(root, "Release checks", project=identity)
+    await write_note(
+        root,
+        created["id"],
+        "All manual checks passed.\n",
+        created["revision"],
+        title="Release checks",
+        project=identity,
+    )
+    project = SimpleNamespace(id="p1", name="Work", root=str(root))
+    foreign = SimpleNamespace(id="p2", name="Other", root=str(other_root))
+    caller = live_session("s1", token="tok")
+    service = service_for(
+        caller,
+        projects=SimpleNamespace(projects={"p1": project, "p2": foreign}),
+    )
+
+    inventory = await service.project_notes(caller, {})
+    note = await service.read_project_note(
+        caller, {"note_id": inventory["notes"][0]["note_id"]}
+    )
+
+    assert inventory["project"] == {"id": "p1", "name": "Work"}
+    assert note["markdown"] == "All manual checks passed.\n"
+    assert "path" not in json.dumps(note)
+    assert not (other_root / ".swe-mux").exists()
+
+
 # ------------------------------------------------------------------ protocol
 
 
 @pytest.mark.asyncio
-async def test_initialize_negotiates_and_lists_only_read_tools() -> None:
+async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
     caller = live_session("s1", token="tok")
     service = service_for(caller)
     init = await service.handle_rpc(
@@ -395,7 +677,8 @@ async def test_initialize_negotiates_and_lists_only_read_tools() -> None:
     )
     assert listing is not None
     names = {tool["name"] for tool in listing["result"]["tools"]}
-    # A closed allowlist: four read tools plus the two bounded Phase 5 writes,
+    # A closed allowlist: Phase 5.6 adds only situational-awareness reads to the
+    # two bounded Phase 5 writes,
     # neither of which delivers or spawns anything by itself. A new tool must
     # be added here deliberately.
     assert names == {
@@ -403,6 +686,12 @@ async def test_initialize_negotiates_and_lists_only_read_tools() -> None:
         "get_session",
         "read_transcript",
         "search_history",
+        "memory_sources",
+        "read_memory",
+        "message_status",
+        "project_notes",
+        "read_project_note",
+        "spawn_requests",
         "notify",
         "request_spawn",
     }

@@ -145,6 +145,14 @@ class _Recorder:
         self.sent.append({"endpoint": subscription_info["endpoint"], "data": data})
 
 
+class _DecisionRecorder:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, object]] = []
+
+    async def record_notification_decision(self, **decision: object) -> None:
+        self.rows.append(decision)
+
+
 @pytest.fixture
 def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     rec = _Recorder()
@@ -153,7 +161,13 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 
 
 async def _make_sender(
-    tmp_path: Path, clock, *, profile: str = "mobile", presence=None, sleep=None
+    tmp_path: Path,
+    clock,
+    *,
+    profile: str = "mobile",
+    presence=None,
+    sleep=None,
+    decision_store=None,
 ):
     store = PushStore(tmp_path, clock=clock)
     store.add({"endpoint": "https://push/e1", "keys": {"p256dh": "p", "auth": "a"}}, profile)
@@ -166,6 +180,7 @@ async def _make_sender(
         EventBus(),
         clock=clock,
         presence=presence,
+        decision_store=decision_store,
         **({"sleep": sleep} if sleep else {}),
     )
     return store, settings, sender
@@ -176,6 +191,44 @@ async def test_sender_delivers_enabled_category(tmp_path: Path, recorder: _Recor
     _store, _settings, sender = await _make_sender(tmp_path, lambda: now[0])
     await sender._handle(_event("approval_needed"))  # attention on by default
     assert len(recorder.sent) == 1
+
+
+async def test_sender_records_classification_route_and_delivery_outcome(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    now = [100.0]
+    decisions = _DecisionRecorder()
+    _store, _settings, sender = await _make_sender(
+        tmp_path, lambda: now[0], decision_store=decisions
+    )
+    await sender._handle(_event("approval_needed"))
+    assert [
+        (row["stage"], row["plan_verdict"], row["outcome"])
+        for row in decisions.rows
+    ] == [
+        ("classification", "route", "eligible"),
+        ("delivery", "send", "delivered"),
+    ]
+    assert {row["candidate_id"] for row in decisions.rows} == {
+        decisions.rows[0]["candidate_id"]
+    }
+    assert decisions.rows[-1]["profile"] == "mobile"
+
+
+async def test_sender_records_classifier_suppression_without_notification_content(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    decisions = _DecisionRecorder()
+    _store, _settings, sender = await _make_sender(
+        tmp_path, lambda: 100.0, decision_store=decisions
+    )
+    await sender._handle(_ready(standing=["subagents"]))
+    assert recorder.sent == []
+    assert len(decisions.rows) == 1
+    assert decisions.rows[0]["category"] == "waiting"
+    assert decisions.rows[0]["outcome"] == "suppressed"
+    assert decisions.rows[0]["reason"] == "running_work"
+    assert "body" not in decisions.rows[0]
 
 
 async def test_sender_skips_disabled_category(tmp_path: Path, recorder: _Recorder) -> None:
@@ -327,8 +380,13 @@ async def test_dealing_with_the_session_cancels_what_is_held_for_it(
 ) -> None:
     now = [100.0]
     gate = _Gate()
+    decisions = _DecisionRecorder()
     _store, _settings, sender = await _make_sender(
-        tmp_path, lambda: now[0], presence=_desktop_presence(now), sleep=gate
+        tmp_path,
+        lambda: now[0],
+        presence=_desktop_presence(now),
+        sleep=gate,
+        decision_store=decisions,
     )
     await sender._handle(_event("approval_needed"))
     assert sender.pending_deferrals() == 1
@@ -339,6 +397,12 @@ async def test_dealing_with_the_session_cancels_what_is_held_for_it(
     gate.released.set()
     await asyncio.sleep(0)
     assert recorder.sent == []
+    assert [(row["stage"], row["outcome"]) for row in decisions.rows] == [
+        ("classification", "eligible"),
+        ("route", "deferred"),
+        ("delivery", "cancelled"),
+    ]
+    assert decisions.rows[-1]["profile"] == "mobile"
 
 
 @pytest.mark.parametrize("event_type", ["session_exited", "session_crashed"])
@@ -426,6 +490,30 @@ async def test_the_agent_carrying_on_cancels_the_ready_alert(
     gate.released.set()
     await asyncio.sleep(0)
     assert recorder.sent == []
+
+
+async def test_ready_settle_records_cancellation_and_resolution(
+    tmp_path: Path, recorder: _Recorder
+) -> None:
+    now = [100.0]
+    gate = _Gate()
+    decisions = _DecisionRecorder()
+    _store, _settings, sender = await _make_sender(
+        tmp_path,
+        lambda: now[0],
+        sleep=gate,
+        decision_store=decisions,
+    )
+    await sender._handle(_ready())
+    await sender._handle(_event("state_changed", state="working"))
+    assert [
+        (row["stage"], row["outcome"], row["reason"])
+        for row in decisions.rows
+    ] == [
+        ("classification", "held", "waiting_settle"),
+        ("settle", "cancelled", "resolved_by_state_changed"),
+    ]
+    assert decisions.rows[0]["candidate_id"] == decisions.rows[1]["candidate_id"]
 
 
 async def test_repeat_idles_inside_the_settle_do_not_stack(

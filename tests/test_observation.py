@@ -1418,6 +1418,51 @@ def _fake_manager() -> Any:
     return mgr
 
 
+async def test_ssh_prompt_enters_and_clears_typed_authentication_wait() -> None:
+    from swe_mux.session import SessionManager
+
+    now = time.time()
+    session = _watchdog_session(
+        None, now, b"builder@example.test's password: ", last_hook_ts=0.0
+    )
+    session.record.backend = "shell"
+    session.record.state = "running"
+    session.state_source_priority = -1
+    session.last_state_change_monotonic = time.monotonic()
+    session.last_evidence_ts = now
+    session.tasks = set()
+    session.publish_update = lambda: None
+    manager = _fake_manager()
+
+    handled = await SessionManager._check_ssh_boundary_state(manager, session, now)
+    await asyncio.gather(*session.tasks)
+
+    assert handled is True
+    assert session.record.runtime_boundary == "remote"
+    assert session.record.remote_authority == "unknown"
+    assert session.record.state == "awaiting"
+    assert session.record.awaiting_reason == "authentication"
+    assert session.record.state_detail == "SSH authentication required"
+
+    session.scrollback = screen(b"remote shell ready")
+    handled = await SessionManager._check_ssh_boundary_state(
+        manager, session, now + 1
+    )
+    assert handled is False
+    assert session.record.state == "running"
+    assert session.record.awaiting_reason is None
+    assert session.record.remote_transport_state == "connected"
+
+    session.scrollback = screen(b"client_loop: send disconnect: Broken pipe")
+    handled = await SessionManager._check_ssh_boundary_state(
+        manager, session, now + 2
+    )
+    assert handled is True
+    assert session.record.runtime_boundary == "remote"
+    assert session.record.remote_transport_state == "ended"
+    assert session.record.state == "running"
+
+
 async def test_watchdog_pty_backstop_idles_open_tail_at_idle_prompt(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

@@ -461,6 +461,37 @@ async def test_hook_ingress_rejects_expired_sessions_and_bounded_bursts() -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "reason"),
+    [
+        ("remote", "remote_terminal_boundary"),
+        ("unknown", "terminal_boundary_unknown"),
+    ],
+)
+async def test_hook_ingress_is_unavailable_across_a_nonlocal_boundary(
+    boundary: str, reason: str
+) -> None:
+    record = SimpleNamespace(id="session-a", state="running", runtime_boundary=boundary)
+    session = SimpleNamespace(record=record, hook_secret="secret")
+    app = web.Application(middlewares=[error_middleware, security_middleware])
+    app["sessions"] = SimpleNamespace(resolve=lambda _: session)
+    app["hook_ingress_windows"] = {}
+    app.router.add_post("/api/hooks/{sid}", hook_ingress)
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/hooks/session-a",
+            json={"event": "Stop", "payload": {}},
+            headers={"X-Mux-Hook-Secret": "secret"},
+        )
+        payload = await response.json()
+
+    assert response.status == 409
+    assert payload["capability"] == "agent-bridge-unavailable"
+    assert payload["reason"] == reason
+
+
+@pytest.mark.asyncio
 async def test_hook_ingress_requires_and_deduplicates_ordered_omp_sequences(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

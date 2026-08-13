@@ -73,6 +73,30 @@ def _idle_agent(
     return session, tracker, clock
 
 
+def test_remote_terminal_boundary_blocks_an_otherwise_safe_session() -> None:
+    session, tracker, _clock = _idle_agent()
+    session.record.runtime_boundary = "remote"
+    session.record.remote_authority = "builder@example.test"
+
+    evaluation = tracker.evaluate(session)
+
+    assert evaluation["delivery_state"] == "blocked"
+    assert evaluation["reason"] == "remote_terminal_boundary"
+    assert evaluation["checks"]["local_terminal_boundary"] is False
+    assert evaluation["evidence"]["remote_authority"] == "builder@example.test"
+
+
+def test_unknown_terminal_boundary_fails_closed() -> None:
+    session, tracker, _clock = _idle_agent()
+    session.record.runtime_boundary = "unknown"
+
+    evaluation = tracker.evaluate(session)
+
+    assert evaluation["delivery_state"] == "blocked"
+    assert evaluation["reason"] == "terminal_boundary_unknown"
+    assert evaluation["checks"]["local_terminal_boundary"] is False
+
+
 def test_ui_snapshot_reuses_a_bounded_pty_classification(monkeypatch: Any) -> None:
     session, tracker, clock = _idle_agent()
     calls = 0

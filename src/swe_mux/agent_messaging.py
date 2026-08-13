@@ -9,7 +9,7 @@ transport, and only through it):
   readiness, identity, and the audit trail all still belong to the queue. What
   this module adds is the relay policy the queue has no opinion about — who may
   address whom, how large, how often, how deep, and never in a cycle.
-- ``request_spawn`` — write an inert draft into the observation inbox. It
+- ``request_spawn`` - write an inert request surfaced in Fleet Queue. It
   starts nothing. Approval is a separate human act (§7.2/§16): an agent that
   can create actors turns one prompt injection into unbounded fan-out, so the
   capability an agent gets is "ask the human", not "create an actor".
@@ -36,6 +36,7 @@ import time
 from typing import Any
 
 from .config import Config
+from .git_projects import ProjectIdentity
 from .harness import is_agent_harness
 from .prompt_queue import PromptQueueService, QueueError
 
@@ -59,6 +60,7 @@ class AgentMessagingService:
         auto: Any,
         *,
         append_observation: Any = None,
+        read_observations: Any = None,
     ) -> None:
         self.queue = queue
         self.sessions = sessions
@@ -68,6 +70,7 @@ class AgentMessagingService:
         # Injected so tests do not need a project on disk, and so the module
         # never reaches into the filesystem layer directly.
         self._append_observation = append_observation
+        self._read_observations = read_observations
 
     # -- scope ----------------------------------------------------------------
 
@@ -261,7 +264,7 @@ class AgentMessagingService:
         name: str = "",
         reason: str = "",
     ) -> dict[str, Any]:
-        """Write an inert spawn request into the caller's Project inbox.
+        """Write an inert spawn request for review in the Fleet Queue.
 
         Starts nothing, reserves nothing, and costs nothing. The human approves
         it (from the desktop or the phone) and *that* act spawns the session
@@ -276,7 +279,7 @@ class AgentMessagingService:
         if self._append_observation is None:
             raise QueueError(
                 "request_spawn_unavailable",
-                "the observation inbox is unavailable",
+                "spawn request storage is unavailable",
                 status=503,
             )
         text = str(prompt or "").strip()
@@ -292,14 +295,14 @@ class AgentMessagingService:
         if project is None:
             raise QueueError(
                 "no_project",
-                "your session is not registered to a Project, so there is no inbox to draft into",
+                "your session is not registered to a Project",
                 status=409,
             )
         summary = " ".join(text.split())[:160]
         label = str(name or "").strip()[:80]
         body = (
             f"Spawn request from {getattr(record, 'name', record.id)}"
-            f"{f' — {label}' if label else ''}: {summary}"
+            f"{f' - {label}' if label else ''}: {summary}"
         )
         request = {
             "prompt": text,
@@ -330,9 +333,121 @@ class AgentMessagingService:
             "project_name": getattr(project, "name", None),
             "status": "drafted",
             "note": (
-                "Nothing was started. This is an inert draft in the Project's"
-                " observation inbox; a human decides whether it becomes a session."
+                "Nothing was started. This is an inert Fleet Queue approval row; "
+                "a human decides whether it becomes a session."
             ),
+        }
+
+    async def _project_spawn_requests(self, project: Any) -> list[dict[str, Any]]:
+        if self._read_observations is None:
+            raise QueueError(
+                "spawn_requests_unavailable",
+                "spawn request storage is unavailable",
+                status=503,
+            )
+        identity = ProjectIdentity(project.id, project.name, project.root, "registered")
+        result = await self._read_observations(project.root, project=identity)
+        if result.get("status") == "malformed":
+            raise QueueError(
+                "spawn_requests_unavailable",
+                str(result.get("error") or "spawn request storage is unreadable"),
+                status=409,
+            )
+        requests: list[dict[str, Any]] = []
+        for item in result.get("observations") or []:
+            if item.get("kind") != "spawn_request":
+                continue
+            payload = dict(item.get("request") or {})
+            requests.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "created_at": float(item.get("created_at") or 0),
+                    "done": bool(item.get("done")),
+                    "status": str(payload.get("status") or "pending"),
+                    "prompt": str(payload.get("prompt") or ""),
+                    "backend": str(payload.get("backend") or ""),
+                    "name": str(payload.get("name") or ""),
+                    "reason": str(payload.get("reason") or ""),
+                    "from_session": str(payload.get("from_session") or ""),
+                    "from_name": str(payload.get("from_name") or ""),
+                    "from_run_id": str(payload.get("from_run_id") or ""),
+                    "session_id": str(payload.get("session_id") or "") or None,
+                    "decided_by": str(payload.get("decided_by") or "") or None,
+                }
+            )
+        return requests
+
+    async def spawn_requests(self, caller: Any) -> dict[str, Any]:
+        """Read only requests attributed to the calling terminal session."""
+        project_id = str(caller.record.project_id or "")
+        project = self.projects.projects.get(project_id) if project_id else None
+        if project is None:
+            raise QueueError(
+                "no_project", "your session is not registered to a Project", status=409
+            )
+        caller_id = str(caller.record.id)
+        requests = [
+            item
+            for item in await self._project_spawn_requests(project)
+            if item["from_session"] == caller_id
+        ]
+        requests.sort(key=lambda item: item["created_at"], reverse=True)
+        return {
+            "project_id": project.id,
+            "project_name": project.name,
+            "requests": requests,
+        }
+
+    async def message_status(self, caller: Any, message_id: str) -> dict[str, Any]:
+        """Current outcome of one notify, visible only to its attributed sender."""
+        message = await self.queue.store.message(str(message_id or ""))
+        caller_id = str(caller.record.id)
+        project_id = str(caller.record.project_id or "")
+        if (
+            message is None
+            or message.get("sender_kind") != AGENT_SENDER_KIND
+            or str(message.get("sender_id") or "") != caller_id
+            or (project_id and str(message.get("project_id") or "") != project_id)
+        ):
+            raise QueueError(
+                "unknown_message", "no such message sent by your session", status=404
+            )
+        raw_state = str(message.get("state") or "")
+        expires_at = (message.get("constraints") or {}).get("expires_at")
+        expired = str(message.get("cancel_kind") or "") == "expired" or bool(
+            raw_state in {"draft", "armed", "blocked"}
+            and isinstance(expires_at, int | float)
+            and time.time() >= float(expires_at)
+        )
+        if expired:
+            status = "expired"
+        else:
+            status = {
+                "draft": "drafted",
+                "armed": "armed",
+                "delivering": "armed",
+                "sent": "delivered",
+                "stranded": "stranded",
+                "blocked": "refused",
+                "failed": "refused",
+                "cancelled": "refused",
+                "deleted": "refused",
+            }.get(raw_state, "refused")
+        return {
+            "message_id": str(message["id"]),
+            "status": status,
+            "queue_state": raw_state,
+            "target_session_id": str(message.get("target_session_id") or ""),
+            "target_name": message.get("target_label"),
+            "created_at": message.get("created_at"),
+            "updated_at": message.get("updated_at"),
+            "sent_at": message.get("sent_at"),
+            "expires_at": expires_at,
+            "blocked_reasons": message.get("blocked_reasons") or [],
+            "stranded_reason": message.get("stranded_reason"),
+            "cancel_kind": message.get("cancel_kind"),
         }
 
     # -- mailbox --------------------------------------------------------------
@@ -374,8 +489,32 @@ class AgentMessagingService:
             if origin_id:
                 origin = self.sessions.sessions.get(str(origin_id))
                 item["origin_live"] = origin is not None
+        spawn_requests: list[dict[str, Any]] = []
+        spawn_request_errors: list[dict[str, str]] = []
+        if author != "human" and target_session_id is None:
+            selected = [
+                project
+                for project in self.projects.projects.values()
+                if not project_id or project.id == project_id
+            ]
+            for project in selected:
+                try:
+                    spawn_requests.extend(await self._project_spawn_requests(project))
+                except QueueError as exc:
+                    log.warning(
+                        "spawn requests unavailable project_id=%s code=%s",
+                        project.id,
+                        exc.code,
+                    )
+                    spawn_request_errors.append(
+                        {"project_id": project.id, "error": exc.code}
+                    )
+            spawn_requests.sort(key=lambda item: item["created_at"], reverse=True)
+            spawn_requests = spawn_requests[: max(1, min(limit, 500))]
         return {
             "author": author,
             "messages": messages,
+            "spawn_requests": spawn_requests,
+            "spawn_request_errors": spawn_request_errors,
             "targets": await self.queue.store.mailbox_targets(),
         }

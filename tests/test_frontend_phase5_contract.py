@@ -107,16 +107,19 @@ def test_the_session_queue_and_the_fleet_queue_have_non_overlapping_scopes() -> 
     assert "useModalFocus" in fleet
 
 
-def test_a_drafted_spawn_request_is_approved_by_a_human_in_the_inbox() -> None:
-    observations = (ROOT / "Observations.tsx").read_text(encoding="utf-8")
+def test_a_drafted_spawn_request_is_approved_by_a_human_in_the_fleet_queue() -> None:
+    fleet = (ROOT / "FleetQueue.tsx").read_text(encoding="utf-8")
+    api = (ROOT / "queueApi.ts").read_text(encoding="utf-8")
+    app = (ROOT / "App.tsx").read_text(encoding="utf-8")
 
-    assert "spawn request" in observations
-    assert "approve &amp; start session" in observations
-    assert "dismiss" in observations
-    assert "/decide" in observations
-    assert "Nothing was started." in observations
-    # A typed request is a decision, not a note: it never joins the batch insert.
-    assert "Typed requests are decisions, not notes" in observations
+    assert "spawn request" in fleet
+    assert "Approve and start session" in fleet
+    assert "Dismiss" in fleet
+    assert "decideSpawnRequest" in fleet
+    assert "/decide" in api
+    assert "Nothing was started" in fleet
+    assert "observations.open" not in app
+    assert "<Observations" not in app
 
 
 def test_the_fleet_queue_is_reachable_from_any_device() -> None:

@@ -129,6 +129,18 @@ async def test_an_agent_with_no_transcript_yet_reports_that(tmp_path: Path) -> N
     assert body["messages"] == []
 
 
+async def test_remote_agent_transcript_is_unavailable_instead_of_stale(
+    tmp_path: Path,
+) -> None:
+    transcript = write_conversation(tmp_path / "claude.jsonl")
+    session = record(runtime_boundary="remote", remote_authority="example.test")
+    async with TestClient(TestServer(build(session, transcript))) as client:
+        body = await (await client.get("/api/sessions/sess-1/transcript")).json()
+
+    assert body["reason"] == "agent_bridge_unavailable"
+    assert body["messages"] == []
+
+
 async def test_a_stale_observation_link_is_reported_to_the_reader(tmp_path: Path) -> None:
     """The reader is where following the wrong transcript becomes plainly visible.
 

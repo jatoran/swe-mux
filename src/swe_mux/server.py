@@ -13,6 +13,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -201,6 +202,7 @@ from .session import (
     acknowledge_turns,
     clear_all_standing_activity,
     clear_standing_activity,
+    note_remote_shell_submission,
     pty_tail_explain,
     pty_tail_state,
     session_cli_state_status,
@@ -728,6 +730,7 @@ def create_app(
             web.get("/api/sessions/{sid}/diagnostic-bundle", get_session_diagnostic_bundle),
             web.get("/api/diagnostics/status-health", get_status_health),
             web.get("/api/diagnostics/background", get_background_health),
+            web.get("/api/diagnostics/notifications", get_notification_diagnostics),
             web.get("/api/diagnostics/network", get_network_usage),
             web.delete("/api/diagnostics/network", reset_network_usage),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
@@ -1090,6 +1093,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         config,
         auto_delivery,
         append_observation=append_observation,
+        read_observations=read_observations,
     )
     prompt_library = PromptLibrary(config.data_dir)
     settings_store = SettingsStore(config.data_dir)
@@ -1242,7 +1246,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     background.start(STATE_WATCHDOG_LOOP, sessions.state_watchdog_loop)
     status_timeline.start()
-    push_sender = PushSender(push_store, settings_store, events, presence=device_presence)
+    push_sender = PushSender(
+        push_store,
+        settings_store,
+        events,
+        presence=device_presence,
+        decision_store=telemetry,
+    )
     background.start(PUSH_SENDER_LOOP, push_sender.run)
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
@@ -1258,7 +1268,14 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         projects=projects,
         history_backfills=history_backfills,
         sessions=sessions,
-        mcp=McpService(sessions, history, agent_messaging, automation_store),
+        mcp=McpService(
+            sessions,
+            history,
+            agent_messaging,
+            automation_store,
+            agent_context,
+            projects,
+        ),
         reaper=reaper,
         supervisor=supervisor_client,
         git_monitor=git_monitor,
@@ -3421,6 +3438,14 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             done=True,
             project=identity,
         )
+        await request.app["events"].emit(
+            "spawn_request_decided",
+            session_id=str(spawn_request.get("from_session") or "") or None,
+            source="user",
+            request_id=observation_id,
+            project_id=project.id,
+            decision="dismissed",
+        )
         result.update({"project_id": project.id, "project_name": project.name})
         return json_response(result)
     prompt = str(body.get("prompt") or spawn_request.get("prompt") or "")
@@ -3462,6 +3487,15 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         },
         done=True,
         project=identity,
+    )
+    await request.app["events"].emit(
+        "spawn_request_decided",
+        session_id=str(spawn_request.get("from_session") or "") or None,
+        source="user",
+        request_id=observation_id,
+        project_id=project.id,
+        decision="approved",
+        spawned_session_id=session.record.id,
     )
     result.update(
         {
@@ -4349,6 +4383,27 @@ async def get_background_health(request: web.Request) -> web.Response:
     )
 
 
+async def get_notification_diagnostics(request: web.Request) -> web.Response:
+    """Content-free notification planner and delivery outcomes for a recent window."""
+
+    try:
+        days = float(request.query.get("days", "7"))
+    except ValueError as exc:
+        raise ValueError("days must be a number") from exc
+    telemetry: OperationalTelemetryStore = request.app["telemetry"]
+    if not math.isfinite(days) or days <= 0 or days > telemetry.retention_days:
+        raise ValueError(
+            f"days must be greater than zero and no more than {telemetry.retention_days}"
+        )
+    until = time.time()
+    return json_response(
+        await telemetry.notification_decision_summary(
+            since=until - days * 86400,
+            until=until,
+        )
+    )
+
+
 async def get_network_usage(request: web.Request) -> web.Response:
     """Application-payload counters for one daemon boot or explicit measurement window."""
 
@@ -4780,6 +4835,7 @@ def _record_operator_input(
     session.pty.write(data)
     now = time.monotonic()
     session.input_revision += 1
+    note_remote_shell_submission(session, data)
     session.last_input_event_ts = now
     session.last_input_report_ts = now
     events.emit_background(
@@ -6827,6 +6883,21 @@ async def session_transcript(request: web.Request) -> web.Response:
         "truncated": False,
         "reason": None,
     }
+    if record.runtime_boundary != "local":
+        boundary = record.runtime_boundary
+        return json_response(
+            {
+                **empty,
+                "reason": "agent_bridge_unavailable",
+                "capability": "agent-bridge-unavailable",
+                "boundary": boundary,
+                "boundary_reason": (
+                    "remote_terminal_boundary"
+                    if boundary == "remote"
+                    else "terminal_boundary_unknown"
+                ),
+            }
+        )
     if not has_observable_transcript(record.backend):
         return json_response({**empty, "reason": "not_agent"})
     path = session.transcript_path
@@ -6861,6 +6932,23 @@ async def session_skills(request: web.Request) -> web.Response:
     than one in the primary checkout of the same Project.
     """
     session = request.app["sessions"].resolve(request.match_info["sid"])
+    if session.record.runtime_boundary != "local":
+        boundary = session.record.runtime_boundary
+        return json_response(
+            {
+                "error": "skill inventory is unavailable across a non-local terminal boundary",
+                "code": "agent_bridge_unavailable",
+                "capability": "agent-bridge-unavailable",
+                "reason": (
+                    "remote_terminal_boundary"
+                    if boundary == "remote"
+                    else "terminal_boundary_unknown"
+                ),
+                "boundary": boundary,
+                "authority": session.record.remote_authority,
+            },
+            409,
+        )
     backend = session.record.backend
     if not is_agent_harness(backend):
         return json_response({"error": "skills are available only for agent sessions"}, 409)
@@ -6914,6 +7002,23 @@ async def session_agent_environment(request: web.Request) -> web.Response:
     """Return a bounded passive inventory for the focused agent CLI."""
     session = request.app["sessions"].resolve(request.match_info["sid"])
     record = session.record
+    if record.runtime_boundary != "local":
+        boundary = record.runtime_boundary
+        return json_response(
+            {
+                "error": "agent environment is unavailable across a non-local terminal boundary",
+                "code": "agent_bridge_unavailable",
+                "capability": "agent-bridge-unavailable",
+                "reason": (
+                    "remote_terminal_boundary"
+                    if boundary == "remote"
+                    else "terminal_boundary_unknown"
+                ),
+                "boundary": boundary,
+                "authority": record.remote_authority,
+            },
+            409,
+        )
     if not is_agent_harness(record.backend):
         return json_response(
             {"error": "agent environment is available only for agent sessions"}, 409
@@ -7944,6 +8049,22 @@ async def hook_ingress(request: web.Request) -> web.Response:
     supplied = request.headers.get("X-Mux-Hook-Secret", "")
     if not secrets.compare_digest(supplied, session.hook_secret):
         raise web.HTTPForbidden(text="invalid hook secret")
+    boundary = getattr(session.record, "runtime_boundary", "local")
+    if boundary != "local":
+        return json_response(
+            {
+                "error": "hook ingress is unavailable across a non-local terminal boundary",
+                "code": "agent_bridge_unavailable",
+                "capability": "agent-bridge-unavailable",
+                "reason": (
+                    "remote_terminal_boundary"
+                    if boundary == "remote"
+                    else "terminal_boundary_unknown"
+                ),
+                "boundary": boundary,
+            },
+            409,
+        )
     now = time.monotonic()
     windows: dict[str, deque[float]] = request.app["hook_ingress_windows"]
     if len(windows) > HOOK_WINDOW_SWEEP_AT:
@@ -8964,6 +9085,7 @@ async def _handle_terminal_input(
     if not is_terminal_response and pointer is None:
         cancel_pending_approval(session, "terminal_input")
         session.input_revision += 1
+        note_remote_shell_submission(session, data)
         session.last_input_event_ts = now
         # Typing is the strongest evidence of where the human is; it renews this
         # connection's protection from a background pane's passive re-claim.
@@ -9279,6 +9401,7 @@ async def _handle_pty_client_message(
         session.pty.write(message.data)
         now = time.monotonic()
         session.input_revision += 1
+        note_remote_shell_submission(session, message.data)
         session.last_input_event_ts = now
         session.note_owner_input(now)
         if now - session.last_input_report_ts >= 2:

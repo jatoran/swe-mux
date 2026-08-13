@@ -45,6 +45,7 @@ AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
 # for a generic one: resuming a live conversation whose writer is still attached
 # would interleave two writers into one session file.
 BranchStrategy = Literal["native_slash_command", "resume_child_thread"]
+MemoryInventoryKind = Literal["claude_project_markdown", "codex_feature_flag"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +110,20 @@ class HeadlessProbes:
     read_tool: tuple[str, ...] | None = None
     # One prompt permitted to spawn a subagent, for the subagent-signal canary.
     subagent: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryInventory:
+    """Stable learned-memory inventory a harness exposes to Agent Context.
+
+    ``None`` on :class:`HarnessDescriptor` is a declared unsupported capability.
+    A concrete kind names a measured resolver, never a guessed private store.
+    ``detail`` is the honest unavailable explanation when that resolver cannot
+    return files for the current installation.
+    """
+
+    kind: MemoryInventoryKind
+    detail: str
 
 
 DataHomeResolver = Callable[[], Path]
@@ -217,6 +232,10 @@ class HarnessDescriptor:
     # Codex already had.
     instruction_file_name: str | None
     global_instruction_parts: tuple[str, ...] | None
+    # Stable learned-memory inventory, or None when none has been measured.
+    # Agent Context enumerates this declaration for every harness so an absent
+    # capability is visible as ``unsupported`` rather than as an omitted row.
+    memory_inventory: MemoryInventory | None
     # What a user types to invoke an authored skill. Published to the browser so the
     # command rail stops re-deriving it: the rail's own copy knew `$` for Codex and
     # `/` for everything else, which types `/name` on oh-my-pi where the CLI wants
@@ -627,6 +646,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         branch_strategy="native_slash_command",
         instruction_file_name="CLAUDE.md",
         global_instruction_parts=_CLAUDE_GLOBAL_INSTRUCTIONS,
+        memory_inventory=MemoryInventory(
+            "claude_project_markdown",
+            "Learned project memory files used by Claude. Repository worktrees share this source.",
+        ),
         skill_invocation_prefix="/",
         npm_entrypoint=("@anthropic-ai/claude-code/", "/cli.js"),
         requires_direct_entrypoint=False,
@@ -687,6 +710,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         branch_strategy="resume_child_thread",
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_CODEX_GLOBAL_INSTRUCTIONS,
+        memory_inventory=MemoryInventory(
+            "codex_feature_flag",
+            "Codex does not expose a stable project-memory file inventory.",
+        ),
         skill_invocation_prefix="$",
         npm_entrypoint=("@openai/codex/", "/codex.js"),
         requires_direct_entrypoint=True,
@@ -752,6 +779,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         branch_strategy=None,
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_OMP_GLOBAL_INSTRUCTIONS,
+        memory_inventory=None,
         skill_invocation_prefix="/skill:",
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
@@ -829,6 +857,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         branch_strategy=None,
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_PI_GLOBAL_INSTRUCTIONS,
+        memory_inventory=None,
         skill_invocation_prefix="/",
         npm_entrypoint=None,
         requires_direct_entrypoint=False,
@@ -921,6 +950,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         branch_strategy=None,
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_OPENCODE_GLOBAL_INSTRUCTIONS,
+        memory_inventory=None,
         skill_invocation_prefix="/",
         npm_entrypoint=None,
         requires_direct_entrypoint=False,

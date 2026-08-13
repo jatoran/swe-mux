@@ -166,7 +166,13 @@ def test_contract_violation_is_ledgered_and_counted_not_refused() -> None:
 
 def test_awaiting_reason_is_typed_and_cleared_on_leaving_awaiting() -> None:
     session = ReplaySession("claude")
-    assert set(get_args(AwaitingReason)) == {"approval", "question", "elicitation", "rate_limit"}
+    assert set(get_args(AwaitingReason)) == {
+        "approval",
+        "question",
+        "elicitation",
+        "rate_limit",
+        "authentication",
+    }
     session.transition(
         "awaiting", "Bash", source="hook", awaiting_reason="approval", evidence="hook"
     )

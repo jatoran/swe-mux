@@ -107,6 +107,23 @@ and quiet hours are re-checked when the deferral fires, since it can cross into 
 Categories that go stale while held (`complete`, `failure`, `reset`) are dropped, not deferred.
 `session_exited` and `session_crashed` also cancel every pending settle and deferral for that session before any terminal failure alert is considered.
 
+## Decision telemetry
+
+Notification decisions are internal telemetry, not choices presented to the user.
+The sender appends a content-free row at each relevant stage: classification, settle, route, and delivery.
+Rows share a random candidate id and carry the source session, event type and sequence, category, optional device profile, planner verdict, actual outcome, and a stable reason code.
+They never carry a notification title or body, terminal content, subscription endpoint, preference payload, or credential.
+
+Classifier suppressions and settle cancellations are recorded even though no push is attempted.
+Immediate sends record `delivered` or `failed` after the push call returns.
+Deferred sends record the initial route decision and their later delivery, suppression, failure, or cancellation.
+Telemetry failure is fail-open for notification delivery: persistence errors are logged but do not suppress an eligible alert.
+
+Rows use the operational-telemetry retention period and are removed by its hourly retention pass.
+`GET /api/diagnostics/notifications?days=N` accepts a positive window no larger than that retention period.
+It returns record and candidate totals, exact grouped decisions, and a `waiting` summary with held, classifier-suppressed, settle-cancelled, settle-survived, delivered push count, delivered candidate count, failures, and delivered pushes per 10 hours.
+The endpoint exposes no user-authored or provider-authored content.
+
 ## Preferences
 
 Every alert preference is stored on the daemon under a Desktop or Mobile device-class profile so either device can configure both profiles and the push sender can enforce policy without a live browser.
@@ -145,7 +162,7 @@ The daemon exposes the packaged files at `/notification-sounds`; this route must
   `features/device-presence.md`)
 - `frontend/src/ProviderAccounts.tsx`
 - `frontend/public/notification-sounds/`
-- `src/swe_mux/push.py`, `src/swe_mux/settings_store.py`
+- `src/swe_mux/push.py`, `src/swe_mux/settings_store.py`, `src/swe_mux/operational_telemetry.py`
 
 ## Relates to
 

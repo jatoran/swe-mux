@@ -26,7 +26,7 @@ from swe_mux.operational_telemetry import (
 )
 from swe_mux.processes import OwnedProcess, ProcessInspector
 from swe_mux.provider_accounts import ProviderAccountManager
-from swe_mux.server import create_app
+from swe_mux.server import create_app, get_notification_diagnostics
 from swe_mux.sqlite_store import read_schema_version
 from swe_mux.tier0_store import TIER0_SCHEMA_VERSION, Tier0Store
 
@@ -634,6 +634,82 @@ def test_schema_versions_are_per_store_not_per_file(phase2_path: Path) -> None:
     telemetry.close()
 
 
+async def test_notification_decision_ledger_summarizes_and_prunes(
+    phase2_path: Path,
+) -> None:
+    now = time.time()
+    store = OperationalTelemetryStore(phase2_path, retention_days=1)
+    try:
+        common = {
+            "event_ts": now - 60,
+            "event_seq": 7,
+            "session_id": "session-a",
+            "event_type": "state_changed",
+            "category": "waiting",
+        }
+        await store.record_notification_decision(
+            candidate_id="candidate-a",
+            stage="classification",
+            plan_verdict="settle",
+            outcome="held",
+            reason="waiting_settle",
+            decided_at=now - 60,
+            **common,
+        )
+        await store.record_notification_decision(
+            candidate_id="candidate-a",
+            stage="settle",
+            plan_verdict="release",
+            outcome="survived",
+            reason="settle_elapsed",
+            decided_at=now - 50,
+            **common,
+        )
+        await store.record_notification_decision(
+            candidate_id="candidate-a",
+            stage="delivery",
+            profile="mobile",
+            plan_verdict="send",
+            outcome="delivered",
+            reason="immediate",
+            decided_at=now - 40,
+            **common,
+        )
+        await store.record_notification_decision(
+            candidate_id="candidate-old",
+            stage="classification",
+            plan_verdict="suppress",
+            outcome="suppressed",
+            reason="running_work",
+            decided_at=now - 2 * 86400,
+            **common,
+        )
+
+        summary = await store.notification_decision_summary(
+            since=now - 3600,
+            until=now,
+        )
+        assert summary["records"] == 3
+        assert summary["candidates"] == 1
+        assert summary["waiting"] == {
+            "candidates": 1,
+            "held": 1,
+            "classification_suppressed": 0,
+            "settle_cancelled": 0,
+            "settle_survived": 1,
+            "delivered": 1,
+            "delivered_candidates": 1,
+            "failed": 0,
+            "delivered_per_10_hours": 10.0,
+        }
+        assert summary["by_category"]["waiting"][-1]["outcome"] == "survived"
+
+        pruned = await store.prune()
+        assert pruned["notification_decisions"] == 1
+    finally:
+        store.close()
+
+
 def test_corrupt_database_is_quarantined_instead_of_crashing_startup(tmp_path: Path) -> None:
     path = tmp_path / "mux.db"
     path.write_bytes(b"SQLite format 3\x00" + b"\x00" * 512)
@@ -1190,7 +1266,11 @@ async def test_retention_compacts_old_quota_samples_and_bounds_process_evidence(
         ]
     )
     deleted = await store.prune(process_retention_days=1)
-    assert deleted == {"quota_samples": 2, "processes": 1}
+    assert deleted == {
+        "quota_samples": 2,
+        "processes": 1,
+        "notification_decisions": 0,
+    }
     snapshot = await store.snapshot()
     assert snapshot["quota"]["samples"] == []
     assert snapshot["quota"]["rollups"][0]["samples"] == 2
@@ -1357,6 +1437,34 @@ def test_operational_telemetry_route_is_registered(phase2_path: Path) -> None:
     assert ("GET", "/api/telemetry/operational") in routes
     assert ("GET", "/api/telemetry/quota-series") in routes
     assert ("POST", "/api/telemetry/quota-resets/review") in routes
+    assert ("GET", "/api/diagnostics/notifications") in routes
+
+
+async def test_notification_diagnostics_uses_a_bounded_recent_window() -> None:
+    summary = {
+        "schema_version": 1,
+        "records": 0,
+        "candidates": 0,
+        "by_category": {},
+        "waiting": {},
+    }
+    telemetry = SimpleNamespace(
+        retention_days=180,
+        notification_decision_summary=AsyncMock(return_value=summary),
+    )
+    request = cast(
+        Any,
+        SimpleNamespace(query={"days": "2"}, app={"telemetry": telemetry}),
+    )
+    response = await get_notification_diagnostics(request)
+    assert response.status == 200
+    assert json.loads(response.body) == summary
+    call = telemetry.notification_decision_summary.await_args.kwargs
+    assert call["until"] - call["since"] == pytest.approx(2 * 86400)
+
+    request.query = {"days": "181"}
+    with pytest.raises(ValueError, match="no more than 180"):
+        await get_notification_diagnostics(request)
 
 
 def test_native_transcript_scanners_count_only_explicit_skills_and_compactions(

@@ -488,7 +488,8 @@ class GitMonitor:
         return [
             session
             for session in self.sessions.sessions.values()
-            if session.subscribers or everything
+            if (session.subscribers or everything)
+            and getattr(session.record, "runtime_boundary", "local") == "local"
         ]
 
     def _override_for(self, session: Session) -> str | None:

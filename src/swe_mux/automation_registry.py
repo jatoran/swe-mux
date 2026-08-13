@@ -95,7 +95,10 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         ),
         implemented=False,
     ),
-    Automation("observation_inbox", CONSUMER, "Observation inbox"),
+    # Keep the persisted id for settings compatibility. The human observation
+    # inbox UI is retired; this now names review of agent spawn requests in the
+    # Fleet Queue.
+    Automation("observation_inbox", CONSUMER, "Spawn request review"),
     Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent"),
 )
 

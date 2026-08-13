@@ -158,6 +158,7 @@ test('every empty state says which kind of nothing it is', () => {
   assert.match(transcriptEmptyMessage('not_agent'), /no agent conversation/)
   assert.match(transcriptEmptyMessage('no_transcript'), /has not written its first message/)
   assert.match(transcriptEmptyMessage('unreadable'), /could not be read/)
+  assert.match(transcriptEmptyMessage('agent_bridge_unavailable'), /terminal boundary/)
   // Loaded, and genuinely empty: a fresh agent nobody has spoken to yet.
   assert.match(transcriptEmptyMessage(null), /Nothing has been said/)
 })

@@ -1,8 +1,7 @@
 """The mux MCP surface (roadmap Phase 4.5 reads, Phase 5 writes; CP §7.5).
 
-A streamable-HTTP MCP endpoint hosted in the daemon — never the supervisor
-(CP §7.3). Four read tools over machinery that already exists (live session
-listing, session status, bounded transcript read, history search) and two
+A streamable-HTTP MCP endpoint hosted in the daemon - never the supervisor
+(CP §7.3). Ten situational-awareness read tools over machinery that already exists and two
 bounded write tools added in Phase 5: `notify` (a message into another
 session's queue) and `request_spawn` (an inert draft; it starts nothing).
 
@@ -37,19 +36,28 @@ Load-bearing properties:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import logging
 import secrets
 from pathlib import Path
 from typing import Any
 
 from .clipboard_store import looks_like_secret
+from .git_projects import ProjectIdentity
 from .harness import agent_harnesses
+from .project_files import (
+    DEFAULT_NOTE_STORAGE_ID,
+    project_note_summaries,
+    read_note,
+)
 from .prompt_queue import QueueError
 from .transcript_view import (
     conversation_is_readable,
-    parse_transcript_cached,
-    searchable_transcript_messages,
+    transcript_message_page,
 )
+
+log = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 _SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
@@ -59,23 +67,13 @@ _SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", "2025-03-26", "2025-06-18"}
 TRANSCRIPT_MAX_BYTES = 512 * 1024
 
 
-def _read_conversation_tail(
-    path: Path | None, backend: str, native_id: str | None
-) -> list[dict[str, Any]]:
-    """The bounded tail of one conversation, however the harness stores it.
-
-    A positional wrapper because `asyncio.to_thread` cannot forward keywords, and
-    the bound has to travel with the call: an unbounded read of a long conversation
-    is exactly what the timeout above exists to avoid.
-    """
-    return parse_transcript_cached(
-        path, backend, max_bytes=TRANSCRIPT_MAX_BYTES, native_id=native_id
-    )
 TRANSCRIPT_MAX_MESSAGES = 200
 TRANSCRIPT_DEFAULT_MESSAGES = 50
 LIST_MAX_SESSIONS = 100
 SEARCH_MAX_LIMIT = 50
 PARSE_TIMEOUT_SECONDS = 2.0
+NOTE_MAX_BYTES = 512 * 1024
+RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
 
 _REDACTED = "[redacted: credential-shaped content withheld by mux]"
 
@@ -123,6 +121,9 @@ def session_summary(record: Any, *, display_name: str | None = None) -> dict[str
         "tokens_in": record.tokens_in,
         "tokens_out": record.tokens_out,
         "context_pct": record.context_pct,
+        "runtime_boundary": getattr(record, "runtime_boundary", "local"),
+        "remote_authority": getattr(record, "remote_authority", None),
+        "remote_transport_state": getattr(record, "remote_transport_state", None),
     }
 
 
@@ -139,6 +140,8 @@ def _history_summary(
         "cwd": row.get("cwd"),
         "project_id": row.get("project_id"),
         "project_label": row.get("project_label"),
+        "agent_run_id": row.get("id"),
+        "agent_run_seq": int(row.get("agent_run_seq") or 0),
         "native_session_id": row.get("native_id"),
         "spawned_at": row.get("spawned_at"),
         "exited_at": row.get("exited_at"),
@@ -151,6 +154,29 @@ def _history_summary(
 
 def _redact(text: str) -> str:
     return _REDACTED if text and looks_like_secret(text) else text
+
+
+def _encode_cursor(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(value: str) -> dict[str, Any]:
+    try:
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid transcript cursor") from exc
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        raise ValueError("invalid transcript cursor")
+    return payload
+
+
+def _bounded_utf8(text: str, limit: int) -> tuple[str, bool]:
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text, False
+    return raw[:limit].decode("utf-8", "ignore"), True
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -200,9 +226,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_transcript",
         "description": (
-            "The tail of a session's conversation transcript (role, timestamp, "
-            "text), bounded. Works for live and recently ended agent sessions "
-            "in your Project."
+            "A bounded, pageable head or tail of one agent run's conversation. "
+            "Every message names its agent_run_id and sequence; cursors cannot "
+            "cross a conversation rollover. System/meta records are excluded "
+            "unless explicitly requested."
         ),
         "inputSchema": {
             "type": "object",
@@ -214,9 +241,22 @@ TOOLS: list[dict[str, Any]] = [
                 "max_messages": {
                     "type": "integer",
                     "description": (
-                        f"Messages from the tail (default {TRANSCRIPT_DEFAULT_MESSAGES}, "
+                        f"Messages in this page (default {TRANSCRIPT_DEFAULT_MESSAGES}, "
                         f"max {TRANSCRIPT_MAX_MESSAGES})"
                     ),
+                },
+                "from": {
+                    "type": "string",
+                    "enum": ["head", "tail"],
+                    "description": "Read from the beginning or end (default tail)",
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Opaque continuation cursor from a previous result",
+                },
+                "include_system": {
+                    "type": "boolean",
+                    "description": "Include system/meta records (default false)",
                 },
             },
             "required": ["session_id"],
@@ -264,7 +304,7 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Ask the human to start a new agent session in your Project with a "
             "prompt you supply. This starts nothing: it writes an inert draft "
-            "into the Project's observation inbox, and a person decides. Use it "
+            "into the Fleet Queue, and a person decides. Use it "
             "when work should continue in a separate session."
         ),
         "inputSchema": {
@@ -315,6 +355,93 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "memory_sources",
+        "description": (
+            "List the root instruction and learned-memory sources available to "
+            "agent harnesses for your Project. Source ids are opaque and may be "
+            "passed to read_memory. Unsupported providers are reported honestly."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "read_memory",
+        "description": (
+            "Read one bounded Project instruction or learned-memory source from "
+            "memory_sources by its opaque source id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source_id": {
+                    "type": "string",
+                    "description": "Opaque source id returned by memory_sources",
+                },
+            },
+            "required": ["source_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "message_status",
+        "description": (
+            "Read the current delivery outcome of one message you sent with "
+            "notify. Only the attributed sender can read it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string", "description": "Message id from notify"},
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "project_notes",
+        "description": (
+            "List the human-authored Project notes available to your session. "
+            "This is read-only and never includes another Project or the global Scratchpad."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "read_project_note",
+        "description": (
+            "Read one bounded Project note by the opaque note id returned by project_notes."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "Opaque note id returned by project_notes",
+                },
+            },
+            "required": ["note_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "spawn_requests",
+        "description": (
+            "List the status of spawn requests attributed to your session. "
+            "This is read-only; approval remains a human Fleet Queue action."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -331,6 +458,8 @@ class McpService:
         history: Any,
         messaging: Any = None,
         automation_store: Any = None,
+        agent_context: Any = None,
+        projects: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -338,6 +467,8 @@ class McpService:
         # list but answer that they are unavailable — never a partial write.
         self.messaging = messaging
         self.automation_store = automation_store
+        self.agent_context = agent_context
+        self.projects = projects
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -423,7 +554,12 @@ class McpService:
             for session in self.sessions.sessions.values()
             if self._in_scope(caller, session.record)
         ]
-        by_id = [session for session in scoped if session.record.id == identity]
+        by_id = [
+            session
+            for session in scoped
+            if session.record.id == identity
+            or str(session.record.agent_run_id or "") == identity
+        ]
         if len(by_id) == 1:
             names = await self._live_display_names(by_id)
             return by_id[0], names[by_id[0].record.id]
@@ -529,18 +665,91 @@ class McpService:
         except KeyError:
             session = None
         if session is not None:
-            return {
+            result = {
                 **session_summary(session.record, display_name=display_name),
                 "ended": False,
             }
+            result["run_brief"] = await self._run_brief(
+                run_id=self._record_run_id(session.record),
+                path=session.transcript_path,
+                backend=str(session.record.backend or ""),
+                native_id=str(session.record.native_session_id or "") or None,
+                opening_request=getattr(session, "first_user_prompt", None),
+            )
+            if session.record.id == caller.record.id:
+                reader = getattr(self.history, "agent_runs_for_session", None)
+                rows = await reader(caller.record.id) if callable(reader) else []
+                current_run = self._record_run_id(caller.record)
+                result["superseded_runs"] = [
+                    {**_history_summary(row), "own_superseded_run": True}
+                    for row in rows
+                    if self._row_run_id(row) != current_run
+                ]
+            return result
         row, display_name = await self._resolve_history(caller, identity)
-        return _history_summary(row, display_name=display_name)
+        result = _history_summary(row, display_name=display_name)
+        raw = row.get("transcript_path")
+        result["run_brief"] = await self._run_brief(
+            run_id=self._row_run_id(row),
+            path=Path(str(raw)) if raw else None,
+            backend=str(row.get("backend") or ""),
+            native_id=str(row.get("native_id") or "") or None,
+        )
+        return result
 
     def _history_row_in_scope(self, caller: Any, row: dict[str, Any]) -> bool:
         project_id, scope_id = self._scope(caller)
         if project_id:
             return str(row.get("project_id") or "") == project_id
         return bool(scope_id) and str(row.get("project_scope_id") or "") == scope_id
+
+    async def _run_brief(
+        self,
+        *,
+        run_id: str,
+        path: Path | None,
+        backend: str,
+        native_id: str | None,
+        opening_request: str | None = None,
+    ) -> dict[str, Any]:
+        titles = await self._generated_titles({run_id})
+        opening = str(opening_request or "").strip()
+        checkpoint_reader = getattr(self.automation_store, "checkpoint", None)
+        if not opening and callable(checkpoint_reader):
+            checkpoint = await checkpoint_reader(f"{RUN_PROMPT_CHECKPOINT_PREFIX}{run_id}")
+            opening = str((checkpoint or {}).get("text") or "").strip()
+        if not opening and conversation_is_readable(path, backend, native_id):
+            try:
+                page = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        transcript_message_page,
+                        path,
+                        backend,
+                        direction="head",
+                        anchor=None,
+                        max_bytes=TRANSCRIPT_MAX_BYTES,
+                        max_messages=8,
+                        include_system=False,
+                        native_id=native_id,
+                    ),
+                    timeout=PARSE_TIMEOUT_SECONDS,
+                )
+            except (OSError, TimeoutError):
+                page = {"messages": []}
+            opening = next(
+                (
+                    str(item.get("text") or "")
+                    for item in page["messages"]
+                    if item.get("role") == "user"
+                ),
+                "",
+            )
+        bounded, truncated = _bounded_utf8(opening, TRANSCRIPT_MAX_BYTES)
+        return {
+            "pinned_title": titles.get(run_id),
+            "opening_request": _redact(bounded),
+            "opening_request_truncated": truncated,
+        }
 
     async def read_transcript(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         identity = str(args.get("session_id") or "").strip()
@@ -553,17 +762,56 @@ class McpService:
                 TRANSCRIPT_MAX_MESSAGES,
             ),
         )
+        cursor_text = str(args.get("cursor") or "").strip()
+        cursor = _decode_cursor(cursor_text) if cursor_text else None
+        direction = str(args.get("from") or (cursor or {}).get("from") or "tail")
+        if direction not in {"head", "tail"}:
+            raise ValueError("from must be head or tail")
+        include_system = bool(args.get("include_system", False))
+        if cursor is not None:
+            if "from" in args and cursor.get("from") != direction:
+                raise ValueError("transcript cursor direction does not match from")
+            if (
+                "include_system" in args
+                and bool(cursor.get("include_system")) != include_system
+            ):
+                raise ValueError(
+                    "transcript cursor system-record setting does not match include_system"
+                )
+            direction = str(cursor.get("from") or "")
+            include_system = bool(cursor.get("include_system"))
         path: Path | None = None
         backend = ""
+        own_superseded_run = False
         try:
             session, _display_name = await self._resolve_live(caller, identity)
         except KeyError:
             session = None
         if session is not None:
+            resolved_session_id = session.record.id
+            run_id = self._record_run_id(session.record)
+            run_seq = int(session.record.agent_run_seq or 0)
+            boundary = getattr(session.record, "runtime_boundary", "local")
+            if boundary != "local":
+                return {
+                    "session_id": resolved_session_id,
+                    "agent_run_id": run_id,
+                    "agent_run_seq": run_seq,
+                    "own_superseded_run": False,
+                    "from": direction,
+                    "include_system": include_system,
+                    "messages": [],
+                    "note": "agent bridge unavailable across the terminal boundary",
+                    "capability": "agent-bridge-unavailable",
+                    "reason": (
+                        "remote_terminal_boundary"
+                        if boundary == "remote"
+                        else "terminal_boundary_unknown"
+                    ),
+                }
             path = session.transcript_path
             backend = session.record.backend
             native_id = session.record.native_session_id
-            resolved_session_id = session.record.id
         else:
             row, _display_name = await self._resolve_history(caller, identity)
             raw = row.get("transcript_path")
@@ -571,19 +819,37 @@ class McpService:
             backend = str(row.get("backend") or "")
             native_id = str(row.get("native_id") or "") or None
             resolved_session_id = str(row.get("id") or identity)
+            run_id = self._row_run_id(row)
+            run_seq = int(row.get("agent_run_seq") or 0)
+            own_superseded_run = bool(
+                str(row.get("note_id") or "") == str(caller.record.id)
+                and run_id != self._record_run_id(caller.record)
+            )
+        if cursor is not None and str(cursor.get("run") or "") != run_id:
+            raise ValueError("transcript cursor belongs to a different agent run")
         if not conversation_is_readable(path, backend, native_id):
             return {
                 "session_id": resolved_session_id,
+                "agent_run_id": run_id,
+                "agent_run_seq": run_seq,
+                "own_superseded_run": own_superseded_run,
+                "from": direction,
+                "include_system": include_system,
                 "messages": [],
                 "note": "no transcript available",
             }
         try:
-            messages = await asyncio.wait_for(
+            page = await asyncio.wait_for(
                 asyncio.to_thread(
-                    _read_conversation_tail,
+                    transcript_message_page,
                     path,
                     backend,
-                    native_id,
+                    direction=direction,
+                    anchor=(cursor or {}).get("anchor"),
+                    max_bytes=TRANSCRIPT_MAX_BYTES,
+                    max_messages=max_messages,
+                    include_system=include_system,
+                    native_id=native_id,
                 ),
                 timeout=PARSE_TIMEOUT_SECONDS,
             )
@@ -593,19 +859,38 @@ class McpService:
             raise RuntimeError(
                 "transient: transcript read did not complete; retry"
             ) from None
-        searchable = searchable_transcript_messages(messages)[-max_messages:]
+        next_cursor = None
+        if page.get("next_anchor") is not None:
+            next_cursor = _encode_cursor(
+                {
+                    "v": 1,
+                    "run": run_id,
+                    "from": direction,
+                    "include_system": include_system,
+                    "anchor": page["next_anchor"],
+                }
+            )
+        messages = list(page.get("messages") or [])
         return {
             "session_id": resolved_session_id,
-            "message_count": len(searchable),
-            "truncated_to_tail": True,
+            "agent_run_id": run_id,
+            "agent_run_seq": run_seq,
+            "own_superseded_run": own_superseded_run,
+            "from": direction,
+            "include_system": include_system,
+            "message_count": len(messages),
+            "next_cursor": next_cursor,
             "messages": [
                 {
-                    "ordinal": item.get("ordinal"),
+                    "ordinal": index,
+                    "message_id": item.get("message_id"),
                     "role": item.get("role"),
                     "ts": item.get("ts"),
                     "text": _redact(str(item.get("text") or "")),
+                    "agent_run_id": run_id,
+                    "agent_run_seq": run_seq,
                 }
-                for item in searchable
+                for index, item in enumerate(messages)
             ],
         }
 
@@ -646,6 +931,151 @@ class McpService:
             summary["match_count"] = row.get("match_count")
             items.append(summary)
         return {"entries": items, "next_cursor": page.get("next_cursor")}
+
+    def _caller_project(self, caller: Any) -> Any:
+        project_id = str(caller.record.project_id or "")
+        project = (
+            self.projects.projects.get(project_id)
+            if project_id and self.projects is not None
+            else None
+        )
+        if project is None:
+            raise ValueError("the caller has no registered Project context")
+        return project
+
+    def _context_service(self) -> Any:
+        if self.agent_context is None:
+            raise RuntimeError(
+                "transient: the agent context service is not available on this daemon"
+            )
+        return self.agent_context
+
+    async def memory_sources(self, caller: Any, _args: dict[str, Any]) -> dict[str, Any]:
+        project = self._caller_project(caller)
+        inventory = await asyncio.to_thread(
+            self._context_service().inventory,
+            project.id,
+            project.name,
+            project.root,
+        )
+        sources = [
+            *inventory["instructions"]["items"],
+            *inventory["global_instructions"]["items"],
+            *[
+                item
+                for provider in inventory["providers"]
+                for item in provider["items"]
+            ],
+        ]
+        return {
+            "project": inventory["project"],
+            "sources": sources,
+            "providers": [
+                {
+                    "id": provider["id"],
+                    "label": provider["label"],
+                    "status": provider["status"],
+                    "detail": provider.get("detail"),
+                    "item_count": provider["item_count"],
+                    "truncated": provider["truncated"],
+                }
+                for provider in inventory["providers"]
+            ],
+        }
+
+    async def read_memory(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        source_id = str(args.get("source_id") or "").strip()
+        if not source_id:
+            raise ValueError("source_id is required")
+        project = self._caller_project(caller)
+        result = await asyncio.to_thread(
+            self._context_service().read_source,
+            project.root,
+            source_id,
+        )
+        content = str(result["text"])
+        redacted = bool(content and looks_like_secret(content))
+        return {
+            "project": {"id": project.id, "name": project.name},
+            "source": result["source"],
+            "text": _REDACTED if redacted else content,
+            "redacted": redacted,
+        }
+
+    async def project_notes(self, caller: Any, _args: dict[str, Any]) -> dict[str, Any]:
+        project = self._caller_project(caller)
+        items = await asyncio.to_thread(
+            project_note_summaries,
+            project.root,
+            default_note_id=project.id,
+            default_title=f"{project.name} notes",
+            migrate_legacy=False,
+        )
+        return {
+            "project": {"id": project.id, "name": project.name},
+            "notes": [
+                {
+                    "note_id": item["note_id"],
+                    "title": item["title"],
+                    "created_at": item["created_at"],
+                    "updated_at": item["updated_at"],
+                    "bytes": item["bytes"],
+                    "revision": item["revision"],
+                    "excerpt": _redact(str(item.get("excerpt") or "")),
+                    "origin_session_id": item.get("origin_session_id"),
+                }
+                for item in items
+            ],
+        }
+
+    async def read_project_note(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        note_id = str(args.get("note_id") or "").strip()
+        if not note_id:
+            raise ValueError("note_id is required")
+        project = self._caller_project(caller)
+        inventory = await self.project_notes(caller, {})
+        summary = next(
+            (item for item in inventory["notes"] if item["note_id"] == note_id),
+            None,
+        )
+        if summary is None:
+            raise QueueError(
+                "unknown_note", "no such note in your Project", status=404
+            )
+        storage_id = DEFAULT_NOTE_STORAGE_ID if note_id == project.id else note_id
+        identity = ProjectIdentity(project.id, project.name, project.root, "registered")
+        note = await read_note(
+            project.root,
+            storage_id,
+            default_title=str(summary["title"]),
+            project=identity,
+        )
+        if not note.get("exists"):
+            raise QueueError(
+                "unknown_note", "no such note in your Project", status=404
+            )
+        markdown, truncated = _bounded_utf8(str(note.get("markdown") or ""), NOTE_MAX_BYTES)
+        redacted = bool(markdown and looks_like_secret(markdown))
+        return {
+            "project": {"id": project.id, "name": project.name},
+            "note": summary,
+            "markdown": _REDACTED if redacted else markdown,
+            "truncated": truncated,
+            "redacted": redacted,
+        }
+
+    async def message_status(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        message_id = str(args.get("message_id") or "").strip()
+        if not message_id:
+            raise ValueError("message_id is required")
+        return dict(await self._messaging().message_status(caller, message_id))
+
+    async def spawn_requests(
+        self, caller: Any, _args: dict[str, Any]
+    ) -> dict[str, Any]:
+        return dict(await self._messaging().spawn_requests(caller))
 
     # ----------------------------------------------------------- write tools
 
@@ -699,11 +1129,23 @@ class McpService:
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
         self.calls += 1
+        log.info(
+            "MCP tool call tool=%s caller_session=%s project=%s",
+            name,
+            caller.record.id,
+            caller.record.project_id,
+        )
         handlers = {
             "list_sessions": self.list_sessions,
             "get_session": self.get_session,
             "read_transcript": self.read_transcript,
             "search_history": self.search_history,
+            "memory_sources": self.memory_sources,
+            "read_memory": self.read_memory,
+            "project_notes": self.project_notes,
+            "read_project_note": self.read_project_note,
+            "message_status": self.message_status,
+            "spawn_requests": self.spawn_requests,
             "notify": self.notify,
             "request_spawn": self.request_spawn,
         }
@@ -741,16 +1183,18 @@ class McpService:
                     "protocolVersion": version,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "mux", "version": "0.1.0"},
-                    "instructions": (
-                        "Visibility into your swe-mux Project: sibling sessions, "
-                        "their live status, transcripts, and archived conversation "
-                        "search. Results are scoped to your Project; an empty "
+                        "instructions": (
+                            "Visibility into your swe-mux Project: sibling sessions, "
+                            "their live status and run briefs, pageable transcripts, "
+                            "archived conversation search, Project notes, message and "
+                            "spawn-request status, and exact Agent Context source reads. Results "
+                        "are scoped to your Project; an empty "
                         "result means nothing relevant exists. Two bounded write "
                         "tools exist: `notify` puts a message into another "
                         "session's prompt queue (it waits for that session's "
                         "readiness and, by default, for a human to approve it), "
-                        "and `request_spawn` drafts a new-session request for a "
-                        "human to approve — it starts nothing."
+                            "and `request_spawn` drafts a new-session request in the "
+                            "Fleet Queue for a human to approve. It starts nothing."
                     ),
                 }
             )

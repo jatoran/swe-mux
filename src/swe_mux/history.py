@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS history (
   id TEXT PRIMARY KEY, native_id TEXT NOT NULL, backend TEXT NOT NULL,
   name TEXT NOT NULL, cwd TEXT NOT NULL, project_id TEXT, note_id TEXT,
+  agent_run_seq INTEGER NOT NULL DEFAULT 0,
   spawned_at REAL NOT NULL, exited_at REAL, exit_reason TEXT,
   tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
   tokens_cache_read INTEGER NOT NULL DEFAULT 0,
@@ -250,6 +251,9 @@ class HistoryIndex:
             ),
             "project_id": "ALTER TABLE history ADD COLUMN project_id TEXT",
             "note_id": "ALTER TABLE history ADD COLUMN note_id TEXT",
+            "agent_run_seq": (
+                "ALTER TABLE history ADD COLUMN agent_run_seq INTEGER NOT NULL DEFAULT 0"
+            ),
             "repository_id": "ALTER TABLE history ADD COLUMN repository_id TEXT",
             "project_label": "ALTER TABLE history ADD COLUMN project_label TEXT",
             "project_root": "ALTER TABLE history ADD COLUMN project_root TEXT",
@@ -299,6 +303,16 @@ class HistoryIndex:
         for column, statement in migrations.items():
             if column not in columns:
                 self._db.execute(statement)
+        if "agent_run_seq" not in columns:
+            # Existing mux-owned rollover rows share ``note_id``. Their spawn
+            # order reconstructs the sequence without inspecting transcripts.
+            self._db.execute(
+                "UPDATE history SET agent_run_seq=(SELECT COUNT(*) FROM history earlier "
+                "WHERE earlier.note_id=history.note_id AND earlier.external=0 "
+                "AND (earlier.spawned_at<history.spawned_at OR "
+                "(earlier.spawned_at=history.spawned_at AND earlier.id<history.id))) "
+                "WHERE external=0"
+            )
         self._db.execute("UPDATE history SET note_id=id WHERE note_id IS NULL")
         if message_summary_added:
             rows = self._db.execute(
@@ -568,14 +582,14 @@ class HistoryIndex:
     ) -> None:
         self._db.execute(
             "INSERT OR REPLACE INTO history"
-            "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,"
+            "(id,native_id,backend,name,cwd,project_id,note_id,agent_run_seq,spawned_at,"
             "tokens_in,tokens_out,tokens_cache_read,tokens_cache_write,cost_usd,"
             "transcript_path,executable,argv_json,"
             "pinned_attention,shell_profile_id,agent_visible,repository_id,project_label,"
             "project_root,context_window,final_context_pct,peak_context_pct,model,"
             "measurement_source,project_scope_id,repo_group_id,auto_named,"
             "provider,provider_account_hashes_json) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row_id,
                 session.native_session_id,
@@ -584,6 +598,7 @@ class HistoryIndex:
                 session.cwd,
                 session.project_id,
                 session.id,
+                session.agent_run_seq,
                 session.created_at,
                 session.tokens_in,
                 session.tokens_out,
@@ -645,7 +660,7 @@ class HistoryIndex:
                 self._db.execute(
                     "UPDATE history SET exited_at=NULL,exit_reason=NULL,final_state=NULL,"
                     "name=?,cwd=?,project_id=?,executable=?,argv_json=?,pinned_attention=?,"
-                    "shell_profile_id=?,auto_named=?,"
+                    "shell_profile_id=?,auto_named=?,agent_run_seq=COALESCE(agent_run_seq,?),"
                     "transcript_path=COALESCE(?,transcript_path),repository_id=?,"
                     "project_label=?,project_root=?,project_scope_id=?,repo_group_id=? "
                     "WHERE id=?",
@@ -658,6 +673,7 @@ class HistoryIndex:
                         int(session.pinned_attention),
                         session.shell_profile_id,
                         int(session.auto_named),
+                        session.agent_run_seq,
                         transcript,
                         session.repository_id,
                         session.project_label,
@@ -808,14 +824,14 @@ class HistoryIndex:
             run_id = session.agent_run_id or session.id
             self._db.execute(
                 "INSERT INTO history"
-                "(id,native_id,backend,name,cwd,project_id,note_id,spawned_at,tokens_in,tokens_out,"
+                "(id,native_id,backend,name,cwd,project_id,note_id,agent_run_seq,spawned_at,tokens_in,tokens_out,"
                 "tokens_cache_read,tokens_cache_write,cost_usd,"
                 "transcript_path,executable,argv_json,pinned_attention,shell_profile_id,"
                 "agent_visible,repository_id,project_label,project_root,context_window,"
                 "final_context_pct,peak_context_pct,model,measurement_source,"
                 "project_scope_id,repo_group_id,auto_named,provider,"
                 "provider_account_hashes_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET native_id=excluded.native_id,"
                 "backend=excluded.backend,name=excluded.name,cwd=excluded.cwd,"
                 "project_id=excluded.project_id,transcript_path=excluded.transcript_path,"
@@ -823,7 +839,8 @@ class HistoryIndex:
                 "agent_visible=1,repository_id=excluded.repository_id,"
                 "project_label=excluded.project_label,project_root=excluded.project_root,"
                 "project_scope_id=excluded.project_scope_id,repo_group_id=excluded.repo_group_id,"
-                "auto_named=excluded.auto_named,provider=excluded.provider,"
+                "auto_named=excluded.auto_named,agent_run_seq=excluded.agent_run_seq,"
+                "provider=excluded.provider,"
                 "provider_account_hashes_json=excluded.provider_account_hashes_json",
                 (
                     run_id,
@@ -833,6 +850,7 @@ class HistoryIndex:
                     session.run_cwd or session.cwd,
                     session.project_id,
                     session.id,
+                    session.agent_run_seq,
                     session.agent_run_started_at or session.created_at,
                     session.tokens_in,
                     session.tokens_out,
@@ -1757,6 +1775,19 @@ class HistoryIndex:
         def op() -> dict[str, Any] | None:
             row = self._db.execute("SELECT * FROM history WHERE id=?", (session_id,)).fetchone()
             return _public_history_row(row) if row else None
+
+        return await self._run(op)
+
+    async def agent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        """Visible mux-owned runs belonging to one persistent terminal session."""
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM history WHERE note_id=? AND agent_visible=1 AND external=0 "
+                "ORDER BY COALESCE(agent_run_seq,0),spawned_at,id",
+                (session_id,),
+            ).fetchall()
+            return [_public_history_row(row) for row in rows]
 
         return await self._run(op)
 

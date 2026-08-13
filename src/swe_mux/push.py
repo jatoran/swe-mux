@@ -43,7 +43,9 @@ import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -122,8 +124,27 @@ def running_work(payload: dict[str, Any]) -> bool:
     return any(str(kind) in RUNNING_ACTIVITY_KINDS for kind in standing)
 
 
-def classify_notification(event: MuxEvent) -> dict[str, str] | None:
-    """Map a live event to a notification, mirroring the frontend classifySoundEvent.
+@dataclass(frozen=True, slots=True)
+class NotificationClassification:
+    category: str
+    note: dict[str, str] | None
+    plan_verdict: str
+    outcome: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationDecisionContext:
+    candidate_id: str
+    event_ts: float
+    event_seq: int
+    session_id: str
+    event_type: str
+    category: str
+
+
+def notification_classification(event: MuxEvent) -> NotificationClassification | None:
+    """Classify an event and retain explicit suppression decisions for telemetry.
 
     Root-agent events only: subagent/sidechain activity and non-root scopes are
     excluded so a busy fleet does not spam the lock screen.
@@ -141,55 +162,86 @@ def classify_notification(event: MuxEvent) -> dict[str, str] | None:
         count = int(payload.get("count") or 1)
         if count > 1:
             provider = str(payload.get("provider") or "provider")
-            return {
+            note = {
                 "category": "reset",
                 "title": "swe-mux",
                 "body": f"Unexpected quota reset on {count} {provider} accounts.",
             }
-        return {"category": "reset", "title": "swe-mux", "body": "Unexpected quota reset."}
+        else:
+            note = {
+                "category": "reset",
+                "title": "swe-mux",
+                "body": "Unexpected quota reset.",
+            }
+        return NotificationClassification("reset", note, "route", "eligible", "classified")
     if kind == "approval_needed":
         if payload.get("kind") == "input":
-            return {
+            note = {
                 "category": "attention",
                 "title": "swe-mux — question",
                 "body": "The agent is waiting for your answer.",
             }
-        return {
-            "category": "attention",
-            "title": "swe-mux — approval",
-            "body": "The agent needs your approval.",
-        }
+        else:
+            note = {
+                "category": "attention",
+                "title": "swe-mux — approval",
+                "body": "The agent needs your approval.",
+            }
+        return NotificationClassification(
+            "attention", note, "route", "eligible", "classified"
+        )
     # `turn_aborted` is cancellation, including deliberate session shutdown. A
     # real provider/process failure is reported by turn_failed/session_crashed.
     if kind in ("turn_failed", "session_crashed") or (
         kind == "state_changed" and payload.get("state") == "crashed"
     ):
-        return {
+        note = {
             "category": "failure",
             "title": "swe-mux — failed",
             "body": "The agent run failed.",
         }
-    if running_work(payload):
+        return NotificationClassification("failure", note, "route", "eligible", "classified")
+    if running_work(payload) and (
+        kind == "turn_ended" or (kind == "state_changed" and payload.get("state") == "idle")
+    ):
         # The turn ended; the agent did not. It resumes itself when its subagents
         # or background tasks land, so this is not the moment worth a lock-screen
         # alert — the next completion is. Suppressing here keeps "the alert means
         # the agent is done" true instead of training the user to ignore it.
-        return None
+        category = "complete" if kind == "turn_ended" else "waiting"
+        return NotificationClassification(
+            category, None, "suppress", "suppressed", "running_work"
+        )
     if kind == "turn_ended":
-        return {"category": "complete", "title": "swe-mux", "body": "The agent finished a turn."}
+        note = {
+            "category": "complete",
+            "title": "swe-mux",
+            "body": "The agent finished a turn.",
+        }
+        return NotificationClassification("complete", note, "route", "eligible", "classified")
     if kind == "state_changed" and payload.get("state") == "idle":
         if payload.get("previous") == "starting":
             # A session that just booted has not finished anything and is not
             # waiting on the human for anything they asked for. Worse, startup
             # `idle` is inferred from PTY quiet and is not even input-ready: the
             # CLI still swallows a submitting CR for several seconds after it.
-            return None
-        return {
+            return NotificationClassification(
+                "waiting", None, "suppress", "suppressed", "startup_settle"
+            )
+        note = {
             "category": "waiting",
             "title": "swe-mux — ready",
             "body": "The agent is waiting for your input.",
         }
+        return NotificationClassification("waiting", note, "settle", "held", "waiting_settle")
     return None
+
+
+def classify_notification(event: MuxEvent) -> dict[str, str] | None:
+    """Map a live event to the user-visible notification payload, if any."""
+
+    classification = notification_classification(event)
+    return classification.note if classification else None
 
 
 def _resolves_attention(event: MuxEvent) -> bool:
@@ -218,21 +270,40 @@ def notification_plan(
     an unreported or stale device looks absent, so the failure mode of the presence
     machinery is a redundant buzz rather than silence.
     """
+    return notification_plan_decision(
+        settings,
+        category,
+        device_present=device_present,
+        other_device_active=other_device_active,
+    )[0]
+
+
+def notification_plan_decision(
+    settings: dict[str, Any],
+    category: str,
+    *,
+    device_present: bool,
+    other_device_active: bool,
+) -> tuple[str, str]:
+    """Return the route verdict and its stable, content-free reason code."""
+
     if not settings.get("enabled"):
-        return "skip"
+        return "skip", "channel_disabled"
     if not settings.get("events", {}).get(category):
-        return "skip"
+        return "skip", "category_disabled"
     if in_quiet_time(settings):
-        return "skip"
+        return "skip", "quiet_time"
     suppress = str(settings.get("suppress") or "focused")
     if suppress == "never":
-        return "send"
+        return "send", "eligible"
     if device_present:
         # This very device is looking at the app; its foreground sound covers it.
-        return "skip"
+        return "skip", "device_present"
     if suppress == "anyDevice" and other_device_active:
-        return "defer" if category in DEFERRABLE_CATEGORIES else "skip"
-    return "send"
+        if category in DEFERRABLE_CATEGORIES:
+            return "defer", "other_device_active"
+        return "skip", "other_device_active"
+    return "send", "eligible"
 
 
 class PushStore:
@@ -343,6 +414,7 @@ class PushSender:
         clock: Callable[[], float] = time.time,
         presence: DevicePresenceStore | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        decision_store: Any | None = None,
     ) -> None:
         self._store = store
         self._settings = settings
@@ -350,10 +422,15 @@ class PushSender:
         self._clock = clock
         self._presence = presence or DevicePresenceStore(clock=clock)
         self._sleep = sleep
+        self._decision_store = decision_store
         self._recent: dict[tuple[str, str], float] = {}
         self._failures: dict[str, int] = {}
         self._deferred: dict[tuple[str, str, str], asyncio.Task[None]] = {}
+        self._deferred_decisions: dict[
+            tuple[str, str, str], tuple[NotificationDecisionContext, str]
+        ] = {}
         self._settling: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._settling_decisions: dict[tuple[str, str], NotificationDecisionContext] = {}
 
     async def run(self) -> None:
         queue = self._events.subscribe(name="push")
@@ -364,18 +441,24 @@ class PushSender:
                     await self._handle(event)
         finally:
             self._events.unsubscribe(queue)
-            self.cancel_pending()
+            await self.cancel_pending(reason="sender_stopped")
 
-    def cancel_pending(self, session_id: str | None = None) -> int:
+    async def cancel_pending(
+        self, session_id: str | None = None, *, reason: str = "resolved"
+    ) -> int:
         """Drop everything held for a session (or all of them): settles and deferrals.
 
         Both maps answer the same question from different ends — "is this alert
         still true?" — so anything that resolves a session has to clear both, or a
         settled alert outlives the resume that falsified it.
         """
-        return self.cancel_deferred(session_id) + self._cancel_settling(session_id)
+        deferred = await self.cancel_deferred(session_id, reason=reason)
+        settling = await self._cancel_settling(session_id, reason=reason)
+        return deferred + settling
 
-    def cancel_deferred(self, session_id: str | None = None) -> int:
+    async def cancel_deferred(
+        self, session_id: str | None = None, *, reason: str = "resolved"
+    ) -> int:
         """Drop pending deferrals, for one session or all of them."""
         keys = [
             key
@@ -384,12 +467,35 @@ class PushSender:
         ]
         for key in keys:
             self._deferred.pop(key).cancel()
+            decision = self._deferred_decisions.pop(key, None)
+            if decision is not None:
+                context, profile = decision
+                await self._record_decision(
+                    context,
+                    stage="delivery",
+                    profile=profile,
+                    plan_verdict="cancel",
+                    outcome="cancelled",
+                    reason=reason,
+                )
         return len(keys)
 
-    def _cancel_settling(self, session_id: str | None = None) -> int:
+    async def _cancel_settling(
+        self, session_id: str | None = None, *, reason: str = "resolved"
+    ) -> int:
         keys = [key for key in self._settling if session_id is None or key[0] == session_id]
         for key in keys:
             self._settling.pop(key).cancel()
+            context = self._settling_decisions.pop(key, None)
+            if context is not None:
+                await self._record_decision(
+                    context,
+                    stage="settle",
+                    profile=None,
+                    plan_verdict="cancel",
+                    outcome="cancelled",
+                    reason=reason,
+                )
         return len(keys)
 
     def pending_deferrals(self) -> int:
@@ -398,34 +504,103 @@ class PushSender:
     def pending_settles(self) -> int:
         return len(self._settling)
 
+    async def _record_decision(
+        self,
+        context: NotificationDecisionContext,
+        *,
+        stage: str,
+        profile: str | None,
+        plan_verdict: str,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        if self._decision_store is None:
+            return
+        try:
+            await self._decision_store.record_notification_decision(
+                candidate_id=context.candidate_id,
+                event_ts=context.event_ts,
+                event_seq=context.event_seq,
+                session_id=context.session_id,
+                event_type=context.event_type,
+                category=context.category,
+                stage=stage,
+                profile=profile,
+                plan_verdict=plan_verdict,
+                outcome=outcome,
+                reason=reason,
+                decided_at=self._clock(),
+            )
+        except Exception:
+            log.exception(
+                "notification decision persistence failed: candidate=%s stage=%s outcome=%s",
+                context.candidate_id,
+                stage,
+                outcome,
+            )
+
     async def _handle(self, event: MuxEvent) -> None:
         if _resolves_attention(event):
             # The user dealt with this session (typed into it, or the agent resumed),
             # so anything held for it is answered and must not arrive late.
-            self.cancel_pending(event.session_id or "")
-        note = classify_notification(event)
-        if not note:
+            await self.cancel_pending(
+                event.session_id or "", reason=f"resolved_by_{event.type}"
+            )
+        classification = notification_classification(event)
+        if classification is None:
             return
-        if note["category"] in SETTLED_CATEGORIES:
+        context = NotificationDecisionContext(
+            candidate_id=uuid.uuid4().hex,
+            event_ts=event.ts,
+            event_seq=event.seq,
+            session_id=event.session_id or "global",
+            event_type=event.type,
+            category=classification.category,
+        )
+        await self._record_decision(
+            context,
+            stage="classification",
+            profile=None,
+            plan_verdict=classification.plan_verdict,
+            outcome=classification.outcome,
+            reason=classification.reason,
+        )
+        if classification.note is None:
+            return
+        if classification.note["category"] in SETTLED_CATEGORIES:
             # Hold before deciding anything. An idle that the agent walks back is
             # indistinguishable from a real one at the moment it is raised; the
             # only thing that tells them apart is what happens next.
-            self._settle(event.session_id or "", note)
+            await self._settle(context, classification.note)
             return
-        await self._dispatch(event.session_id or "", note)
+        await self._dispatch(context, classification.note)
 
-    def _settle(self, session_id: str, note: dict[str, str]) -> None:
-        key = (session_id, note["category"])
+    async def _settle(
+        self, context: NotificationDecisionContext, note: dict[str, str]
+    ) -> None:
+        key = (context.session_id, note["category"])
         if key in self._settling:
             # Already waiting out this session's readiness; a repeat idle inside the
             # hold is the same claim, not a new one.
+            await self._record_decision(
+                context,
+                stage="settle",
+                profile=None,
+                plan_verdict="skip",
+                outcome="duplicate",
+                reason="already_settling",
+            )
             return
-        task = asyncio.create_task(self._dispatch_settled(key, note), name="push-settle")
+        task = asyncio.create_task(
+            self._dispatch_settled(key, note, context), name="push-settle"
+        )
         self._settling[key] = task
+        self._settling_decisions[key] = context
 
         def finished(done: asyncio.Task[None]) -> None:
             if self._settling.get(key) is done:
                 del self._settling[key]
+                self._settling_decisions.pop(key, None)
             if done.cancelled():
                 return
             try:
@@ -435,45 +610,103 @@ class PushSender:
 
         task.add_done_callback(finished)
 
-    async def _dispatch_settled(self, key: tuple[str, str], note: dict[str, str]) -> None:
+    async def _dispatch_settled(
+        self,
+        key: tuple[str, str],
+        note: dict[str, str],
+        context: NotificationDecisionContext,
+    ) -> None:
         await self._sleep(WAITING_SETTLE_SECONDS)
         # Leave the map before dispatching: past this point the alert has survived
         # the hold and is being delivered, and a cancel landing mid-`gather` would
         # tear down a send already in flight rather than preventing one.
         if self._settling.get(key) is asyncio.current_task():
             del self._settling[key]
-        await self._dispatch(key[0], note)
+            self._settling_decisions.pop(key, None)
+        await self._record_decision(
+            context,
+            stage="settle",
+            profile=None,
+            plan_verdict="release",
+            outcome="survived",
+            reason="settle_elapsed",
+        )
+        await self._dispatch(context, note)
 
-    async def _dispatch(self, session_id: str, note: dict[str, str]) -> None:
+    async def _dispatch(
+        self, context: NotificationDecisionContext, note: dict[str, str]
+    ) -> None:
         subs = self._store.list()
         if not subs:
+            await self._record_decision(
+                context,
+                stage="route",
+                profile=None,
+                plan_verdict="skip",
+                outcome="skipped",
+                reason="no_subscription",
+            )
             return
         now = self._clock()
-        dedup_key = (session_id, note["category"])
+        dedup_key = (context.session_id, note["category"])
         if self._recent.get(dedup_key, 0.0) > now - _DEDUP_WINDOW:
+            await self._record_decision(
+                context,
+                stage="route",
+                profile=None,
+                plan_verdict="skip",
+                outcome="duplicate",
+                reason="dedup_window",
+            )
             return
         self._recent = {key: at for key, at in self._recent.items() if at > now - 60}
-        targets = []
+        targets: list[tuple[dict[str, Any], str]] = []
         for sub in subs:
             profile = str(sub.get("profile", "mobile"))
             settings = self._settings.notifications(profile)
-            plan = notification_plan(
+            plan, reason = notification_plan_decision(
                 settings,
                 note["category"],
                 device_present=self._store.is_present(str(sub["endpoint"]), now),
                 other_device_active=self._presence.other_profile_active(profile, now),
             )
             if plan == "send":
-                targets.append(sub)
+                targets.append((sub, profile))
             elif plan == "defer":
-                self._defer(sub, note, session_id, now)
+                deferred = self._defer(sub, note, context, now, profile)
+                await self._record_decision(
+                    context,
+                    stage="route",
+                    profile=profile,
+                    plan_verdict="defer" if deferred else "skip",
+                    outcome="deferred" if deferred else "duplicate",
+                    reason=reason if deferred else "already_deferred",
+                )
+            else:
+                await self._record_decision(
+                    context,
+                    stage="route",
+                    profile=profile,
+                    plan_verdict="skip",
+                    outcome="skipped",
+                    reason=reason,
+                )
         if not targets:
             return
         # Concurrently: one stale endpoint that times out rather than returning
         # 410 otherwise delays every later endpoint by the full 10s push timeout,
         # and on a busy fleet the queue backs up until lock-screen alerts arrive
         # minutes late — the exact moment the feature exists for.
-        results = await asyncio.gather(*(self._send(sub, note) for sub in targets))
+        results = await asyncio.gather(*(self._send(sub, note) for sub, _profile in targets))
+        for (_sub, profile), delivered in zip(targets, results, strict=True):
+            await self._record_decision(
+                context,
+                stage="delivery",
+                profile=profile,
+                plan_verdict="send",
+                outcome="delivered" if delivered else "failed",
+                reason="immediate",
+            )
         # Only a real delivery arms the dedup window. Counting a failed send as
         # delivered swallowed the follow-up event too, so a transient push-service
         # outage produced no notification at all.
@@ -481,20 +714,28 @@ class PushSender:
             self._recent[dedup_key] = now
 
     def _defer(
-        self, sub: dict[str, Any], note: dict[str, str], session_id: str, raised_at: float
-    ) -> None:
-        key = (session_id, note["category"], str(sub["endpoint"]))
+        self,
+        sub: dict[str, Any],
+        note: dict[str, str],
+        context: NotificationDecisionContext,
+        raised_at: float,
+        profile: str,
+    ) -> bool:
+        key = (context.session_id, note["category"], str(sub["endpoint"]))
         if key in self._deferred:
             # Already waiting on this exact alert; a repeat is the same question.
-            return
+            return False
         task = asyncio.create_task(
-            self._deliver_later(key, sub, note, raised_at), name="push-deferred"
+            self._deliver_later(key, sub, note, raised_at, context, profile),
+            name="push-deferred",
         )
         self._deferred[key] = task
+        self._deferred_decisions[key] = (context, profile)
 
         def finished(done: asyncio.Task[None]) -> None:
             if self._deferred.get(key) is done:
                 del self._deferred[key]
+                self._deferred_decisions.pop(key, None)
             if done.cancelled():
                 return
             try:
@@ -503,6 +744,7 @@ class PushSender:
                 log.exception("deferred push delivery failed")
 
         task.add_done_callback(finished)
+        return True
 
     async def _deliver_later(
         self,
@@ -510,28 +752,86 @@ class PushSender:
         sub: dict[str, Any],
         note: dict[str, str],
         raised_at: float,
+        context: NotificationDecisionContext,
+        profile: str,
     ) -> None:
         await self._sleep(DEFERRAL_SECONDS)
-        profile = str(sub.get("profile", "mobile"))
         settings = self._settings.notifications(profile)
         now = self._clock()
-        if not settings.get("enabled") or not settings.get("events", {}).get(note["category"]):
+        if not settings.get("enabled"):
+            await self._record_decision(
+                context,
+                stage="delivery",
+                profile=profile,
+                plan_verdict="skip",
+                outcome="skipped",
+                reason="channel_disabled",
+            )
+            return
+        if not settings.get("events", {}).get(note["category"]):
+            await self._record_decision(
+                context,
+                stage="delivery",
+                profile=profile,
+                plan_verdict="skip",
+                outcome="skipped",
+                reason="category_disabled",
+            )
             return
         # Quiet hours are re-checked here, not only when the alert was raised: a
         # deferral can cross the boundary into them.
         if in_quiet_time(settings):
+            await self._record_decision(
+                context,
+                stage="delivery",
+                profile=profile,
+                plan_verdict="skip",
+                outcome="skipped",
+                reason="quiet_time",
+            )
             return
         if settings.get("suppress") != "never" and self._store.is_present(
             str(sub["endpoint"]), now
         ):
+            await self._record_decision(
+                context,
+                stage="delivery",
+                profile=profile,
+                plan_verdict="skip",
+                outcome="skipped",
+                reason="device_present",
+            )
             return
         if self._presence.interaction_since(raised_at, exclude=profile):
             # The user has touched another device since this was raised: they were
             # there, they can see it, and they did not act. Chasing them is noise.
+            await self._record_decision(
+                context,
+                stage="delivery",
+                profile=profile,
+                plan_verdict="skip",
+                outcome="skipped",
+                reason="other_device_interaction",
+            )
             return
         # Nothing since the alert — they are away from the device that held it back.
         # This is the case plain suppression loses, so deliver, late but useful.
-        if await self._send(sub, note):
+        # Leave the pending map before the push call. A cancellation can prevent a
+        # deferred send, but it cannot stop a blocking push-service call once its
+        # worker thread has started, so reporting that race as cancelled would lie.
+        if self._deferred.get(key) is asyncio.current_task():
+            del self._deferred[key]
+            self._deferred_decisions.pop(key, None)
+        delivered = await self._send(sub, note)
+        await self._record_decision(
+            context,
+            stage="delivery",
+            profile=profile,
+            plan_verdict="send",
+            outcome="delivered" if delivered else "failed",
+            reason="deferral_elapsed",
+        )
+        if delivered:
             self._recent[(key[0], key[1])] = self._clock()
 
     async def _send(self, sub: dict[str, Any], note: dict[str, str]) -> bool:

@@ -11,7 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from swe_mux import server as server_module
 from swe_mux.agent_context import AgentContextConflict, AgentContextService
 from swe_mux.event_bus import EventBus
-from swe_mux.harness import descriptor, instruction_harnesses
+from swe_mux.harness import HARNESSES, descriptor, instruction_harnesses
 from swe_mux.server import (
     error_middleware,
     get_agent_context,
@@ -99,11 +99,23 @@ def test_inventory_is_project_scoped_typed_and_tracks_run_start(tmp_path: Path) 
         for label, item in global_items.items()
         if label not in {"~/.claude/CLAUDE.md", "~/.codex/AGENTS.md"}
     )
-    claude, codex = inventory["providers"]
+    providers = {provider["id"]: provider for provider in inventory["providers"]}
+    assert list(providers) == list(HARNESSES)
+    claude = providers["claude"]
+    codex = providers["codex"]
     assert claude["status"] == "available"
     assert [item["label"] for item in claude["items"]] == ["MEMORY.md", "testing.md"]
     assert claude["item_count"] == 2
     assert codex["status"] == "unsupported"
+    assert all(
+        providers[name]["status"] == "unsupported"
+        for name in HARNESSES
+        if name not in {"claude", "codex"}
+    )
+    assert {option["direction"] for option in inventory["sync_options"]} == {
+        "instruction:claude->instruction:codex",
+        "instruction:codex->instruction:claude",
+    }
 
     source = service.read_source(root, claude["items"][1]["id"])
     assert source["source"]["kind"] == "memory"

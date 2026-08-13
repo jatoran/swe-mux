@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "host-key-confirmation",
+      "screen": "The authenticity of host 'example.test' cannot be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+      "outcome": "authentication"
+    },
+    {
+      "id": "password",
+      "screen": "builder@example.test's password: ",
+      "outcome": "authentication"
+    },
+    {
+      "id": "key-passphrase",
+      "screen": "Enter passphrase for key 'C:/Users/me/.ssh/id_ed25519': ",
+      "outcome": "authentication"
+    },
+    {
+      "id": "verification-code",
+      "screen": "Verification code: ",
+      "outcome": "authentication"
+    },
+    {
+      "id": "keyboard-interactive",
+      "screen": "Keyboard-interactive authentication\nVerification code: ",
+      "outcome": "authentication"
+    },
+    {
+      "id": "mfa-challenge",
+      "screen": "Duo MFA challenge: ",
+      "outcome": "authentication"
+    },
+    {
+      "id": "quiet-remote-shell",
+      "screen": "Last login: Tue Aug 12 10:02:00 2026 from 192.0.2.1\nbuilder@example:~$ ",
+      "outcome": "unknown",
+      "session_state": "idle"
+    },
+    {
+      "id": "remote-long-running-command",
+      "screen": "Building release artifacts...",
+      "outcome": "unknown",
+      "session_state": "running"
+    },
+    {
+      "id": "server-closed",
+      "screen": "Connection to example.test closed.",
+      "outcome": "transport_ended"
+    },
+    {
+      "id": "broken-pipe",
+      "screen": "client_loop: send disconnect: Broken pipe",
+      "outcome": "transport_ended"
+    },
+    {
+      "id": "connection-reset",
+      "screen": "Connection reset by 192.0.2.1 port 22",
+      "outcome": "transport_ended"
+    },
+    {
+      "id": "server-timeout",
+      "screen": "Timeout, server not responding",
+      "outcome": "transport_ended"
+    }
+  ]
+}

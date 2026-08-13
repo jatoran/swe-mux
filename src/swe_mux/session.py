@@ -49,7 +49,7 @@ from .models import (
     StandingActivityKind,
 )
 from .pty_host import PtyHost, merge_environment
-from .runtime_cwd import Osc7Parser, OscSignalParser, local_directory_from_osc7
+from .runtime_cwd import Osc7Parser, OscSignalParser, classify_osc7_location
 from .screen_mode import (
     BRACKETED_PASTE_TOGGLE,
     SCREEN_TOGGLE,
@@ -691,6 +691,33 @@ def apply_state_transition(
     return True
 
 
+def note_remote_shell_submission(session: Any, data: str | bytes) -> bool:
+    """Move an idle remote shell to running when the operator submits a command."""
+
+    if isinstance(data, bytes):
+        submitted = b"\r" in data or b"\n" in data
+    else:
+        submitted = "\r" in data or "\n" in data
+    if (
+        not submitted
+        or getattr(session.record, "backend", None) != "shell"
+        or getattr(session.record, "runtime_boundary", "local") != "remote"
+        or session.record.state != "idle"
+    ):
+        return False
+    changed = apply_state_transition(
+        session,
+        "running",
+        "Remote command running",
+        source="daemon",
+        evidence="remote_shell_submission",
+        force=True,
+    )
+    if changed:
+        session.publish_update()
+    return changed
+
+
 # --- standing-activity annotations (the fifth status axis) -------------------
 #
 # Standing engagements — an armed /loop, a cron schedule, background tasks,
@@ -907,9 +934,23 @@ WatchdogAction = Literal[
 # evidence. Agent-owned viewers deliberately return `uninformative`: their body
 # text describes another screen and must not be mistaken for live lifecycle
 # evidence by any PTY consumer.
-PtyTailState = Literal["working", "approval", "idle", "uninformative", "unknown"]
+PtyTailState = Literal[
+    "working",
+    "approval",
+    "authentication",
+    "transport_ended",
+    "idle",
+    "uninformative",
+    "unknown",
+]
 ScreenRuleState = Literal[
-    "working", "approval", "idle", "background_wait", "uninformative"
+    "working",
+    "approval",
+    "authentication",
+    "transport_ended",
+    "idle",
+    "background_wait",
+    "uninformative",
 ]
 ScreenRegionKind = Literal[
     "whole_tail",
@@ -989,6 +1030,51 @@ PTY_RULES: tuple[ScreenRule, ...] = (
         "uninformative",
         bottom_non_empty_lines(12),
         re.compile(r"(?is)session tree.*enter: switch.*search:"),
+    ),
+    ScreenRule(
+        "ssh.authentication.host_key",
+        "authentication",
+        bottom_non_empty_lines(12),
+        re.compile(r"(?is)are you sure you want to continue connecting.*(?:yes/no|fingerprint)"),
+    ),
+    ScreenRule(
+        "ssh.authentication.password",
+        "authentication",
+        bottom_non_empty_lines(6),
+        re.compile(
+            r"(?im)(?:^|\n)(?:[^@\n]{1,80}@[^:\n]{1,160}'s password|"
+            r"enter passphrase for key '[^'\n]{1,240}'):\s*$"
+        ),
+    ),
+    ScreenRule(
+        "ssh.authentication.challenge",
+        "authentication",
+        bottom_non_empty_lines(10),
+        re.compile(
+            r"(?im)(?:verification|authentication|one[- ]time|security) code\s*:|"
+            r"keyboard-interactive|\b(?:otp|mfa|duo)\b[^\n]*:\s*$"
+        ),
+    ),
+    ScreenRule(
+        "ssh.transport.connection_closed",
+        "transport_ended",
+        bottom_non_empty_lines(8),
+        re.compile(r"(?im)connection (?:to .+ )?closed"),
+    ),
+    ScreenRule(
+        "ssh.transport.client_loop",
+        "transport_ended",
+        bottom_non_empty_lines(8),
+        re.compile(r"(?im)client_loop:[^\n]*(?:broken pipe|connection reset|timed out)"),
+    ),
+    ScreenRule(
+        "ssh.transport.failure",
+        "transport_ended",
+        bottom_non_empty_lines(8),
+        re.compile(
+            r"(?im)(?:connection reset|broken pipe|timeout, server not responding|"
+            r"connection timed out)"
+        ),
     ),
     ScreenRule(
         "approval.question", "approval", AFTER_LAST_PROMPT_MARKER, _contains("do you want to")
@@ -1175,6 +1261,12 @@ def pty_tail_explain(
         if matched and rule.state != "background_wait" and outcome == "unknown":
             outcome = cast(PtyTailState, rule.state)
     screen_outcome = outcome
+    if outcome == "authentication" and any(
+        item["matched"] and str(item["id"]).startswith("ssh.authentication.")
+        for item in evaluations
+    ):
+        for item in evaluations:
+            item["preview"] = "[SSH authentication prompt withheld]"
     normalized_cli_status = str(cli_state_status or "").strip().lower() or None
     # A CLI-state reading may only arbitrate for a harness that actually publishes
     # one, which the descriptor declares (`publishes_cli_state`). `None` is the
@@ -3647,6 +3739,12 @@ class SessionManager:
         while not session.stop_event.is_set() and session.pty.isalive():
             if session.record.backend != "shell":
                 return
+            if session.record.runtime_boundary != "local":
+                try:
+                    await asyncio.wait_for(session.stop_event.wait(), timeout=0.5)
+                except TimeoutError:
+                    pass
+                continue
             # Scan only output produced since the previous poll, accumulating which
             # agent names have appeared. A plain shell may never launch an agent, so
             # re-joining and re-lowercasing the whole retained scrollback twice a
@@ -3742,6 +3840,13 @@ class SessionManager:
         backend = require_backend(backend)
         session = self.resolve(sid)
         self._ensure_spawn_identity(session.record)
+        if session.record.runtime_boundary != "local":
+            log.warning(
+                "session %s rejected %s promotion across remote boundary",
+                session.record.id,
+                backend,
+            )
+            raise ValueError("agent promotion is unavailable inside a remote shell")
         if session.record.spawn_backend in AGENT_BACKENDS:
             await self.events.emit(
                 "backend_promotion_ignored",
@@ -5190,6 +5295,8 @@ class SessionManager:
         from .observation import transcript_tail_turn_state
 
         record = session.record
+        if await SessionManager._check_ssh_boundary_state(self, session, now):
+            return
         if not has_observable_transcript(record.backend):
             return
         # Annotation TTL sweep runs before any early return below: expiry is
@@ -5349,6 +5456,100 @@ class SessionManager:
             stalled_seconds=stalled,
             tail_verdict=verdict,
         )
+
+    async def _check_ssh_boundary_state(self, session: Session, now: float) -> bool:
+        """Apply SSH prompt and disconnect evidence before agent-only watchdog gates."""
+        explanation = self._pty_tail_explanation(session)
+        outcome = cast(PtyTailState, explanation["outcome"])
+        if outcome not in {"authentication", "transport_ended"}:
+            if session.record.awaiting_reason != "authentication":
+                return False
+            apply_state_transition(
+                session,
+                "running" if session.record.backend == "shell" else "idle",
+                None,
+                source="daemon",
+                evidence="ssh_authentication_cleared",
+                force=True,
+            )
+            session.record.remote_transport_state = (
+                "connected" if session.record.runtime_boundary == "remote" else None
+            )
+            session.publish_update()
+            await self.events.emit(
+                "ssh_authentication_cleared",
+                session_id=session.record.id,
+                source="watchdog-pty",
+                boundary=session.record.runtime_boundary,
+            )
+            return False
+
+        self._note_pty_tail_readings(session, explanation, now=now)
+        if outcome == "authentication":
+            if session.record.runtime_boundary != "remote":
+                matched = {
+                    str(item["id"])
+                    for item in explanation["rules"]
+                    if item["matched"]
+                }
+                if matched & {
+                    "ssh.authentication.host_key",
+                    "ssh.authentication.password",
+                }:
+                    SessionManager._accept_remote_boundary(
+                        self, session, "unknown", source="ssh-prompt"
+                    )
+            session.record.remote_transport_state = "authentication"
+            if session.record.awaiting_reason != "authentication":
+                apply_state_transition(
+                    session,
+                    "awaiting",
+                    "SSH authentication required",
+                    source="watchdog-pty",
+                    evidence="ssh_authentication_prompt",
+                    awaiting_reason="authentication",
+                    force=True,
+                )
+                session.publish_update()
+                log.info("session %s is waiting for SSH authentication", session.record.id)
+                await self.events.emit(
+                    "ssh_authentication_required",
+                    session_id=session.record.id,
+                    source="watchdog-pty",
+                    boundary=session.record.runtime_boundary,
+                )
+            return True
+
+        matched = {
+            str(item["id"])
+            for item in explanation["rules"]
+            if item["matched"]
+        }
+        strong_transport_evidence = bool(
+            matched
+            & {
+                "ssh.transport.connection_closed",
+                "ssh.transport.client_loop",
+            }
+        )
+        if session.record.runtime_boundary != "remote" and not strong_transport_evidence:
+            return False
+        if session.record.runtime_boundary != "remote":
+            SessionManager._accept_remote_boundary(
+                self, session, "unknown", source="ssh-transport"
+            )
+        if not session.observation_state.get("ssh_transport_ended"):
+            session.observation_state["ssh_transport_ended"] = now
+            session.record.remote_transport_state = "ended"
+            session.publish_update()
+            log.info("session %s observed an ended SSH transport", session.record.id)
+            await self.events.emit(
+                "ssh_transport_ended",
+                session_id=session.record.id,
+                source="watchdog-pty",
+                boundary=session.record.runtime_boundary,
+            )
+        return session.record.runtime_boundary == "remote"
 
     async def _check_unwitnessed_pty_turn(self, session: Session, now: float) -> bool:
         """Drive turn state from the screen while nothing else can. True if applied.
@@ -5749,8 +5950,12 @@ class SessionManager:
         task.add_done_callback(session.tasks.discard)
 
     def _queue_runtime_cwd(self, session: Session, uri: str) -> None:
-        path = local_directory_from_osc7(uri)
-        if path is None:
+        location = classify_osc7_location(uri)
+        if location.kind == "remote":
+            self._accept_remote_boundary(session, location.authority or "remote")
+            return
+        path = location.path
+        if location.kind != "local" or path is None:
             self._drop_runtime_cwd(session)
             return
         now = time.monotonic()
@@ -5766,6 +5971,66 @@ class SessionManager:
         )
         session.cwd_debounce_task = task
         session.tasks.add(task)
+
+    def _accept_remote_boundary(
+        self, session: Session, authority: str, *, source: str = "osc7"
+    ) -> None:
+        record = session.record
+        if record.runtime_boundary == "remote" and record.remote_authority == authority:
+            changed = record.remote_transport_state != "connected"
+            if changed:
+                record.remote_transport_state = "connected"
+                getattr(session, "observation_state", {}).pop("ssh_transport_ended", None)
+            if source == "osc7" and record.backend == "shell":
+                changed = apply_state_transition(
+                    session,
+                    "idle",
+                    "Remote shell prompt",
+                    source="daemon",
+                    evidence="remote_shell_prompt",
+                    force=True,
+                ) or changed
+            if changed:
+                session.publish_update()
+            return
+        now = time.time()
+        record.runtime_boundary = "remote"
+        record.remote_authority = authority
+        record.remote_since = now
+        record.remote_transport_state = "connected"
+        getattr(session, "observation_state", {}).pop("ssh_transport_ended", None)
+        record.runtime_cwd_live = False
+        record.runtime_cwd_source = f"remote-{source}"
+        record.runtime_cwd_updated_at = now
+        record.runtime_project_scope_id = None
+        record.git = GitState()
+        if source == "osc7" and record.backend == "shell":
+            apply_state_transition(
+                session,
+                "idle",
+                "Remote shell prompt",
+                source="daemon",
+                evidence="remote_shell_prompt",
+                force=True,
+            )
+        session.publish_update()
+        log.info(
+            "session %s crossed remote terminal boundary authority=%s",
+            record.id,
+            authority,
+        )
+        task = asyncio.create_task(
+            self.events.emit(
+                "session_boundary_changed",
+                session_id=record.id,
+                source=source,
+                boundary="remote",
+                authority=authority,
+            ),
+            name=f"remote-boundary-{record.id}",
+        )
+        session.tasks.add(task)
+        task.add_done_callback(session.tasks.discard)
 
     async def _accept_runtime_cwd(
         self,
@@ -5792,7 +6057,12 @@ class SessionManager:
             if session.stop_event.is_set() or not path.is_dir():
                 return
             value = str(path)
-            if session.record.runtime_cwd_live and session.record.runtime_cwd == value:
+            boundary_changed = session.record.runtime_boundary != "local"
+            if (
+                not boundary_changed
+                and session.record.runtime_cwd_live
+                and session.record.runtime_cwd == value
+            ):
                 return
             now = time.monotonic()
             while session.cwd_switches and now - session.cwd_switches[0] >= 60:
@@ -5808,7 +6078,21 @@ class SessionManager:
             session.record.runtime_cwd_source = source
             session.record.runtime_cwd_updated_at = time.time()
             session.record.runtime_project_scope_id = project.id if known else None
+            session.record.runtime_boundary = "local"
+            session.record.remote_authority = None
+            session.record.remote_since = None
+            session.record.remote_transport_state = None
+            getattr(session, "observation_state", {}).pop("ssh_transport_ended", None)
             session.record.git = GitState()
+            if session.record.awaiting_reason == "authentication":
+                apply_state_transition(
+                    session,
+                    "running" if session.record.backend == "shell" else "idle",
+                    None,
+                    source="daemon",
+                    evidence="local_boundary_restored",
+                    force=True,
+                )
             session.publish_update()
             await self.events.emit(
                 "runtime_cwd_changed",
@@ -5818,6 +6102,13 @@ class SessionManager:
                 project_scope_id=session.record.runtime_project_scope_id,
                 dropped=session.cwd_telemetry_dropped,
             )
+            if boundary_changed:
+                await self.events.emit(
+                    "session_boundary_changed",
+                    session_id=session.record.id,
+                    source=channel,
+                    boundary="local",
+                )
         except asyncio.CancelledError:
             raise
 
@@ -5838,6 +6129,8 @@ class SessionManager:
         """
         record = session.record
         if session.stopping or session.stop_event.is_set():
+            return
+        if record.runtime_boundary != "local":
             return
         raw = str(payload.get("cwd") or "").strip()
         if not raw:

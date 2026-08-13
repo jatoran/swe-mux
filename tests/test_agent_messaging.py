@@ -110,6 +110,7 @@ class Harness:
             append_observation=lambda cwd, body, **kw: append_observation(
                 cwd, body, project=self.identity, **kw
             ),
+            read_observations=read_observations,
         )
 
     def close(self) -> None:
@@ -346,6 +347,9 @@ async def test_request_spawn_writes_an_inert_draft_and_starts_nothing(
     # Nothing was queued and nothing was written to any terminal.
     assert not harness.writes
     assert await harness.store.mailbox() == []
+    fleet = await harness.messaging.mailbox(author="non_human")
+    assert [item["id"] for item in fleet["spawn_requests"]] == [result["request_id"]]
+    assert fleet["spawn_requests"][0]["status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -403,6 +407,57 @@ async def test_the_mailbox_filters_before_its_result_limit(tmp_path: Path) -> No
         assert {target["target_session_id"] for target in by_project["targets"]} == {"s2", "s3"}
     finally:
         built.close()
+
+
+@pytest.mark.asyncio
+async def test_message_status_is_visible_only_to_the_notify_sender(harness: Harness) -> None:
+    sent = await harness.messaging.notify(
+        harness.manager.sessions["s1"], target="s2", body="check status"
+    )
+
+    status = await harness.messaging.message_status(
+        harness.manager.sessions["s1"], sent["message_id"]
+    )
+
+    assert status["status"] == "drafted"
+    assert status["queue_state"] == "draft"
+    assert "body" not in status
+    with pytest.raises(QueueError) as caught:
+        await harness.messaging.message_status(
+            harness.manager.sessions["s2"], sent["message_id"]
+        )
+    assert caught.value.code == "unknown_message"
+
+
+@pytest.mark.asyncio
+async def test_message_status_preserves_expired_after_queue_cleanup(harness: Harness) -> None:
+    sent = await harness.messaging.notify(
+        harness.manager.sessions["s1"], target="s2", body="expire me"
+    )
+    await harness.service.cancel(sent["message_id"], kind="expired")
+
+    status = await harness.messaging.message_status(
+        harness.manager.sessions["s1"], sent["message_id"]
+    )
+
+    assert status["status"] == "expired"
+    assert status["queue_state"] == "cancelled"
+    assert status["cancel_kind"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_spawn_request_status_lists_only_the_callers_requests(harness: Harness) -> None:
+    own = await harness.messaging.request_spawn(
+        harness.manager.sessions["s1"], prompt="continue my work"
+    )
+    await harness.messaging.request_spawn(
+        harness.manager.sessions["s2"], prompt="continue other work"
+    )
+
+    result = await harness.messaging.spawn_requests(harness.manager.sessions["s1"])
+
+    assert [item["id"] for item in result["requests"]] == [own["request_id"]]
+    assert result["requests"][0]["from_session"] == "s1"
 
 
 @pytest.mark.asyncio

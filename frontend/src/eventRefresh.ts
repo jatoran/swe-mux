@@ -20,6 +20,8 @@ const EVENT_HANDLED_WITHOUT_FLEET_REFRESH = new Set([
   'queue_delivery',
   'queue_updated',
   'settings_changed',
+  'spawn_request_decided',
+  'spawn_request_drafted',
   'terminal_attached',
   'terminal_client_repair',
   'terminal_detached',

@@ -1,77 +1,52 @@
-# Observation inbox
+# Observation storage compatibility
 
 ## What it is
 
-A per-Project capture surface for quick notes-to-self dropped while testing, with no AI.
-Capture now without switching to the agent, then hand the batch over in one insert. A
-project-owned resource file. Vision: `../../development/CONTROL_PLANE_ROADMAP.md` §6.9.
+The Observation Inbox user surface was retired in Phase 5.6.
+Humans use Project notes for Project-scoped context and the global Scratchpad for cross-Project context.
+Agent-authored spawn requests appear as approval rows in Fleet Queue.
 
-## Key concepts
+The old `<project>/.swe-mux/observations.json` format remains as compatibility storage for typed spawn requests and for existing installations that still contain legacy note rows.
+There is no `observations.open` command, Project-menu entry, or mounted Observation Inbox component.
 
-- **Observation**: `{ id, body, done, created_at }`. Append-only capture; edits (toggle
-  done, delete, reorder) replace the whole list under a revision check.
-- **Typed request** (Phase 5): an item may also carry `kind: "spawn_request"` and a
-  `request` payload (`prompt`, `backend`, `name`, `reason`, `cwd`, calling-session
-  provenance, `status`). Written by `mux.requestSpawn` and inert by construction — it is
-  text in the user's own file until a human decides. Approving it spawns through the
-  ordinary spawn path with the prompt as `seed_text`; dismissing marks it decided. A
-  request can be decided once (`already_decided` afterwards), and typed requests never join
-  the "insert open items into agent" batch — they are decisions, not notes. See
-  `agent-messaging.md`.
-- **Batch handoff**: open (not-done) items are inserted into the focused agent's composer
-  (terminal paste semantics, never submitted) or copied to the clipboard.
-- **Entry point**: a Project's own context menu (sidebar right-click, or the mobile top-bar
-  Project title) under `BROWSE THIS PROJECT`. The inbox carries the Project it was opened for
-  rather than following the active one, so it cannot drift onto a different Project's file. It
-  is not in the app menu: the app menu holds nothing that acts on a single Project.
+## Current data model
 
-## Data model
+- A typed spawn item has `kind: "spawn_request"`, a stable id, creation time, calling-session provenance, requested prompt/backend/name/cwd, and `pending | approved | dismissed` status.
+- The file is bounded to 500 items and each legacy summary body is bounded to 2,000 characters.
+- Missing and malformed files remain distinct.
+- A malformed file reports `observations_unreadable` and is never rewritten as an empty list.
 
-- File `<project>/.swe-mux/observations.json`: `{ version, observations: [...] }`.
-  Bounded: at most 500 items, 2000 characters each. Ids are short safe tokens, unique.
-- Not stored in SQLite — an ordinary project-owned file that outlives sessions.
+## Approval contract
 
-## Operations
+- `mux.request_spawn` appends one inert typed request and emits `spawn_request_drafted`.
+- `GET /api/queue/mailbox` projects typed requests into Fleet Queue beside queued messages.
+- A human approves or dismisses through `POST /api/projects/{project_id}/observations/{id}/decide`.
+- Approval follows the ordinary spawn path with the reviewed prompt as `seed_text`.
+- The once-only decision guard remains unchanged and a second decision returns `already_decided`.
+- The decision emits `spawn_request_decided` without including the prompt body.
 
-- Append is conflict-free (no revision check); full replace is revision-checked and
-  returns `409 revision_conflict` on staleness.
-- "Missing" and "unparseable" are different answers. A file that exists but does not parse
-  (a hand edit, merge-conflict markers) reports `status: "malformed"` and refuses both
-  writes with `409 observations_unreadable`. Reading it as an empty list meant the very next
-  captured note rewrote the file with a single item and silently destroyed every prior
-  observation — in a file whose whole content is the user's own notes.
-- The frontend reuses the terminal clipboard fallback: desktop copies silently, mobile /
-  insecure contexts show the manual-copy overlay.
-
-## API surface
+## Compatibility endpoints
 
 ```text
 GET  /api/projects/{project_id}/observations
-POST /api/projects/{project_id}/observations   {body}          append one
-PUT  /api/projects/{project_id}/observations   {observations, revision}   replace
+POST /api/projects/{project_id}/observations
+PUT  /api/projects/{project_id}/observations
 POST /api/projects/{project_id}/observations/{observation_id}/decide
-                                               {decision: approve|dismiss, …overrides}
 ```
 
-The decision route records its own outcome without a revision check: it is the daemon
-writing the result of an act it just performed, and losing that to a concurrent edit of an
-unrelated note would leave a started session looking like a pending request.
-
-## Configuration
-
-- Consumer id `observation_inbox` (no substrate deps). See `automation-enablement.md`.
+The first three endpoints remain for compatibility with existing clients and stored files.
+The current frontend does not call them for human note capture.
 
 ## Key files
 
-- Store (read/append/write, validation, typed requests): `src/swe_mux/project_files.py`
-- Endpoints (including the spawn-request decision): `src/swe_mux/server.py`
-- Drafting side: `src/swe_mux/agent_messaging.py`
-- UI (capture + list + batch/copy + request approval): `frontend/src/Observations.tsx`
-- Command/menu wiring: `frontend/src/App.tsx` (`observations.open`)
+- `src/swe_mux/project_files.py` owns validation and compatibility storage.
+- `src/swe_mux/agent_messaging.py` creates requests, exposes caller status, and projects requests into Fleet Queue.
+- `src/swe_mux/server.py` owns the human decision and ordinary `seed_text` spawn.
+- `frontend/src/FleetQueue.tsx` is the only current human approval surface.
+- `frontend/src/Observations.tsx` is retained as unmounted legacy source and has no route or command.
 
 ## Relates to
 
-- `project-resources.md` — the `.swe-mux/` project-owned resource model.
-- `prompt-library.md` — the same insert-never-submit composer contract.
-- `agent-messaging.md` — `mux.requestSpawn`, the drafts it writes here, and why spawn
-  authority stays with the human.
+- `agent-messaging.md` defines the request and approval authority.
+- `prompt-queue.md` defines Fleet Queue and message delivery.
+- `project-resources.md` defines Project notes and the Scratchpad that replace human observation capture.
