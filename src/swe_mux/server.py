@@ -193,6 +193,7 @@ from .provider_accounts import (
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
+from .scan_timeline import ScanContext, ScanTimelineService
 from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
@@ -295,9 +296,7 @@ EVENTS_CATCHUP_LIMIT = 64
 # These hook lifecycle records remain durable for diagnostics, but browser state
 # does not consume their large payloads. User-visible state changes arrive as
 # separate, compact events.
-BROWSER_OMITTED_EVENT_TYPES = frozenset(
-    {"PreToolUse", "PostToolUse", "tool_use", "tool_result"}
-)
+BROWSER_OMITTED_EVENT_TYPES = frozenset({"PreToolUse", "PostToolUse", "tool_use", "tool_result"})
 _OSC_DEFAULT_COLOR_RESPONSE = re.compile(
     r"(?:\x1b\](?:10|11);"
     r"(?:rgb:[0-9a-f]{1,4}(?:/[0-9a-f]{1,4}){2}"
@@ -735,6 +734,13 @@ def create_app(
             web.delete("/api/diagnostics/network", reset_network_usage),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.get("/api/sessions/{sid}/transcript", session_transcript),
+            web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
+            web.put("/api/sessions/{sid}/scan-timeline", put_session_scan_timeline),
+            web.post("/api/sessions/{sid}/scan-timeline/scan", scan_session_now),
+            web.get(
+                "/api/sessions/{sid}/scan-timeline/{record_id}",
+                session_scan_timeline_record,
+            ),
             web.get("/api/sessions/{sid}/skills", session_skills),
             web.get("/api/sessions/{sid}/agent-environment", session_agent_environment),
             web.patch("/api/sessions/{sid}", patch_session),
@@ -1013,6 +1019,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                     "could not reset misattributed provider telemetry for session %s",
                     repaired_session_id,
                 )
+
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
     # against two different refs. A Project that has vanished infers, like any
@@ -1194,6 +1201,31 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     async def project_card_enabled(root: str) -> bool:
         return "project_card" in await _enabled_automations(root)
 
+    async def scan_context(session_id: str) -> ScanContext | None:
+        resolved = _session_project_root(session_id)
+        if resolved is None:
+            return None
+        record, root = resolved
+        if not record.project_id or not record.agent_run_id:
+            return None
+        enabled = await _enabled_automations(root)
+        if "scan_timeline" not in enabled:
+            return None
+        portable = await read_project_config(
+            root,
+            project=_registered_identity(projects.projects[record.project_id])
+            if record.project_id in projects.projects
+            else None,
+        )
+        values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
+        return ScanContext(
+            project_id=record.project_id,
+            project_root=root,
+            agent_run_id=record.agent_run_id,
+            daily_budget_usd=float(values.get("scan_timeline_daily_budget_usd", 0.10)),
+            dead_end_memory_enabled="dead_end_memory" in enabled,
+        )
+
     # Control-plane step 4: built lazily on the first consumer request, cached
     # per documentation fingerprint, and absent rather than guessed when no
     # provider is available.
@@ -1204,6 +1236,17 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         resolve_session=project_card_context,
         resolve_project=project_card_enabled,
     )
+    scan_timeline = ScanTimelineService(
+        store=automation_store,
+        tier0=tier0,
+        sessions=sessions,
+        events=events,
+        config=config,
+        provider=openrouter,
+        project_cards=project_cards,
+        resolve_context=scan_context,
+        history=history,
+    )
     tier0.start(events, resolve_context=tier0_context)
     # Phase 3.7: model-free detectors over the facts Tier 0 just captured. Same
     # gate, same cache; writes annotations and nothing else.
@@ -1211,6 +1254,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         tier0, automation_store, sessions, events, resolve_context=consumer_context
     )
     consumers.start()
+    scan_timeline.start()
     git_monitor.start()
     hooks.start()
     automation.start()
@@ -1290,6 +1334,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         tier0=tier0,
         deterministic_consumers=consumers,
         project_cards=project_cards,
+        scan_timeline=scan_timeline,
         provider_accounts=provider_accounts,
         process_inspector=process_inspector,
         ghost_windows=ghost_windows,
@@ -1325,8 +1370,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     network_snapshot = cast(NetworkUsage, app["network_usage"]).snapshot()
     network_totals = network_snapshot["totals"]
     log.info(
-        "network usage at daemon shutdown after %.1fs: "
-        "http_rx=%d http_tx=%d ws_rx=%d ws_tx=%d",
+        "network usage at daemon shutdown after %.1fs: http_rx=%d http_tx=%d ws_rx=%d ws_tx=%d",
         network_snapshot["uptime_seconds"],
         network_totals["http"]["request_bytes"],
         network_totals["http"]["response_bytes"],
@@ -1351,6 +1395,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         await background.stop(loop_name)
     await hooks.stop()
     await automation.stop()
+    await scan_timeline.stop()
     await consumers.stop()
     await auto_delivery.stop()
     await prompt_queue.stop()
@@ -2487,9 +2532,7 @@ async def second_opinion(request: web.Request) -> web.Response:
     # name any observed harness that is not the one under review; with none named,
     # the default is the first other observed harness in registry order.
     alternatives = tuple(
-        name
-        for name in harnesses_at_least(HarnessLevel.observed)
-        if name != source["backend"]
+        name for name in harnesses_at_least(HarnessLevel.observed) if name != source["backend"]
     )
     backend = str(body.get("backend") or (alternatives[0] if alternatives else ""))
     if not has_observable_transcript(backend) or backend == source["backend"]:
@@ -2892,9 +2935,7 @@ async def _run_observer_batch(
                         error=str(exc)[:1000],
                     )
                 else:
-                    await store.observer_finished(
-                        call_id, status="failed", error=str(exc)[:1000]
-                    )
+                    await store.observer_finished(call_id, status="failed", error=str(exc)[:1000])
                 results.append({"run_id": row["id"], "error": str(exc)})
                 continue
             calls += 1
@@ -3156,10 +3197,7 @@ async def _legacy_note_titles(request: web.Request, project) -> dict[str, str]: 
     if "history" in request.app:
         owners = await request.app["history"].note_owner_labels(project.id)
         titles.update(
-            {
-                str(note_id): str(owner.get("name") or note_id)
-                for note_id, owner in owners.items()
-            }
+            {str(note_id): str(owner.get("name") or note_id) for note_id, owner in owners.items()}
         )
     if "sessions" in request.app:
         for session in request.app["sessions"].sessions.values():
@@ -3192,9 +3230,7 @@ async def list_notes(request: web.Request) -> web.Response:
     items: list[dict[str, Any]] = []
     for project in projects:
         for summary in await _project_note_items(request, project):
-            items.append(
-                {**summary, "project_id": project.id, "project_name": project.name}
-            )
+            items.append({**summary, "project_id": project.id, "project_name": project.name})
     items.sort(key=lambda item: float(item["updated_at"]), reverse=True)
     return json_response({"items": items})
 
@@ -3240,9 +3276,7 @@ async def get_note(request: web.Request) -> web.Response:
     )
     if not note["exists"]:
         raise ValueError("unknown note")
-    note.update(
-        {"id": note_id, "project_id": project.id, "project_name": project.name}
-    )
+    note.update({"id": note_id, "project_id": project.id, "project_name": project.name})
     return json_response(note)
 
 
@@ -3276,9 +3310,7 @@ async def _write_project_note(request: web.Request, *, title_only: bool = False)
         if "changed externally" in str(exc):
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
-    result.update(
-        {"id": note_id, "project_id": project.id, "project_name": project.name}
-    )
+    result.update({"id": note_id, "project_id": project.id, "project_name": project.name})
     log.info(
         "project note %s project_id=%s note_id=%s revision=%s",
         "renamed" if title_only else "saved",
@@ -3463,9 +3495,7 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             body.get("backend")
             or spawn_request.get("backend")
             or (
-                configured_default
-                if is_agent_harness(configured_default)
-                else agent_harnesses()[0]
+                configured_default if is_agent_harness(configured_default) else agent_harnesses()[0]
             )
         ),
         "seed_text": prompt,
@@ -3534,6 +3564,9 @@ async def get_project_automations(request: web.Request) -> web.Response:
             "requested": requested,
             "enabled": sorted(resolution.enabled),
             "blocked": {key: list(value) for key, value in resolution.blocked.items()},
+            "scan_timeline_daily_budget_usd": float(
+                values.get("scan_timeline_daily_budget_usd", 0.10)
+            ),
             "automations": [
                 {
                     "id": automation.id,
@@ -3577,9 +3610,13 @@ async def put_project_automations(request: web.Request) -> web.Response:
             },
             409,
         )
+    budget = body.get("scan_timeline_daily_budget_usd", 0.10)
+    if isinstance(budget, bool) or not isinstance(budget, int | float) or not 0 <= budget <= 100:
+        raise ValueError("scan_timeline_daily_budget_usd must be between 0 and 100")
     current = await read_project_config(project.root, project=identity)
     values = dict(current["values"]) if current["status"] != "malformed" else {}
     values["automations"] = {key: bool(value) for key, value in requested.items() if value}
+    values["scan_timeline_daily_budget_usd"] = float(budget)
     try:
         await write_project_config(
             project.root,
@@ -4098,9 +4135,7 @@ def _live_state_log_payload(app: Any, session: Any, now: float) -> dict[str, Any
         "observer_last_fault": session.observer_last_fault,
         "watchdog_recoveries": session.watchdog_recoveries,
         "hook_sequences": hook_sequences,
-        "hook_sequence_duplicates": session.observation_state.get(
-            "hook_sequence_duplicates", 0
-        ),
+        "hook_sequence_duplicates": session.observation_state.get("hook_sequence_duplicates", 0),
         "observation_replay": session.observation_replay,
         # The one fault class that presents as a perfectly healthy session:
         # the transcript parses fine, it is just not this PTY's conversation
@@ -4378,6 +4413,7 @@ async def get_background_health(request: web.Request) -> web.Response:
             # "no card" is a legitimate outcome, so the reason a project has none
             # has to be readable somewhere or it looks like nothing was enabled.
             "project_cards": request.app["project_cards"].status(),
+            "scan_timeline": request.app["scan_timeline"].status(),
             "mcp": request.app["mcp"].status(),
         }
     )
@@ -4770,9 +4806,7 @@ async def branch_session(request: web.Request) -> web.Response:
         before = _claude_transcript_stems(adapter, branch_cwd) if adapter else set()
         source.pty.write("/branch\r")
         forked, branch_id = (
-            await _await_claude_fork(
-                adapter, branch_cwd, original, before, timeout_seconds=15.0
-            )
+            await _await_claude_fork(adapter, branch_cwd, original, before, timeout_seconds=15.0)
             if adapter
             else (False, None)
         )
@@ -5165,11 +5199,7 @@ _MEDIA_SIGNATURES = {
     "image/webp": (b"RIFF",),
     "image/gif": (b"GIF87a", b"GIF89a"),
 }
-_HOOK_EVENT_TYPES = {
-    event
-    for harness in HARNESSES.values()
-    for event in harness.hook_events
-} | {
+_HOOK_EVENT_TYPES = {event for harness in HARNESSES.values() for event in harness.hook_events} | {
     # Compatibility events emitted by older Codex notify integrations and test
     # probes. Native hook catalogs live on the descriptors above.
     "turn_started",
@@ -6713,15 +6743,11 @@ async def voice_submit(request: web.Request) -> web.Response:
         # delivery bytes instead: bracketed paste with newlines as CR, then a
         # separate Enter after the same settle delay. Single-line prompts keep the
         # one-write path they have always used.
-        _record_operator_input(
-            request.app["events"], session, paste_payload(text), source="voice"
-        )
+        _record_operator_input(request.app["events"], session, paste_payload(text), source="voice")
         await asyncio.sleep(SUBMIT_DELAY_SECONDS)
         if session.record.state in {"exited", "crashed"}:
             return json_response({"error": "the agent session ended during delivery"}, 409)
-        _record_operator_input(
-            request.app["events"], session, SUBMIT_SEQUENCE, source="voice"
-        )
+        _record_operator_input(request.app["events"], session, SUBMIT_SEQUENCE, source="voice")
     else:
         _record_operator_input(request.app["events"], session, f"{text}\r", source="voice")
     await request.app["events"].emit(
@@ -6784,9 +6810,7 @@ async def voice_approval(request: web.Request) -> web.Response:
         raise ValueError("voice approval action must be prepare, confirm, or cancel")
     confirmation_id = str(body.get("confirmation_id") or "")
     try:
-        challenge = voice.consume_approval(
-            session.record.id, confirmation_id, run_id, fingerprint
-        )
+        challenge = voice.consume_approval(session.record.id, confirmation_id, run_id, fingerprint)
     except VoiceError as exc:
         return json_response({"error": str(exc)}, 409)
     _record_operator_input(request.app["events"], session, "\r", source="voice")
@@ -6835,9 +6859,7 @@ async def session_last_reply(request: web.Request) -> web.Response:
         return json_response({"error": "the agent transcript is not available yet"}, 409)
     try:
         text = await asyncio.wait_for(
-            asyncio.to_thread(
-                final_reply_text, path, session.record.backend, native_id=native_id
-            ),
+            asyncio.to_thread(final_reply_text, path, session.record.backend, native_id=native_id),
             timeout=CONVERSATION_PARSE_TIMEOUT_SECONDS,
         )
     except (OSError, TimeoutError) as exc:
@@ -6847,6 +6869,37 @@ async def session_last_reply(request: web.Request) -> web.Response:
             {"error": "no assistant reply text was found in the recent transcript"}, 409
         )
     return json_response({"text": text, "agent_run_id": session.record.agent_run_id})
+
+
+async def session_scan_timeline(request: web.Request) -> web.Response:
+    service: ScanTimelineService = request.app["scan_timeline"]
+    return json_response(await service.snapshot(request.match_info["sid"]))
+
+
+async def put_session_scan_timeline(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body.get("enabled"), bool):
+        raise ValueError("enabled must be a boolean")
+    service: ScanTimelineService = request.app["scan_timeline"]
+    await service.set_enabled(request.match_info["sid"], bool(body["enabled"]))
+    return json_response(await service.snapshot(request.match_info["sid"]))
+
+
+async def scan_session_now(request: web.Request) -> web.Response:
+    service: ScanTimelineService = request.app["scan_timeline"]
+    record = await service.scan_now(request.match_info["sid"], "manual")
+    return json_response({"record": record})
+
+
+async def session_scan_timeline_record(request: web.Request) -> web.Response:
+    service: ScanTimelineService = request.app["scan_timeline"]
+    return json_response(
+        await service.record_detail(
+            request.match_info["sid"],
+            request.match_info["record_id"],
+            rehydrate=request.query.get("rehydrate") == "1",
+        )
+    )
 
 
 async def session_transcript(request: web.Request) -> web.Response:
@@ -8658,9 +8711,7 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     session = request.app["sessions"].resolve(request.match_info["sid"])
     snapshot_generation = str(request.app.get("daemon_generation") or "legacy")
     connection_id = secrets.token_urlsafe(12)
-    ws = metered_websocket(
-        request, "pty", heartbeat=20, max_msg_size=2 * 1024 * 1024
-    )
+    ws = metered_websocket(request, "pty", heartbeat=20, max_msg_size=2 * 1024 * 1024)
     await ws.prepare(request)
     allow_terminal_responses = (
         session.attachments_seen == 0
@@ -9369,9 +9420,7 @@ def _handle_client_diagnostic(
     detail = frame.get("detail")
     payload = json.dumps(detail) if isinstance(detail, dict) else ""
     event_type = (
-        "terminal_client_repair"
-        if phase in CLIENT_REPAIR_PHASES
-        else "terminal_input_diagnostic"
+        "terminal_client_repair" if phase in CLIENT_REPAIR_PHASES else "terminal_input_diagnostic"
     )
     request.app["events"].emit_background(
         event_type,

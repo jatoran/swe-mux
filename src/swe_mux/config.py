@@ -169,22 +169,54 @@ def default_voice_commands() -> list[dict[str, Any]]:
         for action, phrases in (
             (
                 "send",
-                ["send", "send it", "send that", "send message",
-                 "submit", "submit it", "submit that", "submit message"],
+                [
+                    "send",
+                    "send it",
+                    "send that",
+                    "send message",
+                    "submit",
+                    "submit it",
+                    "submit that",
+                    "submit message",
+                ],
             ),
-            ("append", ["append", "append it", "append that", "append message",
-                        "insert", "insert it", "insert that"]),
+            (
+                "append",
+                [
+                    "append",
+                    "append it",
+                    "append that",
+                    "append message",
+                    "insert",
+                    "insert it",
+                    "insert that",
+                ],
+            ),
             ("cancel", ["cancel", "cancel that", "clear", "clear that"]),
             (
                 "undo",
-                ["undo", "undo that", "undo last", "undo last phrase",
-                 "delete last", "delete last phrase"],
+                [
+                    "undo",
+                    "undo that",
+                    "undo last",
+                    "undo last phrase",
+                    "delete last",
+                    "delete last phrase",
+                ],
             ),
             ("mute", ["mute", "stop", "stop speaking", "stop playback", "stop audio"]),
             (
                 "read",
-                ["read", "read reply", "read the reply", "read reply again",
-                 "read the reply again", "read response", "speak reply", "speak the reply"],
+                [
+                    "read",
+                    "read reply",
+                    "read the reply",
+                    "read reply again",
+                    "read the reply again",
+                    "read response",
+                    "speak reply",
+                    "speak the reply",
+                ],
             ),
             ("summary", ["summary", "summary mode", "use summaries"]),
             ("verbatim", ["verbatim", "verbatim mode", "read verbatim"]),
@@ -192,8 +224,10 @@ def default_voice_commands() -> list[dict[str, Any]]:
             ("help", ["help", "list commands", "what can i say"]),
             ("standby", ["sleep", "go to sleep", "stand by", "standby", "pause listening"]),
             ("resume", ["wake", "wake up", "resume", "start listening"]),
-            ("comms_on", ["voice comms", "voice comms on", "start voice comms",
-                          "enter voice comms"]),
+            (
+                "comms_on",
+                ["voice comms", "voice comms on", "start voice comms", "enter voice comms"],
+            ),
             ("comms_off", ["voice comms off", "stop voice comms", "exit voice comms"]),
             ("stop", ["stop listening", "turn off", "shut down"]),
         )
@@ -496,6 +530,13 @@ class Config:
     project_card_daily_budget_usd: float = 0.25
     project_card_max_input_tokens: int = 6000
     project_card_max_output_tokens: int = 600
+    # Phase 5.5 semantic timeline. The global switch is an emergency/master
+    # boundary, while Project permission and the current-run toggle are checked
+    # separately. The undated OpenRouter id follows the provider's latest V4
+    # Flash revision without silently changing model family.
+    scan_timeline_enabled: bool = False
+    scan_timeline_model: str = "deepseek/deepseek-v4-flash"
+    scan_timeline_run_token_budget: int = 5_000
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
@@ -525,9 +566,7 @@ class Config:
     # wake word and a command phrase. Small and English-only because that pass is a
     # reflex path; blank falls back to the dictation model.
     stt_routing_model: str = "small.en"
-    voice_wake_words: list[str] = field(
-        default_factory=lambda: list(DEFAULT_VOICE_WAKE_WORDS)
-    )
+    voice_wake_words: list[str] = field(default_factory=lambda: list(DEFAULT_VOICE_WAKE_WORDS))
     voice_commands: list[dict[str, Any]] = field(default_factory=default_voice_commands)
     # Resolved from the real home directory with no environment override, so every
     # process on this machine shares one data dir. Tests must inject an explicit path
@@ -615,9 +654,7 @@ def _validate_project_init_scripts(config: Config, errors: dict[str, str]) -> No
             errors[f"{prefix}.label"] = "must be a non-empty name of 80 characters or fewer"
         command = script.get("command")
         if not isinstance(command, str) or not command.strip() or len(command) > 4000:
-            errors[f"{prefix}.command"] = (
-                "must be a non-empty command of 4000 characters or fewer"
-            )
+            errors[f"{prefix}.command"] = "must be a non-empty command of 4000 characters or fewer"
         if not isinstance(script.get("default_enabled", False), bool):
             errors[f"{prefix}.default_enabled"] = "must be a boolean"
 
@@ -679,7 +716,7 @@ def _validate(config: Config) -> None:
         )
         if bad_chords:
             errors["note_shortcut_overrides"] = (
-                "each entry must map a normalized chord to a command id or \"\" "
+                'each entry must map a normalized chord to a command id or "" '
                 "(release); invalid: " + ", ".join(bad_chords)
             )
     if config.mobile_vertical_drag not in {"smart", "terminal", "application", "disabled"}:
@@ -695,9 +732,7 @@ def _validate(config: Config) -> None:
     else:
         unknown_slots = set(config.mobile_gestures) - set(MOBILE_GESTURE_SLOTS)
         if unknown_slots:
-            errors["mobile_gestures"] = (
-                "unknown gesture slots: " + ", ".join(sorted(unknown_slots))
-            )
+            errors["mobile_gestures"] = "unknown gesture slots: " + ", ".join(sorted(unknown_slots))
         else:
             bad = sorted(
                 slot
@@ -705,9 +740,7 @@ def _validate(config: Config) -> None:
                 if command != "" and not is_command(command)
             )
             if bad:
-                errors["mobile_gestures"] = (
-                    "unknown command for gestures: " + ", ".join(bad)
-                )
+                errors["mobile_gestures"] = "unknown command for gestures: " + ", ".join(bad)
     for field_name in ("harness_args", "usage_commands"):
         value = getattr(config, field_name)
         if not isinstance(value, dict) or any(
@@ -718,9 +751,7 @@ def _validate(config: Config) -> None:
         ):
             errors[field_name] = "must map harness names to arrays of strings"
     if not isinstance(config.harness_exe, dict) or any(
-        not isinstance(name, str)
-        or not isinstance(executable, str)
-        or not executable.strip()
+        not isinstance(name, str) or not isinstance(executable, str) or not executable.strip()
         for name, executable in config.harness_exe.items()
     ):
         errors["harness_exe"] = "must map harness names to non-empty executable strings"
@@ -845,6 +876,10 @@ def _validate(config: Config) -> None:
         errors["project_card_max_input_tokens"] = "must be between 512 and 128000"
     if not 128 <= config.project_card_max_output_tokens <= 4096:
         errors["project_card_max_output_tokens"] = "must be between 128 and 4096"
+    if not config.scan_timeline_model.strip() or len(config.scan_timeline_model) > 200:
+        errors["scan_timeline_model"] = "must be an exact OpenRouter model id"
+    if not 512 <= config.scan_timeline_run_token_budget <= 1_000_000:
+        errors["scan_timeline_run_token_budget"] = "must be between 512 and 1000000"
     if not 1 <= config.openrouter_request_timeout_seconds <= 120:
         errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
     if config.tts_default_mode not in {"off", "on_demand", "auto"}:
@@ -887,9 +922,7 @@ def _validate(config: Config) -> None:
             for word in config.voice_wake_words
         )
     ):
-        errors["voice_wake_words"] = (
-            "must be 1–64 non-empty wake words of 40 characters or fewer"
-        )
+        errors["voice_wake_words"] = "must be 1–64 non-empty wake words of 40 characters or fewer"
     if not isinstance(config.voice_commands, list) or len(config.voice_commands) > 64:
         errors["voice_commands"] = "must be an array of at most 64 command definitions"
     else:
@@ -902,9 +935,7 @@ def _validate(config: Config) -> None:
             action = command.get("action")
             phrases = command.get("phrases")
             if action not in VOICE_COMMAND_ACTIONS:
-                errors[f"{prefix}.action"] = (
-                    f"must be one of {', '.join(VOICE_COMMAND_ACTIONS)}"
-                )
+                errors[f"{prefix}.action"] = f"must be one of {', '.join(VOICE_COMMAND_ACTIONS)}"
             elif action in seen_actions:
                 errors[f"{prefix}.action"] = f"duplicate action {action}"
             else:
@@ -1081,9 +1112,7 @@ def load_config(path: Path | None = None) -> Config:
             dict(raw["harness_args"]) if isinstance(raw.get("harness_args"), dict) else {}
         )
         configured_usage = (
-            dict(raw["usage_commands"])
-            if isinstance(raw.get("usage_commands"), dict)
-            else {}
+            dict(raw["usage_commands"]) if isinstance(raw.get("usage_commands"), dict) else {}
         )
         for name in HARNESSES:
             legacy_exe = raw.get(f"{name}_exe")
@@ -1154,11 +1183,10 @@ def load_config(path: Path | None = None) -> Config:
             # Append and Voice Comms did not exist before schema 20. Add only the
             # new actions, preserving every phrase and omission the user could have
             # chosen for the older command set.
-            existing = {
-                item.get("action") for item in cfg.voice_commands if isinstance(item, dict)
-            }
+            existing = {item.get("action") for item in cfg.voice_commands if isinstance(item, dict)}
             additions = [
-                item for item in default_voice_commands()
+                item
+                for item in default_voice_commands()
                 if item["action"] in {"append", "comms_on", "comms_off"}
                 and item["action"] not in existing
             ]

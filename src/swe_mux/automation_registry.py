@@ -38,9 +38,7 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # the substrate it does spend — one cheap model call per documentation
     # fingerprint — which is exactly why it is opt-in rather than ambient.
     Automation("project_card", SUBSTRATE, "Project card"),
-    Automation(
-        "scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store"), implemented=False
-    ),
+    Automation("scan_timeline", SUBSTRATE, "Scan timeline", ("tier0", "raw_store")),
     # Consumers. The deterministic four (control-plane step 3) are model-free
     # queries over Tier 0 and ship together; everything below them needs a layer
     # that does not exist yet and is marked unimplemented rather than toggleable.
@@ -56,7 +54,6 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         CONSUMER,
         "Dead-end memory",
         ("tier0", "scan_timeline"),
-        implemented=False,
     ),
     Automation(
         "continuous_title",

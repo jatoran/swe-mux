@@ -32,6 +32,7 @@ PROJECT_CONFIG_FIELDS = {
     "notification_sounds_enabled",
     "ignore_patterns",
     "automations",
+    "scan_timeline_daily_budget_usd",
     "worktree",
 }
 FORBIDDEN_PROJECT_FIELDS = {
@@ -452,12 +453,15 @@ def migrate_legacy_notes(
                     destination_id = str(uuid.uuid4())
                     destination = note_path(project_root, destination_id)
             if not already_migrated:
-                stored = note_header(
-                    destination_id,
-                    title,
-                    created_at=stat_result.st_ctime,
-                    origin_session_id=legacy_id,
-                ) + body
+                stored = (
+                    note_header(
+                        destination_id,
+                        title,
+                        created_at=stat_result.st_ctime,
+                        origin_session_id=legacy_id,
+                    )
+                    + body
+                )
                 _atomic_write(destination, stored.encode("utf-8"))
             _archive_legacy_note(project_root, path, "session-notes")
             migrated += 1
@@ -567,9 +571,7 @@ def _validate_project_resource_name(name: str) -> None:
     if name.endswith((" ", ".")):
         raise ValueError("project resource names may not end with a space or dot")
     if any(
-        character in _WINDOWS_INVALID_RESOURCE_CHARS
-        or ord(character) < 32
-        or ord(character) == 127
+        character in _WINDOWS_INVALID_RESOURCE_CHARS or ord(character) < 32 or ord(character) == 127
         for character in name
     ):
         raise ValueError("project resource name contains a Windows-invalid character")
@@ -990,6 +992,14 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         unknown_automations = sorted(set(automations) - set(AUTOMATION_REGISTRY))
         if unknown_automations:
             raise ValueError(f"unknown automations: {', '.join(unknown_automations)}")
+    if "scan_timeline_daily_budget_usd" in parsed:
+        budget = parsed["scan_timeline_daily_budget_usd"]
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, int | float)
+            or not 0 <= budget <= 100
+        ):
+            raise ValueError("scan_timeline_daily_budget_usd must be between 0 and 100")
     if "worktree" in parsed:
         worktree = parsed["worktree"]
         if not isinstance(worktree, dict):
@@ -1035,6 +1045,11 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
             for key, value in sorted(automations.items())
         )
         lines.append(f"automations = {{ {pairs} }}")
+    if "scan_timeline_daily_budget_usd" in values:
+        lines.append(
+            "scan_timeline_daily_budget_usd = "
+            + format(float(values["scan_timeline_daily_budget_usd"]), ".10g")
+        )
     worktree = values.get("worktree")
     if isinstance(worktree, dict) and worktree.get("setup_command"):
         lines.extend(["", "[worktree]"])
@@ -1397,9 +1412,7 @@ def _read_note_file(
         return {
             **payload,
             "title": _stored_note_title(metadata, markdown, default_title),
-            "created_at": _stored_note_created_at(
-                metadata.get("created_at"), stat_result.st_ctime
-            ),
+            "created_at": _stored_note_created_at(metadata.get("created_at"), stat_result.st_ctime),
             "origin_session_id": metadata.get("origin_session_id"),
             "exists": True,
             "bytes": len(data),

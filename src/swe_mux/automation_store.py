@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 4
+AUTOMATION_SCHEMA_VERSION = 6
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -43,6 +43,8 @@ _DURABLE_PRUNE_TABLES = (
     "automation_annotations",
     "experience_entries",
     "session_lineage",
+    "scan_timeline_records",
+    "scan_timeline_boundaries",
 )
 
 AUTOMATION_SCHEMA = """
@@ -95,11 +97,14 @@ CREATE TABLE IF NOT EXISTS automation_checkpoints (
 );
 CREATE TABLE IF NOT EXISTS automation_budget_ledger (
   id TEXT PRIMARY KEY, day TEXT NOT NULL, rule_id TEXT NOT NULL,
+  project_id TEXT, agent_run_id TEXT,
   requested_model TEXT, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
   cost_usd REAL NOT NULL, observer_call_id TEXT, created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_budget_day_rule
   ON automation_budget_ledger(day,rule_id);
+CREATE INDEX IF NOT EXISTS idx_budget_project_run
+  ON automation_budget_ledger(day,project_id,agent_run_id);
 CREATE TABLE IF NOT EXISTS automation_notifications (
   id TEXT PRIMARY KEY, agent_run_id TEXT, session_id TEXT, rule_id TEXT,
   kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL,
@@ -119,6 +124,39 @@ CREATE TABLE IF NOT EXISTS project_cards (
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL, created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scan_timeline_runs (
+  agent_run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0, enabled_at REAL, disabled_at REAL,
+  last_scan_at REAL, last_source_ts REAL, updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_session
+  ON scan_timeline_runs(session_id,updated_at DESC);
+CREATE TABLE IF NOT EXISTS scan_timeline_records (
+  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_run_id TEXT NOT NULL,
+  project_id TEXT NOT NULL, t0 REAL NOT NULL, t1 REAL NOT NULL,
+  trigger TEXT NOT NULL, record_json TEXT NOT NULL, input_hash TEXT NOT NULL,
+  requested_model TEXT NOT NULL, resolved_model TEXT, generation_id TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0, created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scan_records_session
+  ON scan_timeline_records(session_id,created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_scan_records_run
+  ON scan_timeline_records(agent_run_id,created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_scan_records_project
+  ON scan_timeline_records(project_id,created_at ASC);
+CREATE TABLE IF NOT EXISTS scan_timeline_boundaries (
+  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, previous_run_id TEXT NOT NULL,
+  next_run_id TEXT NOT NULL, reason TEXT NOT NULL, created_at REAL NOT NULL,
+  UNIQUE(session_id,previous_run_id,next_run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scan_boundaries_session
+  ON scan_timeline_boundaries(session_id,created_at ASC);
+CREATE TABLE IF NOT EXISTS scan_timeline_metrics (
+  id INTEGER PRIMARY KEY CHECK(id=1), record_reads INTEGER NOT NULL DEFAULT 0,
+  rehydrations INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO scan_timeline_metrics(id,record_reads,rehydrations) VALUES(1,0,0);
 CREATE TABLE IF NOT EXISTS session_lineage (
   id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL, child_run_id TEXT NOT NULL,
   relation TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at REAL NOT NULL,
@@ -245,6 +283,10 @@ class AutomationStore:
                 self._db.execute(
                     f"ALTER TABLE automation_observer_calls ADD COLUMN {column} {sql_type}"
                 )
+        budget_ledger = self._columns("automation_budget_ledger")
+        for column in ("project_id", "agent_run_id"):
+            if budget_ledger and column not in budget_ledger:
+                self._db.execute(f"ALTER TABLE automation_budget_ledger ADD COLUMN {column} TEXT")
 
     async def _run(self, fn: Callable[[], T]) -> T:
         loop = asyncio.get_running_loop()
@@ -578,16 +620,21 @@ class AutomationStore:
         output_tokens: int,
         cost_usd: float,
         call_id: str,
+        project_id: str | None = None,
+        agent_run_id: str | None = None,
     ) -> None:
         def op() -> None:
             self._db.execute(
                 "INSERT INTO automation_budget_ledger"
-                "(id,day,rule_id,requested_model,input_tokens,output_tokens,cost_usd,"
-                "observer_call_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                "(id,day,rule_id,project_id,agent_run_id,requested_model,input_tokens,"
+                "output_tokens,cost_usd,observer_call_id,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     str(uuid.uuid4()),
                     time.strftime("%Y-%m-%d", time.gmtime()),
                     rule_id,
+                    project_id,
+                    agent_run_id,
                     model,
                     input_tokens,
                     output_tokens,
@@ -614,7 +661,13 @@ class AutomationStore:
 
         await self._run(op)
 
-    async def spend(self, *, rule_id: str | None = None) -> dict[str, float | int]:
+    async def spend(
+        self,
+        *,
+        rule_id: str | None = None,
+        project_id: str | None = None,
+        agent_run_id: str | None = None,
+    ) -> dict[str, float | int]:
         sql = (
             "SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
             "COALESCE(SUM(cost_usd),0) cost FROM automation_budget_ledger WHERE day=?"
@@ -623,10 +676,241 @@ class AutomationStore:
         if rule_id:
             sql += " AND rule_id=?"
             args.append(rule_id)
+        if project_id:
+            sql += " AND project_id=?"
+            args.append(project_id)
+        if agent_run_id:
+            sql += " AND agent_run_id=?"
+            args.append(agent_run_id)
 
         def op() -> dict[str, float | int]:
             row = self._db.execute(sql, args).fetchone()
             return {"tokens": int(row["tokens"]), "cost_usd": float(row["cost"])}
+
+        return await self._run(op)
+
+    async def set_scan_run_enabled(
+        self,
+        *,
+        agent_run_id: str,
+        session_id: str,
+        project_id: str,
+        enabled: bool,
+    ) -> dict[str, Any]:
+        """Persist authorization for exactly one provider conversation.
+
+        A successor run has a different primary key and therefore starts disabled.
+        This is the storage-level guarantee behind the per-run toggle.
+        """
+        now = time.time()
+
+        def op() -> dict[str, Any]:
+            self._db.execute(
+                "INSERT INTO scan_timeline_runs"
+                "(agent_run_id,session_id,project_id,enabled,enabled_at,disabled_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(agent_run_id) DO UPDATE SET "
+                "session_id=excluded.session_id,project_id=excluded.project_id,"
+                "enabled=excluded.enabled,enabled_at=CASE WHEN excluded.enabled=1 "
+                "THEN COALESCE(scan_timeline_runs.enabled_at,excluded.enabled_at) "
+                "ELSE scan_timeline_runs.enabled_at END,"
+                "disabled_at=CASE WHEN excluded.enabled=0 THEN excluded.disabled_at ELSE NULL END,"
+                "updated_at=excluded.updated_at",
+                (
+                    agent_run_id,
+                    session_id,
+                    project_id,
+                    int(enabled),
+                    now if enabled else None,
+                    None if enabled else now,
+                    now,
+                ),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM scan_timeline_runs WHERE agent_run_id=?", (agent_run_id,)
+            ).fetchone()
+            return dict(row)
+
+        return await self._run(op)
+
+    async def scan_run(self, agent_run_id: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM scan_timeline_runs WHERE agent_run_id=?", (agent_run_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(op)
+
+    async def save_scan_record(
+        self,
+        *,
+        session_id: str,
+        agent_run_id: str,
+        project_id: str,
+        t0: float,
+        t1: float,
+        trigger: str,
+        record: dict[str, Any],
+        input_hash: str,
+        requested_model: str,
+        resolved_model: str | None,
+        generation_id: str | None,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+    ) -> dict[str, Any]:
+        identity = str(uuid.uuid4())
+        created = time.time()
+        encoded = json.dumps(record, separators=(",", ":"), ensure_ascii=False)
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO scan_timeline_records"
+                "(id,session_id,agent_run_id,project_id,t0,t1,trigger,record_json,input_hash,"
+                "requested_model,resolved_model,generation_id,input_tokens,output_tokens,cost_usd,"
+                "created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    identity,
+                    session_id,
+                    agent_run_id,
+                    project_id,
+                    t0,
+                    t1,
+                    trigger,
+                    encoded,
+                    input_hash,
+                    requested_model,
+                    resolved_model,
+                    generation_id,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    created,
+                ),
+            )
+            self._db.execute(
+                "UPDATE scan_timeline_runs SET last_scan_at=?,last_source_ts=?,updated_at=? "
+                "WHERE agent_run_id=?",
+                (created, t1, created, agent_run_id),
+            )
+            self._db.commit()
+
+        await self._run(op)
+        return {"id": identity, **record, "created_at": created}
+
+    async def scan_records(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_run_id: str | None = None,
+        project_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM scan_timeline_records WHERE 1=1"
+        args: list[Any] = []
+        for field, value in (
+            ("session_id", session_id),
+            ("agent_run_id", agent_run_id),
+            ("project_id", project_id),
+        ):
+            if value:
+                sql += f" AND {field}=?"
+                args.append(value)
+        sql += " ORDER BY created_at ASC LIMIT ?"
+        args.append(max(1, min(limit, 2000)))
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(sql, args).fetchall()
+            return [{**dict(row), **json.loads(str(row["record_json"]))} for row in rows]
+
+        return await self._run(op)
+
+    async def scan_record(self, record_id: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM scan_timeline_records WHERE id=?", (record_id,)
+            ).fetchone()
+            return {**dict(row), **json.loads(str(row["record_json"]))} if row else None
+
+        return await self._run(op)
+
+    async def add_scan_boundary(
+        self,
+        *,
+        session_id: str,
+        previous_run_id: str,
+        next_run_id: str,
+        reason: str,
+        created_at: float | None = None,
+    ) -> None:
+        def op() -> None:
+            self._db.execute(
+                "INSERT OR IGNORE INTO scan_timeline_boundaries"
+                "(id,session_id,previous_run_id,next_run_id,reason,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    str(uuid.uuid4()),
+                    session_id,
+                    previous_run_id,
+                    next_run_id,
+                    reason,
+                    created_at or time.time(),
+                ),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def scan_boundaries(self, session_id: str) -> list[dict[str, Any]]:
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM scan_timeline_boundaries WHERE session_id=? ORDER BY created_at ASC",
+                (session_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await self._run(op)
+
+    async def scan_project_spend(self, project_id: str) -> dict[str, float | int]:
+        return await self.spend(rule_id="builtin:scan-timeline", project_id=project_id)
+
+    async def scan_run_spend(self, agent_run_id: str) -> dict[str, float | int]:
+        return await self.spend(rule_id="builtin:scan-timeline", agent_run_id=agent_run_id)
+
+    async def note_scan_record_read(self, *, rehydrated: bool) -> dict[str, float | int]:
+        def op() -> dict[str, float | int]:
+            self._db.execute(
+                "UPDATE scan_timeline_metrics SET record_reads=record_reads+1,"
+                "rehydrations=rehydrations+? WHERE id=1",
+                (int(rehydrated),),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT record_reads,rehydrations FROM scan_timeline_metrics WHERE id=1"
+            ).fetchone()
+            reads = int(row["record_reads"])
+            rehydrations = int(row["rehydrations"])
+            return {
+                "record_reads": reads,
+                "rehydrations": rehydrations,
+                "rehydration_rate": rehydrations / reads if reads else 0.0,
+            }
+
+        return await self._run(op)
+
+    async def scan_metrics(self) -> dict[str, float | int]:
+        def op() -> dict[str, float | int]:
+            row = self._db.execute(
+                "SELECT record_reads,rehydrations FROM scan_timeline_metrics WHERE id=1"
+            ).fetchone()
+            reads = int(row["record_reads"])
+            rehydrations = int(row["rehydrations"])
+            return {
+                "record_reads": reads,
+                "rehydrations": rehydrations,
+                "rehydration_rate": rehydrations / reads if reads else 0.0,
+            }
 
         return await self._run(op)
 
@@ -1209,9 +1493,7 @@ class AutomationStore:
                 self._db.execute(f"DELETE FROM {table} WHERE created_at<?", (durable_cutoff,))
             # Checkpoint keys embed the agent run id, so every run leaves rows
             # behind permanently; they stamp updated_at rather than created_at.
-            self._db.execute(
-                "DELETE FROM automation_checkpoints WHERE updated_at<?", (cutoff,)
-            )
+            self._db.execute("DELETE FROM automation_checkpoints WHERE updated_at<?", (cutoff,))
             self._db.commit()
 
         await self._run(op)
