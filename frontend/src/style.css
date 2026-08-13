@@ -2332,7 +2332,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    dense-index type is unreadable for that. `position:relative` on the host anchors the
    jump-to-latest pill over the body. */
 .transcript-tab{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
-.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
+.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .transcript-tab-meta{min-width:0;display:grid;gap:2px}
 .transcript-tab-head strong{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transcript-tab-head span{color:var(--muted);font-size:8px}
@@ -2354,8 +2354,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* The user's turns carry the tint. An agent's replies are the bulk of the column, so
    tinting those would tint everything and distinguish nothing. */
 .transcript-message.user{background:color-mix(in srgb,var(--accent) 7%,transparent)}
-.transcript-copy-anchor{position:sticky;top:8px;z-index:3;height:20px;margin-bottom:-20px;display:flex;justify-content:flex-end;pointer-events:none}
-.transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px;padding-right:52px}
+.transcript-copy-anchor{position:sticky;top:8px;z-index:3;height:20px;margin-bottom:-20px;display:flex;justify-content:flex-end;gap:4px;pointer-events:none}
+.transcript-message>header{display:flex;align-items:center;gap:6px;margin-bottom:4px;padding-right:100px}
 .transcript-speaker{flex:1;min-width:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-message.user .transcript-speaker{color:var(--accent)}
 .transcript-message>header time{flex:none;color:var(--muted);font-size:8px}
@@ -2390,9 +2390,32 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Off-screen, not `display:none`: the synchronous copy fallback has to be able to focus
    and select it, which a hidden element cannot be. */
 .transcript-manual{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+/* The select sheet: one flat buffer, deliberately nothing else. Every affordance the
+   reading column carries (sticky copy controls, seams, headers, a scroller of its own)
+   is something a selection handle can catch on, and this surface exists precisely because
+   dragging across those does not work on a phone. Sized to the viewport rather than to
+   content so the drag never runs out of room. */
+.transcript-select-layer{padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))}
+.transcript-select-sheet{display:flex;flex-direction:column;width:min(760px,100%);height:100%;min-height:0;border:1px solid var(--line);background:var(--panel);box-shadow:0 24px 80px #000c}
+.transcript-select-sheet>header{flex:none;display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.transcript-select-sheet>header strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:9px;font-weight:400}
+.transcript-select-sheet>header>button{flex:none;min-width:30px;min-height:30px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:14px;line-height:1;cursor:pointer}
+.transcript-select-text{flex:1 1 auto;min-height:0;width:100%;resize:none;padding:10px;border:0;outline:0;background:var(--bg);color:var(--text);font:inherit;font-size:11px;line-height:1.55;-webkit-user-select:text;user-select:text}
+.transcript-select-sheet>footer{flex:none;display:flex;align-items:center;gap:9px;padding:7px 9px;border-top:1px solid var(--line);background:var(--panel2)}
+.transcript-select-sheet>footer span{min-width:0;flex:1;color:var(--muted);font-size:8px;line-height:1.4}
+.transcript-select-sheet>footer>button{flex:none;min-height:30px;padding:0 11px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:9px;cursor:pointer}
+.transcript-select-sheet>footer>button.copied{border-color:var(--accent);color:var(--accent)}
+@media (max-width:760px){
+  /* 16px, or the phone zooms the whole sheet the moment the control takes focus. */
+  .transcript-select-text{font-size:16px;line-height:1.5}
+  .transcript-select-sheet>header>button{min-width:40px;min-height:40px}
+  .transcript-select-sheet>footer>button{min-height:40px;padding:0 14px;font-size:11px}
+  .transcript-select-sheet>footer span{font-size:9px}
+}
 @media (max-width:760px){
   .transcript-copy-anchor{height:28px;margin-bottom:-28px}
-  .transcript-message>header{padding-right:62px}
+  /* Two controls now float here, so the header's reserved gutter widens with them. */
+  .transcript-message>header{padding-right:118px}
   .transcript-copy{min-height:28px;padding:0 10px}
   .transcript-tab-head>button{min-height:32px}
   .transcript-search input{height:36px;font-size:16px}

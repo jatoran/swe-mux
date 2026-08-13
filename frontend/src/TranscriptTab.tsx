@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { agentTargetName } from './agentTargets'
 import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
+import { useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
 import {
   expandedTranscriptMessageIds,
@@ -17,6 +18,7 @@ import {
   transcriptEmptyMessage,
   transcriptMatchesQuery,
   transcriptSearchParts,
+  transcriptSelectedSlice,
   transcriptSelectionActive,
   transcriptSpeaker,
   transcriptTimestampIso,
@@ -41,6 +43,8 @@ import type { Session } from './types'
 const COPIED_FLASH_MS = 1200
 /** Copy-all's key in the flash state, where per-message keys are ordinals. */
 const COPY_ALL = -1
+/** The select sheet's key in that same state, which its own button reads. */
+const COPY_SELECTION = -2
 
 const readTranscriptExpansions = () => {
   try {
@@ -59,22 +63,80 @@ const writeTranscriptExpansions = (entries: ReturnType<typeof readTranscriptExpa
   }
 }
 
-function Message({ message, copied, expanded, query, onCopy, onExpand }: {
+/**
+ * The reading column's answer to "copy part of this, not all of it".
+ *
+ * A flat `<textarea>` rather than the column itself, because selecting across the column
+ * on a phone does not work and cannot be made to. The messages live in a nested
+ * `overflow-y:auto` scroller, and once the anchor handle scrolls out of view Chrome
+ * re-derives the selection's base from a screen coordinate that is no longer over the
+ * anchor, so extending the other handle swallows every message above it. Nothing in this
+ * app's DOM or CSS decides that; making the chrome unselectable only changed where the
+ * runaway base landed. A text control is a different selection path entirely: offsets
+ * into one buffer, with the control's own drag autoscroll, which is why every mobile
+ * note app can do this and a scrolled column cannot.
+ *
+ * Read-only on purpose. This tab never writes, and a `readonly` control still selects and
+ * scrolls while raising no soft keyboard on either mobile platform.
+ */
+function SelectSheet({ title, text, copied, onCopy, onClose }: {
+  title: string
+  text: string
+  copied: boolean
+  onCopy: (text: string) => void
+  onClose: () => void
+}) {
+  const host = useRef<HTMLDivElement>(null)
+  const area = useRef<HTMLTextAreaElement>(null)
+  // Close is first in the DOM, so the trap's opening focus lands there rather than in the
+  // text: a focused text control on a phone is one stray keystroke from looking editable.
+  useModalFocus(host, onClose, true, 'transcript-select')
+  const copySelection = () => {
+    const element = area.current
+    if (!element) { onCopy(text); return }
+    onCopy(transcriptSelectedSlice(element.value, element.selectionStart, element.selectionEnd))
+  }
+  return <div class="modal-layer transcript-select-layer">
+    <div class="transcript-select-sheet" ref={host} role="dialog" aria-label={`Select text from ${title}`}>
+      <header>
+        <button type="button" aria-label="Close" title="Close" onClick={onClose}>×</button>
+        <strong>{title}</strong>
+      </header>
+      <textarea ref={area} class="transcript-select-text" readOnly spellcheck={false} value={text} />
+      <footer>
+        <span>Drag to select, then copy. Nothing selected copies all of it.</span>
+        <button type="button" class={copied ? 'copied' : ''} onClick={copySelection}>
+          {copied ? 'Copied' : 'Copy selection'}
+        </button>
+      </footer>
+    </div>
+  </div>
+}
+
+function Message({ message, copied, expanded, query, onCopy, onExpand, onSelectText }: {
   message: TranscriptMessage
   copied: boolean
   expanded: boolean
   query: string
   onCopy: (message: TranscriptMessage) => void
   onExpand: (messageId: string) => void
+  onSelectText: (message: TranscriptMessage) => void
 }) {
   const clamped = transcriptClamped(message.text) && !expanded && !query
   const stamp = transcriptTimestampLabel(message.ts)
+  const kind = transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'
   return <article class={`transcript-message ${message.role}`} data-message-ordinal={message.ordinal}>
     <div class="transcript-copy-anchor">
       <button
+        class="transcript-copy"
+        aria-label={`Select text from this ${kind}`}
+        title={`Select part of this ${kind}`}
+        onClick={() => onSelectText(message)}
+      >Select</button>
+      <button
         class={copied ? 'transcript-copy copied' : 'transcript-copy'}
-        aria-label={`Copy this ${transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'}`}
-        title={`Copy this ${transcriptSpeaker(message.role) === 'you' ? 'message' : 'reply'}`}
+        aria-label={`Copy this ${kind}`}
+        title={`Copy this ${kind}`}
         onClick={() => onCopy(message)}
       >{copied ? 'Copied' : 'Copy'}</button>
     </div>
@@ -104,6 +166,7 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const [expansion, setExpansion] = useState<{ scope: string; messageIds: string[] }>({ scope: '', messageIds: [] })
   const [search, setSearch] = useState<{ sessionId: string; value: string }>({ sessionId: '', value: '' })
   const [selectionLive, setSelectionLive] = useState(false)
+  const [sheet, setSheet] = useState<{ title: string; text: string } | null>(null)
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
   const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
@@ -145,6 +208,9 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     shown.current = 0
     selecting.current = false
     setSelectionLive(false)
+    // The sheet holds a snapshot of text from the conversation being left behind, so it
+    // closes with it rather than presenting one session's words over another's.
+    setSheet(null)
     if (sessionId) void load(sessionId)
   }, [sessionId, runId])
 
@@ -337,6 +403,14 @@ export function TranscriptTab({ session }: { session: Session | null }) {
           {data && data.hidden > 0 ? ` · ${data.hidden} CLI record${data.hidden === 1 ? '' : 's'} hidden` : ''}
         </span>
       </div>
+      {/* Whole-conversation selection goes through the same sheet as one message, which
+          is what makes a span *across* messages copyable at all: in the sheet it is one
+          flat buffer, so there is no scroller for a handle drag to lose its anchor in. */}
+      <button
+        disabled={!messages.length}
+        title="Select part of the conversation"
+        onClick={() => setSheet({ title: agentTargetName(session), text: transcriptConversationText(messages) })}
+      >Select</button>
       <button
         class={copied === COPY_ALL ? 'copied' : ''}
         disabled={!messages.length}
@@ -392,6 +466,10 @@ export function TranscriptTab({ session }: { session: Session | null }) {
               query={normalizedQuery}
               onCopy={item => void copy(item.text, item.ordinal)}
               onExpand={toggleExpand}
+              onSelectText={item => setSheet({
+                title: `${transcriptSpeaker(item.role)}${transcriptTimestampLabel(item.ts) ? ` · ${transcriptTimestampLabel(item.ts)}` : ''}`,
+                text: item.text,
+              })}
             />
           </Fragment>)
           : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
@@ -400,6 +478,13 @@ export function TranscriptTab({ session }: { session: Session | null }) {
     {!normalizedQuery && unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>
       {unseen} new ↓
     </button>}
+    {sheet && <SelectSheet
+      title={sheet.title}
+      text={sheet.text}
+      copied={copied === COPY_SELECTION}
+      onCopy={text => void copy(text, COPY_SELECTION)}
+      onClose={() => setSheet(null)}
+    />}
     <textarea ref={manualArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1} />
   </div>
 }

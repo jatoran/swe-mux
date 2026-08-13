@@ -1217,11 +1217,15 @@ responsive controls.
   The top-bar search filters the already loaded messages with literal, case-insensitive matching, highlights every occurrence, and leaves whole-conversation copy unchanged.
   Search owns a temporary scroll position and clearing it restores the reader's prior place.
   A message's copy control sticks to the body's top-right edge while that message is being read, then yields when the message leaves the viewport.
-  **A manual selection is a first-class way to copy from this column, not only the buttons.**
-  None of the column's chrome can hold a selection endpoint: not the head bar, the sticky copy control, the message headers, the seams, or Show more.
-  The head bar is the one that mattered, because it is a sibling above the scroller and therefore precedes every message in document order, so a drag that wandered past the top of the body resolved its caret into it and the highlight swallowed the whole transcript above the anchor.
-  Making the chrome unselectable both removes that trap and keeps speaker labels, timestamps, and seam counts off the clipboard, so a dragged selection yields the prose and nothing else.
-  On touch the sticky copy control also hides for as long as a selection is held, since it is the last thing in the path a selection handle travels that still accepts a tap.
+  **Copying part of a message goes through a flat-text sheet, because dragging a selection across the column cannot be made to work on a phone.**
+  The messages live in a nested `overflow-y:auto` scroller, and once the anchor handle scrolls out of view Chrome re-derives the selection's base from a screen coordinate that is no longer over the anchor, so extending the other handle swallows every message above it.
+  That is the browser's touch-selection controller, not this app's DOM: making the column's chrome unselectable only moved where the runaway base landed, from "and the head bar too" to "from the first message down".
+  So **Select** - per message in its sticky control, and for the whole conversation in the head - opens the text in a read-only `<textarea>` filling the viewport, with **Copy selection** beside it.
+  A text control is a different selection path entirely: offsets into one buffer, with the control's own drag autoscroll and no scroller, sticky control, seam, or message boundary for a handle to catch on.
+  Nothing selected copies all of it, since a reader who opened the sheet to copy is not served by a button that copies an empty string.
+  Selecting in the column directly is still supported and still the faster path within one screenful; it is the scroll that breaks it, not the gesture.
+  To that end none of the column's chrome can hold a selection endpoint - not the head bar, the sticky controls, the message headers, the seams, or Show more - which keeps speaker labels, timestamps, and seam counts off the clipboard so a dragged selection yields the prose and nothing else.
+  On touch the sticky controls also hide for as long as a selection is held, since they are the last things in the path a selection handle travels that still accept a tap.
   Holding a selection over the column suspends the follow-scroll below for its duration; the arrival becomes the same "N new" pill a reader who scrolled up gets, and releasing the selection re-reads whether the column is still at its bottom rather than trusting the answer from before the freeze.
   Every message header shows its full local date and time, not only a time-of-day.
   An explicit Show more or Show less choice is device-local and keyed by session, agent run, and stable message identity, so appending messages, a moving transcript window, or navigating away does not reset it or apply it to a different message.

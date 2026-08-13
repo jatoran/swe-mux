@@ -219,6 +219,21 @@ export function transcriptSelectionActive(
   return host.contains(selection.anchorNode) || host.contains(selection.focusNode)
 }
 
+/**
+ * What "Copy selection" puts on the clipboard, given a text control's offsets.
+ *
+ * An empty selection copies the whole text rather than nothing: the reader opened this
+ * sheet to copy, and a button that silently copies an empty string reads as broken. The
+ * offsets are clamped and ordered because a text control reports them however the drag
+ * went, and a browser that ever reported them out of range must not throw here.
+ */
+export function transcriptSelectedSlice(text: string, start: number, end: number): string {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return text
+  const from = Math.max(0, Math.min(text.length, Math.min(start, end)))
+  const to = Math.max(0, Math.min(text.length, Math.max(start, end)))
+  return from === to ? text : text.slice(from, to)
+}
+
 // One slot, not a map. The rule is "keep my place while I am on this session, and
 // start at the newest message when I move to another one", so remembering more than
 // the current session would be remembering something nobody asked to keep — and a

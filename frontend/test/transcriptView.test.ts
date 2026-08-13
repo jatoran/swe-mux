@@ -17,6 +17,7 @@ import {
   transcriptEmptyMessage,
   transcriptMatchesQuery,
   transcriptSearchParts,
+  transcriptSelectedSlice,
   transcriptSelectionActive,
   transcriptSpeaker,
   transcriptTimestampIso,
@@ -177,6 +178,22 @@ test('a manual selection over the column is recognised from either endpoint', ()
   // No selection, or a body that has not mounted yet.
   assert.equal(transcriptSelectionActive(null, body), false)
   assert.equal(transcriptSelectionActive(selection(), null), false)
+})
+
+test('the select sheet copies the dragged span, or all of it when nothing is dragged', () => {
+  const text = 'built the search bar'
+  assert.equal(transcriptSelectedSlice(text, 6, 9), 'the')
+  // A text control reports the offsets however the drag went.
+  assert.equal(transcriptSelectedSlice(text, 9, 6), 'the')
+  // A caret is not a selection, and a copy button that copies an empty string reads as
+  // broken to someone who opened this sheet specifically to copy.
+  assert.equal(transcriptSelectedSlice(text, 4, 4), text)
+  assert.equal(transcriptSelectedSlice(text, 0, 0), text)
+  // Out-of-range and non-numeric offsets clamp rather than throw or slice to nothing.
+  assert.equal(transcriptSelectedSlice(text, -20, 5), 'built')
+  assert.equal(transcriptSelectedSlice(text, 6, 900), 'the search bar')
+  assert.equal(transcriptSelectedSlice(text, Number.NaN, 5), text)
+  assert.equal(transcriptSelectedSlice('', 0, 0), '')
 })
 
 test('every empty state says which kind of nothing it is', () => {
