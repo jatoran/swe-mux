@@ -53,6 +53,11 @@
   native identity, transcript pointer, derived Git metadata, context/model telemetry, explicit
   compaction summary, exit state, materialized chronological native start/final conversational message
   time and role, plus source mtime/size watermarks for bounded timestamp-summary refreshes.
+- `git_provenance`: durable evidence connecting a full commit OID to a session, optional agent run, Project, and exact checkout root.
+  It copies parent OIDs, subject, Git commit time, previous HEAD, relationship (`created|rewrote|observed`), confidence (`exact|correlated|ambiguous`), ambiguity flag, evidence source, source event sequence, optional tool-call id, and first/latest observation times.
+  The uniqueness key is `(session_id, agent_run_id, worktree_root, commit_oid)` with shell runs represented by the empty run id.
+  An internal evidence rank permits only equal or stronger observations to replace classification fields while preserving the earliest observation time.
+  Project deletion removes Project rows, and explicit History-entry deletion removes rows for that agent run.
 - `history_messages` + `history_messages_fts`: derived role-aware user/assistant text and
   provider-native optional timestamp plus FTS5 lookup surface. `history_transcript_index` stores
   source mtime/size, parser version, message count, and index time so empty/unchanged transcripts
@@ -230,8 +235,10 @@
 ## Retention and secrecy
 
 Native transcripts remain in vendor locations and are authoritative; searchable message text
-is a local rebuildable derivative deleted with its history index row. Backfill job progress is
-daemon-local and disposable; completed index writes remain durable. Provider auth and the
+is a local rebuildable derivative deleted with its history index row.
+Git provenance follows the corresponding History and Project lifecycle instead of operational or optional Tier 0 age retention.
+Backfill job progress is daemon-local and disposable; completed index writes remain durable.
+Provider auth and the
 OpenRouter key are never stored in SQLite or project files. Raw operational telemetry is time-bounded; old
 quota samples roll into daily summaries before deletion. Process and operational retention
 are independently configurable. Quota history contains account IDs and utilization, never

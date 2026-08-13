@@ -67,6 +67,7 @@ from .fleet_intelligence import FleetIntelligence
 from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor, _git
 from .git_projects import ProjectIdentity, resolve_project
+from .git_provenance import GitProvenanceService
 from .harness import (
     AGENT_BACKENDS,
     HARNESSES,
@@ -840,6 +841,7 @@ def create_app(
             web.post("/mcp", mcp_endpoint),
             web.get("/api/git/worktrees", list_worktrees),
             web.get("/api/git/graph", git_graph),
+            web.get("/api/git/provenance", git_provenance),
             web.get("/api/git/commits/{oid}/changes", git_commit_changes),
             web.get("/api/git/diff", git_diff),
             web.post("/api/git/worktrees", create_worktree),
@@ -1031,6 +1033,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     git_monitor = GitMonitor(
         sessions, events, config.git_poll_seconds, compare_override=_project_compare_ref
     )
+    git_provenance_service = GitProvenanceService(history, sessions, events)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)
@@ -1255,6 +1258,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     consumers.start()
     scan_timeline.start()
+    git_provenance_service.start()
     git_monitor.start()
     hooks.start()
     automation.start()
@@ -1323,6 +1327,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         reaper=reaper,
         supervisor=supervisor_client,
         git_monitor=git_monitor,
+        git_provenance=git_provenance_service,
         hooks=hooks,
         automation=automation,
         automation_store=automation_store,
@@ -1407,6 +1412,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await process_inspector.stop()
     await ghost_windows.stop()
     await git_monitor.stop()
+    await git_provenance_service.stop()
     # Shutdown intent (SESSION_PRESERVING_RELOAD §5.3): "quit" reaps everything
     # (today's behavior, and always the case without a supervisor); "detach"
     # leaves supervisor-owned sessions running so the next daemon reattaches.
@@ -4407,6 +4413,7 @@ async def get_background_health(request: web.Request) -> web.Response:
             "loop_lag": loop_lag.snapshot(),
             "event_bus": events.drop_stats(),
             "tier0_capture": tier0.capture_stats(),
+            "git_provenance": request.app["git_provenance"].status(),
             # A detector that stopped producing findings is indistinguishable from
             # a quiet fleet unless the loop's own liveness is reported.
             "deterministic_consumers": consumers.status(),
@@ -8338,6 +8345,39 @@ async def git_graph(request: web.Request) -> web.Response:
     if not 1 <= limit <= GIT_GRAPH_MAX_LIMIT:
         return json_response({"error": f"limit must be between 1 and {GIT_GRAPH_MAX_LIMIT}"}, 400)
     return json_response(await git_review.git_graph(project.id, project.root, limit))
+
+
+async def git_provenance(request: web.Request) -> web.Response:
+    """Return durable commit associations for one Project, session, run, or OID set."""
+    extras = set(request.query) - {"project_id", "session_id", "agent_run_id", "commit", "limit"}
+    if extras:
+        raise git_review.GitReviewError(
+            "invalid_parameters", f"unsupported parameters: {', '.join(sorted(extras))}"
+        )
+    project_id = request.query.get("project_id", "")
+    project = request.app["projects"].projects.get(project_id)
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    raw_limit = request.query.get("limit") or "200"
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return json_response({"error": "limit must be an integer"}, 400)
+    if not 1 <= limit <= 500:
+        return json_response({"error": "limit must be between 1 and 500"}, 400)
+    commit_oids = [value for value in request.query.getall("commit", []) if value]
+    if len(commit_oids) > 500 or any(
+        not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid) for oid in commit_oids
+    ):
+        return json_response({"error": "commit must contain full Git object IDs"}, 400)
+    items = await request.app["history"].git_provenance(
+        project_id=project.id,
+        session_id=request.query.get("session_id") or None,
+        agent_run_id=request.query.get("agent_run_id") or None,
+        commit_oids=commit_oids or None,
+        limit=limit,
+    )
+    return json_response({"items": items})
 
 
 async def git_commit_changes(request: web.Request) -> web.Response:

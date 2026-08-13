@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import time
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -147,12 +148,43 @@ CREATE TABLE IF NOT EXISTS artifacts (
   placement_acknowledged_scope_id TEXT,
   UNIQUE(kind,owner_type,owner_id)
 );
+CREATE TABLE IF NOT EXISTS git_provenance (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  session_name TEXT NOT NULL,
+  agent_run_id TEXT NOT NULL DEFAULT '',
+  project_id TEXT NOT NULL,
+  worktree_root TEXT NOT NULL,
+  commit_oid TEXT NOT NULL,
+  parent_oids_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  committed_at REAL,
+  previous_head TEXT,
+  relationship TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  ambiguous INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL,
+  source_event_seq INTEGER,
+  tool_call_id TEXT,
+  evidence_rank INTEGER NOT NULL,
+  observed_at REAL NOT NULL,
+  updated_at REAL NOT NULL,
+  UNIQUE(session_id,agent_run_id,worktree_root,commit_oid)
+);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_history_spawned ON history(spawned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_history_messages_history ON history_messages(history_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_history_messages_source
   ON history_messages(history_id, source_mtime_ns, source_size, parser_version);
+CREATE INDEX IF NOT EXISTS idx_git_provenance_project
+  ON git_provenance(project_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_git_provenance_session
+  ON git_provenance(session_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_git_provenance_run
+  ON git_provenance(agent_run_id, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_git_provenance_commit
+  ON git_provenance(project_id, commit_oid);
 """
 
 
@@ -531,8 +563,9 @@ class HistoryIndex:
 
     async def delete_project(self, project_id: str) -> None:
         def op() -> None:
-            self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
-            self._db.commit()
+            with self._db:
+                self._db.execute("DELETE FROM git_provenance WHERE project_id=?", (project_id,))
+                self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
         await self._run(op)
 
@@ -1515,6 +1548,146 @@ class HistoryIndex:
 
         return await self._run(op)
 
+    async def record_git_provenance(
+        self,
+        *,
+        session_id: str,
+        session_name: str,
+        agent_run_id: str | None,
+        project_id: str,
+        worktree_root: str,
+        commit_oid: str,
+        parent_oids: tuple[str, ...] = (),
+        subject: str = "",
+        committed_at: float | None = None,
+        previous_head: str | None = None,
+        relationship: str,
+        confidence: str,
+        ambiguous: bool,
+        source: str,
+        source_event_seq: int | None = None,
+        tool_call_id: str | None = None,
+        evidence_rank: int,
+        observed_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Insert one durable association, promoting weaker evidence in place."""
+        timestamp = observed_at if observed_at is not None else time.time()
+        run_id = agent_run_id or ""
+        row_id = uuid.uuid4().hex
+        parents_json = json.dumps(parent_oids)
+
+        def op() -> dict[str, Any]:
+            self._db.execute(
+                "INSERT INTO git_provenance("
+                "id,session_id,session_name,agent_run_id,project_id,worktree_root,commit_oid,"
+                "parent_oids_json,subject,committed_at,previous_head,relationship,confidence,"
+                "ambiguous,source,source_event_seq,tool_call_id,evidence_rank,observed_at,updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(session_id,agent_run_id,worktree_root,commit_oid) DO UPDATE SET "
+                "session_name=excluded.session_name,project_id=excluded.project_id,"
+                "parent_oids_json=CASE WHEN excluded.parent_oids_json!='[]' "
+                "THEN excluded.parent_oids_json ELSE git_provenance.parent_oids_json END,"
+                "subject=CASE WHEN excluded.subject!='' "
+                "THEN excluded.subject ELSE git_provenance.subject END,"
+                "committed_at=COALESCE(excluded.committed_at,git_provenance.committed_at),"
+                "previous_head=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.previous_head ELSE git_provenance.previous_head END,"
+                "relationship=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.relationship ELSE git_provenance.relationship END,"
+                "confidence=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.confidence ELSE git_provenance.confidence END,"
+                "ambiguous=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.ambiguous ELSE git_provenance.ambiguous END,"
+                "source=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.source ELSE git_provenance.source END,"
+                "source_event_seq=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.source_event_seq ELSE git_provenance.source_event_seq END,"
+                "tool_call_id=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+                "THEN excluded.tool_call_id ELSE git_provenance.tool_call_id END,"
+                "evidence_rank=MAX(git_provenance.evidence_rank,excluded.evidence_rank),"
+                "observed_at=MIN(git_provenance.observed_at,excluded.observed_at),"
+                "updated_at=MAX(git_provenance.updated_at,excluded.updated_at)",
+                (
+                    row_id,
+                    session_id,
+                    session_name[:200],
+                    run_id,
+                    project_id,
+                    worktree_root,
+                    commit_oid.lower(),
+                    parents_json,
+                    subject[:512],
+                    committed_at,
+                    previous_head.lower() if previous_head else None,
+                    relationship,
+                    confidence,
+                    int(ambiguous),
+                    source,
+                    source_event_seq,
+                    tool_call_id,
+                    evidence_rank,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM git_provenance WHERE session_id=? AND agent_run_id=? "
+                "AND worktree_root=? AND commit_oid=?",
+                (session_id, run_id, worktree_root, commit_oid.lower()),
+            ).fetchone()
+            assert row is not None
+            return self._public_git_provenance(row)
+
+        return await self._run(op)
+
+    @staticmethod
+    def _public_git_provenance(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        try:
+            parents = json.loads(item.pop("parent_oids_json", "[]") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            parents = []
+        item["parent_oids"] = [str(value) for value in parents] if isinstance(parents, list) else []
+        item["agent_run_id"] = item.get("agent_run_id") or None
+        item["ambiguous"] = bool(item.get("ambiguous"))
+        item.pop("evidence_rank", None)
+        return item
+
+    async def git_provenance(
+        self,
+        *,
+        project_id: str,
+        session_id: str | None = None,
+        agent_run_id: str | None = None,
+        commit_oids: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clauses = ["project_id=?"]
+        args: list[Any] = [project_id]
+        if session_id:
+            clauses.append("session_id=?")
+            args.append(session_id)
+        if agent_run_id:
+            clauses.append("agent_run_id=?")
+            args.append(agent_run_id)
+        if commit_oids:
+            normalized = list(dict.fromkeys(oid.lower() for oid in commit_oids))[:500]
+            clauses.append(f"commit_oid IN ({','.join('?' for _ in normalized)})")
+            args.extend(normalized)
+        bounded_limit = max(1, min(limit, 500))
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM git_provenance WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY observed_at DESC,id LIMIT ?",
+                (*args, bounded_limit),
+            ).fetchall()
+            return [self._public_git_provenance(row) for row in rows]
+
+        return await self._run(op)
+
     async def history(
         self, query: str = "", backend: str | None = None, limit: int = 200
     ) -> list[dict[str, Any]]:
@@ -1760,6 +1933,9 @@ class HistoryIndex:
     async def delete_history_entry(self, session_id: str) -> bool:
         def op() -> bool:
             with self._db:
+                self._db.execute(
+                    "DELETE FROM git_provenance WHERE agent_run_id=?", (session_id,)
+                )
                 self._db.execute("DELETE FROM history_messages WHERE history_id=?", (session_id,))
                 self._db.execute(
                     "DELETE FROM history_transcript_index WHERE history_id=?", (session_id,)

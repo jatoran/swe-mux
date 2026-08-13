@@ -97,6 +97,10 @@ class GitState:
     compare_added: int | None = None
     compare_removed: int | None = None
     compare_files: int | None = None
+    #: Exact checked-out commit. Unlike the display-only branch name, this is
+    #: also the baseline used by durable session-to-commit provenance. It stays
+    #: a checkout property: sessions sharing a worktree report the same HEAD.
+    head: str | None = None
 
 
 @dataclass(slots=True)

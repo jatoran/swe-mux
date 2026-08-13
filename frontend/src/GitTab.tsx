@@ -4,10 +4,12 @@ import {
   isAbsolutePath,
   normalizePath,
   parseGitGraph,
+  parseGitProvenance,
   pathTail,
   sessionGitCwd,
   shortSha,
   type GitGraph,
+  type GitProvenance,
 } from './gitWorktrees'
 import type { Project, Session } from './types'
 import { GitFileRow } from './GitFileRow'
@@ -20,17 +22,18 @@ import {
 } from './gitWorktrees'
 import type { ReviewLocator } from './gitReview'
 
-// One repository, two readings:
+// One repository, three readings:
 //
 //  * Map is the operational projection: one row per worktree, with local files,
 //    comparison-ref changes, and the live sessions using the directory.
 //  * Log is the repository's real commit DAG. Git computes the ASCII lanes; the browser
 //    styles them and attaches the structured commit metadata returned beside each prefix.
+//  * Provenance is the durable evidence ledger connecting commits to sessions and runs.
 //
 // The tab remains deliberately read-mostly. Its only mutations are the worktree add/remove
 // operations the Git feature already owns; it never stages, commits, merges, or checks out.
 
-type GitView = 'map' | 'log'
+type GitView = 'map' | 'log' | 'provenance'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
 
@@ -63,7 +66,7 @@ type Props={
   onProjectUpdated:(project:Project)=>void
 }
 
-type ReviewState={files:ReviewFileChange[];locator:ReviewLocator;initialPath:string;truncated:boolean}
+type ReviewState={files:ReviewFileChange[];locator:ReviewLocator;initialPath:string;truncated:boolean;provenance:GitProvenance[]}
 
 function SummaryHeader({title,summary}:{title:string;summary:ReviewChangeSummary}) {
   return <h4><span>{title}</span><small>{summary.total} file{summary.total===1?'':'s'} · +{summary.additions} -{summary.deletions}{summary.binaryFiles?` · ${summary.binaryFiles} binary`:''}</small></h4>
@@ -84,6 +87,8 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
   const [view,setView]=useState<GitView>('map')
   const [overview,setOverview]=useState<GitWorktreeOverview|null>(null)
   const [graph,setGraph]=useState<GitGraph|null>(null)
+  const [provenance,setProvenance]=useState<GitProvenance[]>([])
+  const [provenanceError,setProvenanceError]=useState('')
   const [graphLimit,setGraphLimit]=useState(GRAPH_STEP)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
@@ -101,6 +106,7 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
   const [compareOverride,setCompareOverride]=useState(project?.git_compare_ref||'')
   const generation=useRef(0)
   const graphGeneration=useRef(0)
+  const provenanceGeneration=useRef(0)
 
   const refresh=useCallback(async()=>{
     if(!project){setOverview(null);return}
@@ -126,13 +132,23 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     }catch(cause){if(mine===graphGeneration.current)setError(describeGitError(cause,'Reading the commit graph'))}
   },[project?.id])
 
+  const refreshProvenance=useCallback(async()=>{
+    if(!project){setProvenance([]);return}
+    const mine=++provenanceGeneration.current
+    try{
+      const raw=await api<unknown>('GET',`/api/git/provenance?project_id=${encodeURIComponent(project.id)}&limit=500`)
+      if(mine!==provenanceGeneration.current)return
+      setProvenance(parseGitProvenance(raw));setProvenanceError('')
+    }catch(cause){if(mine===provenanceGeneration.current)setProvenanceError(cause instanceof Error?cause.message:String(cause))}
+  },[project?.id])
+
   useEffect(()=>{
-    setOverview(null);setGraph(null);setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setCompareOverride(project?.git_compare_ref||'')
-    void refresh()
-    const changed=()=>void refresh()
+    setOverview(null);setGraph(null);setProvenance([]);setProvenanceError('');setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setCompareOverride(project?.git_compare_ref||'')
+    void refresh();void refreshProvenance()
+    const changed=()=>{void refresh();void refreshProvenance()}
     window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
     return()=>{window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed);window.removeEventListener('mux:worktree-created',changed);window.removeEventListener('mux:worktree-removed',changed)}
-  },[refresh])
+  },[refresh,refreshProvenance])
   useEffect(()=>setCompareOverride(project?.git_compare_ref||''),[project?.git_compare_ref])
   useEffect(()=>{
     if(view!=='log')return
@@ -142,6 +158,9 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     window.addEventListener('mux:events-connected',changed)
     return()=>{window.removeEventListener('mux:git-changed',changed);window.removeEventListener('mux:events-connected',changed)}
   },[view,graphLimit,refreshGraph])
+
+  const provenanceByCommit=new Map<string,GitProvenance[]>()
+  for(const item of provenance){const entries=provenanceByCommit.get(item.commitOid)||[];entries.push(item);provenanceByCommit.set(item.commitOid,entries)}
 
   if(!project)return <><p class="drawer-status">no Project selected</p><p class="drawer-empty">Select a Project to inspect its repository.</p></>
 
@@ -157,7 +176,7 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     const cwd=normalizePath(sessionGitCwd(session)),worktree=normalizePath(root)
     return cwd===worktree||cwd.startsWith(`${worktree}/`)
   })
-  const startReview=(summary:ReviewChangeSummary,locator:ReviewLocator,file:ReviewFileChange)=>setReview({files:summary.files,locator,initialPath:file.path,truncated:summary.truncated})
+  const startReview=(summary:ReviewChangeSummary,locator:ReviewLocator,file:ReviewFileChange,commitProvenance:GitProvenance[]=[])=>setReview({files:summary.files,locator,initialPath:file.path,truncated:summary.truncated,provenance:commitProvenance})
   const loadCommit=async(oid:string,parent?:string)=>{
     const key=`${oid}:${parent||''}`
     if(commitCache.has(key))return
@@ -191,8 +210,8 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
 
   return <div class="git-tab git-review-tab">
     <div class="git-toolbar">
-      <div class="git-view-toggle" role="tablist" aria-label="Git view"><button class={view==='map'?'active':''} onClick={()=>setView('map')}>Map</button><button class={view==='log'?'active':''} onClick={()=>setView('log')}>Log</button></div>
-      <button disabled={busy} onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));view==='map'?void refresh():void refreshGraph(graphLimit)}}>↻ Refresh</button>
+      <div class="git-view-toggle" role="tablist" aria-label="Git view"><button class={view==='map'?'active':''} onClick={()=>setView('map')}>Map</button><button class={view==='log'?'active':''} onClick={()=>setView('log')}>Log</button><button class={view==='provenance'?'active':''} onClick={()=>setView('provenance')}>Provenance</button></div>
+      <button disabled={busy} onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map')void refresh();else if(view==='log')void refreshGraph(graphLimit);void refreshProvenance()}}>↻ Refresh</button>
       {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
     </div>
     {overview&&<div class="git-compare"><label>COMPARE <select disabled={busy} value={compareOverride} onChange={event=>void saveComparison(event.currentTarget.value)}><option value="">Auto{overview.comparison.available?` (${overview.comparison.display})`:''}</option>{compareOverride&&!overview.comparison.candidates.includes(compareOverride)&&<option value={compareOverride}>{compareOverride} (unavailable)</option>}{overview.comparison.candidates.map(ref=><option value={ref}>{ref}</option>)}</select></label><small>{comparisonSourceLabel(overview.comparison)}</small></div>}
@@ -225,14 +244,16 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     </>}
     {view==='log'&&<>{!graph&&!error&&<p class="git-state">Reading commit graph…</p>}{graph&&<section class="git-graph" aria-label="Commit graph">{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
         const parent=parentByCommit[line.oid]??line.parents[0]??'',key=`${line.oid}:${parent}`,changes=commitCache.get(key),expanded=expandedCommit===line.oid
-        return <article class="git-graph-row git-review-commit" key={line.oid}><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph}/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span><small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
+        const commitProvenance=provenanceByCommit.get(line.oid)||[]
+        return <article class="git-graph-row git-review-commit" key={line.oid}><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph}/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span><small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}{commitProvenance.length?` · ${commitProvenance.length} session link${commitProvenance.length===1?'':'s'}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
           {/* The summary row can only ever show one elided line of the subject, so the whole
               message - subject, blank line, body - is reproduced here. `pre-wrap` because a
               commit message is pre-formatted prose: its own hard wraps and paragraph breaks
               are part of what was written, and only the over-long line needs the browser. */}
-          {expanded&&<div class="git-commit-detail">{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
+          {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}><strong>{item.sessionName}</strong><span class={`git-provenance-confidence ${item.confidence}`}>{item.relationship} · {item.confidence}</span></p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
-      })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section>}</>}
-    {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
+    })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section>}</>}
+    {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">{provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}{!provenanceError&&provenance.length===0?<p class="git-state">No session-to-commit associations recorded yet.</p>:provenance.map(item=><article key={item.id}><div><strong>{shortSha(item.commitOid)}</strong><span>{item.subject||'Commit observed without readable metadata'}</span></div><p><strong>{item.sessionName}</strong>{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-confidence ${item.confidence}`}>{item.relationship} · {item.confidence}</span></p><small>{item.worktreeRoot} · observed {new Date(item.observedAt*1000).toLocaleString()}</small>{item.ambiguous&&<em>Several live sessions shared this checkout, so swe-mux cannot identify the author.</em>}</article>)}</section>}
+    {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
   </div>
 }

@@ -7,6 +7,7 @@ import { transcriptClamped, transcriptSpeaker, transcriptTimestampIso, transcrip
 import type { Project } from './types'
 import { harnessDisplayName, promptDeliveryHarnesses, transcriptHarnesses } from './harnessRegistry'
 import { ModelName } from './ModelName'
+import { parseGitProvenance, shortSha, type GitProvenance } from './gitWorktrees'
 
 export type HistoryMatch={ordinal:number;role:'user'|'assistant';ts?:string;excerpt:string}
 export type HistoryEntry = {
@@ -91,6 +92,7 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   const [expandedMessages,setExpandedMessages]=useState<Set<number>>(()=>new Set())
   const [copiedMessage,setCopiedMessage]=useState<number|null>(null)
   const [lineage,setLineage]=useState<LineageEdge[]>([])
+  const [gitProvenance,setGitProvenance]=useState<GitProvenance[]>([])
   const [job,setJob]=useState<BackfillJob|null>(null)
   const requestSequence=useRef(0)
   const transcriptBody=useRef<HTMLDivElement>(null)
@@ -171,10 +173,17 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   },[items,historyProjects,projects])
 
   const view=async(entry:HistoryEntry)=>{
-    setError('');setActiveMatch(0);setLineage([]);setExpandedMessages(new Set());setCopiedMessage(null)
+    setError('');setActiveMatch(0);setLineage([]);setGitProvenance([]);setExpandedMessages(new Set());setCopiedMessage(null)
     try{
       const search=new URLSearchParams({scope});if(query)search.set('q',query)
-      setTranscript(await api<Transcript>('GET',`/api/history/${entry.id}/transcript?${search}`))
+      const provenance=entry.project_id
+        ? api<unknown>('GET',`/api/git/provenance?project_id=${encodeURIComponent(entry.project_id)}&agent_run_id=${encodeURIComponent(entry.id)}&limit=500`).then(parseGitProvenance).catch(()=>[])
+        : Promise.resolve([])
+      const [nextTranscript,commits]=await Promise.all([
+        api<Transcript>('GET',`/api/history/${entry.id}/transcript?${search}`),
+        provenance,
+      ])
+      setTranscript(nextTranscript);setGitProvenance(commits)
       void api<{items:LineageEdge[]}>('GET',`/api/lineage?run_id=${encodeURIComponent(entry.id)}`).then(result=>setLineage(result.items)).catch(()=>setLineage([]))
     }catch(cause){setTranscript(null);setError(cause instanceof Error?cause.message:String(cause))}
   }
@@ -235,7 +244,7 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
       <main>{transcript?<><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Results</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label||'Unassigned'} · {transcript.entry.cwd}</span></div></div>
         <div class="transcript-actions"><button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume as new</button><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button>{reviewTarget(transcript.entry.backend)&&<button onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {harnessDisplayName(reviewTarget(transcript.entry.backend)!.name)}</button>}{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
         <div class="transcript-metadata"><small>Started {timestampLabel(historyStart(transcript.entry))} · last {transcript.entry.last_message_role==='assistant'?'agent':transcript.entry.last_message_role==='user'?'you':'message'} {timestampLabel(transcript.entry.last_message_at)}</small><small>{transcript.entry.exit_reason||transcript.entry.final_state||'indexed'} · <ModelName model={transcript.entry.model}/> · {transcript.entry.external?'external':'mux session'}</small>{providerIdentity(transcript.entry)&&<small>{providerIdentity(transcript.entry)}</small>}<small>{transcript.entry.context_window?`context final ${Math.round((transcript.entry.final_context_pct||0)*100)}% · peak ${Math.round((transcript.entry.peak_context_pct||0)*100)}% · ${transcript.entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {transcript.entry.tokens_in||0} / out {transcript.entry.tokens_out||0} · cache read {transcript.entry.tokens_cache_read||0} / write {transcript.entry.tokens_cache_write||0} · cost {money.format(transcript.entry.cost_usd||0)}{formatBytes(transcriptBytes(transcript.entry))?` · transcript ${formatBytes(transcriptBytes(transcript.entry))}`:''}</small><small>{transcript.entry.compaction_count?`explicit compactions ${transcript.entry.compaction_count} · ${transcript.entry.compaction_capability||'native evidence'} · confidence ${transcript.entry.compaction_confidence||'unknown'}`:'compaction count unavailable - token drops are not treated as compaction evidence'}</small></div>
-        {lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}
+        {gitProvenance.length>0&&<section class="transcript-lineage"><h4>Commits from this run</h4>{gitProvenance.map(item=><article key={item.id}><strong>{shortSha(item.commitOid)} · {item.subject||'subject unavailable'}</strong><span>{item.relationship} · {item.confidence}</span><small>{new Date(item.observedAt*1000).toLocaleString()}</small></article>)}</section>}{lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}
         <div class="messages" ref={transcriptBody}>{transcript.messages.length?transcript.messages.map((message,ordinal)=>{
           const text=historyMessageText(message)
           const matched=transcript.matches.some(match=>match.ordinal===ordinal)

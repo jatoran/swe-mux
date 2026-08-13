@@ -41,6 +41,9 @@ and reattachable browser viewports.
 - Spawn preparation runs independent Git identity probes concurrently and briefly caches the
   stable result for repeated launches. Synchronous ConPTY creation runs outside the daemon event
   loop, keeping existing terminals, events, and HTTP responsive during Windows process startup.
+- Session-to-commit provenance snapshots the session label, Project, and current `agent_run_id` when a recognized commit tool call begins.
+  A conversation rollover before its result arrives therefore cannot move that evidence onto the successor run.
+  The durable association and its confidence rules are defined in `features/git.md`.
 - Once ConPTY exists, the daemon publishes the in-memory session and returns the spawn response;
   durable Project/history/event registration continues in the background. Transcript imports or
   other SQLite work therefore cannot hide an already-usable terminal. Lifecycle writes that

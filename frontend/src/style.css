@@ -2852,6 +2852,15 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-commit-message{margin:0 0 6px;max-width:70ch;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text);font:inherit;font-size:9px;line-height:1.45}
 .git-commit-parent{display:flex;justify-content:space-between;align-items:center;gap:7px;color:var(--muted);font-size:8px}
 .git-commit-parent select{min-width:0;background:var(--bg);border:1px solid var(--line);color:var(--text);font:inherit}
+.git-provenance-links{display:grid;gap:3px;margin:0 0 7px;padding:6px;border:1px solid var(--line);background:var(--bg)}
+.git-provenance-links p,.git-provenance article p{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0}
+.git-provenance-confidence{padding:1px 4px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:7px;text-transform:uppercase}
+.git-provenance-confidence.exact{border-color:color-mix(in srgb,var(--green) 60%,var(--line));color:var(--green)}
+.git-provenance-confidence.ambiguous{border-color:color-mix(in srgb,var(--amber) 60%,var(--line));color:var(--amber)}
+.git-provenance{display:grid}
+.git-provenance article{display:grid;gap:4px;padding:8px 10px;border-bottom:1px solid var(--line)}
+.git-provenance article>div{display:flex;gap:8px;min-width:0}.git-provenance article>div strong{color:var(--accent)}.git-provenance article>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.git-provenance article code{color:var(--muted);font-size:8px}.git-provenance article small{overflow:hidden;color:var(--muted);text-overflow:ellipsis;white-space:nowrap}.git-provenance article em{color:var(--amber);font-size:8px;font-style:normal}
 .git-review-backdrop{position:fixed;inset:0;z-index:120;display:grid;place-items:center;background:#050608c7;backdrop-filter:blur(5px)}
 .git-review-modal{width:min(1500px,calc(100vw - 32px));height:min(940px,calc(100vh - 32px));display:flex;flex-direction:column;border:1px solid #3a424c;border-radius:10px;background:var(--bg);box-shadow:0 30px 100px #000;overflow:hidden}
 .git-review-header{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}

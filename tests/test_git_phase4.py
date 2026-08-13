@@ -539,6 +539,39 @@ async def test_sweeping_the_fleet_costs_one_read_per_working_directory(
 
 
 @pytest.mark.asyncio
+async def test_head_only_change_emits_the_previous_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old = "a" * 40
+    new = "b" * 40
+    state = git_monitor.GitState(branch="master", root="C:/repo", head=new)
+
+    async def fake_read(cwds):  # type: ignore[no-untyped-def]
+        return {
+            cwd: git_monitor.GitReading(state, git_monitor.GitEvidence(head=new))
+            for cwd in cwds
+        }
+
+    monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
+    events = EventBus()
+    queue = events.subscribe(name="test")
+    session = _FakeSession(
+        "C:/repo",
+        True,
+        git_monitor.GitState(branch="master", root="C:/repo", head=old),
+    )
+    manager = cast(Any, SimpleNamespace(sessions={"1": session}))
+    monitor = git_monitor.GitMonitor(manager, events)
+
+    await monitor._poll()
+    event = queue.get_nowait()
+
+    assert event.type == "git_changed"
+    assert event.payload["head"] == new
+    assert event.payload["previous_head"] == old
+
+
+@pytest.mark.asyncio
 async def test_one_checkout_two_projects_do_not_share_a_comparison_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

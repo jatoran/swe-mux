@@ -73,6 +73,25 @@ export type GitGraphConnector = { kind: 'connector'; graph: string }
 export type GitGraphLine = GitGraphCommit | GitGraphConnector
 export type GitGraph = { lines: GitGraphLine[]; limit: number; hasMore: boolean }
 
+export type GitProvenance = {
+  id: string
+  sessionId: string
+  sessionName: string
+  agentRunId: string | null
+  projectId: string
+  worktreeRoot: string
+  commitOid: string
+  parentOids: string[]
+  subject: string
+  committedAt: number | null
+  previousHead: string | null
+  relationship: 'created' | 'rewrote' | 'observed'
+  confidence: 'exact' | 'correlated' | 'ambiguous'
+  ambiguous: boolean
+  source: 'session_tool' | 'git_monitor'
+  observedAt: number
+}
+
 /** A live session sitting somewhere in this repository, with whatever Git state it reported. */
 export type SessionGit = {
   id: string
@@ -211,6 +230,48 @@ export function parseGitGraph(raw: unknown): GitGraph {
     limit: typeof record.limit === 'number' && Number.isFinite(record.limit) ? record.limit : 0,
     hasMore: record.has_more === true,
   }
+}
+
+export function parseGitProvenance(raw: unknown): GitProvenance[] {
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { items?: unknown }).items)) return []
+  const items: GitProvenance[] = []
+  for (const value of (raw as { items: unknown[] }).items) {
+    if (!value || typeof value !== 'object') continue
+    const row = value as Record<string, unknown>
+    if (
+      typeof row.id !== 'string'
+      || typeof row.session_id !== 'string'
+      || typeof row.session_name !== 'string'
+      || typeof row.project_id !== 'string'
+      || typeof row.worktree_root !== 'string'
+      || typeof row.commit_oid !== 'string'
+      || !['created', 'rewrote', 'observed'].includes(String(row.relationship))
+      || !['exact', 'correlated', 'ambiguous'].includes(String(row.confidence))
+      || !['session_tool', 'git_monitor'].includes(String(row.source))
+      || typeof row.observed_at !== 'number'
+    ) continue
+    items.push({
+      id: row.id,
+      sessionId: row.session_id,
+      sessionName: row.session_name,
+      agentRunId: typeof row.agent_run_id === 'string' ? row.agent_run_id : null,
+      projectId: row.project_id,
+      worktreeRoot: row.worktree_root,
+      commitOid: row.commit_oid,
+      parentOids: Array.isArray(row.parent_oids)
+        ? row.parent_oids.filter((item): item is string => typeof item === 'string')
+        : [],
+      subject: typeof row.subject === 'string' ? row.subject : '',
+      committedAt: typeof row.committed_at === 'number' ? row.committed_at : null,
+      previousHead: typeof row.previous_head === 'string' ? row.previous_head : null,
+      relationship: row.relationship as GitProvenance['relationship'],
+      confidence: row.confidence as GitProvenance['confidence'],
+      ambiguous: row.ambiguous === true,
+      source: row.source as GitProvenance['source'],
+      observedAt: row.observed_at,
+    })
+  }
+  return items
 }
 
 /** Compact porcelain/name-status code for a narrow file list. */

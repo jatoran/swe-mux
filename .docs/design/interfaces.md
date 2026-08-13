@@ -1043,11 +1043,11 @@ error}` (502). It never writes a PTY. See `features/processes-and-previews.md`.
 Git review routes are derived, read-only tooling APIs except for the existing worktree create and remove mutations.
 Every review read is Project-scoped and rejects unlisted parameters instead of accepting caller-supplied repositories or arbitrary refs.
 
-The session snapshot's `git` object and the `git_changed` event payload carry the same shape,
-which describes the **checkout** a session is in and never the session:
+The session snapshot's `git` object and the `git_changed.git` event field carry the same shape, which describes the **checkout** a session is in and never the session:
 
 ```text
 git {
+  head,                             # full current commit OID, or null for no readable HEAD
   branch, dirty, ahead, behind,     # branch name, dirty file count, upstream divergence
   worktree,                         # leaf name when a linked worktree, else null
   root,                             # absolute working-tree root: the identity of the checkout
@@ -1056,6 +1056,9 @@ git {
   compare_added, compare_removed, compare_files
 }
 ```
+
+On a same-checkout HEAD transition, `git_changed.previous_head` carries the prior full commit OID and the existing top-level `head` evidence field carries the new one.
+The first poll and a checkout switch set `previous_head` to `null`, so they establish a baseline without inventing provenance.
 
 Sessions sharing a working tree report identical values by construction.
 `compare_*` measure the working tree against its merge base with `compare_ref`, so they include
@@ -1074,6 +1077,12 @@ Each summary reports totals, additions, deletions, binary and submodule counts, 
 `limit` is 1 to 200 with a default of 80.
 Lines are either `{kind:"connector", graph}` or typed commit rows carrying `graph`, `oid`, `parents`, `refs`, `author`, `committed_at`, and `subject`.
 Git supplies the graph prefixes and the browser renders them without reconstructing topology.
+
+`GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items}` from the durable session-to-commit evidence ledger.
+`project_id` is required and must name a registered Project, `limit` is 1 to 500 with a default of 200, and repeated `commit` parameters select multiple full 40-to-64-character object IDs.
+Every item carries its durable id, session id and captured label, nullable agent run id, Project, exact worktree root, full commit OID, parent OIDs, copied subject and commit time, previous HEAD, relationship, confidence, ambiguity flag, source, nullable source event sequence and tool-call id, and first/latest observation times.
+Rows are newest-first by their first observation time.
+The route rejects unknown parameters and never accepts a repository path from the caller.
 
 `GET /git/commits/{full_oid}/changes?project_id=ID[&parent=FULL_OID]` validates the commit and selected direct parent, then returns the complete parent list, the commit `message`, and a bounded file summary.
 `message` is the whole message, subject and body, capped at 16,384 characters; it is independent of the selected parent.
