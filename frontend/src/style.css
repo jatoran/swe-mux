@@ -1645,7 +1645,7 @@ body {
      Pushing the host back down *inside* the already-slid surface reveals the grid's top while
      the command rail and the chips stay where the slide put them, above the keyboard, so the
      control that got you here is still the control that takes you back. */
-     A drag moves this continuously rather than flipping between the two ends, so the offset
+  /* A drag moves this continuously rather than flipping between the two ends, so the offset
      is a length the pane writes per pointer move and not a class. The button and the
      landed-output move are jumps and animate; a dragged offset must not, because a
      transition on a value the finger is already setting reads as the pane lagging behind. */
