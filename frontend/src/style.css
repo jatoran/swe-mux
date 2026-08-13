@@ -2831,10 +2831,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
 .git-compare small{color:var(--muted);font-size:8px;overflow-wrap:anywhere}
-.git-review-tab .git-map-summary{width:100%;min-height:48px;display:grid;grid-template-columns:max-content minmax(0,1fr) 12px;grid-template-rows:auto auto;align-items:center;column-gap:7px;row-gap:3px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.git-review-tab .git-map-summary{width:100%;min-height:48px;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-rows:auto auto;align-content:center;column-gap:5px;row-gap:3px;padding:6px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .git-review-tab .git-map-summary:hover{background:var(--panel2)}
-.git-review-tab .git-map-rail,.git-review-tab .git-map-chevron{grid-row:1/-1;align-self:center}
-.git-review-tab .git-map-identity,.git-review-tab .git-map-metrics{grid-column:2}
+.git-review-tab .git-map-rail{grid-column:1;grid-row:1;width:12px;align-self:baseline}
+.git-review-tab .git-map-identity{grid-column:2;grid-row:1;align-self:baseline}
+.git-review-tab .git-map-chevron{grid-column:1;grid-row:2;align-self:baseline;text-align:left}
+.git-review-tab .git-map-metrics{grid-column:2;grid-row:2;align-self:baseline}
 .git-review-tab .git-change-group h4{align-items:center}
 .git-review-tab .git-change-group h4 small{color:var(--muted);font-weight:400;letter-spacing:0;text-align:right}
 .git-review-file-row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
