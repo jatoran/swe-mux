@@ -1297,6 +1297,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         decision_store=telemetry,
     )
     background.start(PUSH_SENDER_LOOP, push_sender.run)
+    history_search_maintenance_task = asyncio.create_task(
+        history.maintain_message_search_indexes(), name="history-message-search-maintenance"
+    )
+    history_search_maintenance_task.add_done_callback(_log_task_failure)
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
         reconcile_task = asyncio.create_task(
@@ -1381,6 +1385,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         if not reconcile_task.done():
             reconcile_task.cancel()
         await asyncio.gather(reconcile_task, return_exceptions=True)
+    if not history_search_maintenance_task.done():
+        history_search_maintenance_task.cancel()
+    await asyncio.gather(history_search_maintenance_task, return_exceptions=True)
     await history_backfills.stop()
     for task in tuple(app["automation_tasks"]):
         task.cancel()

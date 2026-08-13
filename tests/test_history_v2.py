@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from swe_mux.history import HistoryIndex
 from swe_mux.history_backfill import HistoryBackfillManager
 from swe_mux.models import SessionRecord
@@ -411,14 +413,148 @@ async def test_context_search_migration_rebuilds_trigram_for_existing_messages(
 
     migrated = HistoryIndex(database)
     try:
+        status = await migrated.message_search_status()
+        assert status["ready"] is False
         result = await migrated.search_history_index(
             query="middle",
             query_mode="substring",
             project_id="project-id",
         )
         assert result["items"][0]["id"] == "run"
+        assert result["search_index_ready"] is False
+
+        await migrated.maintain_message_search_indexes(batch_size=1)
+        assert (await migrated.message_search_status())["ready"] is True
+        indexed = await migrated.search_history_index(
+            query="middle",
+            query_mode="substring",
+            project_id="project-id",
+        )
+        assert indexed["items"][0]["id"] == "run"
+        assert indexed["search_index_ready"] is True
     finally:
         migrated.close()
+
+
+async def test_message_search_migration_survives_inconsistent_legacy_fts(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "mux.db"
+    root = tmp_path / "project"
+    root.mkdir()
+    transcript = tmp_path / "conversation.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": "2026-08-13T12:00:00Z",
+                "message": {"content": "legacy migration needle"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    history = HistoryIndex(database)
+    record = session("run", "claude", root, "project-id")
+    await history.session_started(record, str(transcript))
+    await history.index_transcript("run", transcript, "claude")
+    history.close()
+
+    connection = sqlite3.connect(database)
+    for trigger in (
+        "history_messages_ai",
+        "history_messages_ad",
+        "history_messages_au",
+        "history_messages_trigram_ai",
+        "history_messages_trigram_ad",
+        "history_messages_trigram_au",
+    ):
+        connection.execute(f"DROP TRIGGER {trigger}")
+    connection.execute("DROP TABLE history_message_search_maintenance")
+    connection.execute(
+        "INSERT INTO history_messages_fts(history_messages_fts) VALUES('delete-all')"
+    )
+    connection.execute(
+        "INSERT INTO history_messages_trigram(history_messages_trigram) VALUES('delete-all')"
+    )
+    connection.execute("DROP INDEX idx_history_messages_time")
+    connection.execute("ALTER TABLE history_messages DROP COLUMN ts_epoch")
+    connection.executescript(
+        """
+        CREATE TRIGGER history_messages_ai AFTER INSERT ON history_messages BEGIN
+          INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
+        END;
+        CREATE TRIGGER history_messages_ad AFTER DELETE ON history_messages BEGIN
+          INSERT INTO history_messages_fts(history_messages_fts,rowid,text)
+          VALUES('delete',old.id,old.text);
+        END;
+        CREATE TRIGGER history_messages_au AFTER UPDATE ON history_messages BEGIN
+          INSERT INTO history_messages_fts(history_messages_fts,rowid,text)
+          VALUES('delete',old.id,old.text);
+          INSERT INTO history_messages_fts(rowid,text) VALUES(new.id,new.text);
+        END;
+        """
+    )
+    with pytest.raises(sqlite3.DatabaseError, match="malformed"):
+        connection.execute("UPDATE history_messages SET ts=ts WHERE history_id='run'")
+    connection.rollback()
+    connection.commit()
+    connection.close()
+
+    migrated = HistoryIndex(database)
+    try:
+        status = await migrated.message_search_status()
+        assert status["ready"] is False
+        assert status["reset_required"] is True
+        assert migrated._db.execute(
+            "SELECT ts_epoch FROM history_messages WHERE history_id='run'"
+        ).fetchone()[0] is None
+
+        fallback = await migrated.search_history_index(
+            query="migration needle",
+            project_id="project-id",
+            message_after=1_700_000_000,
+            message_before=2_000_000_000,
+        )
+        assert fallback["items"][0]["id"] == "run"
+        assert fallback["items"][0]["match_ts_epoch"] is not None
+        assert fallback["search_index_ready"] is False
+
+        await migrated.maintain_message_search_indexes(batch_size=1)
+        ready = await migrated.message_search_status()
+        assert ready["ready"] is True
+        assert ready["cursor_id"] == ready["target_max_id"]
+        assert migrated._db.execute(
+            "SELECT ts_epoch FROM history_messages WHERE history_id='run'"
+        ).fetchone()[0] is not None
+        migrated._db.execute(
+            "INSERT INTO history_messages_fts(history_messages_fts,rank) "
+            "VALUES('integrity-check',1)"
+        )
+        migrated._db.execute(
+            "INSERT INTO history_messages_trigram(history_messages_trigram,rank) "
+            "VALUES('integrity-check',1)"
+        )
+        migrated._db.rollback()
+    finally:
+        migrated.close()
+
+
+async def test_optional_message_search_schema_failure_does_not_block_history(
+    tmp_path: Path,
+) -> None:
+    class BrokenSearchHistory(HistoryIndex):
+        def _initialize_message_search_schema(self) -> None:
+            raise sqlite3.DatabaseError("synthetic optional migration failure")
+
+    history = BrokenSearchHistory(tmp_path / "mux.db")
+    try:
+        assert await history.history() == []
+        status = await history.message_search_status()
+        assert status["ready"] is False
+        assert status["last_error"] == "search schema unavailable"
+    finally:
+        history.close()
 
 
 async def test_history_time_bounds_are_chronological_when_native_lines_are_not(

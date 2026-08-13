@@ -1213,6 +1213,7 @@ Session results expose the stable id, backend-generated `name`, and UI-equivalen
 `search_history` performs server-side message ranking over the Project history index and returns compact hits by default.
 It supports literal hybrid/all-term/any-term/phrase/substring matching plus role, raw/generated title, backend, persisted state, exact run, session-start, and matching-message time filters.
 Its lower date boundaries are inclusive, upper date boundaries are exclusive, default limit is eight hits, default hit-payload budget is 16 KiB, and cursors are bound to the normalized query.
+Its response includes `search_index_ready`; `false` means a post-upgrade repair is using bounded literal filtering until both rebuildable FTS indexes reach their durable watermark.
 `read_transcript(hit_id=...)` reads a bounded indexed neighborhood around one search hit, defaulting to one message before and two after.
 The opaque hit is bound to the caller's Project scope, run, message ordinal, and transcript-index watermark; a changed transcript reports a stale hit instead of returning shifted text.
 Without a hit, `read_transcript` pages from either end through an opaque cursor bound to one `agent_run_id`, labels every message with run id/sequence, and includes system/meta records only by explicit opt-in.

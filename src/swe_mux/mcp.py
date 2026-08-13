@@ -1547,6 +1547,7 @@ class McpService:
             "returned_bytes": returned_bytes,
             "truncated": output_truncated or bool(page.get("candidate_truncated")),
             "next_cursor": next_cursor,
+            "search_index_ready": bool(page.get("search_index_ready", True)),
         }
 
     def _caller_project(self, caller: Any) -> Any:

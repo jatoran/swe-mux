@@ -41,6 +41,7 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   Detailed session records go out only when `detail=full` and still use the `session_summary` allowlist, never `record.snapshot()`, which carries `spawn_env`.
   Any message or excerpt that trips the clipboard credential gate (`looks_like_secret`) is replaced with a redaction marker.
 - **History retrieval is progressive.** `search_history` filters and ranks indexed messages server-side, returning only a title, role, timestamp, bounded excerpt, and opaque `hit_id` by default.
+  During a post-upgrade FTS repair it uses bounded literal database filtering and returns `search_index_ready=false`; this preserves complete retrieval while explicitly withholding ranked-index readiness.
   The caller passes that `hit_id` to `read_transcript`, which returns one message before and two after the match by default instead of loading an entire transcript.
   The hit embeds the Project scope, run, message ordinal, and transcript-index watermark.
   A changed index makes the hit stale and requires a new search, so a remembered pointer cannot silently select different text.

@@ -38,6 +38,10 @@
   Filters compose across user/assistant role, raw or generated title, backend, persisted state, exact run ids, session-start time, and provider-native message time.
   Session and message lower bounds are inclusive and upper bounds are exclusive.
   Provider-native message timestamps are materialized as epoch seconds during indexing so date predicates run in SQLite rather than after retrieval.
+  Upgrades add the epoch column without rewriting existing messages during daemon startup.
+  Post-startup maintenance resets both external-content FTS indexes and materializes old timestamps in resumable 250-row transactions.
+  Search remains complete during that repair through a bounded literal `LIKE` fallback and reports whether ranked indexes are ready.
+  FTS update triggers run only when searchable text is in the `UPDATE` statement, so timestamp and parser metadata changes cannot delete and reinsert index terms.
   An MCP message hit carries the transcript-index watermark and ordinal; reading around it returns indexed neighboring messages only while that watermark is current.
 - Session rows show the chronological minimum and maximum provider-native conversational
   timestamps plus the final speaker, so out-of-order native JSONL records cannot produce a start
