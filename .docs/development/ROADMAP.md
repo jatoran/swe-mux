@@ -833,8 +833,9 @@ Follow-on read tools that were not part of proving the transport are scheduled i
   never regenerated (a fresh one would authenticate nobody). Empty token (pre-feature
   session) never authenticates.
 - [x] Token scope defaults to the session's Project (`project_id`, falling back to the git
-  `project_scope_id` for ungrouped sessions). Cross-project reads do not exist in v0; when
-  wanted they are a separate explicit grant.
+  `project_scope_id` for ungrouped sessions). The separate explicit grant shipped 2026-08-14
+  as the per-call `project` argument on every tool (`"fleet"`, or a Project name or id;
+  `project_scope.py`). The default is unchanged and nothing widens implicitly.
 - [x] **Same-host caller boundary — DECIDED 2026-07-28: option (b), same-host agents are
   fully trusted in v0.** The per-session MCP token is an *identity and read-scoping*
   mechanism (attribution, Project scope), not an authorization boundary. Basis for the
@@ -1051,8 +1052,9 @@ does not let one agent create another.
   and never silently retarget ended runs. Live: an `mux.notify` from one live agent landed in
   the sibling's queue carrying `sender_kind=agent`, sender label, relay path, `chain_depth`,
   and a 24 h expiry. Bounds (size, per-origin budget, target backlog, depth, cycle, self,
-  cross-Project) are refused by the daemon operation and pinned in
-  `tests/test_agent_messaging.py`. Ended/replaced runs still strand — unchanged Phase 4
+  and the requested Project scope) are refused by the daemon operation and pinned in
+  `tests/test_agent_messaging.py`. Scope became a per-call `project` argument on 2026-08-14
+  rather than a fixed own-Project prohibition; the default is unchanged. Ended/replaced runs still strand — unchanged Phase 4
   behaviour, and the auto controller additionally disables its opt-in on a replaced run.
 - [x] Disabling Phase 5 leaves the Phase 4 manual queue and ordinary agent sessions usable.
   Live-verified with the master switch off and nothing paused: stage → arm → view → cancel
@@ -1402,7 +1404,10 @@ descriptor-driven inventory as the Agent Context drawer.
   else am I working on right now" is inherently cross-Project; the default stays own-Project
   only, and any widening is a named grant with its own surface, not a quiet scope change.
   Decision 2026-08-12: v0.5 has no cross-Project grant.
-  Every tool remains own-Project only; widening requires a separately designed, named grant and surface.
+  Superseded 2026-08-14: the named grant shipped as the per-call `project` argument on every
+  read and write tool (`"fleet"`, or a Project name or id; `project_scope.py`), which is the
+  surface that decision asked for. The own-Project default and the no-quiet-widening rule both
+  hold — a widened call states its scope and the answer echoes it back.
 
 ### Consolidate the observation inbox out of existence
 
@@ -1997,10 +2002,12 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
 
 ### What must stay impossible
 
-- [ ] Never reachable: a target outside the caller's Project (indistinguishable from
+- [ ] Never reachable: a target outside the scope the call asked for (indistinguishable from
   nonexistent, as everywhere else), a shell or non-agent pane, and **the session that owns
   the running daemon**, because job-object inheritance means ending that session takes the daemon
   with it, which is a known failure mode and not something an agent may trigger.
+  Scope here means what it means for `notify` since 2026-08-14: the caller's own Project by
+  default, another Project only when the call names it.
 - [ ] Self-termination is permitted and is the ordinary case for a finished worker, but it is
   the caller's last act and must not destroy the record of why: the tool returns its result
   before teardown begins, the final turn is flushed and retained, and the ended session stays

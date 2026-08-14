@@ -101,6 +101,7 @@ class Harness:
         self.projects = SimpleNamespace(
             projects={"p1": SimpleNamespace(id="p1", name="project", root=str(self.root))}
         )
+        self.identities = [self.identity]
         self.auto = AutoDeliveryController(self.service, self.manager, self.config)
         self.messaging = AgentMessagingService(
             self.service,
@@ -109,9 +110,24 @@ class Harness:
             self.config,
             self.auto,
             append_observation=lambda cwd, body, **kw: append_observation(
-                cwd, body, project=self.identity, **kw
+                cwd, body, project=self._identity_for(cwd), **kw
             ),
             read_observations=read_observations,
+        )
+
+    def register_project(self, project_id: str, name: str) -> Path:
+        """A second registered Project, so a call can name somewhere else."""
+        root = self.root.parent / project_id
+        root.mkdir(parents=True, exist_ok=True)
+        self.projects.projects[project_id] = SimpleNamespace(
+            id=project_id, name=name, root=str(root)
+        )
+        self.identities.append(ProjectIdentity(project_id, name, str(root), "registered"))
+        return root
+
+    def _identity_for(self, cwd: Any) -> ProjectIdentity | None:
+        return next(
+            (item for item in self.identities if Path(item.root) == Path(cwd)), None
         )
 
     def close(self) -> None:
@@ -206,6 +222,184 @@ async def test_targets_outside_the_callers_project_do_not_exist(tmp_path: Path) 
                 harness.manager.sessions["s1"], target="s2", body="hello"
             )
         assert caught.value.code == "unknown_target"
+        # A miss the caller cannot act on is a miss it reads as a prohibition,
+        # so the refusal names the argument that would have found the session.
+        assert 'project:"fleet"' in str(caught.value)
+    finally:
+        harness.close()
+
+
+def cross_project_harness(tmp_path: Path, **config_overrides: Any) -> Harness:
+    harness = Harness(
+        tmp_path,
+        live_session("s1", project_label="Horizon of Steel"),
+        live_session(
+            "s2",
+            project_id="p2",
+            project_scope_id="scope-2",
+            project_label="Pixel Lab",
+        ),
+        **config_overrides,
+    )
+    harness.register_project("p2", "Pixel Lab")
+    return harness
+
+
+@pytest.mark.asyncio
+async def test_another_project_is_reachable_three_ways_and_none_of_them_is_silent(
+    tmp_path: Path,
+) -> None:
+    harness = cross_project_harness(tmp_path)
+    try:
+        caller = harness.manager.sessions["s1"]
+        with pytest.raises(QueueError):
+            await harness.messaging.notify(caller, target="s2", body="default")
+
+        by_fleet = await harness.messaging.notify(
+            caller, target="s2", body="fleet", project="fleet"
+        )
+        by_name = await harness.messaging.notify(
+            caller, target="s2", body="named", project="Pixel Lab"
+        )
+        qualified = await harness.messaging.notify(
+            caller, target="Pixel Lab/claude-s2", body="qualified"
+        )
+
+        for result in (by_fleet, by_name, qualified):
+            assert result["target_session_id"] == "s2"
+            assert result["cross_project"] is True
+            assert result["target_project"] == "Pixel Lab"
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_message_that_crosses_a_project_says_so_in_its_envelope(
+    tmp_path: Path,
+) -> None:
+    # The receiver cannot infer where a peer works, and where it works changes
+    # how much its message is worth. Same-Project messages carry no such header,
+    # because a header on every message is one readers learn to skip.
+    harness = cross_project_harness(tmp_path)
+    try:
+        harness.manager.sessions["s3"] = live_session("s3", project_label="Horizon of Steel")
+        crossed = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s2", body="hello", project="fleet"
+        )
+        local = await harness.messaging.notify(
+            harness.manager.sessions["s1"], target="s3", body="hello"
+        )
+        crossed_message = await harness.store.message(crossed["message_id"])
+        local_message = await harness.store.message(local["message_id"])
+        assert crossed_message is not None and local_message is not None
+        assert "from_project: Pixel Lab" not in crossed_message["body"]
+        assert "from_project: Horizon of Steel" in crossed_message["body"]
+        assert "from_project:" not in local_message["body"]
+        assert crossed_message["origin"]["cross_project"] is True
+        assert local_message["origin"]["cross_project"] is False
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_one_name_in_two_projects_is_ambiguous_rather_than_missing(
+    tmp_path: Path,
+) -> None:
+    harness = cross_project_harness(tmp_path)
+    try:
+        # Both Projects hold a session called "backend". Answering "not found"
+        # would be a lie the caller cannot act on.
+        harness.manager.sessions["s4"] = live_session("s4", name="backend")
+        harness.manager.sessions["s5"] = live_session(
+            "s5", name="backend", project_id="p2", project_scope_id="scope-2"
+        )
+        with pytest.raises(QueueError) as caught:
+            await harness.messaging.notify(
+                harness.manager.sessions["s1"],
+                target="backend",
+                body="which one",
+                project="fleet",
+            )
+        assert caught.value.code == "ambiguous_target"
+        assert caught.value.payload["candidates"] == ["s4", "s5"]
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_project_is_a_typed_refusal_not_a_crash(tmp_path: Path) -> None:
+    harness = cross_project_harness(tmp_path)
+    try:
+        with pytest.raises(QueueError) as caught:
+            await harness.messaging.notify(
+                harness.manager.sessions["s1"],
+                target="s2",
+                body="hello",
+                project="pixel-lab",
+            )
+        assert caught.value.code == "unknown_project"
+        assert "Pixel Lab" in str(caught.value)
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_the_sender_can_follow_a_message_it_sent_into_another_project(
+    tmp_path: Path,
+) -> None:
+    # The message row carries the *target's* Project, so a Project check here
+    # would hide the status of everything the caller sent across a boundary.
+    harness = cross_project_harness(tmp_path)
+    try:
+        caller = harness.manager.sessions["s1"]
+        sent = await harness.messaging.notify(
+            caller, target="s2", body="over here", project="fleet"
+        )
+        status = await harness.messaging.message_status(caller, sent["message_id"])
+        assert status["message_id"] == sent["message_id"]
+        with pytest.raises(QueueError):
+            await harness.messaging.message_status(
+                harness.manager.sessions["s2"], sent["message_id"]
+            )
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_request_can_name_another_project_but_never_the_fleet(
+    tmp_path: Path,
+) -> None:
+    harness = cross_project_harness(tmp_path)
+    try:
+        caller = harness.manager.sessions["s1"]
+        result = await harness.messaging.request_spawn(
+            caller, prompt="Pack the sprite atlas", project="Pixel Lab"
+        )
+        assert result["project_id"] == "p2"
+        assert result["cross_project"] is True
+
+        # It is filed in the Project that would run it, which is also where the
+        # sender has to look for it.
+        foreign = harness.projects.projects["p2"]
+        inbox = await read_observations(
+            Path(foreign.root), project=harness.identities[1]
+        )
+        assert inbox["observations"][0]["request"]["project_id"] == "p2"
+        assert "Horizon of Steel" in inbox["observations"][0]["body"]
+        assert not (await read_observations(harness.root, project=harness.identity))[
+            "observations"
+        ]
+
+        mine = await harness.messaging.spawn_requests(caller)
+        fleet = await harness.messaging.spawn_requests(caller, project="fleet")
+        assert mine["requests"] == []
+        assert [item["id"] for item in fleet["requests"]] == [result["request_id"]]
+
+        with pytest.raises(QueueError) as caught:
+            await harness.messaging.request_spawn(
+                caller, prompt="anything", project="fleet"
+            )
+        assert caught.value.code == "invalid_project"
     finally:
         harness.close()
 

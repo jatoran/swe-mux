@@ -29,6 +29,12 @@ below is therefore attributable and enforceable *for well-behaved callers* —
 see the same-host boundary note in `design/features/agent-messaging.md` for
 what that does and does not mean against a compromised same-host process.
 
+Scope is the caller's Project by default and widens only when the caller asks:
+both write tools take the same `project` argument as the read surface
+(`"fleet"`, or a Project name or id). It is re-resolved here rather than trusted
+from the transport, and a message that crosses a Project says so in its envelope,
+because a receiver cannot infer where a peer is working.
+
 Receiver-side policy decides how much a message is worth on arrival. A live
 agent conversation accepts agent-authored messages ``armed`` by default, as part
 of the per-run grant in ``auto_delivery.py`` — armed still waits for
@@ -48,6 +54,13 @@ from typing import Any
 from .config import Config
 from .git_projects import ProjectIdentity
 from .harness import is_agent_harness
+from .project_scope import (
+    ProjectScope,
+    own_scope,
+    record_scope,
+    resolve_project_scope,
+    split_qualified_target,
+)
 from .prompt_queue import PromptQueueService, QueueError
 
 log = logging.getLogger("swe_mux.agent_messaging")
@@ -71,6 +84,7 @@ def _notification_body(
     sender_run_id: str,
     sender_name: str,
     sender_backend: str,
+    sender_project: str,
     reason: str,
     replies_left: int,
     armed: bool,
@@ -85,6 +99,13 @@ def _notification_body(
         f"from_name: {_envelope_value(sender_name)}",
         f"from_backend: {_envelope_value(sender_backend)}",
     ]
+    # Only when the message crossed a Project boundary. A receiver cannot infer
+    # it, and where a peer is working changes how much its message is worth —
+    # but a header on every same-Project message would be noise that teaches
+    # readers to skip the block.
+    clean_project = _envelope_value(sender_project, max_chars=120)
+    if clean_project:
+        headers.append(f"from_project: {clean_project} (a different Project to yours)")
     clean_reason = _envelope_value(reason)
     if clean_reason:
         headers.append(f"reason: {clean_reason}")
@@ -141,34 +162,77 @@ class AgentMessagingService:
 
     # -- scope ----------------------------------------------------------------
 
-    @staticmethod
-    def _scope(record: Any) -> tuple[str, str]:
-        return (str(record.project_id or ""), str(getattr(record, "project_scope_id", "") or ""))
+    def _scope(self, caller: Any, project: Any = None) -> ProjectScope:
+        """The Projects this write may reach - the caller's own unless asked.
 
-    def _in_scope(self, caller: Any, record: Any) -> bool:
-        """Same Project as the caller — the MCP token's read scope, reused for writes.
-
-        Cross-project messaging does not exist: a write is at least as
-        sensitive as a read, and the read scope is already the answer to "what
-        may this agent see" (`CONTROL_PLANE_ROADMAP.md` §7.4).
+        Resolved here rather than trusted from the transport: the bound belongs
+        to the daemon operation, not to the tool that called it
+        (`CONTROL_PLANE_ROADMAP.md` §7.1). A write is at least as sensitive as a
+        read, so it takes the same argument, with the same default and the same
+        wording, as the read surface (`design/features/mux-mcp.md`).
         """
-        project_id, scope_id = self._scope(caller.record)
-        if project_id:
-            return str(record.project_id or "") == project_id
-        return bool(scope_id) and str(getattr(record, "project_scope_id", "") or "") == scope_id
+        try:
+            return resolve_project_scope(project, caller.record, self.projects)
+        except ValueError as exc:
+            # A typed refusal, not a protocol error: an agent that named a
+            # Project wrongly should read the known names and retry.
+            raise QueueError("unknown_project", str(exc), status=404) from exc
 
-    def _resolve_target(self, caller: Any, identity: str) -> Any:
+    def _find_in_scope(self, text: str, scope: ProjectScope) -> Any:
+        """One session matching an id or exact name, inside one scope."""
+        target = self.sessions.sessions.get(text)
+        if target is not None:
+            return target if scope.admits(*record_scope(target.record)) else None
+        # Names resolve inside the scope rather than globally, so two Projects
+        # may each hold a session called "backend" without either becoming
+        # unaddressable. `SessionService.resolve` cannot do this: it answers
+        # "not found" for a name that matches twice anywhere in the fleet.
+        matches = [
+            session
+            for session in self.sessions.sessions.values()
+            if session.record.name == text and scope.admits(*record_scope(session.record))
+        ]
+        if len(matches) > 1:
+            candidates = sorted(session.record.id for session in matches)
+            raise QueueError(
+                "ambiguous_target",
+                f'"{text}" matches {len(matches)} sessions in this scope; '
+                "send to one of these session ids instead: " + ", ".join(candidates),
+                status=409,
+                candidates=candidates,
+            )
+        return matches[0] if matches else None
+
+    def _resolve_target(self, caller: Any, identity: str, project: Any = None) -> Any:
         text = str(identity or "").strip()
         if not text:
             raise QueueError("unknown_target", "target session is required", status=400)
-        try:
-            target = self.sessions.resolve(text)
-        except KeyError:
-            target = None
-        if target is None or not self._in_scope(caller, target.record):
+        scope = self._scope(caller, project)
+        target = self._find_in_scope(text, scope)
+        if target is None and not str(project or "").strip():
+            # "Project name/session name", tried only after the plain form, so a
+            # session whose own name contains a slash still resolves as itself.
+            qualifier, name = split_qualified_target(text)
+            if qualifier:
+                try:
+                    qualified = self._scope(caller, qualifier)
+                except QueueError:
+                    qualified = None
+                if qualified is not None:
+                    target = self._find_in_scope(name, qualified)
+                    if target is not None:
+                        scope = qualified
+        if target is None:
             # Scope miss and true miss answer identically, exactly as the read
-            # tools do: existence outside your Project is not confirmed.
-            raise QueueError("unknown_target", "no such session in your Project", status=404)
+            # tools do: existence outside the requested scope is not confirmed.
+            # The hint is generic, so it confirms nothing either.
+            raise QueueError(
+                "unknown_target",
+                f"no such session in {scope.label}. To reach another "
+                'Project, pass project:"fleet" or the Project name, or address '
+                'the target as "Project name/session name".',
+                status=404,
+            )
         if target.record.id == caller.record.id:
             raise QueueError(
                 "self_notify",
@@ -195,6 +259,7 @@ class AgentMessagingService:
         body: str,
         reason: str = "",
         correlation_id: str | None = None,
+        project: Any = None,
     ) -> dict[str, Any]:
         """Stage a message from the calling session into ``target``'s queue."""
         if not self.config.agent_messaging_enabled:
@@ -213,7 +278,7 @@ class AgentMessagingService:
                 f"an agent message may be at most {limit} characters",
                 status=400,
             )
-        destination = self._resolve_target(caller, target)
+        destination = self._resolve_target(caller, target, project)
         target_id = str(destination.record.id)
         caller_id = str(caller.record.id)
 
@@ -316,6 +381,14 @@ class AgentMessagingService:
         sender_name = str(getattr(caller.record, "name", "") or caller_id)
         sender_run_id = str(getattr(caller.record, "agent_run_id", "") or caller_id)
         sender_backend = str(getattr(caller.record, "backend", "") or "unknown")
+        cross_project = not own_scope(caller.record).admits(
+            *record_scope(destination.record)
+        )
+        sender_project = (
+            str(getattr(caller.record, "project_label", "") or "another Project")
+            if cross_project
+            else ""
+        )
         visible_body = _notification_body(
             message_id=message_id,
             correlation_id=correlation,
@@ -323,6 +396,7 @@ class AgentMessagingService:
             sender_run_id=sender_run_id,
             sender_name=sender_name,
             sender_backend=sender_backend,
+            sender_project=sender_project,
             reason=reason,
             replies_left=max(0, max_turns - (turns + 1)),
             armed=armed,
@@ -348,6 +422,8 @@ class AgentMessagingService:
                 "from_name": getattr(caller.record, "name", None),
                 "from_run_id": getattr(caller.record, "agent_run_id", None),
                 "from_backend": getattr(caller.record, "backend", None),
+                "from_project_label": getattr(caller.record, "project_label", None),
+                "cross_project": cross_project,
                 "reason": str(reason or "")[:500] or None,
                 "created_at": time.time(),
             },
@@ -356,7 +432,8 @@ class AgentMessagingService:
         )
         log.info(
             "agent notification staged sender=%s sender_run=%s target=%s message=%s"
-            " correlation=%s thread=%s chain_depth=%d reply=%s deduplicated=%s",
+            " correlation=%s thread=%s chain_depth=%d reply=%s deduplicated=%s"
+            " cross_project=%s",
             caller_id,
             sender_run_id,
             target_id,
@@ -366,6 +443,7 @@ class AgentMessagingService:
             depth,
             is_reply,
             bool(message.get("deduplicated")),
+            cross_project,
         )
         self.queue.events.emit_background(
             "queue_message_received",
@@ -381,6 +459,8 @@ class AgentMessagingService:
             "state": str(message["state"]),
             "target_session_id": target_id,
             "target_name": getattr(destination.record, "name", None),
+            "target_project": getattr(destination.record, "project_label", None),
+            "cross_project": cross_project,
             "thread_id": thread_id,
             "is_reply": is_reply,
             "chain_depth": depth,
@@ -411,6 +491,7 @@ class AgentMessagingService:
         backend: str = "",
         name: str = "",
         reason: str = "",
+        project: Any = None,
     ) -> dict[str, Any]:
         """Write an inert spawn request for review in the Fleet Queue.
 
@@ -438,18 +519,34 @@ class AgentMessagingService:
                 "invalid_backend", "backend must be a registered agent", status=400
             )
         record = caller.record
-        project_id = str(record.project_id or "")
-        project = self.projects.projects.get(project_id) if project_id else None
-        if project is None:
+        # One request starts one session in one Project, so this argument names
+        # a Project rather than widening to several. Defaults to the caller's.
+        scope = self._scope(caller, project)
+        if scope.fleet:
+            raise QueueError(
+                "invalid_project",
+                "a spawn request belongs to one Project; name the Project the "
+                'session should start in rather than passing "fleet"',
+                status=400,
+            )
+        project_id = scope.project_id or str(record.project_id or "")
+        target_project = self.projects.projects.get(project_id) if project_id else None
+        if target_project is None:
             raise QueueError(
                 "no_project",
                 "your session is not registered to a Project",
                 status=409,
             )
+        cross_project = not own_scope(record).admits(project_id)
         summary = " ".join(text.split())[:160]
         label = str(name or "").strip()[:80]
+        origin = (
+            f" (from {str(getattr(record, 'project_label', '') or 'another Project')})"
+            if cross_project
+            else ""
+        )
         body = (
-            f"Spawn request from {getattr(record, 'name', record.id)}"
+            f"Spawn request from {getattr(record, 'name', record.id)}{origin}"
             f"{f' - {label}' if label else ''}: {summary}"
         )
         request = {
@@ -465,7 +562,7 @@ class AgentMessagingService:
             "status": "pending",
         }
         result = await self._append_observation(
-            project.root, body, kind="spawn_request", request=request
+            target_project.root, body, kind="spawn_request", request=request
         )
         request_id = str(result.get("appended_id") or "")
         self.queue.events.emit_background(
@@ -478,11 +575,18 @@ class AgentMessagingService:
         return {
             "request_id": request_id,
             "project_id": project_id,
-            "project_name": getattr(project, "name", None),
+            "project_name": getattr(target_project, "name", None),
+            "cross_project": cross_project,
             "status": "drafted",
             "note": (
                 "Nothing was started. This is an inert Fleet Queue approval row; "
                 "a human decides whether it becomes a session."
+                + (
+                    " It is filed under another Project, so read it back with "
+                    'that Project\'s name or project:"fleet".'
+                    if cross_project
+                    else ""
+                )
             ),
         }
 
@@ -527,37 +631,67 @@ class AgentMessagingService:
             )
         return requests
 
-    async def spawn_requests(self, caller: Any) -> dict[str, Any]:
+    async def spawn_requests(self, caller: Any, project: Any = None) -> dict[str, Any]:
         """Read only requests attributed to the calling terminal session."""
-        project_id = str(caller.record.project_id or "")
-        project = self.projects.projects.get(project_id) if project_id else None
-        if project is None:
+        scope = self._scope(caller, project)
+        caller_id = str(caller.record.id)
+        if scope.fleet:
+            # A request the caller drafted into another Project is filed there,
+            # so the fleet form is how the sender follows it up.
+            targets = list(self.projects.projects.values())
+        else:
+            project_id = scope.project_id or str(caller.record.project_id or "")
+            found = self.projects.projects.get(project_id) if project_id else None
+            targets = [found] if found is not None else []
+        if not targets:
             raise QueueError(
                 "no_project", "your session is not registered to a Project", status=409
             )
-        caller_id = str(caller.record.id)
-        requests = [
-            item
-            for item in await self._project_spawn_requests(project)
-            if item["from_session"] == caller_id
-        ]
+        requests: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for target in targets:
+            try:
+                found = await self._project_spawn_requests(target)
+            except QueueError as exc:
+                if len(targets) == 1:
+                    raise
+                # One unreadable Project must not blank a fleet-wide answer, and
+                # must not be silently absent from it either. Same handling as
+                # the Fleet Queue projection.
+                log.warning(
+                    "spawn requests unavailable project_id=%s code=%s",
+                    target.id,
+                    exc.code,
+                )
+                errors.append({"project_id": str(target.id), "error": exc.code})
+                continue
+            requests.extend(
+                item for item in found if item["from_session"] == caller_id
+            )
         requests.sort(key=lambda item: item["created_at"], reverse=True)
         return {
-            "project_id": project.id,
-            "project_name": project.name,
+            "project_id": targets[0].id if len(targets) == 1 else None,
+            "project_name": targets[0].name if len(targets) == 1 else None,
+            "projects": [
+                {"id": str(target.id), "name": str(target.name)} for target in targets
+            ],
+            "project_scope": scope.requested,
             "requests": requests,
+            "unreadable_projects": errors,
         }
 
     async def message_status(self, caller: Any, message_id: str) -> dict[str, Any]:
         """Current outcome of one notify, visible only to its attributed sender."""
         message = await self.queue.store.message(str(message_id or ""))
         caller_id = str(caller.record.id)
-        project_id = str(caller.record.project_id or "")
+        # Sender attribution is the whole check. The message carries the
+        # *target's* Project, so a Project comparison here would hide the status
+        # of every message the caller sent into another Project - the sender
+        # would have written something it could not then follow.
         if (
             message is None
             or message.get("sender_kind") != AGENT_SENDER_KIND
             or str(message.get("sender_id") or "") != caller_id
-            or (project_id and str(message.get("project_id") or "") != project_id)
         ):
             raise QueueError(
                 "unknown_message", "no such message sent by your session", status=404

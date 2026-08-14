@@ -1237,7 +1237,11 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The Project-scoped tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `message_status`, `spawn_requests`, `notify`, and `request_spawn`.
+The tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `message_status`, `spawn_requests`, `notify`, and `request_spawn`.
+Each takes a `project` argument selecting the scope it answers within: omitted (or `self`) is the caller's own Project, `fleet` is every Project, and a Project name or id is that one.
+`request_spawn` accepts a name but refuses `fleet`, because one request starts one session in one Project.
+An unknown Project name is refused with the names that exist; a name matching two sessions is refused with their session ids rather than resolved.
+Every result carries `project_scope`, and a default `list_sessions` also reports `live_sessions_in_other_projects` with a note naming the argument that would include them.
 Session results expose the stable id, backend-generated `name`, and UI-equivalent `display_name`; an exact unique display name is accepted wherever a tool targets a session.
 `list_sessions` filters by query and pages a combined live/ended result capped at 25 compact rows and 32 KiB per call.
 `search_history` performs server-side message ranking over the Project history index and returns compact hits by default.
@@ -1245,12 +1249,13 @@ It supports literal hybrid/all-term/any-term/phrase/substring matching plus role
 Its lower date boundaries are inclusive, upper date boundaries are exclusive, default limit is eight hits, default hit-payload budget is 16 KiB, and cursors are bound to the normalized query.
 Its response includes `search_index_ready`; `false` means a post-upgrade repair is using bounded literal filtering until both rebuildable FTS indexes reach their durable watermark.
 `read_transcript(hit_id=...)` reads a bounded indexed neighborhood around one search hit, defaulting to one message before and two after.
-The opaque hit is bound to the caller's Project scope, run, message ordinal, and transcript-index watermark; a changed transcript reports a stale hit instead of returning shifted text.
+The opaque hit is bound to the Project of the row that produced it, plus run, message ordinal, and transcript-index watermark; a changed transcript reports a stale hit instead of returning shifted text.
+Reading a hit from another Project requires the same `project` argument the search used, so a hit id never widens the call that consumes it.
 Without a hit, `read_transcript` pages from either end through an opaque cursor bound to one `agent_run_id`, labels every message with run id/sequence, and includes system/meta records only by explicit opt-in.
 Ordinary reads default to 12 messages and 32 KiB of message text while preserving explicit expansion to 200 messages and 512 KiB.
 An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
 `get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
-All reads remain own-Project only; v0.5 defines no cross-Project grant.
+Reads and writes default to the caller's own Project and reach another only through an explicit `project` argument; there is no mode, no config flag, and no implicit widening.
 Claude's generated settings allow the ten declared read tools without a prompt, while both write tools remain permission-gated.
 Tool annotations declare the same read/write split.
 Successful MCP calls record content-free per-tool call, serialized-response-byte, and truncation counters in background diagnostics.

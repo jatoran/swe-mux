@@ -141,7 +141,8 @@
   inherited by every message continuing it — deliberately *not* the correlation id, which is
   a per-sender idempotency key and would dedup a sender's second message in one exchange),
   `chain_depth` (distinct sessions that have spoken in the thread), `origin_json` (relay path
-  with the most recent sender last / rule id / Tier 0 fact fingerprints),
+  with the most recent sender last / sender Project label and whether the message crossed a
+  Project / rule id / Tier 0 fact fingerprints),
   `payload_json` (typed action payload for control-plane drafts), `constraints_json`
   (`not_before`, `expires_at`) — plus blocked reasons, stranded reason, `cancel_kind`
   (`cancelled|skipped|revoked|expired`), `retargeted_from_json`, and lifecycle timestamps

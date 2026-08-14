@@ -3,9 +3,11 @@
 ## What it is
 
 A streamable-HTTP MCP endpoint (`POST /mcp`) hosted in the daemon that gives every spawned
-agent session visibility into its own Project — sibling sessions, their live status,
-bounded transcript reads, indexed search over Project conversation history, exact Agent
+agent session visibility into the fleet — sibling sessions, their live status,
+bounded transcript reads, indexed search over conversation history, exact Agent
 Context sources, Project notes, and request outcomes, plus two bounded write tools added in Phase 5.
+Every tool answers within the caller's own Project until the caller asks for more with the
+shared `project` argument.
 Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), and Phase 5
 (`notify`, `request_spawn`) / control-plane build-order step 2.5
 (`CONTROL_PLANE_ROADMAP.md` §7.1–7.5). Registered automatically into every spawned Claude
@@ -27,11 +29,37 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
   session meta, and recovered at adoption — so it survives daemon restarts the same way the
   hook secret does, with no token table to invalidate. No tool has a sender parameter. An
   empty token (a session spawned before this feature) never authenticates.
-- **Scope is the caller's Project.** Every tool filters to the caller's `project_id`
-  (falling back to the git `project_scope_id` for ungrouped sessions). A target outside the
-  scope answers exactly like a target that never existed — confirming existence is itself a
-  leak. History queries go through `search_history_index`, which keeps the `agent_visible=1`
-  quarantine predicate.
+- **Scope defaults to the caller's Project and widens only on request.** Every tool takes a
+  `project` argument resolved by `src/swe_mux/project_scope.py`: omitted (or `"self"`) is the
+  caller's `project_id`, falling back to the git `project_scope_id` for sessions in no
+  registered Project; `"fleet"` is every Project; a Project name or id is that one.
+  Nothing widens implicitly, and the fallback scope of an unregistered caller never widens at
+  all. A target outside the requested scope answers exactly like a target that never existed —
+  confirming existence is itself a leak. History queries go through `search_history_index`,
+  which keeps the `agent_visible=1` quarantine predicate.
+- **A default an agent cannot discover reads as a prohibition.** The widening is stated in
+  three places, because an agent reads answers far more often than it reads a tool schema:
+  the tool description, the refusal (`no such session in your Project. Pass
+  project:"fleet"…`), and the result envelope. Every result carries `project_scope`, and a
+  default `list_sessions` also reports `live_sessions_in_other_projects` with a `scope_note`
+  naming the argument that would include them. An unknown Project name is refused with the
+  names that do exist rather than with an empty result, which would read as "that Project
+  holds nothing".
+- **A widened name may match twice.** Two Projects may each hold a session called `backend`.
+  Resolution never picks one: it answers `ambiguous_target` (writes) or `AmbiguousIdentity`
+  (reads) listing the candidate session ids. `notify` also accepts a qualified
+  `"Project name/session name"` target, tried only after the plain form so a session whose own
+  name contains a separator still resolves as itself.
+- **A search hit is not a capability.** `hit_id` embeds the Project of the row that produced
+  it, not the caller's. Reading it back through `read_transcript` needs a scope that admits
+  that Project, so a fleet search followed by a default read refuses rather than crossing
+  silently.
+- **Project-singular reads take a name, not a widening.** `read_memory` and
+  `read_project_note` resolve one opaque id that belongs to one Project. `project:"fleet"`
+  makes them walk Projects until one owns the id, which is what makes a fleet-wide
+  `memory_sources`/`project_notes` listing actionable; a fleet inventory covers at most
+  `FLEET_INVENTORY_MAX_PROJECTS` (25) Projects, caller's own first, and says
+  `projects_truncated` when it stopped.
 - **Return nothing over a weak match (CP §7).** Empty results are fine;
   plausible-but-wrong teaches an agent to stop calling.
 - **Bounded and redacted.** Transcript, Project-note, and Agent Context source reads are capped at 512 KiB.
@@ -60,8 +88,16 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 - **Past self is explicit.** `self` and an omitted `session_id` resolve to the caller, while `read_transcript(agent_run_id=...)` selects an exact current run or one of the caller's retired runs after an in-place conversation rollover.
   An explicit retired-run selector is resolved before live session ids, so a first run whose id equals the logical session id cannot collide with its successor.
   Every returned message carries that run id and its persisted `agent_run_seq`, and the result says `own_superseded_run: true` rather than presenting it as current memory.
-- **Cross-Project access remains absent.** Phase 5.6 resolved the grant question by keeping every read own-Project only.
-  There is no implicit widening and no named cross-Project grant in v0.5.
+- **Cross-Project access is explicit, not absent (changed 2026-08-14).** Phase 5.6 kept every
+  read own-Project only, on the reasoning that a token's default scope is its Project
+  (`CONTROL_PLANE_ROADMAP.md` §7.4). The default did not change; the prohibition did. Sessions
+  in separate Projects legitimately need to hand work to each other, and the same-host
+  boundary decision already establishes that this token is identity and read scope rather than
+  an authorization boundary — so a caller that asks for another Project is not crossing a
+  security line, and refusing it only removes a capability the caller could reach by other
+  means. What the widening does cost is stated plainly: a fleet `search_history` ranks
+  conversations from unrelated repositories against each other, which is why the argument is
+  per-call and never a mode.
 - **Same-host callers are fully trusted (decided 2026-07-28, re-affirmed for Phase 5 on
   2026-07-29).** The token is identity and read scope, not an authorization boundary. The
   Phase 5 re-examination concluded that a token check on the mutating routes cannot deliver
@@ -76,20 +112,24 @@ memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plan
 
 ## Tool surface
 
+Every tool takes `project` (omitted = the caller's own, `"fleet"` = every Project, or a
+Project name or id). `request_spawn` is the one exception: a request starts one session in one
+Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
+
 | Tool | Returns |
 |---|---|
-| `list_sessions` | a compact, queryable, pageable list of live and optionally recent ended sessions; the 25-row and 32 KiB caps apply to the combined result |
-| `get_session` | status + metadata and a run brief by id, exact name, or `self`; the caller's own row also lists superseded run ids |
+| `list_sessions` | a compact, queryable, pageable list of live and optionally recent ended sessions; the 25-row and 32 KiB caps apply to the combined result; ordered caller first, then own Project, then anything the widening added, so a fleet call never pushes a sibling off the first page |
+| `get_session` | status + metadata and a run brief by id, exact name, or `self`; the caller's own row also lists superseded run ids; `self` and the caller's own runs resolve whatever `project` asked for |
 | `read_transcript` | a small indexed window around a `search_history` hit, or a bounded pageable head/tail of exactly one run; `self` is the default and `agent_run_id` unambiguously selects the caller's retired run |
-| `search_history` | globally ranked compact hits across the Project's indexed Claude/Codex conversations, with role, title, backend, state, run, session-date, message-date, matching-mode, diversity, detail, output-budget, and cursor controls |
-| `memory_sources` | the caller Project's descriptor-driven instruction and provider-memory inventory, including source attribution, capability, revision, modification time, and entrypoint kind |
+| `search_history` | globally ranked compact hits across indexed Claude/Codex conversations, with role, title, backend, state, run, session-date, message-date, matching-mode, diversity, detail, output-budget, and cursor controls; each hit names the Project it came from |
+| `memory_sources` | a descriptor-driven instruction and provider-memory inventory, including source attribution, capability, revision, modification time, and entrypoint kind; every source names its Project |
 | `read_memory` | one bounded inventoried Agent Context source by opaque `source_id`, never by a caller-supplied filesystem path |
-| `project_notes` | read-only inventory of the caller Project's notes, excluding the global Scratchpad and every other Project |
+| `project_notes` | read-only inventory of Project notes, excluding the global Scratchpad; every note names its Project |
 | `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
-| `message_status` | current outcome of one `notify`, visible only to its attributed sending session |
+| `message_status` | current outcome of one `notify`, visible only to its attributed sending session, wherever it was sent |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
-| `notify` | stages a message with a visible sender/message/correlation envelope; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
-| `request_spawn` | writes an inert spawn approval row into Fleet Queue; returns the request id and starts nothing |
+| `notify` | stages a message with a visible sender/message/correlation envelope, and a `from_project` header when it crossed a Project; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
+| `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is
@@ -132,13 +172,14 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 ## Key files
 
 - Protocol + tools: `src/swe_mux/mcp.py`
+- The `project` argument, shared by the read and write surfaces: `src/swe_mux/project_scope.py`
 - Closed read/write declarations and Claude read permissions: `src/swe_mux/mcp_contract.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
 - Endpoint handler, rate limit, wiring: `src/swe_mux/server.py`
 - Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`
 - Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
   `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
-- Tests: `tests/test_mcp.py`, `tests/test_agent_messaging.py`
+- Tests: `tests/test_mcp.py`, `tests/test_agent_messaging.py`, `tests/test_project_scope.py`
 
 ## Relates to
 

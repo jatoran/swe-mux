@@ -16,8 +16,12 @@ Load-bearing properties:
 - **Caller identity is injected, never claimed** (CP §7.4). The bearer token is
   minted at spawn, carried in the session env, and recovered from supervisor
   meta across daemon restarts. No tool has a sender parameter.
-- **Scope is the caller's Project.** Every tool filters to it; a target outside
-  it answers "not found" rather than confirming existence.
+- **Scope defaults to the caller's Project and widens only on request.** Every
+  tool takes a `project` argument: omitted means the caller's own Project,
+  `"fleet"` means every Project, and a Project name or id means that one. A
+  target outside the requested scope answers "not found", and the refusal names
+  the argument that would have found it — a default that cannot be discovered is
+  a default an agent reads as a prohibition.
 - **Return nothing over a weak match.** Empty results are acceptable;
   plausible-but-wrong teaches an agent to stop calling (CP §7).
 - **Bounded and redacted output.** Transcript reads are byte- and
@@ -55,6 +59,14 @@ from .project_files import (
     project_note_summaries,
     read_note,
 )
+from .project_scope import (
+    ProjectScope,
+    own_scope,
+    record_scope,
+    resolve_project_scope,
+    row_scope,
+    split_qualified_target,
+)
 from .prompt_queue import QueueError
 from .transcript_view import (
     conversation_is_readable,
@@ -83,6 +95,34 @@ SEARCH_MAX_OUTPUT_BYTES = 64 * 1024
 PARSE_TIMEOUT_SECONDS = 2.0
 NOTE_MAX_BYTES = 512 * 1024
 RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
+#: Projects one fleet-wide inventory read walks before it reports a truncation.
+#: An inventory is a per-Project filesystem read, so the fleet form is bounded
+#: the way every other tool is rather than being unbounded because it is a list.
+FLEET_INVENTORY_MAX_PROJECTS = 25
+
+#: The `project` argument, identical on every tool that has one. Written once so
+#: the wording an agent reads cannot drift between tools.
+_PROJECT_ARG = {
+    "type": "string",
+    "description": (
+        "Which Project to read: omit for your own (the default), "
+        '"fleet" for every Project, or a Project name or id for one other Project'
+    ),
+}
+
+# list_sessions ordering. The caller first, then its own Project, then anything a
+# widened call added: a fleet listing must not push a caller's own siblings off
+# the first page.
+_LIST_RANK_YOU = 0
+_LIST_RANK_LIVE_OWN = 1
+_LIST_RANK_LIVE_OTHER = 2
+_LIST_RANK_ENDED_OWN = 3
+_LIST_RANK_ENDED_OTHER = 4
+
+_NOT_FOUND = (
+    "no such session in your Project. Pass project:\"fleet\" to address every "
+    'Project, or project:"<name>" for one other Project.'
+)
 
 _REDACTED = "[redacted: credential-shaped content withheld by mux]"
 
@@ -178,6 +218,11 @@ def _session_list_summary(
         "agent_run_seq": record.agent_run_seq,
         "last_activity_ts": record.last_activity_ts,
         "runtime_boundary": getattr(record, "runtime_boundary", "local"),
+        # Present on every entry, not only fleet-wide ones: a caller that pages
+        # a widened list must be able to tell which Project each row came from,
+        # and a caller that later widens must not see the shape of a row change.
+        "project_id": record.project_id,
+        "project_label": record.project_label,
         "ended": False,
     }
 
@@ -195,6 +240,8 @@ def _history_list_summary(
         "agent_run_id": row.get("id"),
         "agent_run_seq": int(row.get("agent_run_seq") or 0),
         "last_activity_ts": row.get("last_message_at") or row.get("exited_at"),
+        "project_id": row.get("project_id"),
+        "project_label": row.get("project_label"),
         "ended": True,
     }
 
@@ -293,11 +340,15 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "List sessions in your Project: every live one (any backend), and "
             "optionally recently ended agent sessions. Results are compact, "
-            "bounded, searchable, and pageable; use get_session for details."
+            "bounded, searchable, and pageable; use get_session for details. "
+            'Your own Project is the default; pass project:"fleet" to list every '
+            "Project, or a Project name to list one other. The result reports how "
+            "many live sessions the default hid."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "project": _PROJECT_ARG,
                 "include_ended": {
                     "type": "boolean",
                     "description": "Also list recently ended agent sessions (default false)",
@@ -325,7 +376,8 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Status and metadata for one session in your Project, by session id "
             "or exact backend/display name. Omit session_id or use 'self' for "
-            "the caller. Live sessions report current state; ended ones report their final state."
+            "the caller. Live sessions report current state; ended ones report their final state. "
+            'Pass project:"fleet" or a Project name to reach a session outside your Project.'
         ),
         "inputSchema": {
             "type": "object",
@@ -334,6 +386,7 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Session id or exact backend/display name",
                 },
+                "project": _PROJECT_ARG,
             },
             "additionalProperties": False,
         },
@@ -348,7 +401,9 @@ TOOLS: list[dict[str, Any]] = [
             "to read one of the caller's superseded runs unambiguously. "
             "Every message names its agent_run_id and sequence; cursors cannot "
             "cross a conversation rollover. System/meta records are excluded "
-            "unless explicitly requested."
+            "unless explicitly requested. "
+            'Pass project:"fleet" or a Project name to read a conversation outside '
+            "your Project, including one a widened search_history found."
         ),
         "inputSchema": {
             "type": "object",
@@ -357,6 +412,7 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Session id or exact backend/display name",
                 },
+                "project": _PROJECT_ARG,
                 "agent_run_id": {
                     "type": "string",
                     "description": (
@@ -412,7 +468,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "notify",
         "description": (
-            "Send a short message to another agent session in your Project. It "
+            "Send a short message to another agent session. It "
             "enters that session's prompt queue and waits: it never interrupts "
             "an active turn, never answers an approval prompt, and by default "
             "lands as an inert draft a human must approve. Use it to hand off "
@@ -420,7 +476,11 @@ TOOLS: list[dict[str, Any]] = [
             "issue instructions you would not want a human to read first. "
             "You may reply to a session that messaged you: pass its session id "
             "as the target and the reply continues the same bounded exchange. "
-            "The result reports how many messages that exchange has left."
+            "The result reports how many messages that exchange has left. "
+            "Your own Project is the default. To reach a session in another "
+            'Project, pass project:"fleet" or the Project name, or address the '
+            'target as "Project name/session name". The receiver is told which '
+            "Project you sent from."
         ),
         "inputSchema": {
             "type": "object",
@@ -428,7 +488,15 @@ TOOLS: list[dict[str, Any]] = [
                 "target": {
                     "type": "string",
                     "description": (
-                        "Session id or exact backend/display name of the receiving session"
+                        "Session id, exact backend/display name, or "
+                        '"Project name/session name" for another Project'
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Which Project the target is in: omit for your own, "
+                        '"fleet" for every Project, or a Project name or id'
                     ),
                 },
                 "body": {"type": "string", "description": "The message text"},
@@ -451,10 +519,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "request_spawn",
         "description": (
-            "Ask the human to start a new agent session in your Project with a "
+            "Ask the human to start a new agent session with a "
             "prompt you supply. This starts nothing: it writes an inert draft "
             "into the Fleet Queue, and a person decides. Use it "
-            "when work should continue in a separate session."
+            "when work should continue in a separate session. The session would "
+            "belong to your Project unless you name another one."
         ),
         "inputSchema": {
             "type": "object",
@@ -462,6 +531,14 @@ TOOLS: list[dict[str, Any]] = [
                 "prompt": {
                     "type": "string",
                     "description": "The prompt the new session would be seeded with",
+                },
+                "project": {
+                    "type": "string",
+                    "description": (
+                        "Project the requested session would belong to "
+                        "(name or id; defaults to yours). A request has one "
+                        'Project, so "fleet" is not accepted here.'
+                    ),
                 },
                 "backend": {
                     "type": "string",
@@ -480,7 +557,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Context-efficient search over your Project's indexed agent conversations. "
             "Filtering and relevance ranking happen server-side; results are compact message "
-            "excerpts with opaque hit ids. Pass a hit id to read_transcript for nearby messages."
+            "excerpts with opaque hit ids. Pass a hit id to read_transcript for nearby messages. "
+            'Searches your own Project unless you pass project:"fleet" or a Project '
+            "name. Widen it deliberately: a fleet search ranks conversations from "
+            "unrelated repositories against each other."
         ),
         "inputSchema": {
             "type": "object",
@@ -489,6 +569,7 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Literal search text; may be omitted for filter-only browsing",
                 },
+                "project": _PROJECT_ARG,
                 "scope": {
                     "type": "string",
                     "enum": ["all", "user", "assistant", "metadata"],
@@ -576,11 +657,13 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "List the root instruction and learned-memory sources available to "
             "agent harnesses for your Project. Source ids are opaque and may be "
-            "passed to read_memory. Unsupported providers are reported honestly."
+            "passed to read_memory. Unsupported providers are reported honestly. "
+            'Pass project:"fleet" or a Project name for another Project\'s sources; '
+            "every source names the Project it came from."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {},
+            "properties": {"project": _PROJECT_ARG},
             "additionalProperties": False,
         },
     },
@@ -588,7 +671,9 @@ TOOLS: list[dict[str, Any]] = [
         "name": "read_memory",
         "description": (
             "Read one bounded Project instruction or learned-memory source from "
-            "memory_sources by its opaque source id."
+            "memory_sources by its opaque source id. Source ids are unique to a "
+            "Project: name the Project the source came from, or pass "
+            'project:"fleet" to search every Project for it.'
         ),
         "inputSchema": {
             "type": "object",
@@ -597,6 +682,7 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Opaque source id returned by memory_sources",
                 },
+                "project": _PROJECT_ARG,
             },
             "required": ["source_id"],
             "additionalProperties": False,
@@ -621,18 +707,22 @@ TOOLS: list[dict[str, Any]] = [
         "name": "project_notes",
         "description": (
             "List the human-authored Project notes available to your session. "
-            "This is read-only and never includes another Project or the global Scratchpad."
+            "This is read-only and never includes the global Scratchpad. Your own "
+            'Project is the default; pass project:"fleet" or a Project name for '
+            "another Project's notes."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {},
+            "properties": {"project": _PROJECT_ARG},
             "additionalProperties": False,
         },
     },
     {
         "name": "read_project_note",
         "description": (
-            "Read one bounded Project note by the opaque note id returned by project_notes."
+            "Read one bounded Project note by the opaque note id returned by "
+            "project_notes. Note ids are unique to a Project: name the Project the "
+            'note came from, or pass project:"fleet" to search every Project for it.'
         ),
         "inputSchema": {
             "type": "object",
@@ -641,6 +731,7 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Opaque note id returned by project_notes",
                 },
+                "project": _PROJECT_ARG,
             },
             "required": ["note_id"],
             "additionalProperties": False,
@@ -650,11 +741,13 @@ TOOLS: list[dict[str, Any]] = [
         "name": "spawn_requests",
         "description": (
             "List the status of spawn requests attributed to your session. "
-            "This is read-only; approval remains a human Fleet Queue action."
+            "This is read-only; approval remains a human Fleet Queue action. "
+            'Requests you drafted into another Project need project:"fleet" or '
+            "that Project's name."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {},
+            "properties": {"project": _PROJECT_ARG},
             "additionalProperties": False,
         },
     },
@@ -674,6 +767,38 @@ for _tool in TOOLS:
 
 class McpAuthError(Exception):
     """Raised when no live session owns the presented bearer token."""
+
+
+class ScopeMiss(KeyError):
+    """No session matched under the scope this call asked for.
+
+    A `KeyError` so every existing "not found" path keeps working, with a
+    message that names the argument that would widen the search. A scope miss
+    and a true miss still answer identically — the hint is generic and confirms
+    nothing about what exists elsewhere.
+    """
+
+    def __init__(self, message: str = _NOT_FOUND) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class AmbiguousIdentity(ValueError):
+    """More than one session matched a name.
+
+    Only reachable once a call widens past one Project: two Projects may each
+    hold a session called "backend". Answering "not found" there is a lie the
+    caller cannot act on, so the candidates are named instead.
+    """
+
+    def __init__(self, identity: str, candidates: list[str]) -> None:
+        listed = ", ".join(candidates)
+        super().__init__(
+            f'"{identity}" matches {len(candidates)} sessions in this scope; '
+            f"repeat the call with one of these session ids: {listed}"
+        )
+        self.identity = identity
+        self.candidates = candidates
 
 
 class McpService:
@@ -722,16 +847,40 @@ class McpService:
 
     @staticmethod
     def _scope(caller: Any) -> tuple[str, str]:
-        """(project_id, project_scope_id) the caller may read within."""
-        record = caller.record
-        return (str(record.project_id or ""), str(record.project_scope_id or ""))
+        """(project_id, project_scope_id) of the caller's own Project."""
+        return record_scope(caller.record)
 
-    def _in_scope(self, caller: Any, record: Any) -> bool:
-        project_id, scope_id = self._scope(caller)
-        if project_id:
-            return str(record.project_id or "") == project_id
-        # Ungrouped caller: fall back to the git project identity.
-        return bool(scope_id) and str(record.project_scope_id or "") == scope_id
+    def _requested_scope(self, caller: Any, args: dict[str, Any]) -> ProjectScope:
+        """The scope one tool call asked for; the caller's own Project by default.
+
+        An unknown or ambiguous Project name raises `ValueError`, which the RPC
+        layer returns as an invalid-argument error with the known names in it.
+        Answering "empty" there would teach an agent that the Project holds
+        nothing, which is a different and worse thing to be told.
+        """
+        return resolve_project_scope(args.get("project"), caller.record, self.projects)
+
+    @staticmethod
+    def _in_scope(scope: ProjectScope, record: Any) -> bool:
+        return scope.admits(*record_scope(record))
+
+    @staticmethod
+    def _scope_envelope(scope: ProjectScope, hidden: int = -1) -> dict[str, Any]:
+        """What this result covered, and what a wider call would add.
+
+        An agent reads results far more often than it reads a tool schema, so
+        the widening lives in the answer as well as in the description. `hidden`
+        is a live-session count; -1 means the tool did not measure one.
+        """
+        envelope: dict[str, Any] = {"project_scope": scope.requested}
+        if hidden > 0 and not scope.fleet:
+            envelope["live_sessions_in_other_projects"] = hidden
+            envelope["scope_note"] = (
+                f"{hidden} live session(s) outside {scope.label} are not in this "
+                'result. Repeat the call with project:"fleet" for every Project, '
+                'or project:"<name>" for one.'
+            )
+        return envelope
 
     async def _generated_titles(self, run_ids: set[str]) -> dict[str, str]:
         """Latest generated UI title for each requested run."""
@@ -794,17 +943,25 @@ class McpService:
             for session in sessions
         }
 
-    async def _resolve_live(self, caller: Any, identity: str) -> tuple[Any, str]:
+    async def _resolve_live(
+        self, caller: Any, identity: str, scope: ProjectScope
+    ) -> tuple[Any, str]:
         """Resolve an id, backend name, or UI display name without weak matches."""
         scoped = [
             session
             for session in self.sessions.sessions.values()
-            if self._in_scope(caller, session.record)
+            if self._in_scope(scope, session.record)
         ]
         if identity == "self":
-            matches = [session for session in scoped if session.record.id == caller.record.id]
+            # The caller is always its own scope, whatever `project` asked for:
+            # a widened call must not lose the ability to name itself.
+            matches = [
+                session
+                for session in self.sessions.sessions.values()
+                if session.record.id == caller.record.id
+            ]
             if len(matches) != 1:
-                raise KeyError(identity)
+                raise ScopeMiss()
             names = await self._live_display_names(matches)
             return matches[0], names[matches[0].record.id]
         by_id = [
@@ -823,8 +980,14 @@ class McpService:
             for session in scoped
             if session.record.name == identity or names[session.record.id] == identity
         ]
-        if len(matches) != 1:
-            raise KeyError(identity)
+        if len(matches) > 1:
+            # Two Projects may hold a session of the same name. Naming the
+            # candidates is the only answer the caller can act on.
+            raise AmbiguousIdentity(
+                identity, sorted(session.record.id for session in matches)
+            )
+        if not matches:
+            raise ScopeMiss()
         return matches[0], names[matches[0].record.id]
 
     async def _history_display_names(
@@ -835,23 +998,35 @@ class McpService:
             str(row.get("id") or ""): self._row_display_name(row, titles) for row in rows
         }
 
+    @staticmethod
+    def _history_project_filter(scope: ProjectScope) -> str | None:
+        """The `project_id` a history query needs for this scope.
+
+        `None` means every Project. `"__ungrouped__"` keeps the pre-existing
+        behaviour for a caller that belongs to no registered Project: the query
+        returns the Project-less rows and `_history_row_in_scope` narrows them to
+        the caller's git Project identity.
+        """
+        if scope.fleet:
+            return None
+        return scope.project_id or "__ungrouped__"
+
     async def _resolve_history(
-        self, caller: Any, identity: str
+        self, caller: Any, identity: str, scope: ProjectScope
     ) -> tuple[dict[str, Any], str]:
         row = await self.history.history_entry(identity)
-        if row and self._history_row_in_scope(caller, row):
+        if row and self._history_row_in_scope(scope, row):
             names = await self._history_display_names([row])
             return row, names[str(row.get("id") or "")]
 
-        project_id, _scope_id = self._scope(caller)
         page = await self.history.history_page(
-            project_id=project_id or "__ungrouped__",
+            project_id=self._history_project_filter(scope),
             limit=LIST_HISTORY_SCAN_LIMIT,
         )
         rows = [
             item
             for item in page.get("items", [])
-            if self._history_row_in_scope(caller, item)
+            if self._history_row_in_scope(scope, item)
         ]
         names = await self._history_display_names(rows)
         matches = [
@@ -860,14 +1035,19 @@ class McpService:
             if item.get("name") == identity
             or names[str(item.get("id") or "")] == identity
         ]
-        if len(matches) != 1:
-            raise KeyError(identity)
+        if len(matches) > 1:
+            raise AmbiguousIdentity(
+                identity, sorted(str(item.get("id") or "") for item in matches)
+            )
+        if not matches:
+            raise ScopeMiss()
         match = matches[0]
         return match, names[str(match.get("id") or "")]
 
     # --------------------------------------------------------------- tools
 
     async def list_sessions(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        scope = self._requested_scope(caller, args)
         limit = max(1, min(int(args.get("limit") or 25), LIST_MAX_SESSIONS))
         include_ended = bool(args.get("include_ended"))
         query = str(args.get("query") or "").strip().casefold()
@@ -878,6 +1058,7 @@ class McpService:
                 cursor.get("kind") != "sessions"
                 or bool(cursor.get("include_ended")) != include_ended
                 or str(cursor.get("query") or "") != query
+                or str(cursor.get("project") or "") != scope.requested
             ):
                 raise ValueError("session-list cursor does not match this query")
             raw_after = cursor.get("after")
@@ -885,11 +1066,18 @@ class McpService:
                 raise ValueError("invalid session-list cursor")
             after = (int(raw_after[0]), str(raw_after[1]), str(raw_after[2]))
 
-        scoped = [
-            session
-            for session in self.sessions.sessions.values()
-            if self._in_scope(caller, session.record)
-        ]
+        own = own_scope(caller.record)
+        scoped: list[Any] = []
+        hidden = 0
+        for session in self.sessions.sessions.values():
+            if self._in_scope(scope, session.record):
+                scoped.append(session)
+            elif not own.admits(*record_scope(session.record)):
+                # Only count what widening would actually add. A session the
+                # caller's own Project already holds is never "hidden", and a
+                # narrowed call to one other Project should not advertise the
+                # caller's own siblings back to it.
+                hidden += 1
         display_names = await self._live_display_names(scoped)
         candidates: list[tuple[tuple[int, str, str], str, dict[str, Any]]] = []
         for session in scoped:
@@ -913,23 +1101,26 @@ class McpService:
             if query and query not in searchable:
                 continue
             key = (
-                0 if item.get("you") else 1,
+                _LIST_RANK_YOU
+                if item.get("you")
+                else _LIST_RANK_LIVE_OWN
+                if own.admits(*record_scope(session.record))
+                else _LIST_RANK_LIVE_OTHER,
                 str(item.get("display_name") or "").casefold(),
                 str(item["session_id"]),
             )
             candidates.append((key, "live", item))
 
         if include_ended:
-            project_id, _scope_id = self._scope(caller)
             page = await self.history.history_page(
-                project_id=project_id or "__ungrouped__",
+                project_id=self._history_project_filter(scope),
                 limit=LIST_HISTORY_SCAN_LIMIT,
             )
             live_run_ids = {self._record_run_id(session.record) for session in scoped}
             ended_rows = [
                 row
                 for row in page.get("items", [])
-                if self._history_row_in_scope(caller, row)
+                if self._history_row_in_scope(scope, row)
                 and self._row_run_id(row) not in live_run_ids
             ]
             ended_names = await self._history_display_names(ended_rows)
@@ -952,7 +1143,9 @@ class McpService:
                 if query and query not in searchable:
                     continue
                 key = (
-                    2,
+                    _LIST_RANK_ENDED_OWN
+                    if own.admits(*row_scope(row))
+                    else _LIST_RANK_ENDED_OTHER,
                     str(item.get("display_name") or "").casefold(),
                     str(item["session_id"]),
                 )
@@ -971,6 +1164,7 @@ class McpService:
                         "kind": "sessions",
                         "include_ended": include_ended,
                         "query": query,
+                        "project": scope.requested,
                         "after": list(selected[-1][0]),
                     }
                 )
@@ -984,6 +1178,7 @@ class McpService:
                 "count": len(selected),
                 "has_more": has_more,
                 "next_cursor": next_cursor,
+                **self._scope_envelope(scope, hidden),
             }
             if include_ended:
                 result["ended_sessions"] = ended
@@ -996,21 +1191,24 @@ class McpService:
             "count": 0,
             "has_more": bool(candidates),
             "next_cursor": None,
+            **self._scope_envelope(scope, hidden),
         }
         if include_ended:
             result["ended_sessions"] = []
         return result
 
     async def get_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        scope = self._requested_scope(caller, args)
         identity = str(args.get("session_id") or "self").strip() or "self"
         try:
-            session, display_name = await self._resolve_live(caller, identity)
+            session, display_name = await self._resolve_live(caller, identity, scope)
         except KeyError:
             session = None
         if session is not None:
             result = {
                 **session_summary(session.record, display_name=display_name),
                 "ended": False,
+                **self._scope_envelope(scope),
             }
             result["run_brief"] = await self._run_brief(
                 run_id=self._record_run_id(session.record),
@@ -1029,8 +1227,11 @@ class McpService:
                     if self._row_run_id(row) != current_run
                 ]
             return result
-        row, display_name = await self._resolve_history(caller, identity)
-        result = _history_summary(row, display_name=display_name)
+        row, display_name = await self._resolve_history(caller, identity, scope)
+        result = {
+            **_history_summary(row, display_name=display_name),
+            **self._scope_envelope(scope),
+        }
         raw = row.get("transcript_path")
         result["run_brief"] = await self._run_brief(
             run_id=self._row_run_id(row),
@@ -1040,11 +1241,9 @@ class McpService:
         )
         return result
 
-    def _history_row_in_scope(self, caller: Any, row: dict[str, Any]) -> bool:
-        project_id, scope_id = self._scope(caller)
-        if project_id:
-            return str(row.get("project_id") or "") == project_id
-        return bool(scope_id) and str(row.get("project_scope_id") or "") == scope_id
+    @staticmethod
+    def _history_row_in_scope(scope: ProjectScope, row: dict[str, Any]) -> bool:
+        return scope.admits(*row_scope(row))
 
     async def _run_brief(
         self,
@@ -1095,6 +1294,7 @@ class McpService:
         }
 
     async def read_transcript(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        scope = self._requested_scope(caller, args)
         hit_id = str(args.get("hit_id") or "").strip()
         if hit_id:
             incompatible = {
@@ -1112,13 +1312,20 @@ class McpService:
             hit = _decode_cursor(hit_id, label="history hit")
             if hit.get("kind") != "history-hit":
                 raise ValueError("invalid history hit")
-            project_id, scope_id = self._scope(caller)
-            if str(hit.get("project") or "") != project_id or str(
-                hit.get("scope") or ""
-            ) != scope_id:
-                raise KeyError(str(hit.get("run") or ""))
+            # A hit carries the Project it came from. Reading it back needs a
+            # scope that admits that Project — the hit does not widen the call
+            # by itself, so a fleet search followed by a default read still has
+            # to say `project` again rather than crossing silently.
+            if not scope.admits(
+                str(hit.get("project") or ""), str(hit.get("scope") or "")
+            ):
+                raise ScopeMiss(
+                    "that search hit belongs to another Project. Repeat this read "
+                    'with the same project argument the search used ("fleet" or '
+                    "the Project name)."
+                )
             run_id = str(hit.get("run") or "")
-            hit_row, display_name = await self._resolve_history(caller, run_id)
+            hit_row, display_name = await self._resolve_history(caller, run_id, scope)
             try:
                 ordinal = int(hit["ordinal"])
                 watermark = (
@@ -1174,6 +1381,7 @@ class McpService:
                 "returned_text_bytes": returned_bytes,
                 "content_truncated": truncated,
                 "messages": bounded,
+                **self._scope_envelope(scope),
             }
 
         identity = str(args.get("session_id") or "self").strip() or "self"
@@ -1216,25 +1424,31 @@ class McpService:
         session = None
         row: dict[str, Any] | None = None
         if requested_run_id:
-            session, _display_name = await self._resolve_live(caller, identity)
+            session, _display_name = await self._resolve_live(caller, identity, scope)
             current_run_id = self._record_run_id(session.record)
             if requested_run_id != current_run_id:
                 if session.record.id != caller.record.id:
-                    raise KeyError(requested_run_id)
+                    raise ScopeMiss(
+                        "a superseded run is readable only through the session "
+                        "that owns it"
+                    )
                 candidate = await self.history.history_entry(requested_run_id)
                 if (
                     candidate is None
-                    or not self._history_row_in_scope(caller, candidate)
+                    # The caller's own history, checked against the caller's own
+                    # Project: a call that widened to somewhere else must not
+                    # lose access to the run it is standing in.
+                    or not self._history_row_in_scope(own_scope(caller.record), candidate)
                     or not bool(candidate.get("agent_visible", 1))
                     or str(candidate.get("note_id") or "") != str(caller.record.id)
                     or self._row_run_id(candidate) != requested_run_id
                 ):
-                    raise KeyError(requested_run_id)
+                    raise ScopeMiss("no such run on this session")
                 row = candidate
                 session = None
         else:
             try:
-                session, _display_name = await self._resolve_live(caller, identity)
+                session, _display_name = await self._resolve_live(caller, identity, scope)
             except KeyError:
                 session = None
         if session is not None:
@@ -1258,13 +1472,14 @@ class McpService:
                         if boundary == "remote"
                         else "terminal_boundary_unknown"
                     ),
+                    **self._scope_envelope(scope),
                 }
             path = session.transcript_path
             backend = session.record.backend
             native_id = session.record.native_session_id
         else:
             if row is None:
-                row, _display_name = await self._resolve_history(caller, identity)
+                row, _display_name = await self._resolve_history(caller, identity, scope)
             raw = row.get("transcript_path")
             path = Path(raw) if raw else None
             backend = str(row.get("backend") or "")
@@ -1292,6 +1507,7 @@ class McpService:
                 "include_system": include_system,
                 "messages": [],
                 "note": "no transcript available",
+                **self._scope_envelope(scope),
             }
         try:
             page = await asyncio.wait_for(
@@ -1352,6 +1568,7 @@ class McpService:
             "content_truncated": truncated,
             "next_cursor": next_cursor,
             "messages": bounded,
+            **self._scope_envelope(scope),
         }
 
     async def search_history(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
@@ -1425,10 +1642,17 @@ class McpService:
             ),
         )
         max_per_session = max(1, min(int(args.get("max_hits_per_session") or 2), 5))
-        project_id, scope_id = self._scope(caller)
+        project_scope = self._requested_scope(caller, args)
+        project_filter = self._history_project_filter(project_scope)
+        # The generated-title lookup treats "" as every Project. That is safe at
+        # any scope because the ids it returns only widen a *title* match inside
+        # the query, which `project_filter` has already narrowed to the Projects
+        # this call may read.
+        title_project_id = project_scope.project_id
         normalized = {
             "query": query,
             "scope": scope,
+            "project": project_scope.requested,
             "roles_provided": roles_provided,
             "query_mode": query_mode,
             "title_query": title_query,
@@ -1453,16 +1677,18 @@ class McpService:
             if cursor.get("kind") != "history-search" or cursor.get("sig") != signature:
                 raise ValueError("history search cursor does not match this query")
             offset = max(0, int(cursor.get("offset") or 0))
-        generated_query_ids = await self._matching_generated_title_ids(project_id, query)
+        generated_query_ids = await self._matching_generated_title_ids(
+            title_project_id, query
+        )
         generated_title_ids = await self._matching_generated_title_ids(
-            project_id, title_query
+            title_project_id, title_query
         )
         page = await self.history.search_history_index(
             query=query,
             search_scope=scope,
             include_metadata=not roles_provided,
             query_mode=query_mode,
-            project_id=project_id or "__ungrouped__",
+            project_id=project_filter,
             backends=backends,
             states=states,
             title_query=title_query,
@@ -1483,17 +1709,25 @@ class McpService:
         hits: list[dict[str, Any]] = []
         returned_bytes = 0
         output_truncated = False
+        own = own_scope(caller.record)
         for row in rows:
             run_id = str(row.get("id") or "")
             ordinal = row.get("match_ordinal")
             hit_id = None
+            # The hit names the row's own Project, not the caller's, so
+            # read_transcript can tell whether reading it back crosses a
+            # boundary. Rows indexed before the Project columns existed carry
+            # neither, and fall back to the caller's own scope as before.
+            hit_project, hit_scope = row_scope(row)
+            if not hit_project and not hit_scope:
+                hit_project, hit_scope = own.project_id, own.scope_id
             if ordinal is not None:
                 hit_id = _encode_cursor(
                     {
                         "v": 1,
                         "kind": "history-hit",
-                        "project": project_id,
-                        "scope": scope_id,
+                        "project": hit_project,
+                        "scope": hit_scope,
                         "run": run_id,
                         "ordinal": int(ordinal),
                         "mtime": int(row.get("match_mtime_ns") or 0),
@@ -1505,6 +1739,10 @@ class McpService:
                 "hit_id": hit_id,
                 "agent_run_id": run_id,
                 "title": display_names[run_id],
+                # Which Project produced the hit. A compact fleet result is
+                # unreadable without it, and a caller that widens later must not
+                # see the hit shape change.
+                "project_label": row.get("project_label"),
                 "backend": row.get("backend"),
                 "role": row.get("match_role"),
                 "timestamp": row.get("match_ts"),
@@ -1548,6 +1786,7 @@ class McpService:
             "truncated": output_truncated or bool(page.get("candidate_truncated")),
             "next_cursor": next_cursor,
             "search_index_ready": bool(page.get("search_index_ready", True)),
+            **self._scope_envelope(project_scope),
         }
 
     def _caller_project(self, caller: Any) -> Any:
@@ -1561,6 +1800,34 @@ class McpService:
             raise ValueError("the caller has no registered Project context")
         return project
 
+    def _scoped_projects(self, caller: Any, args: dict[str, Any]) -> tuple[list[Any], bool]:
+        """The Projects one inventory read covers, and whether the list was cut.
+
+        A fleet inventory is a per-Project filesystem read, so it is bounded like
+        every other tool rather than left unbounded because it is a list. The
+        caller's own Project always comes first, so a truncated fleet read still
+        answers the question a default read would have.
+        """
+        scope = self._requested_scope(caller, args)
+        if not scope.fleet:
+            if scope.project_id and self.projects is not None:
+                project = self.projects.projects.get(scope.project_id)
+                if project is not None:
+                    return [project], False
+            return [self._caller_project(caller)], False
+        if self.projects is None:
+            return [self._caller_project(caller)], False
+        own_id = str(caller.record.project_id or "")
+        ordered = sorted(
+            self.projects.projects.values(),
+            key=lambda project: (str(project.id) != own_id, str(project.name).casefold()),
+        )
+        if not ordered:
+            return [self._caller_project(caller)], False
+        return ordered[:FLEET_INVENTORY_MAX_PROJECTS], len(ordered) > (
+            FLEET_INVENTORY_MAX_PROJECTS
+        )
+
     def _context_service(self) -> Any:
         if self.agent_context is None:
             raise RuntimeError(
@@ -1568,27 +1835,57 @@ class McpService:
             )
         return self.agent_context
 
-    async def memory_sources(self, caller: Any, _args: dict[str, Any]) -> dict[str, Any]:
-        project = self._caller_project(caller)
-        inventory = await asyncio.to_thread(
-            self._context_service().inventory,
-            project.id,
-            project.name,
-            project.root,
-        )
-        sources = [
-            *inventory["instructions"]["items"],
-            *inventory["global_instructions"]["items"],
-            *[
-                item
-                for provider in inventory["providers"]
-                for item in provider["items"]
-            ],
-        ]
-        return {
-            "project": inventory["project"],
-            "sources": sources,
-            "providers": [
+    @staticmethod
+    def _covered_projects(projects: list[Any], truncated: bool) -> dict[str, Any]:
+        envelope: dict[str, Any] = {
+            "projects": [
+                {"id": str(project.id), "name": str(project.name)}
+                for project in projects
+            ]
+        }
+        if truncated:
+            envelope["projects_truncated"] = True
+        return envelope
+
+    async def memory_sources(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        scope = self._requested_scope(caller, args)
+        projects, truncated = self._scoped_projects(caller, args)
+        sources: list[dict[str, Any]] = []
+        providers: list[dict[str, Any]] = []
+        unreadable: list[dict[str, str]] = []
+        primary: dict[str, Any] | None = None
+        for project in projects:
+            try:
+                inventory = await asyncio.to_thread(
+                    self._context_service().inventory,
+                    project.id,
+                    project.name,
+                    project.root,
+                )
+            except (OSError, ValueError) as exc:
+                if len(projects) == 1:
+                    raise
+                # One unreachable Project root (a disconnected drive, a deleted
+                # checkout) must not blank a fleet-wide inventory, and must not
+                # be silently missing from it either.
+                unreadable.append({"project_id": str(project.id), "error": str(exc)})
+                continue
+            if primary is None:
+                primary = inventory["project"]
+            owner = {"project_id": str(project.id), "project_name": str(project.name)}
+            sources.extend(
+                {**item, **owner}
+                for item in (
+                    *inventory["instructions"]["items"],
+                    *inventory["global_instructions"]["items"],
+                    *[
+                        entry
+                        for provider in inventory["providers"]
+                        for entry in provider["items"]
+                    ],
+                )
+            )
+            providers.extend(
                 {
                     "id": provider["id"],
                     "label": provider["label"],
@@ -1596,42 +1893,79 @@ class McpService:
                     "detail": provider.get("detail"),
                     "item_count": provider["item_count"],
                     "truncated": provider["truncated"],
+                    **owner,
                 }
                 for provider in inventory["providers"]
-            ],
+            )
+        result: dict[str, Any] = {
+            "sources": sources,
+            "providers": providers,
+            **self._covered_projects(projects, truncated),
+            **self._scope_envelope(scope),
         }
+        if unreadable:
+            result["unreadable_projects"] = unreadable
+        if len(projects) == 1 and primary is not None:
+            # One Project covered keeps the original single-Project shape.
+            result["project"] = primary
+        return result
 
     async def read_memory(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         source_id = str(args.get("source_id") or "").strip()
         if not source_id:
             raise ValueError("source_id is required")
-        project = self._caller_project(caller)
-        result = await asyncio.to_thread(
-            self._context_service().read_source,
-            project.root,
-            source_id,
+        scope = self._requested_scope(caller, args)
+        projects, _truncated = self._scoped_projects(caller, args)
+        failure: Exception | None = None
+        for project in projects:
+            try:
+                result = await asyncio.to_thread(
+                    self._context_service().read_source,
+                    project.root,
+                    source_id,
+                )
+            except ValueError as exc:
+                # A source id belongs to one Project. Under `project:"fleet"`
+                # this walks Projects until one owns it, which is what makes a
+                # fleet-wide memory_sources listing actionable.
+                failure = exc
+                continue
+            content = str(result["text"])
+            redacted = bool(content and looks_like_secret(content))
+            return {
+                "project": {"id": project.id, "name": project.name},
+                "source": result["source"],
+                "text": _REDACTED if redacted else content,
+                "redacted": redacted,
+                **self._scope_envelope(scope),
+            }
+        if len(projects) == 1 and failure is not None:
+            raise failure
+        raise ValueError(
+            f'no Project in {scope.label} owns the source "{source_id}"; read it '
+            "from the Project memory_sources listed it under"
         )
-        content = str(result["text"])
-        redacted = bool(content and looks_like_secret(content))
-        return {
-            "project": {"id": project.id, "name": project.name},
-            "source": result["source"],
-            "text": _REDACTED if redacted else content,
-            "redacted": redacted,
-        }
 
-    async def project_notes(self, caller: Any, _args: dict[str, Any]) -> dict[str, Any]:
-        project = self._caller_project(caller)
-        items = await asyncio.to_thread(
-            project_note_summaries,
-            project.root,
-            default_note_id=project.id,
-            default_title=f"{project.name} notes",
-            migrate_legacy=False,
-        )
-        return {
-            "project": {"id": project.id, "name": project.name},
-            "notes": [
+    async def project_notes(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        scope = self._requested_scope(caller, args)
+        projects, truncated = self._scoped_projects(caller, args)
+        notes: list[dict[str, Any]] = []
+        unreadable: list[dict[str, str]] = []
+        for project in projects:
+            try:
+                items = await asyncio.to_thread(
+                    project_note_summaries,
+                    project.root,
+                    default_note_id=project.id,
+                    default_title=f"{project.name} notes",
+                    migrate_legacy=False,
+                )
+            except (OSError, ValueError) as exc:
+                if len(projects) == 1:
+                    raise
+                unreadable.append({"project_id": str(project.id), "error": str(exc)})
+                continue
+            notes.extend(
                 {
                     "note_id": item["note_id"],
                     "title": item["title"],
@@ -1641,10 +1975,21 @@ class McpService:
                     "revision": item["revision"],
                     "excerpt": _redact(str(item.get("excerpt") or "")),
                     "origin_session_id": item.get("origin_session_id"),
+                    "project_id": str(project.id),
+                    "project_name": str(project.name),
                 }
                 for item in items
-            ],
+            )
+        result: dict[str, Any] = {
+            "notes": notes,
+            **self._covered_projects(projects, truncated),
+            **self._scope_envelope(scope),
         }
+        if unreadable:
+            result["unreadable_projects"] = unreadable
+        if len(projects) == 1:
+            result["project"] = {"id": projects[0].id, "name": projects[0].name}
+        return result
 
     async def read_project_note(
         self, caller: Any, args: dict[str, Any]
@@ -1652,15 +1997,21 @@ class McpService:
         note_id = str(args.get("note_id") or "").strip()
         if not note_id:
             raise ValueError("note_id is required")
-        project = self._caller_project(caller)
-        inventory = await self.project_notes(caller, {})
+        scope = self._requested_scope(caller, args)
+        projects, _truncated = self._scoped_projects(caller, args)
+        inventory = await self.project_notes(caller, args)
+        by_project = {str(project.id): project for project in projects}
         summary = next(
             (item for item in inventory["notes"] if item["note_id"] == note_id),
             None,
         )
-        if summary is None:
+        project = by_project.get(str((summary or {}).get("project_id") or ""))
+        if summary is None or project is None:
             raise QueueError(
-                "unknown_note", "no such note in your Project", status=404
+                "unknown_note",
+                f"no such note in {scope.label}. Note ids belong to one Project: "
+                'name that Project, or pass project:"fleet".',
+                status=404,
             )
         storage_id = DEFAULT_NOTE_STORAGE_ID if note_id == project.id else note_id
         identity = ProjectIdentity(project.id, project.name, project.root, "registered")
@@ -1672,7 +2023,7 @@ class McpService:
         )
         if not note.get("exists"):
             raise QueueError(
-                "unknown_note", "no such note in your Project", status=404
+                "unknown_note", f"no such note in {scope.label}", status=404
             )
         markdown, truncated = _bounded_utf8(str(note.get("markdown") or ""), NOTE_MAX_BYTES)
         redacted = bool(markdown and looks_like_secret(markdown))
@@ -1682,6 +2033,7 @@ class McpService:
             "markdown": _REDACTED if redacted else markdown,
             "truncated": truncated,
             "redacted": redacted,
+            **self._scope_envelope(scope),
         }
 
     async def message_status(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
@@ -1691,9 +2043,11 @@ class McpService:
         return dict(await self._messaging().message_status(caller, message_id))
 
     async def spawn_requests(
-        self, caller: Any, _args: dict[str, Any]
+        self, caller: Any, args: dict[str, Any]
     ) -> dict[str, Any]:
-        return dict(await self._messaging().spawn_requests(caller))
+        return dict(
+            await self._messaging().spawn_requests(caller, project=args.get("project"))
+        )
 
     # ----------------------------------------------------------- write tools
 
@@ -1704,30 +2058,67 @@ class McpService:
             )
         return self.messaging
 
+    async def _notify_target(
+        self, caller: Any, target: str, requested_project: str
+    ) -> tuple[str, str]:
+        """Map a target to (session id, the `project` the write should carry).
+
+        Only display names need resolving here: the messaging service resolves
+        ids and backend names itself, but generated UI titles live in the
+        annotation store this service reads. The resolution is advisory — the
+        write re-checks the scope it is handed, so this cannot widen anything.
+        """
+        if not target:
+            return target, requested_project
+        scope = self._requested_scope(caller, {"project": requested_project})
+        try:
+            session, _display_name = await self._resolve_live(caller, target, scope)
+        except AmbiguousIdentity as exc:
+            raise QueueError(
+                "ambiguous_target", str(exc), status=409, candidates=exc.candidates
+            ) from exc
+        except KeyError:
+            pass
+        else:
+            return session.record.id, requested_project
+        # "Project name/session name" — tried only after the plain form, so a
+        # session whose name contains a slash still resolves as itself.
+        qualifier, name = split_qualified_target(target)
+        if not qualifier or requested_project:
+            return target, requested_project
+        try:
+            qualified = self._requested_scope(caller, {"project": qualifier})
+            session, _display_name = await self._resolve_live(caller, name, qualified)
+        except AmbiguousIdentity as exc:
+            raise QueueError(
+                "ambiguous_target", str(exc), status=409, candidates=exc.candidates
+            ) from exc
+        except (KeyError, ValueError):
+            return target, requested_project
+        return session.record.id, qualified.requested
+
     async def notify(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
         """`mux.notify`: a caller over the Phase 5 A→B queue operation.
 
-        Every bound (allowlist, size, budget, chain depth, cycle detection,
-        receiver readiness, kill switch) lives in the daemon operation, not
-        here — that is the whole point of MCP being transport and not authority
-        (`CONTROL_PLANE_ROADMAP.md` §7.1). The sender is the token's session;
-        there is no sender argument to forge.
+        Every bound (scope, allowlist, size, budget, chain depth, cycle
+        detection, receiver readiness, kill switch) lives in the daemon
+        operation, not here — that is the whole point of MCP being transport and
+        not authority (`CONTROL_PLANE_ROADMAP.md` §7.1). The sender is the
+        token's session; there is no sender argument to forge.
         """
         self.writes += 1
-        target = str(args.get("target") or "")
-        if target:
-            try:
-                target_session, _display_name = await self._resolve_live(caller, target)
-            except KeyError:
-                pass
-            else:
-                target = target_session.record.id
+        target, project = await self._notify_target(
+            caller,
+            str(args.get("target") or ""),
+            str(args.get("project") or ""),
+        )
         result = await self._messaging().notify(
             caller,
             target=target,
             body=str(args.get("body") or ""),
             reason=str(args.get("reason") or ""),
             correlation_id=str(args.get("correlation_id") or "") or None,
+            project=project,
         )
         return dict(result)
 
@@ -1740,6 +2131,7 @@ class McpService:
             backend=str(args.get("backend") or ""),
             name=str(args.get("name") or ""),
             reason=str(args.get("reason") or ""),
+            project=str(args.get("project") or ""),
         )
         return dict(result)
 
@@ -1752,10 +2144,11 @@ class McpService:
         )
         stats["calls"] += 1
         log.info(
-            "MCP tool call tool=%s caller_session=%s project=%s",
+            "MCP tool call tool=%s caller_session=%s project=%s requested_project=%s",
             name,
             caller.record.id,
             caller.record.project_id,
+            str(args.get("project") or "self"),
         )
         handlers = {
             "list_sessions": self.list_sessions,
@@ -1806,15 +2199,19 @@ class McpService:
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "mux", "version": "0.1.0"},
                         "instructions": (
-                            "Visibility into your swe-mux Project: sibling sessions, "
+                            "Visibility into your swe-mux fleet: sibling sessions, "
                             "their live status and run briefs, pageable transcripts, "
                             "archived conversation search, Project notes, message and "
-                            "spawn-request status, and exact Agent Context source reads. Results "
-                        "are scoped to your Project; an empty "
-                        "result means nothing relevant exists. Two bounded write "
-                        "tools exist: `notify` puts a message into another "
-                        "session's prompt queue (it waits for that session's "
-                        "readiness and, by default, for a human to approve it), "
+                            "spawn-request status, and exact Agent Context source reads. "
+                            "Results default to your own Project, and every tool takes a "
+                            '`project` argument that widens that: "fleet" for every '
+                            "Project, or a Project name or id for one other. Sessions in "
+                            "other Projects are reachable — you just have to ask for them. "
+                            "An empty result means nothing relevant exists in the scope you "
+                            "asked for. Two bounded write "
+                            "tools exist: `notify` puts a message into another "
+                            "session's prompt queue (it waits for that session's "
+                            "readiness and, by default, for a human to approve it), "
                             "and `request_spawn` drafts a new-session request in the "
                             "Fleet Queue for a human to approve. It starts nothing."
                     ),
@@ -1850,14 +2247,16 @@ class McpService:
                         "isError": True,
                     }
                 )
-            except KeyError:
-                # Scope miss and true miss answer identically: not found.
+            except KeyError as exc:
+                # Scope miss and true miss answer identically: not found. The
+                # text names the argument that widens the search, because a
+                # default an agent cannot discover reads as a prohibition.
                 return ok(
                     {
                         "content": [
                             {
                                 "type": "text",
-                                "text": "no such session in your Project",
+                                "text": str(getattr(exc, "message", "") or _NOT_FOUND),
                             }
                         ],
                         "isError": True,

@@ -19,6 +19,7 @@ There is no `observations.open` command, Project-menu entry, or mounted Observat
 ## Approval contract
 
 - `mux.request_spawn` appends one inert typed request and emits `spawn_request_drafted`.
+- The request is filed in the Project that would run the session, which is the caller's own unless the call named another; a request that crossed a Project says so in its Fleet Queue body.
 - `GET /api/queue/mailbox` projects typed requests into Fleet Queue beside queued messages.
 - A human approves or dismisses through `POST /api/projects/{project_id}/observations/{id}/decide`.
 - Approval follows the ordinary spawn path with the reviewed prompt as `seed_text`.

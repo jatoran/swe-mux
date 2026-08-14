@@ -911,6 +911,19 @@ Two consequences to design for up front:
   separate explicit grant. The default answer to "what may this agent see" is its own
   Project, consistent with per-project opt-in (§8).
 
+  **The grant shipped 2026-08-14 as a per-call argument.** Every tool takes `project`:
+  omitted for the caller's own Project, `"fleet"` for every Project, or a Project name or id.
+  It is resolved in `project_scope.py` and re-resolved in `agent_messaging.py` for writes, so
+  the bound lives in the daemon operation rather than in the transport (§7.1). It is
+  deliberately not a mode, a config flag, or a capability stored on the token: each of those
+  decides once for every later call, while the cost of widening is per-call — a fleet
+  `search_history` ranks unrelated repositories against each other, whereas a cross-Project
+  `notify` is exactly what a hand-off between two Projects needs. The same-host decision
+  below already establishes that this token is not an authorization boundary, so widening
+  removes no protection; what the argument buys is that the caller states its intent, the
+  answer reports which scope produced it, and a refusal names the argument that would have
+  succeeded.
+
 **Same-host boundary decision (2026-07-28, re-affirmed 2026-07-29 with Phase 5):**
 same-host agents are fully trusted — the token is identity and read scope, not
 authorization; the un-tokened mutating HTTP surface is unchanged. The Phase 5
@@ -1189,6 +1202,9 @@ another agent can pick up mid-plan. Section links point to the design detail.
     "what else am I working on right now" is inherently cross-Project and needs a named grant
     if it is ever answered, not a quiet scope widening.
     Decision 2026-08-12: v0.5 ships no cross-Project grant.
+    Superseded 2026-08-14: the named grant is the per-call `project` argument every read and
+    write tool takes (§7.4). Both conditions the decision set still hold - the default is the
+    caller's own Project, and no call widens without saying so.
 - [x] **3 · Deterministic consumers** (§6.1, 6.3, 6.4, 6.5). No model; write to `annotations`.
   Design: `design/features/deterministic-consumers.md`.
   - [x] Annotation anchor + evidence schema: `automation_annotations.agent_run_id` is now
@@ -1291,10 +1307,12 @@ another agent can pick up mid-plan. Section links point to the design detail.
   - [ ] Resolve agent-held **spawn** authority under the same grant, or leave both drafted.
     One capability with a real grant model and another drafted forever is an inconsistency,
     not a boundary (§16).
-  - [ ] Reuse the `notify` bounds wholesale: Project scope, live-agent targets, per-origin
-    budget, chain depth, cycle detection, idempotency, typed refusals, master kill switch.
-    Never reachable at any grant level: a target outside the caller's Project, and the session
-    that owns the running daemon.
+  - [ ] Reuse the `notify` bounds wholesale: the requested Project scope, live-agent targets,
+    per-origin budget, chain depth, cycle detection, idempotency, typed refusals, master kill
+    switch. Scope means the same thing it means for `notify` since 2026-08-14 — own Project by
+    default, another only when the call names it — and this surface should take the same
+    argument rather than inventing a second rule. Never reachable at any grant level: the
+    session that owns the running daemon.
   - [ ] Every interrupt and end is logged with caller provenance, visible in the fleet audit
     surface, and eligible for the §6.7 attention channels. No automatic remediation is built
     on top of it (§16: resampling amplifies injected content).
@@ -1718,12 +1736,14 @@ Universal hooks abstracts the CLIs' *signals*. The same move applies elsewhere:
 - MCP transport on the Codex side: whether the targeted Codex version accepts a
   streamable-HTTP `mcp_servers` entry, or whether a stdio proxy shim is required
   (§7.3). Verify against the shipped CLI before the v0 phase starts, not during it.
-- MCP v0 read scope: whether cross-Project reads are ever granted to an agent token,
-  and if so what the grant surface looks like — the default is own-Project only
-  (§7.4), but "what else am I working on right now" is inherently cross-Project.
-- Whether `mux.notify` targets need a per-Project allowlist UI or whether "any live
+- ~~MCP v0 read scope: whether cross-Project reads are ever granted to an agent token,
+  and if so what the grant surface looks like.~~ **Answered 2026-08-14**: the grant surface is
+  the per-call `project` argument on every tool (§7.4). The default remains own-Project.
+- ~~Whether `mux.notify` targets need a per-Project allowlist UI or whether "any live
   session in the same Project, plus explicit user-added targets" is sufficient
-  bounding for Phase 5.
+  bounding for Phase 5.~~ **Answered 2026-08-14**: no allowlist UI. The reachable set is any
+  live agent session in the scope the call asked for, still bounded by the per-origin budget,
+  the per-target backlog, propagation depth, thread turns, and receiver arming.
 - Session-control grant defaults (§7.6): whether `granted` is ever a sensible per-Project
   default for `interrupt` on a session the caller itself spawned, or whether the parent/child
   relationship deserves its own position between `draft` and `granted`.

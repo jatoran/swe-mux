@@ -115,8 +115,11 @@ can manually rescan; no filesystem watcher is kept alive for hidden provider dir
 - no claim that a running agent has loaded a newly changed file;
 - no semantic search or bulk prompt injection through the MCP bridge.
 
-The MCP `memory_sources` and `read_memory` tools expose the same Project-scoped inventory/read
+The MCP `memory_sources` and `read_memory` tools expose the same per-Project inventory/read
 contract so agents can inspect available provider sources.
+They answer for the caller's own Project unless the call names another one or `"fleet"`
+(`mux-mcp.md`); a fleet inventory labels every source with the Project it came from, and a
+source id still belongs to exactly one Project.
 They remain read-only and never silently inject, copy, or synchronize provider state.
 
 ## Code map

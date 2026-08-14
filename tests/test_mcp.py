@@ -1,10 +1,11 @@
 """Phase 4.5: mux MCP v0 — read/discovery surface, identity, scope, bounds.
 
 What these pin is the surface's contract, not its wording: caller identity is
-derived from the injected token and never claimed; every tool is scoped to the
+derived from the injected token and never claimed; every tool defaults to the
 caller's Project and answers "not found" identically for scope misses and true
-misses; output is bounded and credential-shaped content is withheld; and the
-surface is read-only end to end.
+misses; the `project` argument is the only way past that default, and the answer
+says which scope produced it; output is bounded and credential-shaped content is
+withheld; and the read surface is read-only end to end.
 """
 
 from __future__ import annotations
@@ -22,12 +23,14 @@ from swe_mux.mcp import (
     LIST_MAX_BYTES,
     TOOLS,
     TRANSCRIPT_MAX_MESSAGES,
+    AmbiguousIdentity,
     McpAuthError,
     McpService,
     session_summary,
 )
 from swe_mux.mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
 from swe_mux.project_files import create_note, write_note
+from swe_mux.prompt_queue import QueueError
 
 
 def record(
@@ -129,9 +132,11 @@ class AutomationStoreStub:
 class MessagingStub:
     def __init__(self) -> None:
         self.targets: list[str] = []
+        self.calls: list[dict[str, Any]] = []
 
-    async def notify(self, _caller: Any, *, target: str, **_kwargs: Any) -> dict[str, Any]:
+    async def notify(self, _caller: Any, *, target: str, **kwargs: Any) -> dict[str, Any]:
         self.targets.append(target)
+        self.calls.append({"target": target, **kwargs})
         return {"target_session_id": target}
 
 
@@ -301,7 +306,7 @@ async def test_exact_display_name_resolves_live_sessions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_display_name_does_not_resolve() -> None:
+async def test_ambiguous_display_name_names_the_candidates_instead_of_guessing() -> None:
     caller = live_session("s1", token="tok")
     first = live_session("s2")
     second = live_session("s3")
@@ -312,8 +317,13 @@ async def test_ambiguous_display_name_does_not_resolve() -> None:
         titles={"s2": "Same title", "s3": "Same title"},
     )
 
-    with pytest.raises(KeyError):
+    # Never a weak match, and never a bare "not found" either: "not found" is
+    # unactionable when the session does exist twice, which is the normal case
+    # once a call reaches past one Project.
+    with pytest.raises(AmbiguousIdentity) as raised:
         await service.get_session(caller, {"session_id": "Same title"})
+    assert raised.value.candidates == ["s2", "s3"]
+    assert "s2, s3" in str(raised.value)
 
 
 @pytest.mark.asyncio
@@ -335,6 +345,58 @@ async def test_notify_accepts_the_display_name_but_sends_the_stable_id() -> None
 
     assert messaging.targets == ["s2"]
     assert result["target_session_id"] == "s2"
+
+
+@pytest.mark.asyncio
+async def test_notify_resolves_a_display_name_across_projects_and_carries_the_scope() -> None:
+    # Generated UI titles are only resolvable here, so this layer maps the name
+    # to an id. It also hands the write the scope it used, because the write
+    # re-checks it rather than trusting this resolution.
+    caller = live_session("s1", token="tok")
+    foreign = live_session("s3", project_id="p2")
+    messaging = MessagingStub()
+    service = service_for(
+        caller,
+        foreign,
+        titles={"s3": "Pack The Atlas"},
+        messaging=messaging,
+        projects=projects_stub(),
+    )
+
+    named = await service.notify(
+        caller, {"target": "Pack The Atlas", "body": "hi", "project": "fleet"}
+    )
+    qualified = await service.notify(
+        caller, {"target": "Pixel Lab/Pack The Atlas", "body": "hi"}
+    )
+
+    assert named["target_session_id"] == "s3"
+    assert messaging.calls[0]["project"] == "fleet"
+    assert qualified["target_session_id"] == "s3"
+    assert messaging.calls[1]["project"] == "Pixel Lab"
+
+
+@pytest.mark.asyncio
+async def test_notify_refuses_an_ambiguous_target_as_a_typed_result() -> None:
+    caller = live_session("s1", token="tok")
+    messaging = MessagingStub()
+    service = service_for(
+        caller,
+        live_session("s2"),
+        live_session("s3", project_id="p2"),
+        titles={"s2": "Same title", "s3": "Same title"},
+        messaging=messaging,
+        projects=projects_stub(),
+    )
+
+    with pytest.raises(QueueError) as caught:
+        await service.notify(
+            caller, {"target": "Same title", "body": "which one", "project": "fleet"}
+        )
+
+    assert caught.value.code == "ambiguous_target"
+    assert caught.value.payload["candidates"] == ["s2", "s3"]
+    assert not messaging.calls
 
 
 @pytest.mark.asyncio
@@ -388,6 +450,139 @@ async def test_search_history_passes_the_caller_project_filter() -> None:
     await service.search_history(caller, {"query": "deploy"})
     assert history.page_calls[0]["project_id"] == "p1"
     assert history.page_calls[0]["limit"] <= 50
+
+
+# ------------------------------------------------------- widening the scope
+
+
+def projects_stub(**roots: str) -> Any:
+    return SimpleNamespace(
+        projects={
+            pid: SimpleNamespace(id=pid, name=name, root=roots.get(pid, f"D:/{pid}"))
+            for pid, name in (("p1", "Work"), ("p2", "Pixel Lab"))
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_fleet_is_reachable_but_only_when_the_caller_asks() -> None:
+    caller = live_session("s1", token="tok")
+    sibling = live_session("s2", project_id="p1")
+    foreign = live_session("s3", project_id="p2")
+    service = service_for(caller, sibling, foreign, projects=projects_stub())
+
+    default = await service.list_sessions(caller, {})
+    fleet = await service.list_sessions(caller, {"project": "fleet"})
+    named = await service.list_sessions(caller, {"project": "Pixel Lab"})
+
+    assert {item["session_id"] for item in default["sessions"]} == {"s1", "s2"}
+    assert {item["session_id"] for item in fleet["sessions"]} == {"s1", "s2", "s3"}
+    assert {item["session_id"] for item in named["sessions"]} == {"s3"}
+    # The caller stays first and its own Project outranks the rest, so widening
+    # never pushes a sibling off the first page.
+    assert [item["session_id"] for item in fleet["sessions"]] == ["s1", "s2", "s3"]
+    assert fleet["project_scope"] == "fleet"
+    assert named["project_scope"] == "Pixel Lab"
+
+
+@pytest.mark.asyncio
+async def test_a_default_listing_says_what_the_default_hid() -> None:
+    # The hint has to live in the result: an agent reads answers far more often
+    # than it reads a tool schema, and a default it cannot discover reads as a
+    # prohibition.
+    caller = live_session("s1", token="tok")
+    service = service_for(caller, live_session("s3", project_id="p2"))
+
+    default = await service.list_sessions(caller, {})
+    fleet = await service.list_sessions(caller, {"project": "fleet"})
+
+    assert default["project_scope"] == "self"
+    assert default["live_sessions_in_other_projects"] == 1
+    assert 'project:"fleet"' in default["scope_note"]
+    # Nothing left to advertise once the caller has widened.
+    assert "scope_note" not in fleet
+
+
+@pytest.mark.asyncio
+async def test_each_session_entry_names_its_project() -> None:
+    caller = live_session("s1", token="tok")
+    service = service_for(caller, live_session("s3", project_id="p2"))
+    result = await service.list_sessions(caller, {"project": "fleet"})
+    by_id = {item["session_id"]: item for item in result["sessions"]}
+    assert by_id["s3"]["project_id"] == "p2"
+    assert by_id["s1"]["project_label"] == "Work"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_project_names_the_projects_that_exist() -> None:
+    caller = live_session("s1", token="tok")
+    service = service_for(caller, projects=projects_stub())
+    with pytest.raises(ValueError, match="Pixel Lab"):
+        await service.list_sessions(caller, {"project": "pixellab"})
+
+
+@pytest.mark.asyncio
+async def test_a_session_in_another_project_resolves_only_under_a_wider_scope() -> None:
+    caller = live_session("s1", token="tok")
+    foreign = live_session("s3", project_id="p2")
+    service = service_for(caller, foreign, projects=projects_stub())
+
+    with pytest.raises(KeyError):
+        await service.get_session(caller, {"session_id": "s3"})
+    widened = await service.get_session(caller, {"session_id": "s3", "project": "fleet"})
+    assert widened["session_id"] == "s3"
+    assert widened["project_scope"] == "fleet"
+
+
+@pytest.mark.asyncio
+async def test_search_widens_its_project_filter_only_when_asked() -> None:
+    history = HistoryStub()
+    caller = live_session("s1", token="tok")
+    service = service_for(caller, history=history, projects=projects_stub())
+
+    await service.search_history(caller, {"query": "deploy", "project": "fleet"})
+    await service.search_history(caller, {"query": "deploy", "project": "Pixel Lab"})
+
+    assert history.page_calls[0]["project_id"] is None
+    assert history.page_calls[1]["project_id"] == "p2"
+
+
+@pytest.mark.asyncio
+async def test_a_hit_from_another_project_is_not_readable_by_default() -> None:
+    row = {
+        "id": "run-9",
+        "note_id": "session-9",
+        "name": "claude-run",
+        "backend": "claude",
+        "project_id": "p2",
+        "project_scope_id": "scope-2",
+        "agent_visible": 1,
+        "agent_run_seq": 1,
+        "match_ordinal": 4,
+        "match_role": "assistant",
+        "match_ts": "2026-08-01T00:00:01Z",
+        "match_mtime_ns": 1,
+        "match_size": 2,
+        "match_parser_version": 3,
+        "excerpt": "the other project's answer",
+        "match_kind": "message",
+    }
+    history = HistoryStub(
+        [row], window={"stale": False, "messages": [{"ordinal": 4, "role": "assistant"}]}
+    )
+    caller = live_session("s1", token="tok")
+    service = service_for(caller, history=history, projects=projects_stub())
+
+    found = await service.search_history(caller, {"query": "answer", "project": "fleet"})
+    hit_id = found["hits"][0]["hit_id"]
+    assert found["hits"][0]["hit_id"]
+
+    # The hit carries its own Project, so reading it back has to say `project`
+    # again. A hit id is not a capability that widens the next call.
+    with pytest.raises(KeyError):
+        await service.read_transcript(caller, {"hit_id": hit_id})
+    read = await service.read_transcript(caller, {"hit_id": hit_id, "project": "fleet"})
+    assert read["agent_run_id"] == "run-9"
 
 
 @pytest.mark.asyncio
@@ -972,6 +1167,47 @@ async def test_project_notes_are_bounded_read_only_and_project_scoped(tmp_path: 
     assert note["markdown"] == "All manual checks passed.\n"
     assert "path" not in json.dumps(note)
     assert not (other_root / ".swe-mux").exists()
+
+
+@pytest.mark.asyncio
+async def test_notes_in_another_project_are_reachable_and_labelled(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    other_root = tmp_path / "other"
+    root.mkdir()
+    other_root.mkdir()
+    foreign_identity = ProjectIdentity("p2", "Pixel Lab", str(other_root), "registered")
+    created = await create_note(other_root, "Sprite pipeline", project=foreign_identity)
+    await write_note(
+        other_root,
+        created["id"],
+        "Atlas packing is done.\n",
+        created["revision"],
+        title="Sprite pipeline",
+        project=foreign_identity,
+    )
+    caller = live_session("s1", token="tok")
+    service = service_for(
+        caller,
+        projects=projects_stub(p1=str(root), p2=str(other_root)),
+    )
+
+    default = await service.project_notes(caller, {})
+    fleet = await service.project_notes(caller, {"project": "fleet"})
+    titles = {item["title"]: item for item in fleet["notes"]}
+
+    assert "Sprite pipeline" not in {item["title"] for item in default["notes"]}
+    assert titles["Sprite pipeline"]["project_name"] == "Pixel Lab"
+    # A note id belongs to one Project, so the fleet form is what makes a
+    # fleet-wide listing actionable rather than decorative.
+    read = await service.read_project_note(
+        caller, {"note_id": titles["Sprite pipeline"]["note_id"], "project": "fleet"}
+    )
+    assert read["markdown"] == "Atlas packing is done.\n"
+    assert read["project"]["name"] == "Pixel Lab"
+    with pytest.raises(QueueError):
+        await service.read_project_note(
+            caller, {"note_id": titles["Sprite pipeline"]["note_id"]}
+        )
 
 
 # ------------------------------------------------------------------ protocol

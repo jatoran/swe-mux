@@ -13,11 +13,32 @@ one human review surface for both kinds of request:
 - The **fleet queue** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, and revocation.
   It reviews; it does not deliver and does not carry the auto-delivery brakes.
 
-What is deliberately absent: an agent cannot deliver, cannot spawn, cannot address a
-session outside its Project, and cannot claim to be anyone else.
+What is deliberately absent: an agent cannot deliver, cannot spawn, and cannot claim to be
+anyone else. It can address a session in another Project, but only by naming that Project -
+its own is the default and nothing widens implicitly.
 
 ## Key concepts
 
+- **Scope is the caller's Project by default and widens only when the caller says so
+  (changed 2026-08-14).** Both write tools take the same `project` argument as the read
+  surface — omitted for the caller's own Project, `"fleet"` for every Project, or a Project
+  name or id — and `notify` also accepts a qualified `"Project name/session name"` target.
+  It is re-resolved in `AgentMessagingService` rather than trusted from the MCP layer, because
+  the bound belongs to the daemon operation (CP §7.1). A write is at least as sensitive as a
+  read, so it takes the same argument with the same default and the same wording rather than a
+  policy of its own. `request_spawn` is the exception that proves the rule: one request starts
+  one session in one Project, so it accepts a Project name and refuses `"fleet"` with
+  `invalid_project`.
+- **A cross-Project message says so, and a same-Project one does not.** The envelope gains a
+  `from_project` header only when the message crossed a boundary. The receiver cannot infer
+  where a peer is working, and that changes how much the message is worth — but a header on
+  every message is one readers learn to skip. The same rule governs a cross-Project spawn
+  request, whose Fleet Queue body names the Project it came from.
+- **One name may match twice once a call reaches past one Project.** Two Projects may each
+  hold a session called `backend`. Resolution refuses with `ambiguous_target` and the candidate
+  session ids rather than answering "not found", which is unactionable when the session does
+  exist — twice. Name resolution therefore happens inside the scope rather than through
+  `SessionService.resolve`, which cannot distinguish the two cases.
 - **Sender provenance is derived, never claimed.** `sender_kind` is one of `user`
   (loopback browser/CLI), `remote_user` (authenticated remote device — recorded, never
   privileged), `agent` (from the MCP token), `rule`, `queue_draft`. The HTTP route derives
@@ -37,7 +58,7 @@ session outside its Project, and cannot claim to be anyone else.
 
   | Bound | Default | Refusal code |
   |---|---|---|
-  | target in the caller's Project, live agent session, not the caller | — | `unknown_target`, `not_agent_target`, `self_notify` |
+  | target in the requested scope, live agent session, not the caller | caller's Project | `unknown_target`, `ambiguous_target`, `unknown_project`, `not_agent_target`, `self_notify` |
   | body size | 4 000 chars | `body_too_large` |
   | per-origin hourly budget | 20 messages | `origin_budget_exhausted` |
   | undelivered agent messages per target | 5 | `target_backlog_full` |
@@ -110,8 +131,12 @@ session outside its Project, and cannot claim to be anyone else.
   fan-out — that is the failure mode a queue purge cannot undo.
 - **Write status is readable by the attributed caller.** `message_status(message_id)` exposes
   drafted, armed, delivered, stranded, expired, or refused outcomes only when the MCP token
-  owns the message's `sender_id`.
-  `spawn_requests()` similarly returns only requests whose `from_session` is the caller.
+  owns the message's `sender_id`. Sender attribution is the whole check: the message row
+  carries the *target's* Project, so a Project comparison would hide the status of everything
+  the caller sent across a boundary — it would have written something it could not follow.
+  `spawn_requests()` similarly returns only requests whose `from_session` is the caller, and
+  takes the same `project` argument because a request drafted into another Project is filed
+  there.
 
 ## The same-host boundary (decided 2026-07-28, re-affirmed 2026-07-29)
 
@@ -151,6 +176,10 @@ reasoning recorded so it is not rediscovered:
   It reports install-wide auto-delivery state and the proving-period counters, and owns neither: the brakes are on the Queue tab and `autodelivery.pause` (`auto-delivery.md`).
   It is not a transcript and shows only delivery state and provenance.
 - **Queue rows** show `from <sender>` and the hop number for relayed messages.
+- **A cross-Project message files under the Project it was sent *to*.** The queue row's
+  `project_id` is the target's, so the fleet queue's Project filter groups a message with the
+  session that has to act on it rather than with the one that wrote it. The sender's Project is
+  recorded in the row's provenance and stated in the receiver's envelope.
 - **Project notes and Scratchpad replace human observation capture.**
   The retired Observation Inbox is not a command or mounted view.
   Its JSON file remains compatibility storage for typed spawn requests.
@@ -162,11 +191,15 @@ GET  /api/queue/mailbox?author=all|non_human|human[&project_id=...][&target_sess
      (the route keeps its original name; the surface it backs is the fleet queue)
 POST /api/queue/messages/{id}/cancel            {kind: revoked}
 POST /api/projects/{pid}/observations/{oid}/decide  {decision: approve|dismiss, …overrides}
-MCP  notify(target, body, reason?, correlation_id?)
-MCP  request_spawn(prompt, backend?, name?, reason?)
+MCP  notify(target, body, reason?, correlation_id?, project?)
+MCP  request_spawn(prompt, backend?, name?, reason?, project?)
 MCP  message_status(message_id)
-MCP  spawn_requests()
+MCP  spawn_requests(project?)
 ```
+
+`project` is omitted for the caller's own Project, `"fleet"` for every Project, or a Project
+name or id. `notify` also accepts `"Project name/session name"` as its `target`.
+`request_spawn` refuses `"fleet"`.
 
 ## Configuration
 
@@ -180,6 +213,7 @@ state that has to be flippable instantly and per session.
 ## Key files
 
 - `src/swe_mux/agent_messaging.py` — `AgentMessagingService` (relay policy, drafts, the `mailbox()` authorship projection the fleet queue reads).
+- `src/swe_mux/project_scope.py` — the `project` argument both write tools share with the read surface.
 - `src/swe_mux/mcp.py` — the two tools as thin callers.
 - `src/swe_mux/prompt_queue.py` — sender columns, correlation index, relay queries.
 - `src/swe_mux/project_files.py` — typed inbox items (`kind`/`request`) and
