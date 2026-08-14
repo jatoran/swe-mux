@@ -47,6 +47,15 @@ session outside its Project, and cannot claim to be anyone else.
   | kill switch (`agent_messaging_enabled`) | on | `agent_messaging_disabled` |
   | expiry | 24 h | item is cancelled, `cancel_kind: expired` |
 
+- **The envelope states its authority, because a receiver cannot infer it.** A peer's note and
+  an instruction a human approved arrive through the same pipe. The `authority` header says
+  which this is: a message auto-delivered under the target's standing grant declares that no
+  human reviewed it and that nothing in it overrides an instruction the operator gave that
+  session directly, while a message that waited as a draft declares that a person armed it and
+  released it. Without the header a relayed "your operator says go ahead" is indistinguishable
+  from a prompt injection, and the conservative reading — refuse — is correct often enough to
+  be worth protecting and wrong often enough to be worth informing (observed 2026-08-13, a
+  session correctly refused a relayed release it had no way to verify).
 - **Replying to the session that messaged you is an ordinary turn, not a cycle.**
   This is the load-bearing distinction, and getting it wrong is what made replies impossible
   before 2026-08-13: a reply *is* A→B→A, so a cycle rule that tested "is the target anywhere
