@@ -21,9 +21,11 @@ import {
   setFieldMode, unplacedFields,
   type ContextRender, type CountStyle, type DiffStyle, type DotShape,
   type RowAlign, type RowFieldId, type RowLine, type RowPresetId, type SeparatorId,
-  type SessionRowConfig,
+  type SessionRowConfig, type StandingRender,
 } from './sessionRowConfig'
-import { buildSessionRowTokens, deriveRowContext, sessionContextArc } from './sessionRowFields'
+import {
+  buildSessionRowTokens, deriveRowContext, sessionContextArc, sessionStandingMark,
+} from './sessionRowFields'
 import { loadSessionRowConfig, saveSessionRowConfig } from './sessionRowPrefs'
 import type { Session } from './types'
 
@@ -57,6 +59,10 @@ const PREVIEW_SESSIONS: Session[] = [
   sample({
     id: 'preview-ready', name: 'status detection v2', model: 'opus',
     state: 'idle', last_turn_ms: 72_000, context_pct: 0.41, context_peak_pct: 0.55,
+    // A finished turn with a half-written reply still in the composer: the case
+    // the unsent-input mark exists for, and the one you cannot see any other way
+    // without opening the pane.
+    unsent_input: { since: NOW - 240 },
     git: {
       branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48,
       root: PRIMARY_ROOT, compare_ref: 'origin/main',
@@ -77,6 +83,10 @@ const PREVIEW_SESSIONS: Session[] = [
     id: 'preview-worktree', name: 'audit sweep', backend: 'codex', model: 'gpt-5-codex',
     state: 'working', state_since: NOW - 10_800, context_pct: 0.96, context_peak_pct: 0.97,
     compaction_count: 3, cost_usd: 4.2,
+    standing_activity: [{
+      kind: 'subagents', source: 'hook', evidence: 'hook:SubagentStart',
+      since: NOW - 600, expires_at: null, count: 3, detail: null,
+    }],
     git: {
       branch: 'wt-audit', worktree: 'wt-audit', dirty: 3, ahead: 0, behind: 1,
       added: 18, removed: 4, root: `${PRIMARY_ROOT}-wt/wt-audit`, compare_ref: 'origin/main',
@@ -104,6 +114,12 @@ const CONTEXT_MODES: Array<{ id: ContextRender; label: string; hint: string }> =
   { id: 'gauge', label: 'Gauge', hint: 'Four cells in the row, comparable down the list.' },
   { id: 'percent', label: 'Percentage', hint: 'Exact number in the row.' },
   { id: 'off', label: 'Off', hint: 'Context pressure is not shown.' },
+]
+
+const STANDING_MODES: Array<{ id: StandingRender; label: string; hint: string }> = [
+  { id: 'row', label: 'Glyphs in the flag strip', hint: 'Says which kind and how many (⟳ loop or cron, ≡ background tasks, ⑂ subagents).' },
+  { id: 'indicator', label: 'Pip on the indicator', hint: 'Costs no row width at all, and says only that something is standing — the kinds and counts move to the tooltip.' },
+  { id: 'off', label: 'Off', hint: 'Standing activity is not marked on the row.' },
 ]
 
 export function SessionRowSettings() {
@@ -235,7 +251,12 @@ export function SessionRowSettings() {
     <div class="session-row-preview sidebar" style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px` }}>
       <div class="session-list">
         {PREVIEW_SESSIONS.map(session => <div key={session.id} class={`session-row agent ${session.state}`}>
-          <StateIndicator session={session} shape={config.dotShape} gauge={sessionContextArc(session, config)} />
+          <StateIndicator
+            session={session}
+            shape={config.dotShape}
+            gauge={sessionContextArc(session, config)}
+            standing={sessionStandingMark(session, config)}
+          />
           <SessionRowBody session={session} tokens={buildSessionRowTokens(session, config, PREVIEW_CONTEXT)} config={config} />
         </div>)}
       </div>
@@ -277,8 +298,14 @@ export function SessionRowSettings() {
       </select>
     </label>
     <p>{CONTEXT_MODES.find(mode => mode.id === config.context)?.hint} The indicator's colour, pulse, and hollow "engaged" variant are not configurable: they are the one thing every surface reads the same way.</p>
+    <label>Standing activity
+      <select value={config.standing} onChange={event => change({ ...config, standing: event.currentTarget.value as StandingRender })}>
+        {STANDING_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
+      </select>
+    </label>
+    <p>{STANDING_MODES.find(mode => mode.id === config.standing)?.hint} Whichever you pick applies to tab strips and menus too, so the same session never reports it twice on one screen.</p>
 
-    {lineEditor('top', 'Top line', 'Identity: the indicator sits outside these sections and is always drawn.')}
+    {lineEditor('top', 'Top line', 'Identity, plus the flag strip on the right: presence-only marks are pinned to the row’s edge so a long title ellipsizes instead of hiding them.')}
     {lineEditor('bottom', 'Bottom line', 'Everything else. The state word is off by default because the indicator already carries it.')}
 
     <h4>Git fields</h4>

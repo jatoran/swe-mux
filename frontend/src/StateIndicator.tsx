@@ -29,6 +29,12 @@ export interface StateIndicatorProps {
   shape: DotShape
   /** Context pressure drawn as an outline around the shape. Omit to draw none. */
   gauge?: { pct: number; peak: number } | null
+  /**
+   * Standing activity collapsed to a corner pip, with the label it carries.
+   * Supplied by `sessionStandingMark`, so it is present only in the rendering
+   * that asks for it and the row never draws the same fact twice.
+   */
+  standing?: { label: string } | null
   /** Extra classes for surfaces that position the indicator themselves. */
   class?: string
 }
@@ -40,12 +46,12 @@ const band = (pct: number): string => (pct >= 0.9 ? ' crit' : pct >= 0.7 ? ' hot
  * existing colour rule, pulse, and reduced-motion override keeps applying and
  * the hollow `standing` variant keeps meaning "engaged, but you can type".
  */
-export function StateIndicator({ session, shape, gauge, class: extra }: StateIndicatorProps) {
+export function StateIndicator({ session, shape, gauge, standing, class: extra }: StateIndicatorProps) {
   const hollow = Boolean(session && session.state === 'idle' && hasRunningActivity(session))
   const outline = shapePath(shape, RING_RADIUS)
   const pct = gauge ? Math.max(0, Math.min(1, gauge.pct)) : 0
   const peak = gauge ? Math.max(0, Math.min(1, gauge.peak)) : 0
-  return <span class={`${sessionDotClass(session)} state-indicator shape-${shape}${extra ? ` ${extra}` : ''}`}>
+  return <span class={`${sessionDotClass(session)} state-indicator shape-${shape}${extra ? ` ${extra}` : ''}`} title={standing?.label}>
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       {gauge && <path class="ind-track" d={outline} />}
       {gauge && <path class={`ind-fill${band(pct)}`} d={outline} pathLength={100} stroke-dasharray="100" stroke-dashoffset={100 - pct * 100} />}
@@ -60,5 +66,13 @@ export function StateIndicator({ session, shape, gauge, class: extra }: StateInd
         d={shapePath(shape, hollow ? CORE_RADIUS - HOLLOW_STROKE / 2 : CORE_RADIUS)}
       />
     </svg>
+    {/* Deliberately a CSS pip outside the SVG rather than another path inside
+        it. A 24-unit box with a 6.2 core and a 10.2 ring has no empty annulus
+        left: a mark placed on the ring is indistinguishable from the context
+        gauge's peak dash, and one placed inside it lands on the state colour.
+        The box's top-right *corner* is empty for every shape, and a pip sized in
+        pixels also stays legible at a 10px indicator, where a shape-relative one
+        would be under two pixels across. */}
+    {standing && <i class="ind-standing" aria-hidden="true" />}
   </span>
 }

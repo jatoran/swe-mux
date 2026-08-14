@@ -41,6 +41,16 @@ export interface SessionRowContext {
    */
   checkoutSessions: Record<string, number>
   /**
+   * Sessions this device is holding an unsent composer draft for, as epoch
+   * seconds, unioned with what the daemon reports.
+   *
+   * The mobile draft composer stages text in `localStorage` and never writes it
+   * to the PTY, so the daemon cannot see it; the daemon's own ledger sees text
+   * typed anywhere, including on another device. Neither is a superset of the
+   * other, which is why the row asks both.
+   */
+  localDrafts: Record<string, number>
+  /**
    * How many low-priority tokens each section sheds for the current width.
    *
    * Shedding lives here rather than in a container query because the separator
@@ -55,7 +65,7 @@ export interface SessionRowContext {
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
   return {
     now, defaultBranch: {}, defaultModel: {}, multiAccount: false,
-    queueDepth: {}, checkoutSessions: {}, shed: 0,
+    queueDepth: {}, checkoutSessions: {}, localDrafts: {}, shed: 0,
   }
 }
 
@@ -70,7 +80,8 @@ export function shedForWidth(width: number): number {
   return shed
 }
 
-export type RowTokenKind = 'text' | 'diff' | 'gauge' | 'count' | 'badges' | 'glyph' | 'title' | 'broadcast'
+export type RowTokenKind =
+  'text' | 'diff' | 'gauge' | 'count' | 'badges' | 'glyph' | 'title' | 'broadcast' | 'draft'
 export type RowTone = 'default' | 'muted' | 'warn' | 'add' | 'del'
 
 export interface RowToken {
@@ -311,6 +322,43 @@ export function sessionContextArc(session: Session, config: SessionRowConfig): {
   return config.context === 'arc' ? contextGauge(session) : null
 }
 
+/**
+ * Standing activity for the indicator's pip, and the label that explains it.
+ *
+ * The counterpart of `sessionContextArc`: the same fact the `badges` field
+ * draws, in the rendering that costs no row width. Returns null in every mode
+ * but `indicator`, so the two renderings can never both be on.
+ */
+export function sessionStandingMark(
+  session: Session | undefined, config: SessionRowConfig,
+): { label: string } | null {
+  if (!session || session.pending || config.standing !== 'indicator') return null
+  const badges = activityBadges(session)
+  return badges.length ? { label: badges.map(badge => badge.label).join(' · ') } : null
+}
+
+/**
+ * When this session's composer was last known to hold unsent text, or null.
+ *
+ * Zero is a real answer here — a device-local draft with no usable timestamp —
+ * and is distinct from null, which is "nothing is sitting there". An ended
+ * session has no composer, whatever the last thing typed into it was.
+ */
+function unsentInputSince(session: Session, context: SessionRowContext): number | null {
+  if (isEnded(session)) return null
+  const local = context.localDrafts[session.id]
+  const daemon = session.unsent_input?.since
+  const stamps = [local, daemon].filter(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0,
+  )
+  if (!stamps.length) return null
+  // The oldest, because the question the row answers is "how long has something
+  // been sitting here": a phone draft from yesterday is not made recent by a
+  // keystroke on the desktop a minute ago.
+  const dated = stamps.filter(value => value > 0)
+  return dated.length ? Math.min(...dated) : 0
+}
+
 function workingCwd(session: Session): string {
   return session.runtime_cwd || session.spawn_cwd || session.cwd || ''
 }
@@ -370,10 +418,28 @@ function candidateFor(
         ? make({ kind: 'broadcast', text: '⇶', title: 'In the broadcast set — keystrokes mirror here while broadcast input is on' }, true)
         : null
     case 'badges': {
+      // `indicator` moves the same fact onto the state indicator and `off`
+      // withdraws it; either way the row must not also print it.
+      if (config.standing !== 'row') return null
       const badges = session.pending ? [] : activityBadges(session)
       return badges.length
         ? make({ kind: 'badges', text: badges.map(badge => badge.label).join(', '), badges }, true)
         : null
+    }
+    case 'draft': {
+      const since = unsentInputSince(session, context)
+      if (since === null) return null
+      const age = since > 0 ? ageOf(since, context.now) : null
+      return make(
+        {
+          kind: 'draft',
+          text: 'unsent input',
+          title: age === null
+            ? 'unsent text is sitting in this session’s composer'
+            : `unsent text is sitting in this session’s composer, from ${formatRowDuration(age)} ago`,
+        },
+        true,
+      )
     }
     case 'state':
       // Never notable on purpose: the indicator says it. Reachable only in `always`.
@@ -568,13 +634,20 @@ function buildSection(
 
 /**
  * Drop the `count` lowest-priority tokens, preserving the configured order of
- * those that survive. The title is never shed — a row without one is not
- * identifiable — and shedding happens before the renderer sees the list, so
+ * those that survive. Shedding happens before the renderer sees the list, so
  * separators are still emitted only between tokens that actually draw.
+ *
+ * Identity tokens are never shed. The rule used to name the title alone, which
+ * was the same rule for as long as identity meant "the title and the marks
+ * beside it": everything else on that line was a prefix of the name. It stops
+ * being the same rule for a flag, whose section may hold nothing else — a narrow
+ * sidebar would then delete the only token in it, and the mark that says a
+ * subagent is running would disappear at exactly the width that made the row
+ * hard to read in the first place.
  */
 function shedLowestPriority(tokens: RowToken[], count: number): RowToken[] {
   if (count <= 0 || tokens.length <= 1) return tokens
-  const sheddable = tokens.filter(token => token.kind !== 'title')
+  const sheddable = tokens.filter(token => !ROW_FIELD_BY_ID[token.id]?.identity)
   if (!sheddable.length) return tokens
   const doomed = new Set(
     [...sheddable].sort((a, b) => a.priority - b.priority).slice(0, count),
@@ -603,14 +676,24 @@ export function buildSessionRowTokens(
   return { top: line('top'), bottom: line('bottom') }
 }
 
-/** Identity-only projection: what a phone renders when parity is off. */
-export function identityRowTokens(session: Session, config: SessionRowConfig): SessionRowTokens {
+/**
+ * Identity-only projection: what a phone renders when parity is off.
+ *
+ * The flag strip survives it. Identity means "which session is this and what is
+ * true of it right now", and a phone is where an unsent draft is most likely to
+ * have been left behind — a projection that dropped the marks would be silent on
+ * exactly the device that stages text and walks away. The strip costs a few
+ * pixels at the row's edge and nothing at all when nothing is flagged.
+ */
+export function identityRowTokens(
+  session: Session, config: SessionRowConfig, context = emptyRowContext(0),
+): SessionRowTokens {
   const identityOnly = {
     ...config,
-    top: { ...config.top, left: config.top.left.filter(slot => slot.id === 'glyph' || slot.id === 'title'), right: [] },
+    top: { ...config.top, left: config.top.left.filter(slot => slot.id === 'glyph' || slot.id === 'title') },
     bottom: { ...config.bottom, left: [], right: [] },
   }
-  return buildSessionRowTokens(session, identityOnly, emptyRowContext(0))
+  return buildSessionRowTokens(session, identityOnly, context)
 }
 
 const mostCommon = (values: Array<string | undefined | null>): string | undefined => {
@@ -632,6 +715,7 @@ export function deriveRowContext(
   queueDepth: Record<string, number>,
   now: number,
   shed = 0,
+  localDrafts: Record<string, number> = {},
 ): SessionRowContext {
   const byProject = new Map<string, Session[]>()
   for (const session of sessions) {
@@ -658,6 +742,6 @@ export function deriveRowContext(
   }
   return {
     now, defaultBranch, defaultModel,
-    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, shed,
+    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, shed,
   }
 }

@@ -189,6 +189,83 @@ test('narrowing slides the sections together and clips, never squeezes the left 
 })
 
 /**
+ * The flag strip: presence marks pinned to the top line's right edge.
+ *
+ * The regression this pins is the reason the strip exists. Placed after the
+ * title, the marks sat inside the section that clips, so a title long enough to
+ * fill the sidebar hid every one of them — and the rows with the most to report
+ * are the ones with the longest names. Pure CSS, so nothing but a real layout
+ * can answer it.
+ */
+async function stripGeometry(page: import('playwright/test').Page, width: number) {
+  await page.evaluate(w => {
+    document.querySelector<HTMLElement>('.sidebar')!.style.width = `${w}px`
+  }, width)
+  return page.evaluate(() => {
+    const row = document.querySelector('[data-row="standing"]')!
+    const box = (el: Element | null) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x, width: r.width, right: r.right }
+    }
+    const line = row.querySelector('.row-line.top')!
+    const title = line.querySelector('.row-title') as HTMLElement
+    return {
+      row: box(row),
+      line: box(line),
+      title: box(title),
+      strip: box(line.querySelector('.row-section.right')),
+      flags: [...line.querySelectorAll('.row-section.right .row-token')].map(token => box(token)),
+      actions: box(row.querySelector('.row-actions')),
+      // Smaller than its content means the title is ellipsizing, which is the
+      // trade the strip is supposed to force.
+      titleClient: title.clientWidth,
+      titleScroll: title.scrollWidth,
+    }
+  })
+}
+
+for (const width of [420, 240, 180]) {
+  test(`at ${width}px the flag strip stays visible and the title yields instead`, async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 600 })
+    await page.goto('/session-row-harness.html')
+    const g = await stripGeometry(page, width)
+
+    expect(g.flags.length).toBe(3)
+    for (const flag of g.flags) {
+      expect(flag!.width).toBeGreaterThan(0)
+      expect(flag!.x).toBeGreaterThanOrEqual(g.line!.x - 0.5)
+      expect(flag!.right).toBeLessThanOrEqual(g.line!.right + 0.5)
+    }
+    // Pinned to the edge, with the title stopping before it rather than under it.
+    expect(g.strip!.right).toBeLessThanOrEqual(g.line!.right + 0.5)
+    expect(g.title!.right).toBeLessThanOrEqual(g.strip!.x + 0.5)
+  })
+}
+
+test('a title too long for the sidebar ellipsizes rather than pushing the flags out', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html')
+  const g = await stripGeometry(page, 200)
+
+  expect(g.titleScroll).toBeGreaterThan(g.titleClient)
+  const overflow = await page.evaluate(() =>
+    getComputedStyle(document.querySelector('[data-row="standing"] .row-title')!).textOverflow)
+  expect(overflow).toBe('ellipsis')
+})
+
+test('the hover-revealed kill control does not land on top of the flags', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html')
+  await stripGeometry(page, 300)
+  await page.hover('[data-row="standing"]')
+  const g = await stripGeometry(page, 300)
+
+  expect(g.actions!.width).toBeGreaterThan(0)
+  expect(g.strip!.right).toBeLessThanOrEqual(g.actions!.x + 0.5)
+})
+
+/**
  * The working pulse marks the *state*. The context gauge only moves when the
  * conversation grows, so blinking it alongside the core makes a static
  * measurement read as live activity.

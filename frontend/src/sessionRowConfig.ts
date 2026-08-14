@@ -22,7 +22,7 @@
 
 /** Every field the row can draw. Order here is the settings-UI catalog order. */
 export type RowFieldId =
-  | 'glyph' | 'title' | 'broadcast' | 'badges'
+  | 'glyph' | 'title' | 'broadcast' | 'badges' | 'draft'
   | 'state' | 'detail' | 'duration' | 'sincePrompt' | 'idleFor' | 'context'
   | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
@@ -33,6 +33,15 @@ export type RowAlign = 'left' | 'right'
 export type DotShape = 'hexagon' | 'circle' | 'square'
 /** How context pressure is drawn. One setting, because one fact must not render twice. */
 export type ContextRender = 'off' | 'arc' | 'gauge' | 'percent'
+/**
+ * Where standing activity is drawn, on the same one-place rule as context.
+ *
+ * `row` spells it out as glyphs with counts; `indicator` collapses it to a pip on
+ * the state indicator, which costs no row width at all and cannot be clipped, at
+ * the price of saying only *that* something is standing (the kinds and counts
+ * fall back to the tooltip).
+ */
+export type StandingRender = 'row' | 'indicator' | 'off'
 export type DiffStyle = 'numbers' | 'bar'
 export type CountStyle = 'numbers' | 'pips'
 
@@ -63,7 +72,7 @@ export const DEFAULT_DOT_SIZE_DESKTOP = 15
 export const DEFAULT_DOT_SIZE_MOBILE = 17
 
 export interface SessionRowConfig {
-  version: 1
+  version: 2
   top: RowLineConfig
   bottom: RowLineConfig
   /** Shape of the state indicator and of any gauge drawn around it. */
@@ -82,6 +91,7 @@ export interface SessionRowConfig {
   dotSizeDesktop: number
   dotSizeMobile: number
   context: ContextRender
+  standing: StandingRender
   diffStyle: DiffStyle
   countStyle: CountStyle
   /** Prefix git tokens with their glyph (⎇ / ⌂). Off keeps branch names bare. */
@@ -131,8 +141,10 @@ export interface RowFieldDescriptor {
 export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'title', label: 'Session title', notable: 'always has a value', priority: 100, identity: true },
   { id: 'glyph', label: 'Provider mark', notable: 'agent sessions only', priority: 95, identity: true },
-  { id: 'badges', label: 'Standing activity', notable: 'a loop, cron, subagent, or background task is live', priority: 90, identity: true },
+  // The flag strip, in the order it reads on the row.
   { id: 'broadcast', label: 'Broadcast flag', notable: 'session is in the broadcast set', priority: 88, identity: true },
+  { id: 'badges', label: 'Standing activity', notable: 'a loop, cron, subagent, or background task is live', priority: 90, identity: true },
+  { id: 'draft', label: 'Unsent input', notable: 'text is sitting unsent in this session’s composer', priority: 92, identity: true },
   { id: 'detail', label: 'What it is doing', notable: 'the harness reported a tool or a question', priority: 70 },
   { id: 'duration', label: 'Time', notable: 'past the per-state threshold', priority: 80 },
   {
@@ -169,18 +181,27 @@ const ALL_FIELD_IDS = new Set(ROW_FIELDS.map(field => field.id))
  * Shipped default. Identity on the top line and nothing else; the bottom line
  * carries work facts left and session facts right, almost all conditional, with
  * context drawn on the indicator so it costs no row width.
+ *
+ * The top line's right section is the **flag strip**: presence-only marks that
+ * are pinned to the row's right edge instead of queueing behind the title. Placed
+ * after it they were clipped by exactly the rows that needed them — a title long
+ * enough to fill the sidebar is a title long enough to hide everything following
+ * it — and a flag whose whole content is "this is true" has nothing left to
+ * ellipsize.
  */
 export function defaultSessionRowConfig(): SessionRowConfig {
   return {
-    version: 1,
+    version: 2,
     top: {
       left: [
         { id: 'glyph', mode: 'always' },
         { id: 'title', mode: 'always' },
+      ],
+      right: [
         { id: 'broadcast', mode: 'notable' },
         { id: 'badges', mode: 'notable' },
+        { id: 'draft', mode: 'always' },
       ],
-      right: [],
       separator: 'none',
     },
     bottom: {
@@ -210,6 +231,7 @@ export function defaultSessionRowConfig(): SessionRowConfig {
     dotSizeDesktop: DEFAULT_DOT_SIZE_DESKTOP,
     dotSizeMobile: DEFAULT_DOT_SIZE_MOBILE,
     context: 'arc',
+    standing: 'row',
     diffStyle: 'numbers',
     countStyle: 'numbers',
     gitGlyphs: false,
@@ -310,6 +332,44 @@ export function normalizeDotSize(value: unknown, fallback: number): number {
   return Math.max(DOT_SIZE_MIN, Math.min(DOT_SIZE_MAX, Math.round(value)))
 }
 
+/** Flags in the order the strip reads them, ahead of any field placed by hand. */
+const FLAG_STRIP: RowFieldId[] = ['broadcast', 'badges', 'draft']
+
+/**
+ * Bring a pre-flag-strip layout onto version 2.
+ *
+ * Changing `defaultSessionRowConfig` reaches nobody who has ever opened the
+ * settings: a stored blob is authoritative, and an unplaced field is off, so a
+ * new field would arrive invisible and a relocated one would stay where it was.
+ * The two moves are made once, on the stored blob:
+ *
+ *   - flags already placed move to the top line's right section, in strip order.
+ *     A flag the user had removed stays removed — this relocates a choice, it
+ *     does not re-impose one.
+ *   - `draft` is placed, because a field nobody could have configured yet is new
+ *     rather than declined.
+ */
+function migrateToFlagStrip(config: SessionRowConfig): SessionRowConfig {
+  const placed = new Map<RowFieldId, RowSlot>()
+  for (const slot of [...config.top.left, ...config.top.right]) {
+    if (FLAG_STRIP.includes(slot.id)) placed.set(slot.id, slot)
+  }
+  const strip: RowSlot[] = FLAG_STRIP.flatMap(id => {
+    const existing = placed.get(id)
+    if (existing) return [existing]
+    return id === 'draft' ? [{ id, mode: 'always' as RowFieldMode }] : []
+  })
+  const keep = (slots: RowSlot[]) => slots.filter(slot => !FLAG_STRIP.includes(slot.id))
+  return {
+    ...config,
+    top: {
+      ...config.top,
+      left: keep(config.top.left),
+      right: [...strip, ...keep(config.top.right)],
+    },
+  }
+}
+
 /**
  * Coerce any stored blob into a usable configuration.
  *
@@ -327,19 +387,21 @@ export function normalizeSessionRowConfig(value: unknown): SessionRowConfig {
   const top = normalizeLine(raw.top, seen, true, base.top)
   const bottom = normalizeLine(raw.bottom, seen, false, base.bottom)
   if (!seen.has('title')) top.left.push({ id: 'title', mode: 'always' })
-  return {
-    version: 1,
+  const config: SessionRowConfig = {
+    version: 2,
     top,
     bottom,
     dotShape: pick(raw.dotShape, ['hexagon', 'circle', 'square'] as const, base.dotShape),
     dotSizeDesktop: normalizeDotSize(raw.dotSizeDesktop, base.dotSizeDesktop),
     dotSizeMobile: normalizeDotSize(raw.dotSizeMobile, base.dotSizeMobile),
     context: pick(raw.context, ['off', 'arc', 'gauge', 'percent'] as const, base.context),
+    standing: pick(raw.standing, ['row', 'indicator', 'off'] as const, base.standing),
     diffStyle: pick(raw.diffStyle, ['numbers', 'bar'] as const, base.diffStyle),
     countStyle: pick(raw.countStyle, ['numbers', 'pips'] as const, base.countStyle),
     gitGlyphs: typeof raw.gitGlyphs === 'boolean' ? raw.gitGlyphs : base.gitGlyphs,
     mobileFields: typeof raw.mobileFields === 'boolean' ? raw.mobileFields : base.mobileFields,
   }
+  return raw.version === 2 ? config : migrateToFlagStrip(config)
 }
 
 /** Fields not currently placed anywhere, in catalog order, for the settings pool. */

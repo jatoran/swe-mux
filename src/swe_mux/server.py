@@ -59,6 +59,7 @@ from .automation_store import AutomationStore
 from .background_tasks import background
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
+from .composer_input import note_composer_write
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
 from .device_presence import DevicePresenceStore, parse_device_report
@@ -3962,6 +3963,13 @@ async def list_sessions(request: web.Request) -> web.Response:
             "reason": delivery["reason"],
             "authorized": False,
         }
+        # Present only while something is actually sitting in the composer, so a
+        # client can treat presence as the whole signal. The character estimate
+        # stays server-side: it is inferred from keystrokes, and a number on
+        # screen would be read as a measurement (`composer_input.py`).
+        composer = getattr(session, "composer", None)
+        if composer is not None and composer.pending:
+            item["unsent_input"] = {"since": composer.since}
         sessions.append(item)
     await _decorate_generated_titles(request.app, sessions)
     for field in ("project_id", "state", "backend"):
@@ -4912,6 +4920,42 @@ async def branch_session(request: web.Request) -> web.Response:
     return json_response({"session": session.record.snapshot(), "source": record.id}, 201)
 
 
+def _note_composer_write(events: EventBus, session: Any, data: str | bytes, source: str) -> None:
+    """Track what one operator write left sitting in the composer.
+
+    Every path that writes operator text to a PTY calls this, for the same reason
+    every one of them advances `input_revision`: text inserted by a voice append,
+    a send-to-agent, or a mobile draft is as unsent as text someone typed, and a
+    row that only lit up for keystrokes would be silent on exactly the paths that
+    stage text and walk away.
+
+    Only the empty/non-empty crossing is announced. A keystroke-rate event would
+    put one fanout on the bus per character typed, which is the traffic the
+    throttled `terminal_input` event already exists to avoid.
+    """
+    composer = getattr(session, "composer", None)
+    if composer is None:
+        return
+    text = data.decode("utf-8", "ignore") if isinstance(data, bytes) else data
+    change = note_composer_write(composer, text, time.time())
+    if change is None:
+        return
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is not None:
+        ledger.append(
+            {"ts": time.time(), "kind": "composer", "action": change, "source": source}
+        )
+    log.debug(
+        "composer %s for session %s (source %s)", change, session.record.id, source
+    )
+    events.emit_background(
+        "composer_input_changed",
+        session_id=session.record.id,
+        source=source,
+        pending=composer.pending,
+    )
+
+
 def _record_operator_input(
     events: EventBus, session: Any, data: str, *, source: str, input_owner: bool = True
 ) -> None:
@@ -4928,6 +4972,7 @@ def _record_operator_input(
     now = time.monotonic()
     session.input_revision += 1
     note_remote_shell_submission(session, data)
+    _note_composer_write(events, session, data, source)
     session.last_input_event_ts = now
     session.last_input_report_ts = now
     events.emit_background(
@@ -9297,6 +9342,7 @@ async def _handle_terminal_input(
         cancel_pending_approval(session, "terminal_input")
         session.input_revision += 1
         note_remote_shell_submission(session, data)
+        _note_composer_write(request.app["events"], session, data, "browser")
         session.last_input_event_ts = now
         # Typing is the strongest evidence of where the human is; it renews this
         # connection's protection from a background pane's passive re-claim.
@@ -9611,6 +9657,7 @@ async def _handle_pty_client_message(
         now = time.monotonic()
         session.input_revision += 1
         note_remote_shell_submission(session, message.data)
+        _note_composer_write(request.app["events"], session, message.data, "browser")
         session.last_input_event_ts = now
         session.note_owner_input(now)
         if now - session.last_input_report_ts >= 2:

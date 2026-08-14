@@ -252,6 +252,16 @@ CLI transcript discovery, schema coverage, root start/completion, and child acti
 checking model prose. They should run on CLI upgrades and periodically in a protected
 authenticated lane, not on every pull request.
 
+**The unsent-composer estimate is not evidence here.** `composer_input.py` keeps a
+finer-grained reading of the same PTY writes — it decrements on backspace, clears on `Esc`, and
+treats a bracketed paste as content — and publishes it as `unsent_input` for the session row
+(`features/terminal-input.md`). This tracker keeps its own coarse `input_revision` boundary and
+never consults it. The two disagree exactly where it matters: an estimate that concluded "the
+composer is empty again" would clear `terminal_input_after_completion` and authorize a send into
+a composer whose contents nothing here can see, which is the false-safe the whole contract
+exists to prevent. A gate may only be relaxed by evidence that cannot be wrong in that
+direction.
+
 ## Diagnostics
 
 `GET /api/automation/injection-safety` returns the v2 research contract, per-session checks,
@@ -264,6 +274,7 @@ actuation is unauthorized.
 
 - `src/swe_mux/observation.py`
 - `src/swe_mux/delivery_readiness.py`
+- `src/swe_mux/composer_input.py` (display-only sibling; deliberately not an input here)
 - `src/swe_mux/screen_mode.py`
 - `src/swe_mux/event_bus.py`
 - `tests/test_delivery_readiness_evidence.py`, `tests/test_screen_mode.py`

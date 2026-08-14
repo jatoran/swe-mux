@@ -252,6 +252,39 @@ work, while a claim that changes owners must use the freshly registered viewport
 - Pointer-generated mouse reports and caret-steering keys (Codex, OMP, pi) are unicast regardless of broadcast membership.
   A pointer target belongs only to the pane in which it was chosen.
 
+## Unsent composer text
+
+The daemon holds a write log, not a terminal cell grid, and no harness publishes what is in its
+input box.
+What it does hold is every byte an operator path writes, so the composer's *emptiness* is
+derivable from the input side alone: count what was typed, drop the count on the keys that
+submit or discard it (`src/swe_mux/composer_input.py`).
+The estimate is published as `unsent_input` and is what marks a sidebar row that has something
+half-typed in it, from any device (`features/ui.md`).
+
+- **Display evidence only.**
+  `delivery_readiness` keeps blocking on its own `input_revision` boundary and never reads this.
+  A flag that said "empty" while the composer held a line would turn a refused send into a
+  corrupted one, and a false *safe* is the dangerous direction.
+- **Every operator write is counted.**
+  Text inserted by a voice append, a send-to-agent, or a mobile draft is as unsent as text
+  someone typed, so `_note_composer_write` sits on both the WebSocket path and
+  `_record_operator_input`, exactly where `input_revision` is advanced.
+- **Only the crossing is announced.**
+  `composer_input_changed` fires when the composer goes empty ↔ non-empty, never per keystroke,
+  and the same two moments are the only `kind: "composer"` entries in the transition ledger.
+- **A turn opening empties it, whatever submitted it.**
+  A queue delivery, a voice send, and a keystroke are the same bytes to the PTY but only one of
+  them passes through the input handler, so the state funnel clears the estimate on any
+  transition into `working` (and on `exited`/`crashed`, which have no composer at all).
+- **Bracketed paste is content, not a submit**, and its open/closed state is carried between
+  writes: a paste large enough to matter is the one most likely to arrive split, and a
+  continuation frame carries no opening marker of its own.
+- **Known imprecision, in the safe direction.**
+  Keystrokes a slash menu consumed can leave the mark standing until the next submit or `Esc`;
+  history recall (`↑`) puts text in the composer that this cannot see and is deliberately not
+  counted, because inventing a count for bytes nobody sent is worse than missing one.
+
 ## API surface
 
 PTY WebSocket frames, typed in `design/interfaces.md`: `claim_input`, `input_owner`,
@@ -291,6 +324,7 @@ None user-facing.
 ## Key files
 
 - Rules (pure): `src/swe_mux/terminal_arbitration.py`
+- Unsent-composer estimate (pure): `src/swe_mux/composer_input.py`
 - Ownership/viewport state, geometry fanout: `src/swe_mux/session.py`
 - Frame handling, claim decisions, decision log: `src/swe_mux/server.py` (`pty_ws`,
   `_claim_terminal_input`, `_handle_terminal_input`, `_apply_client_viewport`)

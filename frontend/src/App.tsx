@@ -157,12 +157,15 @@ import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { activityBadges, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
-import type { DotShape } from './sessionRowConfig'
+import type { DotShape, StandingRender } from './sessionRowConfig'
 import {
   applySessionDotSize, useObservedWidth, useRowClock, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
 import { serverNow } from './serverClock.ts'
-import { buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc, shedForWidth } from './sessionRowFields'
+import {
+  buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc,
+  sessionStandingMark, shedForWidth,
+} from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
@@ -212,8 +215,13 @@ const sessionName=(session:Session):string=>agentTargetName(session)
 // strips): the dot's color never changes — green keeps meaning "ready" — so
 // an armed loop, cron schedule, background tasks, or live subagents render as
 // dimmed glyphs beside it, with the full text in the status line and tooltip.
-const activityGlyphs=(session:Session|undefined)=>{
-  if(!session||session.pending)return null
+//
+// `standing` is the row configuration's rendering choice, honoured on every
+// surface rather than in the sidebar alone: moving the fact onto the indicator
+// and leaving the tab strip printing glyphs would be the same fact twice, in the
+// two places most likely to be on screen together.
+const activityGlyphs=(session:Session|undefined,standing:StandingRender)=>{
+  if(!session||session.pending||standing!=='row')return null
   const badges=activityBadges(session)
   if(!badges.length)return null
   return <span class="activity-badges" role="img" aria-label={badges.map(badge=>badge.label).join(', ')}>
@@ -236,9 +244,14 @@ const sessionGlyph=(session:Session|undefined)=>{
 // The one state indicator every surface draws. Shape (and any gauge wrapped
 // around it) comes from the sidebar row configuration, so a hexagon in the
 // sidebar is a hexagon in the tab strip and the context menu too.
-const sessionStateDot=(session:Session|undefined,shape:DotShape,gauge?:{pct:number;peak:number}|null)=>{
+const sessionStateDot=(
+  session:Session|undefined,
+  shape:DotShape,
+  gauge?:{pct:number;peak:number}|null,
+  standing?:{label:string}|null,
+)=>{
   if(!session||(isAgent(session)&&!isObservedHarness(session.backend)))return null
-  return <StateIndicator session={session} shape={shape} gauge={gauge}/>
+  return <StateIndicator session={session} shape={shape} gauge={gauge} standing={standing}/>
 }
 
 function workingCwd(session:Session):string {
@@ -382,7 +395,7 @@ export function App() {
   // Per-target prompt-queue aggregates (pending counts for pane chips), keyed by
   // target session id and refreshed off `queue_updated` events.
   const [queueSummary,setQueueSummary]=useState<Record<string,QueueTargetSummary>>({})
-  const [,setMobileDraftRevision]=useState(0)
+  const [mobileDraftRevision,setMobileDraftRevision]=useState(0)
   useEffect(()=>{
     const changed=()=>setMobileDraftRevision(value=>value+1)
     window.addEventListener(MOBILE_TERMINAL_DRAFT_EVENT,changed)
@@ -421,9 +434,14 @@ export function App() {
   const sidebarRef=useRef<HTMLElement>(null)
   const rowWidth=useObservedWidth(sidebarRef)
   const rowShed=shedForWidth(rowWidth)
+  // Device-local drafts are unioned into the row context rather than read at the
+  // row: the daemon's ledger sees text typed from any client but not text staged
+  // in this browser's own draft composer, which never reaches the PTY. Neither
+  // source is a superset of the other.
+  const localDrafts=useMemo(()=>mobileTerminalDraftStore.stamps(),[mobileDraftRevision])
   const rowContext=useMemo(
-    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowShed),
-    [sessions,rowQueueDepth,rowNow,rowShed],
+    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowShed,localDrafts),
+    [sessions,rowQueueDepth,rowNow,rowShed,localDrafts],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -4503,7 +4521,7 @@ export function App() {
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
-          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape)}{sessionGlyph(session)}{activityGlyphs(session)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
         })}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
@@ -4608,7 +4626,7 @@ export function App() {
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape)}{sessionGlyph(session)}{activityGlyphs(session)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -4686,8 +4704,10 @@ export function App() {
     // The phone renders identity only unless parity is enabled: its rows are
     // narrower than any of these tokens are useful in, and a row that truncates
     // its own title to make room for a branch name has traded down.
+    // The flag strip survives the identity projection and is given the live row
+    // context, so a phone still marks the session it is holding a draft for.
     const rowTokens=(item:Session)=>mobileWorkspace&&!rowConfig.mobileFields
-      ? identityRowTokens(item,rowConfig)
+      ? identityRowTokens(item,rowConfig,rowContext)
       : buildSessionRowTokens(item,rowConfig,rowContext)
     // Sidebar attention tier for agent rows. The focused row keeps its own
     // `.active` treatment; a row visible in another split pane reads as
@@ -4698,7 +4718,7 @@ export function App() {
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,ackedTurns)?'unread':'read'
     return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});if(!mobileWorkspace)beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
-      {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig))}
+      {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
       <SessionRowBody session={session} tokens={rowTokens(session)} config={rowConfig}/>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
     </button>{spawnedPreviews.map(preview=>sidebarPreviewRow(preview,session))}</div>
@@ -4762,7 +4782,7 @@ export function App() {
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
     const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
-    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape)}{sessionGlyph(session)}{activityGlyphs(session)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
+    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
     // hazard next to tab activation. Closing/killing lives in the long-press
     // menu (session menu for terminals, tab menu for resources), which is also
@@ -5097,7 +5117,7 @@ export function App() {
     </div>}
 
     {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
-      <div class="context-title">{sessionStateDot(contextMenu.session,rowConfig.dotShape)}<strong>{sessionName(contextMenu.session)}</strong></div>
+      <div class="context-title">{sessionStateDot(contextMenu.session,rowConfig.dotShape,null,sessionStandingMark(contextMenu.session,rowConfig))}<strong>{sessionName(contextMenu.session)}</strong></div>
       <div class="context-session-info">
         <span title="Process ID of the session's root process">PID {contextMenu.session.pid}</span>
         {contextMenu.session.git.branch&&<span class="git-chip" title={`Git branch ${contextMenu.session.git.branch}${contextMenu.session.git.dirty?` · ${contextMenu.session.git.dirty} changed files`:' · clean'}`}>git:{contextMenu.session.git.branch}{contextMenu.session.git.dirty?` +${contextMenu.session.git.dirty}`:''}</span>}
@@ -5248,7 +5268,7 @@ export function App() {
       <button role="menuitem" onClick={() => { setEmptyMenu(null); void spawnTerminal() }}>New terminal</button>
       <button role="menuitem" onClick={() => { setEmptyMenu(null); openLauncher() }}>New terminal custom…</button>
       {unpanned.length > 0 && <div class="context-subtitle">ATTACH LIVE SESSION</div>}
-      {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}>{sessionStateDot(session,rowConfig.dotShape)}{sessionName(session)}</button>)}
+      {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionName(session)}</button>)}
     </div>}
 
     {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-140))}}>

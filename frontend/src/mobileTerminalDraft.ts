@@ -100,6 +100,22 @@ export class MobileTerminalDraftStore {
     return Boolean(this.get(sessionId))
   }
 
+  /**
+   * Epoch **seconds** per session currently holding a draft.
+   *
+   * Seconds rather than the milliseconds stored here, because every other
+   * timestamp a session row subtracts from was written by the daemon in
+   * seconds; one unit through the whole row engine is what keeps that
+   * arithmetic from needing a per-field conversion to be right.
+   */
+  stamps(): Record<string, number> {
+    return Object.fromEntries(
+      Object.entries(this.load())
+        .filter(([, entry]) => entry.text)
+        .map(([sessionId, entry]) => [sessionId, Math.floor(entry.updatedAt / 1000)]),
+    )
+  }
+
   set(sessionId: string, text: string): string {
     if (!sessionId) return ''
     const drafts = this.load()

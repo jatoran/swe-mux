@@ -3054,6 +3054,30 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* The top line's left section shrinks so a long title ellipsizes in place. */
 .row-line.top{overflow:hidden}
 .row-line.top .row-section.left{flex:1 1 auto;overflow:hidden}
+/* The flag strip: presence marks pinned to the row's right edge.
+   `flex:none` is the whole fix for the defect this replaced. Placed after the
+   title in the left section, the marks were inside the box that clips, so a
+   title long enough to fill the sidebar hid every one of them — and the rows
+   with the most to say about them are exactly the rows with the longest names.
+   Unshrinkable, they are laid out first and the title ellipsizes into whatever
+   is left, which is the correct priority: a name loses its tail and stays
+   recognisable, a flag loses everything. */
+.row-line.top .row-section.right{flex:none;gap:4px;align-items:center;padding-left:8px}
+/* Only the title yields on the top line. Flexbox shrinks every sibling in
+   proportion, so the provider mark's token was squeezed below the mark itself
+   and — not being the last child, which is the only one that clips — its glyph
+   spilled visibly *under* the first letter of a long name. */
+.row-line.top .row-section.left .row-token{flex:none}
+.row-line.top .row-section.left .row-token:last-child{flex:0 1 auto}
+/* The hover/focus lane for `.row-actions`, which is absolutely positioned over
+   the row's right edge. Reserved only while the control is actually shown, so
+   no row pays for it at rest: without it the kill button lands on top of the
+   flags (and, as it always has, on the bottom line's right-hand tokens) at the
+   moment the pointer arrives to read them. */
+.session-row:hover .session-copy,
+.session-row:focus-visible .session-copy,
+.session-row:has(.row-actions button:focus-visible) .session-copy{padding-right:26px}
+@media(hover:none){.session-row:focus-within .session-copy{padding-right:26px}}
 /* The bottom line does the opposite: neither section shrinks, the right one is
    pushed over by `margin-left:auto` only while there is room, and the line
    clips. So the two sections slide together as the sidebar narrows, meet at a
@@ -3093,6 +3117,27 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 }
 .session-row.active .row-title{color:var(--text)}
 .session-row .activity-badges{align-self:center}
+/* Marks in the strip carry no margins of their own — the strip's gap owns the
+   spacing, and the margins that separated them from the title doubled it. */
+.row-line.top .row-section.right .broadcast-flag,
+.row-line.top .row-section.right .activity-badges{margin-left:0}
+/* Unsent input: a caret bar, because the fact is that a cursor is sitting in
+   text you left behind. Teal rather than any state colour — green, blue, amber,
+   and red all already mean something about what the *agent* is doing, and this
+   is the one mark on the row that is about you. It is the same family as the
+   unread edge for the same reason: something here is waiting on you. */
+.row-draft{color:#5cb0b8;font-size:11px;line-height:1;flex:none;align-self:center}
+/* Standing activity collapsed onto the indicator (`standing: 'indicator'`).
+   Sized in pixels, not in the SVG's units, so it stays legible at a 10px
+   indicator; parked in the box's top-right corner, which every shape leaves
+   empty. The halo is what keeps it separate from the context arc when the two
+   are drawn together. */
+.state-dot.state-indicator{position:relative}
+.ind-standing{
+  position:absolute;top:0;right:0;width:5px;height:5px;border-radius:50%;
+  background:var(--blue);box-shadow:0 0 0 1.5px var(--panel);pointer-events:none
+}
+.session-row.active .ind-standing{box-shadow:0 0 0 1.5px #1a201a}
 /* Width shedding is NOT done here. Hiding a token with `display:none` removes
    the token but not the separator already emitted beside it, which rendered a
    narrowed row as `· apply_patch`. The token engine sheds instead, so the

@@ -1772,10 +1772,33 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The `state` field exists for anyone who wants it back but is defined as never notable, so it renders only in `always` mode.
 - **Placement and visibility are one decision.**
   A field placed in no section is off; there is no separate enable flag, and therefore no "enabled but nowhere" state.
+- **Presence-only marks live in a flag strip pinned to the top line's right edge.**
+  The strip is the top line's right section: the broadcast flag, standing activity, and unsent input, in that order, unshrinkable and never shed.
+  Placed after the title instead, the marks sat inside the section that clips, so a title long enough to fill the sidebar hid every one of them — and the rows with the most to report are the ones with the longest names.
+  A flag whose entire content is "this is true" has nothing to ellipsize, while a name that loses its tail stays recognisable, so the strip is laid out first and the title takes whatever is left.
+  Placement is still configurable: putting a flag ahead of the title in the left section keeps it fully visible too, at the cost of a ragged left edge down the list.
+- **Only the title yields on the top line.**
+  Flexbox shrinks siblings in proportion, so the provider mark's token was squeezed below the mark itself, and — not being the last child, which is the only one that clips — its glyph spilled visibly under the first letter of a long name.
+- **The hover-revealed row control gets a lane, and only while it is shown.**
+  It is absolutely positioned over the row's right edge, so it lands on the flag strip (and, as it always had, on the bottom line's right-hand tokens) exactly when the pointer arrives to read them.
+  Reserved on hover rather than always, because 26 px of every row is the width the strip exists to save.
+- **Standing activity renders in exactly one place**, chosen by a single setting like context pressure: glyphs with counts in the flag strip (default), or a pip on the state indicator, or off.
+  The pip costs no row width and cannot be clipped, and says only *that* something is standing — the kinds and counts move to the tooltip.
+  It is a CSS mark at the indicator box's empty top-right corner, not another SVG path: a 24-unit box with a 6.2 core and a 10.2 ring has no empty annulus left, a mark on the ring is indistinguishable from the context gauge's peak dash, and one inside it lands on the state colour.
+  Sized in pixels, it also stays legible at a 10 px indicator, where a shape-relative mark would be under two pixels across.
+  The choice applies to tab strips and menus too, so one session never reports it twice on one screen.
+- **Unsent input is marked with a caret bar (`▌`), in teal.**
+  It reports `unsent_input` from the daemon (`features/terminal-input.md`) unioned with this device's own mobile draft registry, which never reaches the PTY and so is invisible to every other client.
+  Where the two disagree the mark reports the **oldest**: the question is how long something has been sitting there, and a phone draft from an hour ago is not made recent by a keystroke on the desktop a minute ago.
+  Teal because green, blue, amber, and red already say something about what the *agent* is doing, and this is the one mark on the row that is about the operator; the same family as the unread edge, for the same reason.
+  An ended session has no composer and is never marked.
 - **Every placed field is `when notable` or `always`.**
   Notability is per field: a branch that differs from the project's most common branch, a diff with changed lines, a queue with items, a model that differs from the project default, an account when more than one is live, a duration past its per-state threshold.
   The default configuration is almost entirely `when notable`, so a quiet fleet shows a title and a duration and anything visible has earned its place.
-- Read-only model labels use the shared compact presentation mapping, while tooltips, accessibility labels, configuration controls, session comparisons, and API values retain the exact provider identifier.
+- Read-only model labels use the shared compact presentation rule, while tooltips, accessibility labels, configuration controls, session comparisons, and API values retain the exact provider identifier.
+  The rule removes the provider path and a leading vendor-brand token (`claude-`, `gpt-`) and touches nothing else, because every surface that prints a model draws the session's provider mark beside it.
+  A token that names a model *family* — `codex`, `kimi`, `o3`, `sonnet` — is not branding and stays.
+  It replaced a hand-maintained per-family table, which printed the raw id for every model nobody had added yet: the sidebar showed `opus-5` beside `claude-fable-5`, and `sonnet-4-6` beside `gpt-5.6-sol`, in the same list.
 - **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
 - **Sections meet but never overlap.**
   Neither bottom-line section shrinks; the right one is pushed over only while there is room, and the line clips.
@@ -1822,8 +1845,13 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The arc is a measurement that only moves when the conversation grows, so blinking it alongside the core made a static reading look like live activity.
 
 Mobile shares the one layout rather than keeping a second one.
-`mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title.
+`mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title, and the flag strip.
+The strip survives the identity projection because a phone is where an unsent draft is most likely to have been left behind, and a projection that dropped the marks would be silent on exactly the device that stages text and walks away.
 Both screens want the same information in the same order; only how much of it fits differs.
+
+The stored layout is versioned, and version 2 introduced the flag strip.
+Changing the shipped default reaches nobody who has ever opened the settings — a stored blob is authoritative and an unplaced field is off — so the migration moves already-placed flags into the strip and places `draft`, which nobody could have declined because it did not exist.
+A flag the user had removed stays removed: the migration relocates a choice, it does not re-impose one.
 
 The state indicator is SVG rather than a styled element.
 A hexagon is expressible as `clip-path`, a *hollow* hexagon is not, and a gauge that follows a hexagon's outline is not expressible in CSS at all.

@@ -555,6 +555,16 @@ the returned reference as unicast draft input without submitting it.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
+Rows carry `unsent_input` — `{since}` in epoch seconds, or absent — the daemon's estimate that
+text is sitting unsent in that session's composer, derived from the bytes every operator path
+writes to the PTY (`features/terminal-input.md`).
+It is present only while something is there, so presence is the whole signal, and the character
+count behind it is deliberately not published: it is inferred from keystrokes and a number on
+screen would be read as a measurement.
+It is process-scoped — a daemon restart forgets it, because the byte history it comes from does
+not survive one — and cross-device, because it describes the PTY rather than a client.
+`composer_input_changed` (`session_id`, `source`, `pending`) announces the empty/non-empty
+crossing and nothing between.
 Every `GET /sessions` row and every PTY `state`/`update`/`exit` snapshot carries
 `_snapshot_generation`, `_snapshot_revision`, and `_snapshot_enriched`.
 The generation identifies one daemon process, the revision orders one session inside that generation, and the enriched flag identifies REST rows that authoritatively carry generated-title and delivery-readiness presentation fields.

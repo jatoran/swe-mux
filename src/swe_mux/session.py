@@ -26,6 +26,7 @@ from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ParkedMove
+from .composer_input import ComposerState, clear_composer
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
@@ -682,6 +683,19 @@ def apply_state_transition(
             latencies = getattr(session, "terminal_latencies", None)
             if latencies is not None and seconds_in_previous is not None:
                 latencies.append({"proof": proof, "seconds": round(seconds_in_previous, 3)})
+    # A turn *opening* proves the composer was submitted, whichever path wrote
+    # the carriage return — a queue delivery, a voice send, and a keystroke are
+    # the same byte to the PTY but only one of them passes through the input
+    # handler that tracks them. An ended session has no composer at all.
+    #
+    # Gated on an actual state change, not on reaching this line: a same-state
+    # detail update is a tool call inside a turn already running, and a CLI that
+    # accepts typing mid-turn (Claude queues it) would otherwise have the
+    # operator's half-written follow-up erased by the next tool the agent ran.
+    composer = getattr(session, "composer", None)
+    if composer is not None and previous != state and state in {"working", "exited", "crashed"}:
+        if clear_composer(composer) and ledger is not None:
+            ledger.append({"ts": now, "kind": "composer", "action": "cleared", "reason": state})
     record.state = state
     record.state_detail = detail
     if hasattr(record, "awaiting_reason"):
@@ -1928,6 +1942,10 @@ class Session:
         self.last_input_event_ts = 0.0
         self.last_input_report_ts = 0.0
         self.input_revision = 0
+        # Estimated unsent composer contents, kept from the bytes written to this
+        # PTY (`composer_input.py`). Display evidence only: the delivery gate has
+        # its own `input_revision` boundary and never reads this.
+        self.composer = ComposerState()
         # Two sources for the same fact, deliberately kept apart. The daemon reads
         # the child's own screen switch off the PTY and so has it for every
         # session; the browser reports xterm's active buffer only while a pane is
