@@ -1933,9 +1933,10 @@ body {
 .voice-command-dialog>header button:hover{background:var(--panel2);color:var(--text)}
 .voice-command-dialog-groups{overflow:auto;padding:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .voice-command-dialog-groups section{min-width:0}
-.voice-command-dialog-groups h3{margin:0 0 6px;color:var(--green,#8bd450);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.voice-command-dialog-groups h3{display:flex;justify-content:space-between;gap:8px;margin:0 0 6px;color:var(--green,#8bd450);font-size:10px;text-transform:uppercase;letter-spacing:.06em}.voice-command-dialog-groups h3 span{color:var(--muted);font-weight:400}
 .voice-command-dialog-groups section>div{display:grid;gap:3px}
 .voice-command-dialog-groups code{display:block;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:normal}
+.voice-dialog-commands article{display:grid;gap:4px;padding:7px 0;border-top:1px solid var(--line)}.voice-dialog-commands article:first-child{border-top:0}.voice-dialog-commands article>small{color:var(--muted)}.voice-dialog-commands article>div{display:grid;gap:3px}
 @media(max-width:760px){
   .mobile-toolbar>.conversation-talk-toggle{min-width:52px;height:calc(36px*var(--ui-scale));padding:0 6px;font-size:9px}
   .conversation-layer{left:0;right:0;top:calc(46px*var(--ui-scale));width:auto;padding:0 max(5px,env(safe-area-inset-right)) 0 max(5px,env(safe-area-inset-left))}

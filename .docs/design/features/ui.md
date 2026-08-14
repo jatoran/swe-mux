@@ -1428,6 +1428,9 @@ responsive controls.
   Its launcher rail takes a second tonal step, while internal drawer panes reuse the workspace's neutral gutter and focus-frame language.
   It has no fixed maximum; its live maximum is the available viewport width after reserving the navigation chrome, utility rail, and a 150 px main workspace.
   Dragging its divider below 260 px previews collapse, and reversing the same drag past 280 px reopens it before release.
+- `sidebar.open` and `sidebar.close` are semantic navigation commands across both renderings.
+  They open or close the mobile overlay and expand or collapse the desktop navigation column.
+  Their voice aliases include navigation-sidebar and left-sidebar forms.
 - **The launcher rail is what the closed drawer looks like**, exactly as the collapsed sidebar rail
   is what the closed sidebar looks like. It is desktop-only, holds the workspace's last column while
   the drawer is closed, and is replaced by the drawer itself on open.
@@ -1503,6 +1506,8 @@ responsive controls.
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
   commands open one tab directly and close it if it is already showing.
+- `drawer.open` and `drawer.close` are idempotent command-registry entries with side-panel, right-sidebar, and utility-sidebar voice aliases.
+  They coexist with the pointer/gesture-oriented `drawer.toggle` and the per-tab `drawer.show:<tab>` voice commands.
 - On mobile the toolbar's right-corner toggle is the drawer's only *visible* entry point because the desktop launcher is hidden there.
   Without it, the panel would be reachable only by gesture or command palette, neither of which announces itself.
   It mirrors the nav toggle at the opposite
