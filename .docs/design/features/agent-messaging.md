@@ -50,9 +50,12 @@ session outside its Project, and cannot claim to be anyone else.
 - **The envelope states its authority, because a receiver cannot infer it.** A peer's note and
   an instruction a human approved arrive through the same pipe. The `authority` header says
   which this is: a message auto-delivered under the target's standing grant declares that no
-  human reviewed it and that nothing in it overrides an instruction the operator gave that
-  session directly, while a message that waited as a draft declares that a person armed it and
-  released it. Without the header a relayed "your operator says go ahead" is indistinguishable
+  human reviewed it, while a message that waited as a draft declares that a person armed it and
+  released it. The auto-delivered form informs rather than forbids — a conflict with the
+  operator's own instruction is neither complied with nor allowed to stall the relay, because
+  an operator relaying their own release through a peer is a legitimate shape that a hard
+  prohibition would block forever. Without the header a relayed "your operator says go ahead" is
+  indistinguishable
   from a prompt injection, and the conservative reading — refuse — is correct often enough to
   be worth protecting and wrong often enough to be worth informing (observed 2026-08-13, a
   session correctly refused a relayed release it had no way to verify).

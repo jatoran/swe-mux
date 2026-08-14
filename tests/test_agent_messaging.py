@@ -335,7 +335,11 @@ async def test_the_envelope_states_whether_a_human_released_the_message(
         stored = await harness.store.message(auto_delivered["message_id"])
         assert stored is not None
         assert "no human reviewed it" in str(stored["body"])
-        assert "overrides an instruction your operator gave you" in str(stored["body"])
+        # Informs rather than forbids: a conflicting relay is neither obeyed nor
+        # allowed to stall the sender, because an operator relaying their own
+        # release through a peer is a legitimate shape a hard prohibition would
+        # block forever.
+        assert "do not comply and do not stall" in str(stored["body"])
     finally:
         harness.close()
 
