@@ -92,6 +92,12 @@ FAILED_DELIVERY_REASON = (
 # only that time passed. It is therefore the one reason the conversation default
 # may restore on its own when the session is in use again.
 LAPSED_REASON = "auto-delivery grant lapsed while the conversation was idle"
+# The reason written by builds before the window was measured against idleness.
+# Rows carrying it are lapses under the old rule and must be restorable too,
+# otherwise every conversation the previous build disabled stays disabled
+# forever and the fix appears to do nothing on the machine that needed it.
+LEGACY_EXPIRED_REASON = "auto-delivery grant expired"
+LAPSE_REASONS = frozenset({LAPSED_REASON, LEGACY_EXPIRED_REASON})
 
 
 def _minutes(value: str) -> int | None:
@@ -466,7 +472,7 @@ class AutoDeliveryController:
         """True for a lapsed grant on a conversation that is being used again."""
         if row.get("enabled"):
             return False
-        if row.get("disabled_reason") != LAPSED_REASON:
+        if str(row.get("disabled_reason") or "") not in LAPSE_REASONS:
             return False
         return now < self._idle_deadline(record, {"enabled_at": 0.0})
 

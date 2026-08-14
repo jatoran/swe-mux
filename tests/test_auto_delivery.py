@@ -366,6 +366,25 @@ async def test_a_lapsed_grant_returns_when_the_conversation_is_used_again(
 
 
 @pytest.mark.asyncio
+async def test_a_grant_the_previous_build_disabled_is_restored_too(
+    harness: Harness,
+) -> None:
+    """The upgrade has to reach rows the old rule already wrote.
+
+    Every conversation on the machine that needed this fix was already sitting
+    at the previous build's `grant expired`, so recognising only the new reason
+    would have left them disabled forever and made the fix look inert.
+    """
+    from swe_mux.auto_delivery import LEGACY_EXPIRED_REASON
+
+    await harness.auto.enable_session("s1")
+    await harness.auto.disable_session("s1", reason=LEGACY_EXPIRED_REASON, by="controller")
+    await harness.auto.status()
+    restored = await harness.store.auto_policy("s1")
+    assert restored is not None and restored["enabled"]
+
+
+@pytest.mark.asyncio
 async def test_an_explicit_opt_out_is_never_restored_by_the_conversation_default(
     harness: Harness,
 ) -> None:
