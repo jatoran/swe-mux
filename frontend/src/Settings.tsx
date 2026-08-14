@@ -19,8 +19,9 @@ import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
-import { registeredVoiceReference } from './voiceCommandReference'
-import { VOICE_HELP_COMMANDS, type VoiceHelpCategory } from './voiceQueries'
+import {
+  completeVoiceReference, VOICE_ACTION_META, VOICE_ACTION_ORDER,
+} from './voiceCommandReference'
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { RailEditor } from './RailEditor'
@@ -202,28 +203,6 @@ type NoteChordState = 'default'|'bind'|'release'
 const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordState =>
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
-// Canonical order + labels for the configurable conversation commands. The action
-// set is fixed (each is wired to code in ConversationControl); only the wake words
-// and phrases are editable. Mirrors VOICE_COMMAND_ACTIONS in config.py.
-const VOICE_ACTION_ORDER=['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','comms_on','comms_off','stop'] as const
-const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
-  send:{label:'Send / submit',hint:'submit the buffered message'},
-  append:{label:'Append',hint:'append the buffer without submitting'},
-  cancel:{label:'Cancel / clear',hint:'clear the whole draft'},
-  undo:{label:'Undo',hint:'remove the last transcribed phrase'},
-  mute:{label:'Mute',hint:'stop playback, keep listening'},
-  read:{label:'Read reply',hint:'speak the latest reply'},
-  summary:{label:'Summary mode',hint:'switch spoken replies to summaries'},
-  verbatim:{label:'Verbatim mode',hint:'switch spoken replies to verbatim'},
-  interrupt:{label:'Interrupt',hint:'stop playback and send Ctrl-C to the agent'},
-  help:{label:'Help',hint:'list the commands'},
-  standby:{label:'Standby',hint:'keep listening but ignore speech until resumed'},
-  resume:{label:'Resume',hint:'leave standby and act on speech again'},
-  comms_on:{label:'Voice Comms on',hint:'request short spoken replies from the focused agent'},
-  comms_off:{label:'Voice Comms off',hint:'restore normal replies and prior read-aloud settings'},
-  stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
-}
-
 export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
@@ -243,7 +222,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
-  const liveVoiceReference=useMemo(()=>registeredVoiceReference(voiceCommands),[voiceCommands])
+  const completeVoiceCatalog=useMemo(()=>completeVoiceReference(voiceCommands,draft?.voice_commands||[]),[voiceCommands,draft?.voice_commands])
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
@@ -912,20 +891,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <h3>Complete voice command reference</h3>
           <p>Say a configured wake word before every command. <code>Project N</code> uses the visible sidebar order. <code>Session N</code> uses the selected Project. Braced values such as <code>{'{text}'}</code> are spoken content, not literal words.</p>
           <div class="voice-command-reference">
-            {(Object.keys(VOICE_HELP_COMMANDS) as VoiceHelpCategory[]).map((category,index)=>{
-              const title=category[0].toUpperCase()+category.slice(1)
-              return <details open={index===0} key={category}>
-                <summary>{title} grammar <span>{VOICE_HELP_COMMANDS[category].length}</span></summary>
-                <div class="voice-reference-phrases">{VOICE_HELP_COMMANDS[category].map(command=><code key={command}>{command}</code>)}</div>
-              </details>
-            })}
-            {liveVoiceReference.map(group=><details key={group.id}>
-              <summary>{group.title} <span>{group.commands.length}</span></summary>
-              <div class="voice-reference-commands">{group.commands.map(command=><article key={command.id}>
+            {completeVoiceCatalog.map((section,index)=><details open={index===0} key={section.id}>
+              <summary>{section.title} <span>{section.phrases.length+section.commands.length}</span></summary>
+              {!!section.phrases.length&&<div class="voice-reference-phrases">{section.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>}
+              {!!section.commands.length&&<div class="voice-reference-commands">{section.commands.map(command=><article key={command.id}>
                 <strong>{command.label}</strong>
                 {!command.available&&<small>{command.disabledReason||'Unavailable in the current workspace state'}</small>}
                 <div class="voice-reference-phrases">{command.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>
-              </article>)}</div>
+              </article>)}</div>}
             </details>)}
           </div>
           <h4>Test what the recognizer actually hears</h4>

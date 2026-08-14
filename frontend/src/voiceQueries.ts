@@ -2,6 +2,14 @@ import type { FleetSession } from './fleetStatus.ts'
 import { fleetPredicateMatches } from './fleetStatus.ts'
 import { normalizeSpokenText } from './voiceIntents.ts'
 import type { VoiceSessionAddress } from './voiceNavigation.ts'
+import type { Command } from './commands.ts'
+import {
+  completeVoiceReference, VOICE_HELP_COMMANDS,
+  type ConfiguredVoiceCommand, type VoiceHelpCategory,
+} from './voiceCommandReference.ts'
+
+export { VOICE_HELP_COMMANDS }
+export type { VoiceHelpCategory }
 
 export type VoiceSessionFilter =
   | 'live'
@@ -21,8 +29,6 @@ export type VoiceScope =
   | { kind: 'project'; reference: string }
 
 export type VoiceReplyMode = 'current' | 'summary' | 'verbatim'
-export type VoiceHelpCategory = 'reading' | 'sessions' | 'projects' | 'navigation' | 'dictation' | 'approvals'
-
 export type VoiceQuery =
   | { kind: 'help'; category: VoiceHelpCategory | null }
   | { kind: 'list_projects' }
@@ -251,15 +257,6 @@ export function projectListPage(
   return { speech, detail, shownFrom: start, shownThrough: start + page.length, hasMore: remaining > 0 }
 }
 
-export const VOICE_HELP_COMMANDS:Record<VoiceHelpCategory,string[]>={
-  reading:['read the last reply','read the last reply verbatim','summarize the last reply','read Session 2 reply','read a session reply by name'],
-  sessions:['list sessions','list active sessions','list working sessions','list ready sessions','list pending sessions','list approvals','list questions','list rate limited sessions','list stuck sessions','list failed sessions','status of Session 2','list sessions in the current Project','list sessions in Project 2'],
-  projects:['list Projects','open Project 2','open a Project by name','open Project 2 Session 1','status of Project 2','status of the current Project','list sessions in Project 2'],
-  navigation:['go to next session','go to previous session','open Session 2 in the current Project','open Project 2','open Project 2 Session 1','open Session 1 in Project 2','open a session or Project by its visible name','next page','repeat','more detail'],
-  dictation:['send','append without sending','voice comms on','voice comms off','undo last phrase','cancel','mute','summary mode','verbatim mode','interrupt agent','standby','resume','stop listening','pin the current voice target from the Talk panel'],
-  approvals:['open a session awaiting approval','approve','review approval','confirm tool use','confirm approval','cancel approval'],
-}
-
 const helpGroup=(category:VoiceHelpCategory):VoiceHelpPage=>{
   const title=category[0].toUpperCase()+category.slice(1)
   const commands=VOICE_HELP_COMMANDS[category]
@@ -268,14 +265,38 @@ const helpGroup=(category:VoiceHelpCategory):VoiceHelpPage=>{
   return{speech,detail}
 }
 
-export function voiceHelpPage(category:VoiceHelpCategory|null):VoiceHelpPage{
-  if(category)return helpGroup(category)
-  const categories=Object.keys(VOICE_HELP_COMMANDS) as VoiceHelpCategory[]
-  const pages=categories.map(helpGroup)
-  return{
-    speech:`Complete voice command list. ${pages.map((page,index)=>`${index?'Next group. ':''}${page.speech}`).join(' ')} End of voice command list.`,
-    detail:pages.map(page=>page.detail).join('\n\n'),
+export function voiceHelpPage(
+  category:VoiceHelpCategory|null,
+  commands:Command[]=[],
+  configuredCommands:ConfiguredVoiceCommand[]=[],
+):VoiceHelpPage{
+  const sections=completeVoiceReference(commands,configuredCommands,category)
+  const detail=sections.map(section=>{
+    const phrases=section.phrases.map((phrase,index)=>`${index+1}. ${phrase}`)
+    const dynamic=section.commands.map(command=>{
+      const availability=command.available?'':` [unavailable: ${command.disabledReason||'current workspace state'}]`
+      return [`- ${command.label}${availability}`,...command.phrases.map(phrase=>`  - ${phrase}`)].join('\n')
+    })
+    return[section.title,...phrases,...dynamic].join('\n')
+  }).join('\n\n')
+  if(!category){
+    const summary=sections.map(section=>`${section.title}, ${section.phrases.length+section.commands.length}`).join('. ')
+    return{
+      speech:`Complete voice command catalog is in Talk history. Groups and command counts: ${summary}. Ask for voice commands for a group to hear its entries.`,
+      detail,
+    }
   }
+  if(!commands.length&&!configuredCommands.length)return helpGroup(category)
+  let number=0
+  const spoken=sections.flatMap(section=>[
+    `${section.title}.`,
+    ...section.phrases.map(phrase=>`Command ${++number}. ${phrase}.`),
+    ...section.commands.map(command=>{
+      const aliases=command.phrases.map(phrase=>`Say ${phrase}.`).join(' ')
+      return`Command ${++number}. ${command.label}. ${aliases}`
+    }),
+  ]).join(' ')
+  return{speech:`${spoken} End of ${category} commands.`,detail}
 }
 
 export function voiceHelpText(category:VoiceHelpCategory|null):string{return voiceHelpPage(category).speech}

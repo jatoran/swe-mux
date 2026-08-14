@@ -22,7 +22,15 @@ import {
   SIDEBAR_REOPEN_WIDTH,
   clampSidebarWidth,
   dragCollapsedAtWidth,
+  navigationSidebarCommandState,
 } from '../src/sidebarResize.ts'
+
+test('navigation sidebar commands target the active responsive presentation',()=>{
+  assert.deepEqual(navigationSidebarCommandState(true,true),{mobileOpen:true,desktopCollapsed:null})
+  assert.deepEqual(navigationSidebarCommandState(true,false),{mobileOpen:false,desktopCollapsed:null})
+  assert.deepEqual(navigationSidebarCommandState(false,true),{mobileOpen:null,desktopCollapsed:false})
+  assert.deepEqual(navigationSidebarCommandState(false,false),{mobileOpen:null,desktopCollapsed:true})
+})
 
 test('session surfaces lead, then Project surfaces, then application surfaces', () => {
   // Order is the argument for the drawer existing: clipboard, session commands, prompts

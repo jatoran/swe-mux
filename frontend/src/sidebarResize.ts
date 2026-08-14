@@ -27,3 +27,13 @@ export function dragCollapsedAtWidth(
   if (!Number.isFinite(rawWidth)) return currentlyCollapsed
   return currentlyCollapsed ? rawWidth < reopenWidth : rawWidth <= collapseWidth
 }
+
+/** Translate one semantic open/close command to the active responsive presentation. */
+export function navigationSidebarCommandState(mobile: boolean, open: boolean): {
+  mobileOpen: boolean | null
+  desktopCollapsed: boolean | null
+} {
+  return mobile
+    ? { mobileOpen: open, desktopCollapsed: null }
+    : { mobileOpen: null, desktopCollapsed: !open }
+}

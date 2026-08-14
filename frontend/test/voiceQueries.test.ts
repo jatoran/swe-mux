@@ -122,4 +122,22 @@ assert.match(helpPage.speech,/Command 1\. list sessions\. Next command\. Command
 assert.match(helpPage.speech,/End of sessions commands\./)
 assert.match(helpPage.detail,/1\. list sessions\n2\. list active sessions/)
 
+const dynamicHelp=voiceHelpPage('sessions',[{
+  id:'session.spawn:p1:codex',label:'New Codex in Alpha',category:'session',available:true,run:()=>{},
+  voice:{phrases:['new Codex','new Codex in Alpha']},
+}])
+assert.match(dynamicHelp.detail,/Start sessions in Projects/)
+assert.match(dynamicHelp.detail,/new Codex in Alpha/)
+assert.match(dynamicHelp.speech,/New Codex in Alpha/)
+
+const completeHelp=voiceHelpPage(null,[{
+  id:'drawer.close',label:'Close side panel',category:'view',available:true,run:()=>{},
+  voice:{phrases:['close side panel','close right sidebar']},
+}],[{action:'send',phrases:['send it']}])
+assert.match(completeHelp.detail,/Configured conversation controls/)
+assert.match(completeHelp.detail,/send it/)
+assert.match(completeHelp.detail,/Workspace and side panels/)
+assert.match(completeHelp.detail,/close right sidebar/)
+assert.match(completeHelp.speech,/complete voice command catalog is in Talk history/i)
+
 console.log('voice query tests passed')

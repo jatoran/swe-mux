@@ -16,7 +16,7 @@ import { reportPromptSubmitted } from './projectRecency'
 import { conversationTargetAvailable, effectiveConversationTarget, toggleConversationTargetPin } from './conversationTarget'
 import type { ConversationTarget } from './conversationTarget'
 import { extractWakeIntent } from './voiceIntents'
-import type { VoiceCommandResult } from './commands'
+import type { Command, VoiceCommandResult } from './commands'
 import { safeDuringSystemPlayback } from './voiceQueries'
 import {
   appendVoiceConversationEntry, loadVoiceConversationHistory, loadVoiceConversationHistoryOpen,
@@ -638,15 +638,19 @@ export function ConversationToggle({
 /** The global draft card exists only while workspace-level capture is running. */
 export function ConversationSurface({
   conversation,
+  commands,
+  configuredCommands,
   onOpenSettings,
   placement='fallback',
 }:{
   conversation:Conversation
+  commands:Command[]
+  configuredCommands?:{action:string;phrases:string[]}[]
   onOpenSettings:()=>void
   placement?:'pane'|'fallback'
 }){
   if(conversation.phase==='off')return null
-  const panel=<DictationPanel conversation={conversation} onOpenSettings={onOpenSettings}/>
+  const panel=<DictationPanel conversation={conversation} commands={commands} configuredCommands={configuredCommands} onOpenSettings={onOpenSettings}/>
   return placement==='pane'?panel:<div class="conversation-layer active">{panel}</div>
 }
 
@@ -654,7 +658,7 @@ export function ConversationSurface({
  * The app-level dictation state can render in a pane overlay without belonging to that pane.
  * Moving the view follows focus; capture, history, target pinning, and the draft stay alive.
  */
-export function DictationPanel({conversation,onOpenSettings}:{conversation:Conversation;onOpenSettings:()=>void}){
+export function DictationPanel({conversation,commands,configuredCommands,onOpenSettings}:{conversation:Conversation;commands:Command[];configuredCommands?:{action:string;phrases:string[]}[];onOpenSettings:()=>void}){
   const draftRef=useRef<HTMLTextAreaElement|null>(null)
   const historyRef=useRef<HTMLDivElement|null>(null)
   const [landed,setLanded]=useState(false)
@@ -724,7 +728,7 @@ export function DictationPanel({conversation,onOpenSettings}:{conversation:Conve
         <button class={conversation.standby?'active':''} title={conversation.standby?'Resume listening':'Keep the mic open but ignore speech until resumed'} onClick={()=>conversation.toggleStandby()}>{conversation.standby?'resume':'standby'}</button>
         <button class={conversation.comms?'active':''} aria-pressed={conversation.comms} title={conversation.comms?'Exit short spoken agent replies and restore prior read-aloud settings':'Pin this agent and request short spoken replies'} onClick={()=>conversation.toggleComms()}>comms:{conversation.comms?'on':'off'}</button>
         <button class="dictation-stop" title="Stop dictating and release the microphone" onClick={()=>conversation.stop()}>stop</button>
-        <VoiceCommandsButton/>
+        <VoiceCommandsButton commands={commands} configuredCommands={configuredCommands}/>
         <button class="dictation-settings" aria-label="Open Voice settings" title="Open Voice settings (engine, wake words, commands)" onClick={onOpenSettings}>⚙</button>
       </div>
     </header>

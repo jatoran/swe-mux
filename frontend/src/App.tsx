@@ -60,7 +60,7 @@ import {
 import {
   SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_COLLAPSE_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH, SIDEBAR_REOPEN_WIDTH, SIDEBAR_RESIZER_WIDTH, clampSidebarWidth,
-  dragCollapsedAtWidth,
+  dragCollapsedAtWidth, navigationSidebarCommandState,
 } from './sidebarResize'
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
@@ -1101,11 +1101,20 @@ export function App() {
     window.addEventListener('pointercancel',release)
   }
 
+  const setDesktopSidebarCollapsed=(next:boolean)=>{
+    localStorage.setItem('mux.sidebar.collapsed.v1',String(next))
+    setSidebarCollapsed(next)
+  }
   const toggleSidebar=()=>setSidebarCollapsed(value=>{
     const next=!value
     localStorage.setItem('mux.sidebar.collapsed.v1',String(next))
     return next
   })
+  const setNavigationSidebarOpen=(open:boolean)=>{
+    const state=navigationSidebarCommandState(mobileWorkspace,open)
+    if(state.mobileOpen!==null)setSidebarOpen(state.mobileOpen)
+    if(state.desktopCollapsed!==null)setDesktopSidebarCollapsed(state.desktopCollapsed)
+  }
   const persistSidebarWidth=(value:number)=>{
     const next=clampSidebarWidth(value)
     setSidebarWidth(next);localStorage.setItem('mux.sidebar.width.v1',String(Math.round(next)))
@@ -3559,7 +3568,7 @@ export function App() {
   }
   voiceQueryHandler.current=async(query:VoiceQuery):Promise<VoiceCommandResult>=>{
     if(query.kind==='help'){
-      const page=voiceHelpPage(query.category)
+      const page=voiceHelpPage(query.category,commandRegistryRef.current,voiceStatus?.commands||[])
       return{detail:page.detail,speech:page.speech,transcript:page.detail}
     }
     if(query.kind==='list_projects'){
@@ -3720,7 +3729,9 @@ export function App() {
     { id: 'tab.previous', label: 'Focus previous workspace tab', category: 'pane', available: mobileWorkspace ? leaves(activeLayout).length > 1 : !!activeStack && activeStack.children.length > 1, disabledReason: mobileWorkspace ? 'Only one tab is open in this project' : 'Only one tab is open in the focused pane', run: () => navigateWorkspaceTab(-1) },
     { id: 'mobileTab.next', label: 'Focus next tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(1) },
     { id: 'mobileTab.previous', label: 'Focus previous tab (mobile)', category: 'pane', available: mobileWorkspace, disabledReason: 'Available on the mobile workspace', run: () => navigateMobileTab(-1) },
-    { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(true) },
+    { id: 'sidebar.open', label: 'Open navigation sidebar', category: 'view', available: true, run: () => setNavigationSidebarOpen(true), voice:{
+      phrases:['open navigation','show navigation','open navigation sidebar','show navigation sidebar','open left sidebar','show left sidebar'],
+    } },
     // Unconditionally available, and deliberately not gated on `dismissStack.depth()`:
     // `available` is a render-time snapshot, but a drill-down level (History's transcript)
     // lives in its own component's state and opens without re-rendering App. A stale
@@ -3729,7 +3740,9 @@ export function App() {
     // outcome without the lie. Subscribing App to the stack instead would re-render the
     // whole shell on every overlay open for a greyed-out palette row.
     { id: 'nav.back', label: 'Back (close one overlay level)', category: 'view', available: true, run: () => { dismissStack.pop() } },
-    { id: 'sidebar.close', label: 'Close navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(false) },
+    { id: 'sidebar.close', label: 'Close navigation sidebar', category: 'view', available: true, run: () => setNavigationSidebarOpen(false), voice:{
+      phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
+    } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
@@ -3799,6 +3812,12 @@ export function App() {
     // the gesture that pulls it in pushes it back out, and a tab command run while
     // that tab is showing closes it.
     { id: 'drawer.toggle', label: clipboardOpen ? 'Close side panel' : `Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`, category: 'view', available: true, run: () => { setClipboardOpen(value => !value); setMainMenuOpen(false); setContextMenu(null) } },
+    { id:'drawer.open',label:'Open side panel',category:'view',available:true,run:()=>{setClipboardOpen(true);setMainMenuOpen(false);setContextMenu(null)},voice:{
+      phrases:['open side panel','show side panel','open right sidebar','show right sidebar','open utility sidebar','show utility sidebar'],
+    }},
+    { id:'drawer.close',label:'Close side panel',category:'view',available:true,run:()=>{setClipboardOpen(false);setMainMenuOpen(false);setContextMenu(null)},voice:{
+      phrases:['close side panel','hide side panel','close right sidebar','hide right sidebar','close utility sidebar','hide utility sidebar'],
+    }},
     ...DRAWER_TABS.map((tab): Command => ({
       id: `drawer.${tab.id}`, label: `Side panel: ${tab.label}`, category: tab.id === 'notifications' ? 'view' : 'clipboard',
       available: true, run: () => showDrawerTab(tab.id),
@@ -4577,11 +4596,11 @@ export function App() {
           three routes to one Settings section is two too many. */}
     </>:null
     const openVoiceSettings=()=>openSettings('Voice')
-    const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
+    const voiceStripNode=voiceStripVisible&&voiceStatus?<VoicePlayer session={session} status={voiceStatus} mode={voiceMode as 'on_demand'|'auto'} commands={commands} onSession={updateSession} onOpenSettings={openVoiceSettings} />:null
     // The read-aloud strip hangs off a zero-height pane anchor. Dictation no longer
     // participates in pane layout at all.
     const conversationSurface=id===conversationPaneId
-      ?<ConversationSurface conversation={conversation} onOpenSettings={openVoiceSettings} placement="pane"/>
+      ?<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus?.commands} onOpenSettings={openVoiceSettings} placement="pane"/>
       :null
     const voiceOverlayNode=voiceStripNode||conversationSurface
       ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
@@ -4853,7 +4872,7 @@ export function App() {
       <button class="mobile-drawer-toggle" aria-label={clipboardOpen?'Close side panel':`Open side panel (${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'})`} aria-expanded={clipboardOpen} title={clipboardOpen?'Close side panel':`Side panel — ${DRAWER_TABS.find(tab=>tab.id===drawerTabId)?.label||'clipboard'}`} onClick={()=>setClipboardOpen(value=>!value)}><SidePanelIcon/></button>
     </div>
     <InteractionHud />
-    {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} onOpenSettings={()=>openSettings('Voice')}/>}
+    {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus.commands} onOpenSettings={()=>openSettings('Voice')}/>}
 
     <ContinuityBanner />
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
