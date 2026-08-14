@@ -717,6 +717,11 @@ def test_the_transcript_tab_reads_and_only_reads() -> None:
     for surface in (tab, history):
         assert "transcriptTimestampLabel(message.ts)" in surface
         assert "transcriptTimestampIso(message.ts)" in surface
+        assert "TranscriptToolCalls" in surface
+        assert "showToolCalls" in surface
+    tool_calls = source("TranscriptToolCalls.tsx")
+    assert "transcriptToolInputText(call.input)" in tool_calls
+    assert '<details class="transcript-tool-call"' in tool_calls
     # Deliberately not the same formatter the history *list* uses: a row with no
     # timestamp still owes the reader an explanation, while a message stamp that
     # cannot be rendered is simply omitted (`{stamp&&<time…>}`).

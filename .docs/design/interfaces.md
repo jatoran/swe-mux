@@ -705,12 +705,15 @@ narration the agent wrote before it. Provider control acknowledgements are skipp
 does not type `/copy` into the PTY.
 
 `GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
-Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls}], hidden, truncated,
-observation_stale_since, reason}`. Tool calls and CLI machinery are classified out, and an agent's
-turn is merged into one message per *segment*, a segment being a run of records with no tool call
+Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls,preceding_tools:[{id,name,input}]}], trailing_tool_calls:[{id,name,input}], hidden, truncated, observation_stale_since, reason}`.
+Tool calls stay outside conversational prose but carry their native names and input arguments for the default-off disclosure.
+Tool results and operational telemetry are never included.
+An agent's turn is merged into one message per *segment*, a segment being a run of records with no tool call
 between them (`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld
 and `preceding_tool_calls` counts the tool calls between a message and the one before it, so
-neither the filtering nor the gap is ever invisible. `ordinal` numbers the returned window rather
+neither the filtering nor the gap is ever invisible.
+`trailing_tool_calls` preserves calls made after the newest prose message without inventing another message.
+`ordinal` numbers the returned window rather
 than the conversation, making it a display key and not an identity. Deliberately **not**
 `/history/{id}/transcript`, which reindexes the run's searchable messages and loads its
 annotations on every call: right for opening an entry once, wrong for a surface that refreshes on
@@ -720,6 +723,10 @@ reach hundreds of MB. Nothing to show is a `200` with a `reason`
 (`not_agent`/`no_transcript`/`unreadable`), because a shell pane and an agent that has not spoken
 yet are ordinary states of a passive view, not failures. No redaction: unlike the MCP surface,
 the reader is the machine's owner and needs the literal text to copy.
+
+`GET /history/{id}/transcript` returns the same tool-use block subset inside native message content: `{type:"tool_use",id,name,input}`.
+Pure tool-call records remain reviewable even when they contain no prose.
+Tool results and other output-bearing blocks are removed before the response and are not persisted in the History message index.
 
 `GET /sessions/{id}/skills` lists the skills that session's CLI can see, read off disk from the
 directories the CLI itself reads (`agent_skills.py`). Agent backends only; `409` on a shell

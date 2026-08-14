@@ -1240,7 +1240,10 @@ responsive controls.
   Opening it never starts a configured server or executes extension code, and it has no mutation or terminal-insertion action.
   Source drift is measured against the current CLI process generation, not the latest conversation rollover.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are not
-  rendered, and neither is the CLI machinery that both providers write into
+  rendered by default.
+  A `Tool calls` toggle replaces each count-only seam with individually collapsed native call names and input arguments, and it also exposes calls after the newest prose message.
+  Expanding a call reveals only its input; tool results, telemetry, and private reasoning never enter this projection.
+  The CLI machinery that both providers write into
   the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
   skill bodies injected mid-conversation, interrupt markers, Claude's `<system-reminder>` spans
   (stripped from the prompt that carries them rather than hiding it), and Codex's
@@ -1263,8 +1266,9 @@ responsive controls.
   of the answer. So the fragments merge only where no tool call sits between them, and each
   message carries `preceding_tool_calls`. Where it is non-zero the column draws a seam naming the
   count, on the same principle as `hidden`: a reader seeing two agent messages in a row must not
-  have to guess whether the gap between them is nothing or twenty minutes of tool work. The seam
-  is not drawn under a search, where the neighbours are whatever matched rather than what followed.
+  have to guess whether the gap between them is nothing or twenty minutes of tool work.
+  With the toggle enabled, the seam becomes one collapsed disclosure per useful tool call.
+  The seam and disclosures are not drawn under a search, where the neighbours are whatever matched rather than what followed.
 - **The rail's Copy reply is the last agent message in this tab**, by construction rather than by
   agreement: `/sessions/{id}/last-reply` reads this same reduction (`final_reply_text`), as does
   read-aloud. The reader is where a doubt about what was copied or spoken gets settled.
@@ -1284,7 +1288,7 @@ responsive controls.
   A pane whose conversation rolled over
   (`/clear`, `/new`) reloads onto the new run; the retired conversation stays in History, which
   is also where anything older than the loaded window lives.
-  History transcript messages use the same agent/you labels, full local timestamp, sticky per-message copy control, and long-message Show more/Show less treatment.
+  History transcript messages use the same agent/you labels, full local timestamp, sticky per-message copy control, long-message Show more/Show less treatment, and default-off collapsed tool-call disclosures.
   A search-matched history message is temporarily unfolded so its result cannot remain behind the clamp.
 - A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh
   generated title from the latest observed user request. A manual Rename remains authoritative and

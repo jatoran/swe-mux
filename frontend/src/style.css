@@ -748,6 +748,10 @@ body {
 .transcript-heading h3,.transcript-heading span { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .transcript-actions { flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel2) }
 .transcript-actions>button,.transcript-match-nav button { min-height:31px;border:1px solid var(--line);background:var(--panel);color:var(--text);padding:0 10px;font:inherit;cursor:pointer }
+.transcript-tool-toggle { min-height:31px;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:9px;cursor:pointer }
+.transcript-tool-toggle:has(input:checked) { border-color:var(--accent);color:var(--text) }
+.transcript-tool-toggle:has(input:disabled) { opacity:.45;cursor:not-allowed }
+.transcript-tool-toggle input { margin:0;accent-color:var(--accent) }
 .transcript-metadata { flex:none;max-height:min(160px,28dvh);overflow-x:hidden;overflow-y:auto;padding:7px 16px;border-bottom:1px solid var(--line);scrollbar-gutter:stable }
 .transcript-metadata small { display:block;color:var(--muted);margin:0 0 4px;overflow-wrap:anywhere;line-height:1.35 }
 .transcript-metadata small:last-child { margin-bottom:0 }
@@ -2332,7 +2336,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    dense-index type is unreadable for that. `position:relative` on the host anchors the
    jump-to-latest pill over the body. */
 .transcript-tab{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
-.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
+.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .transcript-tab-meta{min-width:0;display:grid;gap:2px}
 .transcript-tab-head strong{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transcript-tab-head span{color:var(--muted);font-size:8px}
@@ -2386,6 +2390,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    seam and not as a message: it is the only row in the column nobody said. */
 .transcript-tool-boundary{display:flex;align-items:center;gap:8px;margin:0;padding:4px 9px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-tool-boundary::before,.transcript-tool-boundary::after{content:"";flex:1;height:1px;background:var(--line)}
+.transcript-tool-calls{display:grid;gap:4px;padding:6px 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 72%,transparent)}
+.messages article .transcript-tool-calls{margin-top:8px;padding:8px 0 0;border:0;border-top:1px solid var(--line);background:transparent}
+.transcript-tool-call{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--muted);font-size:9px}
+.transcript-tool-call>summary,.transcript-tool-call-empty{padding:6px 8px;color:var(--text);font-family:'JetBrains Mono',Consolas,monospace;overflow-wrap:anywhere}
+.transcript-tool-call>summary{cursor:pointer;-webkit-user-select:none;user-select:none}
+.transcript-tool-call>pre{max-height:320px;margin:0;padding:8px;border-top:1px solid var(--line);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#9da8b5;font:9px/1.5 'JetBrains Mono',Consolas,monospace}
 .transcript-jump{position:absolute;right:12px;bottom:12px;z-index:4;min-height:26px;padding:0 10px;border:1px solid var(--accent);border-radius:13px;background:var(--panel);color:var(--accent);font:inherit;font-size:9px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
 /* Off-screen, not `display:none`: the synchronous copy fallback has to be able to focus
    and select it, which a hidden element cannot be. */
