@@ -147,6 +147,27 @@ and reattachable browser viewports.
   Notes are created and managed through the owning Project's flat Notes collection.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
+- **Branch** forks a live agent conversation and leaves both halves open, and is the only flow
+  that types a command into a pane the operator is holding. It therefore runs a readiness gate
+  first (`_branch_block_reason`): a pane that is mid-turn, waiting on an approval, ended, or
+  holding unsent composer text is refused rather than typed into, because in each of those the
+  injected `/branch` becomes something other than a command.
+- A Claude branch completes in two waits, and the second is the load-bearing one. A new
+  transcript appearing proves the fork **started**; it does not prove the source process has
+  released the conversation the sibling is about to resume. Those are seconds apart — measured
+  live on 2026-08-14, 0.2 s versus 8 s — and resuming inside the gap is fatal rather than slow,
+  because Claude refuses a conversation another live process still holds and the resumed CLI
+  exits 1. So the daemon waits for the source pane's own `SessionStart` hook to name a different
+  transcript, which is the CLI reporting where it went rather than the daemon inferring it from a
+  directory listing. That report also names the fork in the one case the listing must decline to
+  guess: two transcripts appearing at once.
+- The release wait makes the first spawn succeed; it is not what makes the branch correct. The
+  sibling is spawned and then **watched**, and one that exits inside the settle window is
+  discarded and retried rather than attached. A pane that will not stay up is removed and
+  reported, because handing the operator a session that spawned dead is the defect this exists
+  to prevent. A fork that cannot be identified at all is refused outright rather than resumed:
+  without the identity roll the source pane still claims the original, and the sibling would show
+  one conversation as two rows over one file.
 - Terminal environments are built from a scrubbed base (`spawn_contract.base_session_env`):
   parent-Claude session markers (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, session
   id/entrypoint/pid/effort) are dropped at spawn for every session because a daemon relaunched

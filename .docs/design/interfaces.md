@@ -458,6 +458,7 @@ POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
 DELETE /sessions/{id}
 POST   /sessions/{id}/input
+POST   /sessions/{id}/branch          {name?, target_session_id?, direction?}
 POST   /sessions/{id}/broadcast-set
 POST   /broadcast/input
 POST   /sessions/{id}/attachments   multipart `file`; X-Mux-User-Gesture: terminal-attachment
@@ -467,6 +468,25 @@ GET    /sessions/{id}/transcript[?limit=]
 GET    /sessions/{id}/skills[?refresh=1]
 GET    /sessions/{id}/agent-environment[?refresh=1]
 ```
+
+`POST /sessions/{id}/branch` forks a live agent conversation and returns
+`201 {session, source}` with the sibling pane already attached to the Project layout. It is a
+slow endpoint by design — it types a command into a running CLI and then waits for that CLI to
+report the result — and it emits `session_branched` carrying `original`, `branch_id`,
+`sibling_id`, `release`, `attempts`, and `duration_ms`. The refusals are all distinguishable, and
+none of them leaves a half-made pane behind:
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `not_agent` | 422 | The backend has no observable transcript |
+| `branch_unsupported` | 422 | The harness declares no `branch_strategy` |
+| `source_busy` | 409 | The pane is mid-turn or holding an approval dialog |
+| `source_not_live` | 409 | The pane has ended |
+| `source_composer_dirty` | 409 | Unsent composer text would swallow the command |
+| `native_id_missing` | 409 | No conversation id to fork from yet |
+| `branch_timeout` | 504 | No fork transcript appeared; carries `source_state`, re-read at the timeout, because a turn that had begun but was not yet detected is the usual cause |
+| `branch_id_unresolved` | 409 | Branched, but nothing could name the fork; original stays in History |
+| `branch_sibling_failed` | 503 | Branched, but the original would not reopen after N attempts |
 
 `POST /sessions/{id}/title/regenerate` accepts no body and returns `202 {ok:true}` after emitting
 an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex
