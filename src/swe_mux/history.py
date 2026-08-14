@@ -175,6 +175,37 @@ CREATE INDEX IF NOT EXISTS idx_git_provenance_commit
 """
 
 _MESSAGE_SEARCH_TABLES = ("history_messages_fts", "history_messages_trigram")
+_GIT_PROVENANCE_UPSERT = (
+    "INSERT INTO git_provenance("
+    "id,session_id,session_name,agent_run_id,project_id,worktree_root,commit_oid,"
+    "parent_oids_json,subject,committed_at,previous_head,relationship,confidence,"
+    "ambiguous,source,source_event_seq,tool_call_id,evidence_rank,observed_at,updated_at"
+    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+    "ON CONFLICT(session_id,agent_run_id,worktree_root,commit_oid) DO UPDATE SET "
+    "session_name=excluded.session_name,project_id=excluded.project_id,"
+    "parent_oids_json=CASE WHEN excluded.parent_oids_json!='[]' "
+    "THEN excluded.parent_oids_json ELSE git_provenance.parent_oids_json END,"
+    "subject=CASE WHEN excluded.subject!='' "
+    "THEN excluded.subject ELSE git_provenance.subject END,"
+    "committed_at=COALESCE(excluded.committed_at,git_provenance.committed_at),"
+    "previous_head=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.previous_head ELSE git_provenance.previous_head END,"
+    "relationship=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.relationship ELSE git_provenance.relationship END,"
+    "confidence=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.confidence ELSE git_provenance.confidence END,"
+    "ambiguous=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.ambiguous ELSE git_provenance.ambiguous END,"
+    "source=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.source ELSE git_provenance.source END,"
+    "source_event_seq=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.source_event_seq ELSE git_provenance.source_event_seq END,"
+    "tool_call_id=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.tool_call_id ELSE git_provenance.tool_call_id END,"
+    "evidence_rank=MAX(git_provenance.evidence_rank,excluded.evidence_rank),"
+    "observed_at=MIN(git_provenance.observed_at,excluded.observed_at),"
+    "updated_at=MAX(git_provenance.updated_at,excluded.updated_at)"
+)
 _MESSAGE_SEARCH_TRIGGERS = (
     "history_messages_ai",
     "history_messages_ad",
@@ -1922,35 +1953,7 @@ class HistoryIndex:
 
         def op() -> dict[str, Any]:
             self._db.execute(
-                "INSERT INTO git_provenance("
-                "id,session_id,session_name,agent_run_id,project_id,worktree_root,commit_oid,"
-                "parent_oids_json,subject,committed_at,previous_head,relationship,confidence,"
-                "ambiguous,source,source_event_seq,tool_call_id,evidence_rank,observed_at,updated_at"
-                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(session_id,agent_run_id,worktree_root,commit_oid) DO UPDATE SET "
-                "session_name=excluded.session_name,project_id=excluded.project_id,"
-                "parent_oids_json=CASE WHEN excluded.parent_oids_json!='[]' "
-                "THEN excluded.parent_oids_json ELSE git_provenance.parent_oids_json END,"
-                "subject=CASE WHEN excluded.subject!='' "
-                "THEN excluded.subject ELSE git_provenance.subject END,"
-                "committed_at=COALESCE(excluded.committed_at,git_provenance.committed_at),"
-                "previous_head=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.previous_head ELSE git_provenance.previous_head END,"
-                "relationship=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.relationship ELSE git_provenance.relationship END,"
-                "confidence=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.confidence ELSE git_provenance.confidence END,"
-                "ambiguous=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.ambiguous ELSE git_provenance.ambiguous END,"
-                "source=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.source ELSE git_provenance.source END,"
-                "source_event_seq=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.source_event_seq ELSE git_provenance.source_event_seq END,"
-                "tool_call_id=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
-                "THEN excluded.tool_call_id ELSE git_provenance.tool_call_id END,"
-                "evidence_rank=MAX(git_provenance.evidence_rank,excluded.evidence_rank),"
-                "observed_at=MIN(git_provenance.observed_at,excluded.observed_at),"
-                "updated_at=MAX(git_provenance.updated_at,excluded.updated_at)",
+                _GIT_PROVENANCE_UPSERT,
                 (
                     row_id,
                     session_id,
@@ -1982,6 +1985,58 @@ class HistoryIndex:
             ).fetchone()
             assert row is not None
             return self._public_git_provenance(row)
+
+        return await self._run(op)
+
+    async def record_git_provenance_batch(
+        self, records: list[dict[str, Any]]
+    ) -> int:
+        """Upsert an explicit provenance import in one bounded transaction."""
+        if not records:
+            return 0
+        if len(records) > 1000:
+            raise ValueError("git provenance batch exceeds 1000 rows")
+        timestamp = time.time()
+
+        def op() -> int:
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                for record in records:
+                    observed_at = float(record.get("observed_at") or timestamp)
+                    self._db.execute(
+                        _GIT_PROVENANCE_UPSERT,
+                        (
+                            str(record.get("id") or uuid.uuid4().hex),
+                            str(record["session_id"]),
+                            str(record["session_name"])[:200],
+                            str(record.get("agent_run_id") or ""),
+                            str(record["project_id"]),
+                            str(record["worktree_root"]),
+                            str(record["commit_oid"]).lower(),
+                            json.dumps(tuple(record.get("parent_oids") or ())),
+                            str(record.get("subject") or "")[:512],
+                            record.get("committed_at"),
+                            (
+                                str(record["previous_head"]).lower()
+                                if record.get("previous_head")
+                                else None
+                            ),
+                            str(record["relationship"]),
+                            str(record["confidence"]),
+                            int(bool(record.get("ambiguous"))),
+                            str(record["source"]),
+                            record.get("source_event_seq"),
+                            record.get("tool_call_id"),
+                            int(record["evidence_rank"]),
+                            observed_at,
+                            timestamp,
+                        ),
+                    )
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+            return len(records)
 
         return await self._run(op)
 

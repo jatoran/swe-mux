@@ -100,6 +100,14 @@ The sidebar marks a quantity whose root carries more than one live session
   Deleting a Project removes its rows, and deleting a History run removes the rows bound to that run.
 - Capture status is part of daemon background health and reports running state, captured rows, dropped observations, pending commit calls, and the last error.
   Failures are rate-limited in logs and never interrupt Git polling or terminal event delivery.
+- Historical provenance is an explicit, idempotent operator action, never a startup migration.
+  `python -m swe_mux.git_provenance_backfill PROJECT` is read-only and reports the proposed evidence classes; `--apply` writes the same plan in one bounded transaction.
+- The importer reads provider-native tool calls and their call-id-paired results, then validates candidate objects against the Project repository without executing transcript text.
+  A unique output hash is `exact`, a unique commit-subject/time match is `correlated`, and timestamp-only or cross-session matches are `ambiguous`.
+  Failed, unpaired, unresolved, and multiply matching commands are not written.
+- Retained Tier 0 command identities recover the actual mux session for resumed conversations when available.
+  Older evidence falls back to the canonical History run, while the row always keeps that run id for History lookup.
+- The importer logs only operation ids and aggregate counts to the size-rotated `<data_dir>/git-provenance-backfill.log`; transcript commands and outputs never enter that log.
 
 ### Branch-scoped comparison
 
@@ -262,7 +270,7 @@ and provider-managed worktrees may live outside that root.
 ## Key files
 
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
-- Durable session-to-commit capture: `src/swe_mux/git_provenance.py`, `src/swe_mux/history.py`
+- Durable session-to-commit capture and explicit historical import: `src/swe_mux/git_provenance.py`, `src/swe_mux/git_provenance_backfill.py`, `src/swe_mux/history.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - Routes: `src/swe_mux/server.py`
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`

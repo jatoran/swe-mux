@@ -57,6 +57,7 @@
   It copies parent OIDs, subject, Git commit time, previous HEAD, relationship (`created|rewrote|observed`), confidence (`exact|correlated|ambiguous`), ambiguity flag, evidence source, source event sequence, optional tool-call id, and first/latest observation times.
   The uniqueness key is `(session_id, agent_run_id, worktree_root, commit_oid)` with shell runs represented by the empty run id.
   An internal evidence rank permits only equal or stronger observations to replace classification fields while preserving the earliest observation time.
+  Explicit transcript backfills use the same ranked upsert in batches of at most 1,000 rows, so rerunning an import cannot duplicate or weaken existing live evidence.
   Project deletion removes Project rows, and explicit History-entry deletion removes rows for that agent run.
 - `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
   `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
