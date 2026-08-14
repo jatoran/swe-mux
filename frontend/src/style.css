@@ -2632,6 +2632,35 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Dismissed records are history, not attention: readable when asked for, quiet otherwise. */
 .utility-drawer .notification-list article.dismissed{opacity:.55}
 .utility-drawer .notification-empty{margin:0;padding:22px 12px;color:var(--muted);text-align:center;line-height:1.45}
+/* Ranked attention. The channel groups carry the meaning here, so they are drawn
+   as separate blocks with their own heading and rationale rather than as one
+   score-sorted list: a permission prompt and a wrong plan are not the same kind
+   of interruption and must never look like one. */
+.attention-inbox{flex:none;display:grid;gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
+.attention-fanout{margin:0;color:var(--text);line-height:1.4}
+.attention-budget,.attention-rule-active{margin:0;color:var(--muted);font-size:9px;line-height:1.4}
+.attention-rule-active button{margin-left:6px;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.attention-rule{display:grid;gap:5px;padding:7px;border:1px solid var(--accent,var(--line));background:var(--panel2)}
+.attention-rule span{display:block;color:var(--muted);line-height:1.4}
+.attention-channel{display:grid;gap:5px}
+.attention-channel h4{margin:6px 0 0;font-weight:400;letter-spacing:.04em;text-transform:uppercase;font-size:9px;color:var(--text)}
+.attention-channel h4 span{color:var(--muted)}
+.attention-channel-hint{margin:0;color:var(--muted);font-size:8px;line-height:1.4}
+.attention-item{display:grid;grid-template-columns:9px minmax(0,1fr);gap:7px;padding:7px;border:1px solid var(--line);background:var(--bg)}
+.attention-item>div{min-width:0;display:grid;gap:3px}
+.attention-item strong{font-weight:400}
+.attention-item span,.attention-item small{color:var(--muted);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
+/* Evidence first: the deterministic summary is the row, the model's "why" is an
+   aside under it, and it is visibly secondary so a narration failure reads as a
+   missing aside rather than as a missing finding. */
+.attention-item .attention-narration{font-style:italic;opacity:.85}
+.attention-item .attention-action{color:var(--text)}
+.attention-item .notification-row-actions{grid-column:2;display:flex;flex-wrap:wrap;gap:6px}
+.attention-item .notification-row-actions button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.attention-item .notification-row-actions button:disabled{opacity:.45;cursor:not-allowed}
+.attention-channel.interrupt_now .attention-item{border-color:var(--warn,var(--line))}
+.attention-suppressed{color:var(--muted);font-size:8px;align-self:center;line-height:1.4}
+.attention-raw-heading{margin:8px 9px 0;font-weight:400;letter-spacing:.04em;text-transform:uppercase;font-size:9px;color:var(--muted)}
 /* Git: Map is the operational worktree projection; Log is Git's real commit DAG.
    The compact row is the default reading. Paths, filenames, and destructive actions
    exist only in the expanded detail so they do not compete with branch state. */

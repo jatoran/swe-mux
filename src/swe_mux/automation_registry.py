@@ -68,7 +68,6 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         CONSUMER,
         "Absence report / digest",
         ("scan_timeline",),
-        implemented=False,
     ),
     # "← everything" in the design: ranking has nothing to rank without the
     # detectors and the timeline that feed it. The old `("tier0",)` would have let
@@ -84,8 +83,11 @@ _AUTOMATIONS: tuple[Automation, ...] = (
             "declared_vs_verified",
             "doc_debt",
         ),
-        implemented=False,
     ),
+    # The model tier, and the only automation here that spends tokens. It is a
+    # "why" over items ranking has already produced, so it depends on ranking
+    # rather than on the detectors: with ranking off there is nothing to narrate.
+    Automation("model_narration", CONSUMER, "Model narration", ("attention_ranking",)),
     # Keep the persisted id for settings compatibility. The human observation
     # inbox UI is retired; this now names review of agent spawn requests in the
     # Fleet Queue.

@@ -12,7 +12,7 @@ import pytest
 from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
-from swe_mux.runtime_cwd import Osc7Parser, OscSignalParser
+from swe_mux.runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser
 from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
 from swe_mux.server import session_startup_metrics
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
@@ -387,6 +387,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
         output_window=deque(),
         osc7=Osc7Parser(),
         osc_signals=OscSignalParser(),
+        osc133=Osc133Parser(),
         screen=ScreenModeParser(),
         bracketed_paste=BracketedPasteParser(),
         scrollback=ScrollbackBuffer(1024),
@@ -402,7 +403,10 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
     async def emit(event_type: str, **payload: Any) -> None:
         events.append((event_type, payload))
 
-    manager.events = SimpleNamespace(emit=emit)
+    manager.events = SimpleNamespace(
+        emit=emit,
+        emit_background=lambda event_type, **payload: events.append((event_type, payload)),
+    )
     manager._queue_runtime_cwd = lambda _session, uri: prompt_uris.append(uri)
 
     await SessionManager._fanout(manager, session)

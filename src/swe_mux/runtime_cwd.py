@@ -12,6 +12,9 @@ OSC7_PATTERN = re.compile(rb"\x1b\]7;([^\x07\x1b]{1,8192})(?:\x07|\x1b\\)")
 OSC_SIGNAL_PATTERN = re.compile(
     rb"\x1b\](0|2|4|9;4);([^\x07\x1b]{0,8192})(?:\x07|\x1b\\)"
 )
+# FinalTerm/VS Code shell integration: A prompt start, B command start,
+# C output start, D command finished (with an optional exit status).
+OSC133_PATTERN = re.compile(rb"\x1b\]133;([A-D])(?:;([^\x07\x1b]{0,64}))?(?:\x07|\x1b\\)")
 
 
 class Osc7Parser:
@@ -69,6 +72,40 @@ class OscSignalParser:
         else:
             self._tail = b"\x1b" if data.endswith(b"\x1b") else b""
         return values
+
+
+class Osc133Parser:
+    """Incrementally extract OSC 133 shell-integration markers from a PTY stream.
+
+    The marker that matters to attention ranking is ``D``: the human's own shell
+    reporting that their command finished, which is empirically the strongest
+    moment to hand them something to look at. The parser is deliberately
+    transport-only — it classifies nothing and reports every marker it sees, so a
+    shell that emits only a subset degrades to fewer breakpoints rather than to a
+    wrong one.
+    """
+
+    def __init__(self) -> None:
+        self._tail = b""
+        self.last_exit_status: str | None = None
+
+    def feed(self, chunk: bytes) -> list[tuple[str, str | None]]:
+        data = self._tail + chunk
+        markers: list[tuple[str, str | None]] = []
+        for match in OSC133_PATTERN.finditer(data):
+            marker = match.group(1).decode("ascii")
+            raw = match.group(2)
+            value = raw.decode("utf-8", "replace") if raw is not None else None
+            if marker == "D":
+                self.last_exit_status = value
+            markers.append((marker, value))
+        prefix = b"\x1b]133;"
+        start = data.rfind(prefix[:2])
+        if start >= 0 and not OSC133_PATTERN.search(data[start:]):
+            self._tail = data[start:][-80:]
+        else:
+            self._tail = b"\x1b" if data.endswith(b"\x1b") else b""
+        return markers
 
 
 @dataclass(frozen=True, slots=True)

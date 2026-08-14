@@ -553,6 +553,11 @@ out of the provenance graph plus owned-listener data.
 
 ### 6.7 Attention ranking / the inbox  ← everything
 
+**Shipped 2026-08-13.** Current behaviour: `features/attention-ranking.md`. The shape below is
+the design it was built to; one thing changed in delivery, recorded here so the difference is
+not read as drift: the four channels are in-app surfaces only, with no push route, because
+push was explicitly out of scope for this user.
+
 The top consumer, and the one that makes every other one viable. It decides what is
 worth interrupting the human for. Non-negotiable shape from the HCI review:
 
@@ -590,6 +595,9 @@ worth interrupting the human for. Non-negotiable shape from the HCI review:
   cost function and swe-mux can measure it from focus/input telemetry.
 
 ### 6.8 Absence report / digest  ← event log + scan timeline
+
+**Shipped 2026-08-13** as additional keys on the existing away report rather than a second
+endpoint (`features/attention-ranking.md`).
 
 "What happened while I was away" as a query: everything the fleet did, decided, and
 got stuck on since the last attach/input, in one narrated digest. Composes entirely
@@ -1230,11 +1238,30 @@ another agent can pick up mid-plan. Section links point to the design detail.
   - [x] The Timeline drawer owns Project permission, Project context, run permission, current scan, full-session scan, spend, records, and source expansion; the topbar owns none of them.
   - [x] Full-session scans process uncovered current-run messages oldest first under ordinary gates and budgets, keep the live cursor monotonic, and expose running/completed/partial/failed progress.
   - [x] Global and built-in automation enablement is centralized in the Automation dashboard; Settings retains configuration only.
-- [ ] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
+- [x] **6 · Model narration** (§14). Cheap-model "why" on top of the deterministic detectors.
   A narration slice never spans two agent runs.
-- [ ] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
+  Shipped 2026-08-13 as `attention_narration.py`, off by default, per-project `model_narration`
+  opt-in over `attention_ranking`, metered under `builtin:attention-narration`. Every failure
+  path returns a typed status and leaves the deterministic item intact.
+- [x] **7 · Attention ranking / inbox** (§6.7). Last — needs every other signal. Fan-out,
   daily interrupt budget, four channels, breakpoint delivery. Findings anchored to a
   superseded run stay inspectable and are excluded from ranking.
+  - [x] Budget counted per **incident**: several detectors describing one underlying event
+    share an `incident_key` and one slot, and a merge never re-routes an incident that has
+    already been placed.
+  - [x] Fan-out measured rather than assumed (burst duration over inter-burst gap from
+    attach/input telemetry), reporting `insufficient_samples` and no number below five
+    samples. Resumption lag is sampled as the cost of an interruption.
+  - [x] Breakpoint delivery from OSC 133 markers emitted by the *user's own shells*
+    (`attention_breakpoint_markers`, `breakpoint-osc133` capability). Agent panes are excluded:
+    an agent's "finished" is not the human's breakpoint.
+  - [x] Demotion rules mined from act/dismiss behaviour are **proposed**, never applied
+    silently, and an accepted rule expires after 14 days so the judgment is re-made.
+  - [x] **No push.** The four channels are in-app surfaces; ranking holds no device routing and
+    the inbox states the boundary in its response. The settle-gated `waiting` push alert
+    (`features/notifications.md`) is a separate path and is unchanged.
+  - [x] Delivered as `ROADMAP.md` Phase 6.5; behaviour lives in
+    `features/attention-ranking.md`.
 - [ ] **8 · Cross-session + novel + mux MCP v1** (§6.6, 6.8, 6.10, 7). Interlocks, digests,
   second opinions, experience DB, and the memory half of the return path
   (`provenance`, `priorResolutions`, `deadEnds`, `verifiedStatus`) layered onto the v0
@@ -1285,8 +1312,12 @@ another agent can pick up mid-plan. Section links point to the design detail.
 - [x] **Persistent scan-timeline spend/budget line.** Timeline tokens/cost today and the
   current run budget are visible in the always-on active-session status line, not only in
   the timeline tab.
-- [ ] **Daily interrupt budget extension.** Add the interrupt budget to that status line when
-  Phase 6.5 ships the interrupt-ranking policy that owns it.
+- [x] **Daily interrupt budget extension.** Shipped 2026-08-13 in the Alerts drawer tab
+  alongside the fan-out headline and the suppressed count, not in an application status line:
+  the scan-spend line moved into the Timeline drawer when that surface took ownership of its
+  own gating (a frontend contract test pins its absence from `App.tsx`), and putting a second
+  always-on chip back in the topbar would re-open exactly what that move closed. The budget is
+  read where the items it bounds are read.
 - [ ] **Progressive disclosure on rule rows.** Show name + state + one-line summary by
   default; expand for `when::trigger · reads::slice · model → result · setting::key`.
 
@@ -1501,6 +1532,9 @@ path (§7).
 ---
 
 ## 14. The `llm` action kind and observers
+
+The attention-narration application of this shipped 2026-08-13
+(`features/attention-ranking.md`); the kernel below still describes the general action kind.
 
 The minimal kernel:
 

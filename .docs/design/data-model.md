@@ -171,6 +171,20 @@
   `evidence_json`, the *set* of Tier 0 facts a finding rests on: a loop's case is "this
   fingerprint repeated three times", which one pointer cannot express. `dedupe_key` makes a
   re-running detector idempotent — a conflicting write returns the existing row.
+- `attention_items`: one row per ranked *incident*, not per finding
+  (`features/attention-ranking.md`). `incident_key` is unique and is what folds several
+  detectors reporting one underlying event into one row, so `kinds_json`, `evidence_json`, and
+  `contributions` accumulate while `channel` and `budget_day` stay as first decided — the
+  routing decision, and the interrupt slot it spent, belong to the incident rather than to
+  each contributing finding. `suppressed_reason` records why an incident was demoted
+  (`budget_exhausted`, `low_confidence`, `superseded_run`, `rule:<class>`); a demoted row is
+  never deleted, because a held-back item the user cannot see is indistinguishable from a
+  detector that broke. `budget_day` plus a non-null `delivered_at` is what the daily interrupt
+  budget counts.
+- `attention_feedback`: act/dismiss samples per incident class and channel, with the latency
+  from surfacing to decision. It is the only input to mined demotion rules; acceptance of a
+  rule lives in `automation_checkpoints` under `attention:rule:<class>:<channel>` and carries
+  an expiry, so a standing suppression has to be re-confirmed.
 - `automation_observer_calls`: bounded provider-call audit records with requested and resolved
   model, generation, token and cost usage, latency, provider, finish reason, HTTP status,
   retryability, and response content type and length.

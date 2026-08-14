@@ -456,11 +456,14 @@ def test_every_deterministic_consumer_is_implemented_and_needs_only_tier0() -> N
 def test_unimplemented_automations_are_marked_so_the_toggle_cannot_mislead() -> None:
     # The toggle surface renders dependencies straight from this registry, so a
     # reserved id with a placeholder edge must not present as ready to enable.
-    for automation_id in ("attention_ranking",):
+    for automation_id in ("continuous_title", "cross_session_interlocks"):
         assert REGISTRY[automation_id].implemented is False, automation_id
     # Project context is user-owned data, not an automation toggle.
     assert "project_card" not in REGISTRY
     assert REGISTRY["scan_timeline"].implemented is True
+    # Phase 6.5 shipped: ranking, the digest, and the model tier over them.
+    for automation_id in ("attention_ranking", "absence_report", "model_narration"):
+        assert REGISTRY[automation_id].implemented is True, automation_id
     # Ranking reads every other signal; a one-dependency tree would be a lie.
     assert set(REGISTRY["attention_ranking"].requires) >= {
         "loop_detection",
@@ -468,6 +471,9 @@ def test_unimplemented_automations_are_marked_so_the_toggle_cannot_mislead() -> 
         "doc_debt",
         "scan_timeline",
     }
+    # Narration sits over ranked items, so with ranking off there is nothing to
+    # narrate and no way to spend tokens on one.
+    assert set(REGISTRY["model_narration"].requires) == {"attention_ranking"}
 
 
 # --------------------------------------------------------------- store wiring

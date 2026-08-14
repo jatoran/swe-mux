@@ -66,6 +66,8 @@ It should call domain packages rather than acquire their storage or process resp
 | `project_context.py` | fixed `.swe-mux/project-context.md` path, bounded UTF-8 Markdown read, blank-file initialization, atomic revision-checked writes, setup prompt, and scan prompt prefix | repository crawling, inferred context, model calls, arbitrary paths, UI rendering |
 | `project_card.py` | retained generated-card implementation for source compatibility only; no runtime construction or consumers | active Project context, scan input, automation enablement |
 | `scan_timeline.py` | three-gated, run-scoped Tier 1 scanner: event/heartbeat scheduling, bounded transcript deltas plus same-run continuity, user Project context and Tier 0 facts, explicit oldest-first uncovered full-session scans, strict DeepSeek V4 Flash extraction, rollover boundaries, run/Project budget enforcement, exact-interval source rehydration, progress state, and dead-end annotation candidates | PTY writes, attention ranking, cross-run continuity, guessed records when the provider fails |
+| `attention_ranking.py` | incident grouping over detector findings and fleet fault events, the four cost-to-resolve channels, the hard daily interrupt budget and its hourly burst limiter, live-run-only ranking, suppression records, breakpoint draining, fan-out and resumption-lag telemetry, behaviour-mined demotion rules, and the absence digest | detection itself, any session write, push or device routing, model calls (`attention_narration.py`) |
+| `attention_narration.py` | one budgeted cheap-model "why" per ranked incident over a normalized single-run slice, with typed failure statuses | ranking, routing, evidence, anything that survives its own failure |
 | `mcp.py` | agent-facing MCP protocol + closed tool set: Project-scoped session/run briefs, compact filtered history hits and stale-safe hit-neighborhood reads, bidirectional run-bound transcript pages, Agent Context sources, Project notes, sender message status, caller spawn-request status, and two thin write callers (`notify`, `request_spawn`); token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics | history indexing/ranking (`history.py`), relay policy and queue/request storage (those live in `agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, aiohttp handlers (`server.py`) |
 | `mcp_contract.py` | the shared closed read/write tool declarations and generated Claude read-permission names | tool implementation, transport, write approval |
 | `prompt_queue.py` | persistent prompt queue: durable message store (states, strict head-of-line, revisions, sender provenance, correlation, relay depth), typed operations (enqueue/edit/arm/move/cancel/delete/retarget/schedule/send-next), content-erasing delete tombstones, delivery constraints, auto-policy + proving-counter tables, event-driven stranding + startup reconcile, delivery audit, seed-prompt staging (`stage_seed_argv`) | *when* an automatic send happens (`auto_delivery.py`), who may address whom (`agent_messaging.py`), PTY ownership (delivery writes go through the injected operator-input helper), aiohttp handlers |
@@ -337,6 +339,15 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   Its event and heartbeat loops are supervised, its provider output is strict schema data, and a
   provider or decode failure writes no semantic record.
   Rollover ends the grant and every run-local comparison before a successor can scan.
+- `attention_ranking.py` owns routing and nothing else. It reads findings that already exist
+  (annotations from `deterministic_consumers.py`, fault events from `fleet_intelligence.py`)
+  and never detects anything itself, so a detector change lands in one place and a routing
+  change lands in another. Its budget accounting is per incident, which is why the store's
+  `incident_key` upsert refuses to re-route an existing incident: the merge path is what keeps
+  three detectors describing one stuck run from spending three interrupt slots.
+- `attention_narration.py` is the only model tier over ranked items and is separable by
+  construction: it is passed in, it returns a status alongside its text, and every failure
+  status leaves the deterministic item untouched. Nothing in ranking waits on it.
 
 ## Related design
 

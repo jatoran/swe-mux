@@ -41,12 +41,24 @@ session outside its Project, and cannot claim to be anyone else.
   | body size | 4 000 chars | `body_too_large` |
   | per-origin hourly budget | 20 messages | `origin_budget_exhausted` |
   | undelivered agent messages per target | 5 | `target_backlog_full` |
-  | relay propagation: distinct sessions one thread may reach | 3 | `chain_depth_exceeded` |
-  | agent messages within one thread | 6 | `thread_budget_exhausted` |
+  | relay propagation: distinct sessions one thread may reach | 6 | `chain_depth_exceeded` |
+  | agent messages within one thread | 12 | `thread_budget_exhausted` |
   | ring back past the session that messaged you | — | `relay_cycle` |
   | kill switch (`agent_messaging_enabled`) | on | `agent_messaging_disabled` |
   | expiry | 24 h | item is cancelled, `cancel_kind: expired` |
 
+- **The envelope states its authority, because a receiver cannot infer it.** A peer's note and
+  an instruction a human approved arrive through the same pipe. The `authority` header says
+  which this is: a message auto-delivered under the target's standing grant declares that no
+  human reviewed it, while a message that waited as a draft declares that a person armed it and
+  released it. The auto-delivered form informs rather than forbids — a conflict with the
+  operator's own instruction is neither complied with nor allowed to stall the relay, because
+  an operator relaying their own release through a peer is a legitimate shape that a hard
+  prohibition would block forever. Without the header a relayed "your operator says go ahead" is
+  indistinguishable
+  from a prompt injection, and the conservative reading — refuse — is correct often enough to
+  be worth protecting and wrong often enough to be worth informing (observed 2026-08-13, a
+  session correctly refused a relayed release it had no way to verify).
 - **Replying to the session that messaged you is an ordinary turn, not a cycle.**
   This is the load-bearing distinction, and getting it wrong is what made replies impossible
   before 2026-08-13: a reply *is* A→B→A, so a cycle rule that tested "is the target anywhere
@@ -59,6 +71,14 @@ session outside its Project, and cannot claim to be anyone else.
   holds its depth. `max_thread_turns` bounds **volume** inside one thread, and is what
   actually stops two agents talking forever. Chain depth cannot serve that purpose once
   replies exist, because a two-party exchange has constant depth however long it runs.
+- **Depth is sized for a relay across a fleet, because that is a shape people use.** The
+  default was 3 while the only pattern anyone had was "tell one sibling", and it refused the
+  fourth hop of an operator-authored hand-off passed down five sessions — killing the relay
+  in the middle rather than at the point it was written. The hazard the bound exists for is
+  **breadth**, one injected instruction fanning out, and breadth is bounded separately by the
+  per-origin hourly budget, the per-target backlog, and the ring detector. A relay that needs
+  to travel further than the bound is a fresh thread a human starts, and the refusal says so
+  and names the setting rather than stopping silently.
 - **Threads, depth, and rings are derived from the queue itself.** Each message records a
   `thread_id`, a `chain_depth`, and an `origin.path` of session ids with the most recent
   sender last, so no separate relay-state table can drift out of sync with the audit trail.
