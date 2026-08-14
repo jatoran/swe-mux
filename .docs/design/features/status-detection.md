@@ -91,7 +91,7 @@ Codex publishes no equivalent side state; this layer is Claude-only.
 | `running` | daemon | Shell lifecycle (spawn or demotion back to shell). |
 | `working` | transcript, hook, watchdog-pty | A root turn began or root tool activity: user prompt / assistant / tool records in order, or `UserPromptSubmit`/`PreToolUse`/`PostToolUse` while the transcript is not authoritative. The PTY may never invent work except under the two narrow `watchdog-pty` rules below. The unwitnessed first-turn rule also requires a submit from the current input owner before it may read a working marker. |
 | `awaiting` | transcript, hook, watchdog-pty | A stabilized approval request, immediate `request_user_input` question, elicitation dialog, rate limit, or SSH authentication prompt, always with a typed `awaiting_reason`. `watchdog-pty` covers startup dialogs and SSH authentication prompts classified from the bounded PTY tail. |
-| `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) — or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). A catch-up settle over a session already idle also emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
+| `idle` | transcript, hook, pty, watchdog, watchdog-pty, daemon | A proven turn boundary (`turn_duration`, `end_turn`+text, `task_complete`, native abort outcome, Stop hook, `idle_prompt`, interrupt marker, catch-up settle) or a bounded inferred recovery (startup-quiet fallback, watchdog paths below). Exact operator interrupt input plus this session's idle PTY is also bounded confirmation of an interrupted turn. A catch-up settle over a session already idle emits `root_turn_settled`, which changes no state but is the only way delivery readiness can learn that a session left running across a daemon restart is at its prompt (`delivery-readiness.md`). |
 | `exited` / `crashed` | pty, daemon | Process ground truth: the exit code through `terminal_exit_outcome`. |
 
 Ambiguous or absent evidence resolves to the conservative prior, never a guessed active
@@ -577,6 +577,14 @@ Two timings cross the API boundary so a client can age a session without a secon
 - `turn_started_at` is the instant the current root turn began, cleared when it ends.
   This, not `state_since`, is what "how long has it been working" means: a turn spans every tool call and every approval inside it, while `state_since` restarts on each of them.
   Run-scoped like `last_turn_ms`.
+- `turn_epoch` is a monotonic root-turn generation within the current observation identity.
+  `active_turn_id` is the optional provider-native or mux-synthesized identity for the open generation.
+  A terminal event with a different non-empty ID is stale, is ignored, and increments `stale_turn_terminal_ignored` instead of closing newer work.
+  OMP, pi, and opencode synthesize process-local IDs at their native root-start event; Codex IDs pass through unchanged.
+- A logical root prompt is distinct from tool activity and duplicate start evidence.
+  The same prompt reported once by a hook and once by the transcript joins one generation.
+  A later logical prompt or a different native turn ID while the previous generation is still open proves that its terminal boundary was missed.
+  Mux emits `turn_aborted(outcome=superseded, recovered_boundary=true)`, increments `turn_boundary_recovered`, and opens the new generation without publishing a false idle interval.
 - `last_turn_ms` is the length of the last **completed** root turn.
   A harness-reported `duration_ms` outranks any measurement taken from the outside, which also counts observation lag.
   Otherwise the two boundary stamps are subtracted, and the result is published only if it is a plausible turn.
@@ -590,6 +598,10 @@ Two timings cross the API boundary so a client can age a session without a secon
   Plenty of turns are opened by something other than a person: mux delivering an agent-authored queued message, or a Stop hook injecting a teammate message the instant the previous turn ends.
   A session can therefore be minutes into a fresh turn and an hour past anything its operator said — measured live at a `3m22` turn on a session thirteen minutes into work asked for once.
   Run-scoped like the turn fields, and `None` rather than guessed when unknown.
+- `interrupt_pending_at` and `interrupt_pending_source` record exact operator Esc or Ctrl-C intent while a root turn is working.
+  Intent is not completion proof, so state remains `working` and delivery remains blocked.
+  The UI renders `interrupt requested` and freezes the displayed duration at the request instant instead of continuing to claim that cancellation time is active work.
+  Native terminal evidence clears the fields immediately; an unconfirmed intent expires after 120 seconds and the running timer resumes.
 
 ### Prompt authorship is captured at delivery or not at all
 
@@ -695,6 +707,10 @@ The durable timeline records the raw result as `pty_tail_screen`, the effective 
   This preserves the same root-turn lifetime and its `turn_started_at` timestamp; the sidebar working timer therefore cannot reset on that repaint.
 - `working`/`awaiting` stalled ≥ `STATE_WATCHDOG_ENDED_STUCK_SECONDS` (6s) with a quiet
   transcript whose tail **proves** the turn ended → force idle (`watchdog`).
+- Exact Esc or Ctrl-C input recorded against a working root turn arms interrupt intent.
+  After `INTERRUPT_PTY_SETTLE_SECONDS` (2s), this session's own idle prompt confirms `turn_aborted(outcome=interrupted)` on the next watchdog pass without waiting for a provider marker that may never be written.
+  A busy, approval, uninformative, or unknown PTY cannot confirm it.
+  This rule is available even for a hook-only harness because it reads only the owned PTY and operator intent.
 - **Unwitnessed** (no transcript bound and no hook ever received): `idle` + working
   spinner → `begin_pty_turn`; `working` + idle prompt → `end_pty_turn`. Evaluated
   first, because it is the only rule that reads an `idle` session, and deliberately
@@ -863,6 +879,9 @@ headers, tab strips, context menus, and the mobile unified-tab projection all re
 through it — `frontend/test/sessionStatus.test.ts` asserts totality, the awaiting
 affordances, that idle never renders as awaiting approval, and (by source inspection)
 that no surface reintroduces an inline heuristic.
+
+An open working turn with `interrupt_pending_at` renders as `interrupt requested` with a static amber indicator.
+`frontend/src/sessionRowFields.ts` caps the displayed duration at `interrupt_pending_at`; provider or watchdog resolution clears the open-turn timestamp, while intent timeout resumes the same root-turn clock.
 
 Standing activity renders through the same mapping and — with one exception — **never
 changes the dot**: hue variants of green fail at a glance and fail colorblind users, so

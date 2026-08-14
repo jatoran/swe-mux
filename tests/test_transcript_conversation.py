@@ -19,6 +19,7 @@ from swe_mux.transcript_view import (
     conversation_view,
     conversation_view_cached,
     final_reply_text,
+    parse_transcript,
 )
 
 
@@ -118,7 +119,15 @@ def claude_tool_use(count: int = 1) -> dict[str, Any]:
         "timestamp": "2026-08-02T10:00:02Z",
         "message": {
             "role": "assistant",
-            "content": [{"type": "tool_use", "name": "Read", "input": {}}] * count,
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": f"read-{index}",
+                    "name": "Read",
+                    "input": {"file_path": f"src/{index}.py"},
+                }
+                for index in range(count)
+            ],
         },
     }
 
@@ -144,7 +153,50 @@ def test_a_tool_call_ends_a_message_and_the_boundary_is_counted(tmp_path: Path) 
     ]
     # The count is what tells a reader the two agent messages are not one thought.
     assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 3, 0]
+    assert view["messages"][2]["preceding_tools"] == [
+        {"id": f"read-{index}", "name": "Read", "input": {"file_path": f"src/{index}.py"}}
+        for index in range(3)
+    ]
     assert final_reply_text(path, "claude") == "Nine tabs, all registered."
+
+
+def test_tool_inputs_are_exposed_but_tool_results_are_not(tmp_path: Path) -> None:
+    path = write_jsonl(
+        tmp_path / "claude.jsonl",
+        [
+            claude_user("read it", **HUMAN),
+            claude_tool_use(),
+            {
+                "type": "user",
+                "timestamp": "2026-08-02T10:00:03Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read-0",
+                            "content": "private file contents",
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+
+    messages = parse_transcript(path, "claude")
+    assert messages[-1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "read-0",
+            "name": "Read",
+            "input": {"file_path": "src/0.py"},
+        }
+    ]
+    assert "private file contents" not in repr(messages)
+    view = conversation_view(path, "claude")
+    assert view["trailing_tool_calls"] == [
+        {"id": "read-0", "name": "Read", "input": {"file_path": "src/0.py"}}
+    ]
 
 
 def test_a_streaming_split_with_no_tool_between_is_still_one_message(tmp_path: Path) -> None:
@@ -255,7 +307,12 @@ def test_omp_keeps_conversation_text_and_drops_protocol_messages_and_tools(
                 "assistant",
                 [
                     {"type": "text", "text": "Checking."},
-                    {"type": "toolCall", "id": "call-1", "name": "read"},
+                    {
+                        "type": "toolCall",
+                        "id": "call-1",
+                        "name": "read",
+                        "arguments": {"path": "README.md"},
+                    },
                 ],
                 stopReason="toolUse",
             ),
@@ -280,6 +337,9 @@ def test_omp_keeps_conversation_text_and_drops_protocol_messages_and_tools(
         ("assistant", "Verified."),
     ]
     assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 1]
+    assert view["messages"][-1]["preceding_tools"] == [
+        {"id": "call-1", "name": "read", "input": {"path": "README.md"}}
+    ]
     assert view["hidden"] == 0
     assert final_reply_text(path, "omp") == "Verified."
 
@@ -298,7 +358,12 @@ def test_codex_drops_tool_calls_and_harness_blocks_but_keeps_its_instructions(
             {
                 "type": "response_item",
                 "timestamp": "2026-08-02T10:00:03Z",
-                "payload": {"type": "function_call", "name": "shell", "arguments": "{}"},
+                "payload": {
+                    "type": "function_call",
+                    "call_id": "shell-1",
+                    "name": "shell",
+                    "arguments": '{"command":"pytest -q"}',
+                },
             },
             codex_message("assistant", "reading the docs"),
         ],
@@ -312,6 +377,9 @@ def test_codex_drops_tool_calls_and_harness_blocks_but_keeps_its_instructions(
     assert view["hidden"] == 2
     # Codex names the call in the payload type rather than a content block.
     assert [item["preceding_tool_calls"] for item in view["messages"]] == [0, 0, 1]
+    assert view["messages"][-1]["preceding_tools"] == [
+        {"id": "shell-1", "name": "shell", "input": {"command": "pytest -q"}}
+    ]
 
 
 def test_codex_legacy_event_copies_do_not_double_the_conversation(tmp_path: Path) -> None:

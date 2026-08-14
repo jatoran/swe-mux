@@ -26,6 +26,11 @@
 - `SessionRecord.observation_stale_since`: volatile. Set when the followed transcript is
   provably no longer this PTY's conversation and no successor could be corroborated; it
   revokes the transcript's authority over hooks and hard-blocks delivery.
+- `SessionRecord.turn_epoch`, `active_turn_id`, and `turn_started_at` identify the open root-turn generation and its clock.
+  The epoch increases on every root open, the opaque ID is provider-native or mux-synthesized when available, and both the ID and start timestamp clear on terminal evidence.
+  A mismatched terminal ID is diagnosable stale evidence and cannot close a newer generation.
+- `SessionRecord.interrupt_pending_at` and `interrupt_pending_source` expose operator interrupt intent separately from lifecycle proof.
+  They freeze the user-visible timer and status wording while delivery remains blocked, clear on terminal evidence or a new root generation, and expire when an interrupt cannot be confirmed.
 - `SessionRecord.standing_activity`: the standing-engagement annotation axis — a list of
   `StandingActivity {kind: loop|cron|background_tasks|subagents, source, evidence, since,
   expires_at, count, detail}`. Not states: SessionState, `awaiting_reason`, and delivery are
@@ -171,6 +176,20 @@
   `evidence_json`, the *set* of Tier 0 facts a finding rests on: a loop's case is "this
   fingerprint repeated three times", which one pointer cannot express. `dedupe_key` makes a
   re-running detector idempotent — a conflicting write returns the existing row.
+- `attention_items`: one row per ranked *incident*, not per finding
+  (`features/attention-ranking.md`). `incident_key` is unique and is what folds several
+  detectors reporting one underlying event into one row, so `kinds_json`, `evidence_json`, and
+  `contributions` accumulate while `channel` and `budget_day` stay as first decided — the
+  routing decision, and the interrupt slot it spent, belong to the incident rather than to
+  each contributing finding. `suppressed_reason` records why an incident was demoted
+  (`budget_exhausted`, `low_confidence`, `superseded_run`, `rule:<class>`); a demoted row is
+  never deleted, because a held-back item the user cannot see is indistinguishable from a
+  detector that broke. `budget_day` plus a non-null `delivered_at` is what the daily interrupt
+  budget counts.
+- `attention_feedback`: act/dismiss samples per incident class and channel, with the latency
+  from surfacing to decision. It is the only input to mined demotion rules; acceptance of a
+  rule lives in `automation_checkpoints` under `attention:rule:<class>:<channel>` and carries
+  an expiry, so a standing suppression has to be re-confirmed.
 - `automation_observer_calls`: bounded provider-call audit records with requested and resolved
   model, generation, token and cost usage, latency, provider, finish reason, HTTP status,
   retryability, and response content type and length.

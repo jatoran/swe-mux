@@ -26,6 +26,7 @@ from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
 from .background_tasks import background
 from .cli_state import CliStateMonitor, ParkedMove
+from .composer_input import ComposerState, clear_composer
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
 from .harness import (
@@ -49,7 +50,7 @@ from .models import (
     StandingActivityKind,
 )
 from .pty_host import PtyHost, merge_environment
-from .runtime_cwd import Osc7Parser, OscSignalParser, classify_osc7_location
+from .runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser, classify_osc7_location
 from .screen_mode import (
     BRACKETED_PASTE_TOGGLE,
     SCREEN_TOGGLE,
@@ -723,6 +724,19 @@ def apply_state_transition(
             latencies = getattr(session, "terminal_latencies", None)
             if latencies is not None and seconds_in_previous is not None:
                 latencies.append({"proof": proof, "seconds": round(seconds_in_previous, 3)})
+    # A turn *opening* proves the composer was submitted, whichever path wrote
+    # the carriage return — a queue delivery, a voice send, and a keystroke are
+    # the same byte to the PTY but only one of them passes through the input
+    # handler that tracks them. An ended session has no composer at all.
+    #
+    # Gated on an actual state change, not on reaching this line: a same-state
+    # detail update is a tool call inside a turn already running, and a CLI that
+    # accepts typing mid-turn (Claude queues it) would otherwise have the
+    # operator's half-written follow-up erased by the next tool the agent ran.
+    composer = getattr(session, "composer", None)
+    if composer is not None and previous != state and state in {"working", "exited", "crashed"}:
+        if clear_composer(composer) and ledger is not None:
+            ledger.append({"ts": now, "kind": "composer", "action": "cleared", "reason": state})
     record.state = state
     record.state_detail = detail
     if hasattr(record, "awaiting_reason"):
@@ -1745,6 +1759,9 @@ def reset_session_observation_state(session: Any, evidence: str) -> None:
         "root_completion_seen": False,
         "codex_scope": "root",
     }
+    session.record.active_turn_id = None
+    session.record.interrupt_pending_at = None
+    session.record.interrupt_pending_source = None
     if isinstance(hook_sequences, dict):
         session.observation_state["hook_sequences"] = dict(hook_sequences)
     if isinstance(hook_sequence_duplicates, int) and hook_sequence_duplicates >= 0:
@@ -1963,12 +1980,17 @@ class Session:
         self.ignored_detection_runs: set[tuple[str, str]] = set()
         self.osc7 = Osc7Parser()
         self.osc_signals = OscSignalParser()
+        self.osc133 = Osc133Parser()
         self.cwd_debounce_task: asyncio.Task[Any] | None = None
         self.cwd_switches: deque[float] = deque()
         self.cwd_telemetry_dropped = 0
         self.last_input_event_ts = 0.0
         self.last_input_report_ts = 0.0
         self.input_revision = 0
+        # Estimated unsent composer contents, kept from the bytes written to this
+        # PTY (`composer_input.py`). Display evidence only: the delivery gate has
+        # its own `input_revision` boundary and never reads this.
+        self.composer = ComposerState()
         # Two sources for the same fact, deliberately kept apart. The daemon reads
         # the child's own screen switch off the PTY and so has it for every
         # session; the browser reports xterm's active buffer only while a pane is
@@ -3322,6 +3344,10 @@ class SessionManager:
         # first idle with the old run's last turn.
         record.last_turn_ms = None
         record.turn_started_at = None
+        record.turn_epoch = 0
+        record.active_turn_id = None
+        record.interrupt_pending_at = None
+        record.interrupt_pending_source = None
         # Same scope: a prompt addressed to the conversation being replaced was
         # not addressed to this one, and carrying it over would report the new
         # run as hours into work nobody has asked it for yet.
@@ -5347,11 +5373,43 @@ class SessionManager:
         A legitimately long tool call keeps "esc to interrupt" on screen, so the PTY
         check never cuts it short.
         """
-        from .observation import transcript_tail_turn_state
+        from .observation import (
+            INTERRUPT_PTY_SETTLE_SECONDS,
+            _finish_root_turn,
+            expire_interrupt_intent,
+            transcript_tail_turn_state,
+        )
 
         record = session.record
         if await SessionManager._check_ssh_boundary_state(self, session, now):
             return
+        interrupt_requested_at = record.interrupt_pending_at
+        if interrupt_requested_at is not None:
+            interrupt_pty = self._pty_tail_explanation(session)
+            interrupt_pty_state = cast(PtyTailState, interrupt_pty["outcome"])
+            self._note_pty_tail_readings(session, interrupt_pty, now=now)
+            interrupt_age = max(0.0, now - interrupt_requested_at)
+            if (
+                interrupt_age >= INTERRUPT_PTY_SETTLE_SECONDS
+                and interrupt_pty_state == "idle"
+                and session.observation_state.get("root_turn_active")
+            ):
+                session.note_watchdog_recovery(
+                    "interrupt_confirmed_pty",
+                    stalled_seconds=interrupt_age,
+                    tail_verdict="interrupt_intent+pty_idle",
+                )
+                await _finish_root_turn(
+                    session,
+                    self.events,
+                    source="watchdog-pty",
+                    outcome="interrupted",
+                    force=True,
+                    inferred=True,
+                    evidence="interrupt_intent+pty_idle",
+                )
+                return
+            expire_interrupt_intent(session, now=now)
         if not has_observable_transcript(record.backend):
             return
         # Annotation TTL sweep runs before any early return below: expiry is
@@ -5877,6 +5935,7 @@ class SessionManager:
             session.screen.feed(chunk)
             session.bracketed_paste.feed(chunk)
             session.osc_signals.feed(chunk)
+            self._note_shell_breakpoints(session, chunk)
             prompt_uris = session.osc7.feed(chunk)
             if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
                 session.record.startup_timing_ms["first_prompt"] = round(
@@ -5895,6 +5954,27 @@ class SessionManager:
                 session.publish_update()
             if prompt_uris:
                 self._schedule_startup_measurement(session, "first_prompt")
+
+    def _note_shell_breakpoints(self, session: Session, chunk: bytes) -> None:
+        """Report the human's own command finishing, from OSC 133 in a shell pane.
+
+        Only a shell counts. An agent pane's "finished" is the agent's breakpoint,
+        not the human's, and the whole point of this signal is that swe-mux owns
+        the terminal the human is working in themselves. Emitted in the background
+        because it is telemetry on the PTY fan-out path and must never add latency
+        to output delivery.
+        """
+        if session.record.backend in AGENT_BACKENDS:
+            return
+        markers = session.osc133.feed(chunk)
+        if not any(marker == "D" for marker, _ in markers):
+            return
+        self.events.emit_background(
+            "shell_command_finished",
+            session_id=session.record.id,
+            source="daemon",
+            exit_status=session.osc133.last_exit_status,
+        )
 
     def _queue_agent_ready_check(self, session: Session) -> None:
         """Use settled PTY output only while semantic startup evidence is absent."""

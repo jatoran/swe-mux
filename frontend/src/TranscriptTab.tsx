@@ -5,6 +5,7 @@ import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
+import { TranscriptToolCalls } from './TranscriptToolCalls'
 import {
   expandedTranscriptMessageIds,
   isPinnedToBottom,
@@ -167,6 +168,7 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   const [search, setSearch] = useState<{ sessionId: string; value: string }>({ sessionId: '', value: '' })
   const [selectionLive, setSelectionLive] = useState(false)
   const [sheet, setSheet] = useState<{ title: string; text: string } | null>(null)
+  const [showToolCalls, setShowToolCalls] = useState(false)
   const body = useRef<HTMLDivElement>(null)
   const manualArea = useRef<HTMLTextAreaElement>(null)
   const searchOrigin = useRef<{ sessionId: string; scrollTop: number } | null>(null)
@@ -386,6 +388,11 @@ export function TranscriptTab({ session }: { session: Session | null }) {
   if (!session) return <p class="drawer-empty">Focus a session to read its conversation.</p>
 
   const messages = data?.messages || []
+  const trailingToolCalls = data?.trailing_tool_calls || []
+  const availableToolCalls = messages.reduce(
+    (total, message) => total + (message.preceding_tools?.length || 0),
+    trailingToolCalls.length,
+  )
   const visibleMessages = normalizedQuery
     ? messages.filter(message => transcriptMatchesQuery(message, normalizedQuery))
     : messages
@@ -417,6 +424,15 @@ export function TranscriptTab({ session }: { session: Session | null }) {
         title="Copy the whole conversation, with speakers"
         onClick={() => void copy(transcriptConversationText(messages), COPY_ALL)}
       >{copied === COPY_ALL ? 'Copied' : 'Copy all'}</button>
+      <label class="transcript-tool-toggle">
+        <input
+          type="checkbox"
+          checked={showToolCalls}
+          disabled={!availableToolCalls}
+          onChange={event => setShowToolCalls(event.currentTarget.checked)}
+        />
+        Tool calls
+      </label>
       <div class="transcript-search">
         <input
           type="search"
@@ -456,9 +472,11 @@ export function TranscriptTab({ session }: { session: Session | null }) {
             {/* Only in the unfiltered column. Under a search the neighbours are
                 whatever matched, so "12 tool calls" between them would describe
                 a gap the reader is not looking at. */}
-            {!normalizedQuery && index > 0 && message.preceding_tool_calls > 0 && <p class="transcript-tool-boundary">
-              {transcriptToolBoundaryLabel(message.preceding_tool_calls)}
-            </p>}
+            {!normalizedQuery && index > 0 && message.preceding_tool_calls > 0 && (
+              showToolCalls && message.preceding_tools?.length
+                ? <TranscriptToolCalls calls={message.preceding_tools} />
+                : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(message.preceding_tool_calls)}</p>
+            )}
             <Message
               message={message}
               copied={copied === message.ordinal}
@@ -473,7 +491,10 @@ export function TranscriptTab({ session }: { session: Session | null }) {
             />
           </Fragment>)
           : <p class="drawer-empty">No messages match “{normalizedQuery}”.</p>
-        : !loading && <p class="drawer-empty">{transcriptEmptyMessage(data?.reason ?? null, session.backend)}</p>}
+        : !loading && !(showToolCalls && trailingToolCalls.length) && <p class="drawer-empty">{transcriptEmptyMessage(data?.reason ?? null, session.backend)}</p>}
+      {!normalizedQuery && trailingToolCalls.length > 0 && (showToolCalls
+        ? <TranscriptToolCalls calls={trailingToolCalls} />
+        : <p class="transcript-tool-boundary">{transcriptToolBoundaryLabel(trailingToolCalls.length)}</p>)}
     </div>
     {!normalizedQuery && unseen > 0 && <button class="transcript-jump" onClick={jumpToLatest}>
       {unseen} new ↓

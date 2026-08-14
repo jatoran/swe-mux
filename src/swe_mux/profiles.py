@@ -151,7 +151,7 @@ _POWERSHELL_NAMES = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
 _POWERSHELL_SCRIPT_ARGS = {"-command", "-c", "-file", "-f"}
 
 
-def _powershell_bootstrap(*, osc7: bool) -> str:
+def _powershell_bootstrap(*, osc7: bool, breakpoints: bool = False) -> str:
     """The ``-Command`` block an interactive PowerShell session runs after ``$PROFILE``.
 
     Restoring the agent-shim directory is unconditional, because losing it is silent and
@@ -166,6 +166,11 @@ def _powershell_bootstrap(*, osc7: bool) -> str:
     directories of its own.
 
     OSC 7 cwd reporting is the opt-in half (``cwd_integration``) and only wraps ``prompt``.
+
+    OSC 133 shell-integration markers are the other reason to wrap ``prompt``: the
+    prompt function runs exactly when the human's own command has finished, which
+    is the breakpoint attention ranking delivers against. Both features share one
+    wrapper, and the original prompt is preserved and called either way.
     """
     # Rebuilt rather than tested-and-prepended so the invariant matches what
     # `launchers.create_agent_shims` establishes at spawn: exactly one shim dir, in front.
@@ -174,14 +179,29 @@ def _powershell_bootstrap(*, osc7: bool) -> str:
         "(($env:PATH -split ';')|Where-Object{$_ -and $_ -ne $env:MUX_SHIM_DIR}))"
         " -join ';'};"
     )
-    if not osc7:
+    if not osc7 and not breakpoints:
         return restore
+    # `$?` has to be read as the prompt's first statement or it reports this
+    # function's own last operation instead of the command that just ended.
+    marker = (
+        "$__mux_ok=if($?){0}else{1};"
+        '[Console]::Write("$([char]27)]133;D;$__mux_ok$([char]7)'
+        '$([char]27)]133;A$([char]7)");'
+        if breakpoints
+        else ""
+    )
+    report_cwd = (
+        "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"
+        '[Console]::Write("$([char]27)]7;$u$([char]7)")} catch {};'
+        if osc7
+        else ""
+    )
     return restore + (
         "$global:__swe_mux_prompt=$function:prompt;"
         "function global:prompt {"
-        "try {$u=[System.Uri]::new((Get-Location).ProviderPath).AbsoluteUri;"
-        '[Console]::Write("$([char]27)]7;$u$([char]7)")} catch {};'
-        "if($global:__swe_mux_prompt){& $global:__swe_mux_prompt}"
+        + marker
+        + report_cwd
+        + "if($global:__swe_mux_prompt){& $global:__swe_mux_prompt}"
         'else {"PS $($executionContext.SessionState.Path.CurrentLocation)> "}}'
     )
 
@@ -220,9 +240,19 @@ def resolve_profile(
         else:
             if not any(item.casefold() == "-noexit" for item in argv):
                 argv.append("-NoExit")
-            argv.extend(["-Command", _powershell_bootstrap(osc7=profile.cwd_integration)])
+            breakpoints = bool(getattr(config, "attention_breakpoint_markers", True))
+            argv.extend(
+                [
+                    "-Command",
+                    _powershell_bootstrap(
+                        osc7=profile.cwd_integration, breakpoints=breakpoints
+                    ),
+                ]
+            )
             if profile.cwd_integration:
                 capabilities.append("cwd-osc7")
+            if breakpoints:
+                capabilities.append("breakpoint-osc133")
     if profile.cwd_strategy == "wsl":
         argv.extend(["--cd", _wsl_cwd(executable, argv, cwd)])
     return ResolvedProfile(

@@ -1295,7 +1295,10 @@ responsive controls.
   Opening it never starts a configured server or executes extension code, and it has no mutation or terminal-insertion action.
   Source drift is measured against the current CLI process generation, not the latest conversation rollover.
 - **What the reader shows is a filtered conversation, not the transcript.** Tool calls are not
-  rendered, and neither is the CLI machinery that both providers write into
+  rendered by default.
+  A `Tool calls` toggle replaces each count-only seam with individually collapsed native call names and input arguments, and it also exposes calls after the newest prose message.
+  Expanding a call reveals only its input; tool results, telemetry, and private reasoning never enter this projection.
+  The CLI machinery that both providers write into
   the transcript as `user` records: slash-command expansions and their output, `!` shell escapes,
   skill bodies injected mid-conversation, interrupt markers, Claude's `<system-reminder>` spans
   (stripped from the prompt that carries them rather than hiding it), and Codex's
@@ -1318,8 +1321,9 @@ responsive controls.
   of the answer. So the fragments merge only where no tool call sits between them, and each
   message carries `preceding_tool_calls`. Where it is non-zero the column draws a seam naming the
   count, on the same principle as `hidden`: a reader seeing two agent messages in a row must not
-  have to guess whether the gap between them is nothing or twenty minutes of tool work. The seam
-  is not drawn under a search, where the neighbours are whatever matched rather than what followed.
+  have to guess whether the gap between them is nothing or twenty minutes of tool work.
+  With the toggle enabled, the seam becomes one collapsed disclosure per useful tool call.
+  The seam and disclosures are not drawn under a search, where the neighbours are whatever matched rather than what followed.
 - **The rail's Copy reply is the last agent message in this tab**, by construction rather than by
   agreement: `/sessions/{id}/last-reply` reads this same reduction (`final_reply_text`), as does
   read-aloud. The reader is where a doubt about what was copied or spoken gets settled.
@@ -1339,7 +1343,7 @@ responsive controls.
   A pane whose conversation rolled over
   (`/clear`, `/new`) reloads onto the new run; the retired conversation stays in History, which
   is also where anything older than the loaded window lives.
-  History transcript messages use the same agent/you labels, full local timestamp, sticky per-message copy control, and long-message Show more/Show less treatment.
+  History transcript messages use the same agent/you labels, full local timestamp, sticky per-message copy control, long-message Show more/Show less treatment, and default-off collapsed tool-call disclosures.
   A search-matched history message is temporarily unfolded so its result cannot remain behind the clamp.
 - A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh
   generated title from the latest observed user request. A manual Rename remains authoritative and
@@ -1452,7 +1456,14 @@ responsive controls.
   state of its own — `note` reports empty/written/open, `queue` its pending count — so it was pure
   navigation, and on a phone it cost 40 px of a bar that also has to fit the session name and
   path. The session context menu and the palette still open the inspector directly.
-- **Alerts** shows open attention records first and dismissed ones only on request. Each row
+- **Alerts** leads with ranked attention (`attention-ranking.md`): the fan-out headline, the
+  daily interrupt budget, incidents grouped by channel, any behaviour-mined rule awaiting an
+  explicit decision, and the count of what was held back and why. Ranking is the reading; the
+  raw record list under it is how the decision is checked. It is one tab rather than two
+  because a second app-wide icon would compete with the one that already exists for exactly
+  this subject, and the phone rail has no room for it.
+  Ranked items surface here and nowhere else — no sound, no push.
+  Below the ranked view, Alerts shows open attention records first and dismissed ones only on request. Each row
   dismisses (or restores) and the footer clears the lot; both write `read_at` server-side, so
   the state follows the user to every device and to the dashboard inbox rather than being a
   per-browser hide. The tab lists what the daemon retains for 90 days, which made it
@@ -1476,6 +1487,9 @@ responsive controls.
   Its launcher rail takes a second tonal step, while internal drawer panes reuse the workspace's neutral gutter and focus-frame language.
   It has no fixed maximum; its live maximum is the available viewport width after reserving the navigation chrome, utility rail, and a 150 px main workspace.
   Dragging its divider below 260 px previews collapse, and reversing the same drag past 280 px reopens it before release.
+- `sidebar.open` and `sidebar.close` are semantic navigation commands across both renderings.
+  They open or close the mobile overlay and expand or collapse the desktop navigation column.
+  Their voice aliases include navigation-sidebar and left-sidebar forms.
 - **The launcher rail is what the closed drawer looks like**, exactly as the collapsed sidebar rail
   is what the closed sidebar looks like. It is desktop-only, holds the workspace's last column while
   the drawer is closed, and is replaced by the drawer itself on open.
@@ -1551,6 +1565,8 @@ responsive controls.
   `drawer.toggle` (default two-finger swipe **left**, the swipe that drags a right-edge panel in;
   the rightward swipe keeps the left-edge sidebar) reopens where you left off, while `drawer.<tab>`
   commands open one tab directly and close it if it is already showing.
+- `drawer.open` and `drawer.close` are idempotent command-registry entries with side-panel, right-sidebar, and utility-sidebar voice aliases.
+  They coexist with the pointer/gesture-oriented `drawer.toggle` and the per-tab `drawer.show:<tab>` voice commands.
 - On mobile the toolbar's right-corner toggle is the drawer's only *visible* entry point because the desktop launcher is hidden there.
   Without it, the panel would be reachable only by gesture or command palette, neither of which announces itself.
   It mirrors the nav toggle at the opposite
@@ -1827,10 +1843,33 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The `state` field exists for anyone who wants it back but is defined as never notable, so it renders only in `always` mode.
 - **Placement and visibility are one decision.**
   A field placed in no section is off; there is no separate enable flag, and therefore no "enabled but nowhere" state.
+- **Presence-only marks live in a flag strip pinned to the top line's right edge.**
+  The strip is the top line's right section: the broadcast flag, standing activity, and unsent input, in that order, unshrinkable and never shed.
+  Placed after the title instead, the marks sat inside the section that clips, so a title long enough to fill the sidebar hid every one of them — and the rows with the most to report are the ones with the longest names.
+  A flag whose entire content is "this is true" has nothing to ellipsize, while a name that loses its tail stays recognisable, so the strip is laid out first and the title takes whatever is left.
+  Placement is still configurable: putting a flag ahead of the title in the left section keeps it fully visible too, at the cost of a ragged left edge down the list.
+- **Only the title yields on the top line.**
+  Flexbox shrinks siblings in proportion, so the provider mark's token was squeezed below the mark itself, and — not being the last child, which is the only one that clips — its glyph spilled visibly under the first letter of a long name.
+- **The hover-revealed row control gets a lane, and only while it is shown.**
+  It is absolutely positioned over the row's right edge, so it lands on the flag strip (and, as it always had, on the bottom line's right-hand tokens) exactly when the pointer arrives to read them.
+  Reserved on hover rather than always, because 26 px of every row is the width the strip exists to save.
+- **Standing activity renders in exactly one place**, chosen by a single setting like context pressure: glyphs with counts in the flag strip (default), or a pip on the state indicator, or off.
+  The pip costs no row width and cannot be clipped, and says only *that* something is standing — the kinds and counts move to the tooltip.
+  It is a CSS mark at the indicator box's empty top-right corner, not another SVG path: a 24-unit box with a 6.2 core and a 10.2 ring has no empty annulus left, a mark on the ring is indistinguishable from the context gauge's peak dash, and one inside it lands on the state colour.
+  Sized in pixels, it also stays legible at a 10 px indicator, where a shape-relative mark would be under two pixels across.
+  The choice applies to tab strips and menus too, so one session never reports it twice on one screen.
+- **Unsent input is marked with a caret bar (`▌`), in teal.**
+  It reports `unsent_input` from the daemon (`features/terminal-input.md`) unioned with this device's own mobile draft registry, which never reaches the PTY and so is invisible to every other client.
+  Where the two disagree the mark reports the **oldest**: the question is how long something has been sitting there, and a phone draft from an hour ago is not made recent by a keystroke on the desktop a minute ago.
+  Teal because green, blue, amber, and red already say something about what the *agent* is doing, and this is the one mark on the row that is about the operator; the same family as the unread edge, for the same reason.
+  An ended session has no composer and is never marked.
 - **Every placed field is `when notable` or `always`.**
   Notability is per field: a branch that differs from the project's most common branch, a diff with changed lines, a queue with items, a model that differs from the project default, an account when more than one is live, a duration past its per-state threshold.
   The default configuration is almost entirely `when notable`, so a quiet fleet shows a title and a duration and anything visible has earned its place.
-- Read-only model labels use the shared compact presentation mapping, while tooltips, accessibility labels, configuration controls, session comparisons, and API values retain the exact provider identifier.
+- Read-only model labels use the shared compact presentation rule, while tooltips, accessibility labels, configuration controls, session comparisons, and API values retain the exact provider identifier.
+  The rule removes the provider path and a leading vendor-brand token (`claude-`, `gpt-`) and touches nothing else, because every surface that prints a model draws the session's provider mark beside it.
+  A token that names a model *family* — `codex`, `kimi`, `o3`, `sonnet` — is not branding and stays.
+  It replaced a hand-maintained per-family table, which printed the raw id for every model nobody had added yet: the sidebar showed `opus-5` beside `claude-fable-5`, and `sonnet-4-6` beside `gpt-5.6-sol`, in the same list.
 - **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
 - **Sections meet but never overlap.**
   Neither bottom-line section shrinks; the right one is pushed over only while there is room, and the line clips.
@@ -1877,8 +1916,13 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   The arc is a measurement that only moves when the conversation grows, so blinking it alongside the core made a static reading look like live activity.
 
 Mobile shares the one layout rather than keeping a second one.
-`mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title.
+`mobileFields` decides whether the phone renders the configured sections or identity only — indicator, provider mark, title, and the flag strip.
+The strip survives the identity projection because a phone is where an unsent draft is most likely to have been left behind, and a projection that dropped the marks would be silent on exactly the device that stages text and walks away.
 Both screens want the same information in the same order; only how much of it fits differs.
+
+The stored layout is versioned, and version 2 introduced the flag strip.
+Changing the shipped default reaches nobody who has ever opened the settings — a stored blob is authoritative and an unplaced field is off — so the migration moves already-placed flags into the strip and places `draft`, which nobody could have declined because it did not exist.
+A flag the user had removed stays removed: the migration relocates a choice, it does not re-impose one.
 
 The state indicator is SVG rather than a styled element.
 A hexagon is expressible as `clip-path`, a *hollow* hexagon is not, and a gauge that follows a hexagon's outline is not expressible in CSS at all.

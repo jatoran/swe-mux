@@ -566,6 +566,16 @@ the returned reference as unicast draft input without submitting it.
 
 `GET /sessions` adds a compact, read-only `delivery_readiness` object with
 `state: safe|blocked|unknown`, a reason, and `authorized: false`. It is not accepted on writes.
+Rows carry `unsent_input` — `{since}` in epoch seconds, or absent — the daemon's estimate that
+text is sitting unsent in that session's composer, derived from the bytes every operator path
+writes to the PTY (`features/terminal-input.md`).
+It is present only while something is there, so presence is the whole signal, and the character
+count behind it is deliberately not published: it is inferred from keystrokes and a number on
+screen would be read as a measurement.
+It is process-scoped — a daemon restart forgets it, because the byte history it comes from does
+not survive one — and cross-device, because it describes the PTY rather than a client.
+`composer_input_changed` (`session_id`, `source`, `pending`) announces the empty/non-empty
+crossing and nothing between.
 Every `GET /sessions` row and every PTY `state`/`update`/`exit` snapshot carries
 `_snapshot_generation`, `_snapshot_revision`, and `_snapshot_enriched`.
 The generation identifies one daemon process, the revision orders one session inside that generation, and the enriched flag identifies REST rows that authoritatively carry generated-title and delivery-readiness presentation fields.
@@ -575,6 +585,8 @@ Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 `delivery_state` is unchanged) while the agent has background work that will wake it back
 up. Completion sounds and push alerts skip that turn end; the next one is the moment worth
 the user's attention.
+Rows carry `turn_started_at`, monotonic `turn_epoch`, and nullable `active_turn_id` for the open root-turn generation.
+Rows also carry nullable `interrupt_pending_at` and `interrupt_pending_source`; these expose exact operator interrupt intent without claiming completion or changing delivery readiness.
 Rows carry nullable `agent_loaded_at`, the start of the current Claude or Codex process generation.
 Unlike `agent_run_started_at`, it survives an in-process conversation rollover and daemon adoption.
 Rows carry `standing_activity`, the standing-engagement annotation axis: a list of
@@ -716,12 +728,15 @@ narration the agent wrote before it. Provider control acknowledgements are skipp
 does not type `/copy` into the PTY.
 
 `GET /sessions/{id}/transcript` returns the live session's readable conversation for the drawer's
-Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls}], hidden, truncated,
-observation_stale_since, reason}`. Tool calls and CLI machinery are classified out, and an agent's
-turn is merged into one message per *segment*, a segment being a run of records with no tool call
+Transcript tab: `{messages:[{ordinal,role,ts,text,preceding_tool_calls,preceding_tools:[{id,name,input}]}], trailing_tool_calls:[{id,name,input}], hidden, truncated, observation_stale_since, reason}`.
+Tool calls stay outside conversational prose but carry their native names and input arguments for the default-off disclosure.
+Tool results and operational telemetry are never included.
+An agent's turn is merged into one message per *segment*, a segment being a run of records with no tool call
 between them (`transcript_view.conversation_view`, see `ui.md`); `hidden` counts what was withheld
 and `preceding_tool_calls` counts the tool calls between a message and the one before it, so
-neither the filtering nor the gap is ever invisible. `ordinal` numbers the returned window rather
+neither the filtering nor the gap is ever invisible.
+`trailing_tool_calls` preserves calls made after the newest prose message without inventing another message.
+`ordinal` numbers the returned window rather
 than the conversation, making it a display key and not an identity. Deliberately **not**
 `/history/{id}/transcript`, which reindexes the run's searchable messages and loads its
 annotations on every call: right for opening an entry once, wrong for a surface that refreshes on
@@ -731,6 +746,10 @@ reach hundreds of MB. Nothing to show is a `200` with a `reason`
 (`not_agent`/`no_transcript`/`unreadable`), because a shell pane and an agent that has not spoken
 yet are ordinary states of a passive view, not failures. No redaction: unlike the MCP surface,
 the reader is the machine's owner and needs the literal text to copy.
+
+`GET /history/{id}/transcript` returns the same tool-use block subset inside native message content: `{type:"tool_use",id,name,input}`.
+Pure tool-call records remain reviewable even when they contain no prose.
+Tool results and other output-bearing blocks are removed before the response and are not persisted in the History message index.
 
 `GET /sessions/{id}/skills` lists the skills that session's CLI can see, read off disk from the
 directories the CLI itself reads (`agent_skills.py`). Agent backends only; `409` on a shell
@@ -1284,6 +1303,35 @@ tab's live-filtered cheap and standard model pickers.
 `GET /api/automation/dashboard` includes recent observer-call diagnostics without response
 content: requested and resolved model, generation, provider, finish reason, HTTP status,
 retryability, token and cost usage, latency, and response content type and length.
+
+## Attention ranking
+
+Behaviour and invariants: `features/attention-ranking.md`.
+
+`GET /api/attention/inbox[?limit=N]` returns open ranked incidents grouped by channel
+(`interrupt_now`, `next_breakpoint`, `inbox`, `digest`), plus `budget` (daily bound, used,
+remaining, hourly burst limiter), `fanout` (`ok` with a `sustainable_agents` estimate, or
+`insufficient_samples` with no number), `resumption_lag`, `suppressed` counts by reason,
+mined `rules`, and `delivery`. `delivery` is always `{"push": false, "surface": "in_app"}`:
+ranked items reach no device, and the response states that rather than implying it.
+
+`POST /api/attention/items/{item_id}/feedback` with `{"action": "acted"|"dismissed"}` resolves
+one item and records the only input rule mining reads. An unknown item is 404; any other
+action is rejected.
+
+`POST /api/attention/rules` with `{incident_class, channel, accept}` accepts or rejects a
+mined demotion rule and returns the current rule set. An accepted rule expires after 14 days
+and returns as proposed, which is the periodic forced re-judgment.
+
+`GET /api/attention/absence[?since=<epoch>]` is the away report. Its original keys
+(`sessions`, `annotations`, `notifications`, `since`) are unchanged; it additionally carries
+`items`, `boundaries` (each rollover rendered as an explicit boundary rather than smoothed
+over), `suppressed`, `fanout`, and `resumption_lag`.
+
+Ranking emits `attention_item_ranked` and `attention_breakpoint`; a shell pane whose command
+finished emits `shell_command_finished` with its exit status. Loop health and narration
+counters are under `attention_ranking` and `attention_narration` in
+`GET /api/diagnostics/background`.
 
 ## CLI
 

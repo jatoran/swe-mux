@@ -612,7 +612,7 @@ async def test_an_unimplemented_automation_cannot_be_switched_on(tmp_path: Path)
     project = SimpleNamespace(id="p1", name="Main", root=str(tmp_path))
 
     async def body() -> dict[str, object]:
-        return {"automations": {"attention_ranking": True}}
+        return {"automations": {"cross_session_interlocks": True}}
 
     response = await put_project_automations(  # type: ignore[arg-type]
         SimpleNamespace(

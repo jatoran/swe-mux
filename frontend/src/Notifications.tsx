@@ -8,8 +8,15 @@
 // firing on a normal workflow buried every record that mattered. Dismissing marks
 // read — the same flag the automation dashboard's inbox uses — and deletes nothing,
 // so "show dismissed" brings the history back.
+//
+// Ranked attention leads this tab, and the raw records follow it. The records
+// are every finding in arrival order; ranking is the judgement about which of
+// them is worth your attention and when. Keeping both on one surface is
+// deliberate: the ranked view is the one you read, and the raw list is how you
+// check what it decided against.
 import { useState } from 'preact/hooks'
 import { api } from './api'
+import { AttentionInbox } from './AttentionInbox'
 
 export type UiNotification = {
   ts:number;channel:string;delivery_id:string;session_id?:string
@@ -49,6 +56,8 @@ export function NotificationsTab({data,onOpenSession,onChanged}:{
   const dismissAll=()=>void write(()=>api('PATCH','/api/automation/notifications',{read:true}))
 
   return <>
+    <AttentionInbox onOpenSession={onOpenSession} />
+    <h4 class="attention-raw-heading">Every record</h4>
     <p class="drawer-status">{error||`${open.length} open · ${records.length-open.length} dismissed · ${items.length} delivered`}</p>
     <div class="notification-list">
       {automation.length===0&&items.length===0&&<p class="notification-empty">{showRead||!records.length

@@ -69,6 +69,13 @@ function TokenView({ token, session, config }: { token: RowToken; session: Sessi
   if (token.kind === 'broadcast') {
     return <span class="broadcast-flag" title={token.title}>⇶</span>
   }
+  if (token.kind === 'draft') {
+    // A caret bar, because the fact is "a cursor is sitting in text here". It is
+    // the one mark in the strip that reports something *you* left behind rather
+    // than something the agent is doing, so it takes the input accent rather
+    // than the muted grey the standing badges share.
+    return <span class="row-draft" title={token.title} role="img" aria-label={token.text}>▌</span>
+  }
   if (token.kind === 'badges') {
     return <span class="activity-badges" role="img" aria-label={token.text}>
       {(token.badges || []).map((badge, index) =>

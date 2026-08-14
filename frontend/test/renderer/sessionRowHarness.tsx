@@ -6,7 +6,9 @@ import { render } from 'preact'
 import { SessionRowBody } from '../../src/SessionRowBody'
 import { StateIndicator } from '../../src/StateIndicator'
 import { defaultSessionRowConfig, type DotShape } from '../../src/sessionRowConfig'
-import { buildSessionRowTokens, deriveRowContext, sessionContextArc } from '../../src/sessionRowFields'
+import {
+  buildSessionRowTokens, deriveRowContext, sessionContextArc, sessionStandingMark,
+} from '../../src/sessionRowFields'
 import type { Session } from '../../src/types'
 import '../../src/style.css'
 
@@ -28,8 +30,14 @@ const SESSIONS: Session[] = [
     git: { branch: 'feat-tokenizer', dirty: 7, ahead: 2, behind: 0, added: 312, removed: 48 },
   }),
   sample({ id: 'ready', name: 'status detection v2', model: 'opus', last_turn_ms: 72_000, context_pct: 0.41 }),
+  // Long enough to fill any sidebar this harness is measured at, and carrying
+  // every flag: the strip has to survive exactly the row that cannot show its
+  // own title, which is the row the marks used to disappear from.
   sample({
-    id: 'standing', name: 'background work', model: 'opus', last_turn_ms: 9_000, context_pct: 0.2,
+    id: 'standing',
+    name: 'background work on the deterministic consumer pipeline and its detectors',
+    model: 'opus', last_turn_ms: 9_000, context_pct: 0.2, broadcast: true,
+    unsent_input: { since: NOW - 300 },
     standing_activity: [{ kind: 'subagents', source: 'hook', evidence: 'hook:SubagentStart', since: NOW, expires_at: null, count: 2, detail: null }],
   }),
 ]
@@ -51,8 +59,17 @@ render(
             >
               <div class="session-entry">
                 <button data-row={session.id} class={`session-row agent ${session.state}`}>
-                  <StateIndicator session={session} shape={config.dotShape} gauge={sessionContextArc(session, config)} />
+                  <StateIndicator
+                    session={session}
+                    shape={config.dotShape}
+                    gauge={sessionContextArc(session, config)}
+                    standing={sessionStandingMark(session, config)}
+                  />
                   <SessionRowBody session={session} tokens={buildSessionRowTokens(session, config, context)} config={config} />
+                  {/* The hover-revealed kill control, which is absolutely
+                      positioned over the row's right edge — the lane the flag
+                      strip has to be moved out of while it is showing. */}
+                  <span class="row-actions"><button>×</button></span>
                 </button>
               </div>
             </div>

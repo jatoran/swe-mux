@@ -38,6 +38,12 @@ test('terminal states never render the blinking working indicator', () => {
   }
 })
 
+test('interrupt intent is visible and stops the working pulse', () => {
+  const pending = agent('working', { interrupt_pending_at: 1_700_000_000 })
+  assert.equal(sessionStatus(pending), 'interrupt requested')
+  assert.equal(sessionDotClass(pending), 'state-dot working interrupting')
+})
+
 test('awaiting distinguishes approval, question, elicitation, rate limit, and SSH auth', () => {
   const labels = new Set(ALL_AWAITING.map(reason => awaitingLabel(agent('awaiting', { awaiting_reason: reason }))))
   assert.equal(labels.size, ALL_AWAITING.length, 'each awaiting sub-reason needs a distinct affordance')

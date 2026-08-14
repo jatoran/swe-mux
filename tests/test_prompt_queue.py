@@ -23,6 +23,8 @@ from swe_mux.prompt_queue import (
     ARGV_SEED_MAX_CHARS,
     BRACKETED_PASTE_END,
     BRACKETED_PASTE_START,
+    LARGE_PASTE_BYTES,
+    MAX_SUBMIT_DELAY_SECONDS,
     SUBMIT_SEQUENCE,
     PromptQueueService,
     PromptQueueStore,
@@ -41,6 +43,7 @@ def record(sid: str, **kw: Any) -> Any:
         awaiting_reason=None,
         agent_run_id=f"run-{sid}",
         project_id="p1",
+        last_activity_ts=0.0,
     )
     defaults.update(kw)
     return SimpleNamespace(**defaults)
@@ -74,7 +77,7 @@ class ReadinessStub:
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, *sessions: Any) -> None:
+    def __init__(self, tmp_path: Path, *sessions: Any, reacts: bool = False) -> None:
         self.store = PromptQueueStore(tmp_path / "queue.db")
         self.events = EventsStub()
         self.readiness = ReadinessStub()
@@ -82,12 +85,23 @@ class Harness:
             sessions={session.record.id: session for session in sessions}
         )
         self.writes: list[tuple[str, str]] = []
+        # `reacts` models a CLI that redraws when it takes the submit. Default off
+        # so the existing cases keep asserting the exact write sequence; the
+        # delivery-confirmation cases set it to distinguish a CLI that consumed
+        # the keystroke from one whose composer silently kept the body.
+        self.reacts = reacts
+
+        def write(session: Any, data: str) -> None:
+            self.writes.append((session.record.id, data))
+            if self.reacts:
+                session.record.last_activity_ts = time.time()
+
         self.service = PromptQueueService(
             self.store,
             self.manager,
             self.events,
             self.readiness,
-            lambda session, data: self.writes.append((session.record.id, data)),
+            write,
             submit_delay=0.0,
         )
 
@@ -290,6 +304,75 @@ async def test_queues_are_per_target(harness: Harness) -> None:
 
 
 # ----------------------------------------------------------------- delivery
+
+
+@pytest.mark.asyncio
+async def test_a_large_paste_that_swallows_its_submit_is_pressed_again(
+    tmp_path: Path,
+) -> None:
+    """The failure that lost a relay message: the CLI ate the Enter.
+
+    A multi-kilobyte body becomes a placeholder chip and the CLI is busy while it
+    builds one, so a submit sized for a spoken sentence lands mid-consumption and
+    is swallowed. Observed live 2026-08-13 as
+    `[Pasted Content 2784 chars][Pasted Content 4230 chars]` parked in a codex
+    composer while the queue reported both messages sent.
+    """
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        message = await harness.service.enqueue(
+            target_session_id="s1", body="x" * (LARGE_PASTE_BYTES + 10)
+        )
+        result = await harness.service.send_next(message["id"], revision=1)
+        submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
+        assert len(submits) == 2
+        # The write landed either way; what is reported is that nobody saw the
+        # CLI take it, which is the fact the old code had no way to express.
+        assert result["submit_confirmed"] is False
+    finally:
+        harness.store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_cli_that_reacts_is_never_pressed_twice(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, live_session("s1"), reacts=True)
+    try:
+        message = await harness.service.enqueue(
+            target_session_id="s1", body="x" * (LARGE_PASTE_BYTES + 10)
+        )
+        result = await harness.service.send_next(message["id"], revision=1)
+        submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
+        assert len(submits) == 1
+        assert result["submit_confirmed"] is True
+    finally:
+        harness.store.close()
+
+
+@pytest.mark.asyncio
+async def test_a_short_body_keeps_exactly_one_submit(tmp_path: Path) -> None:
+    """Short deliveries never had the problem and must not pay for the fix."""
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        message = await harness.service.enqueue(target_session_id="s1", body="hi")
+        await harness.service.send_next(message["id"], revision=1)
+        submits = [data for _, data in harness.writes if data == SUBMIT_SEQUENCE]
+        assert len(submits) == 1
+    finally:
+        harness.store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_settle_scales_with_the_body(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, live_session("s1"))
+    try:
+        service = harness.service
+        assert service._paste_settle(0) >= service._submit_delay
+        assert service._paste_settle(10) < service._paste_settle(8 * 1024)
+        assert service._paste_settle(8 * 1024) < MAX_SUBMIT_DELAY_SECONDS
+        # Bounded, so a huge body cannot stall the delivery path.
+        assert service._paste_settle(50_000) == MAX_SUBMIT_DELAY_SECONDS
+    finally:
+        harness.store.close()
 
 
 @pytest.mark.asyncio

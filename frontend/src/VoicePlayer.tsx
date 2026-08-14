@@ -7,6 +7,7 @@ import {
   setAutoplayEnabled, subscribePlayback, unlockPlayback,
 } from './voice'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
+import type { Command } from './commands'
 
 const formatSeconds = (value: number) => {
   const total = Math.max(0, Math.floor(value || 0))
@@ -17,7 +18,7 @@ const formatSeconds = (value: number) => {
 // verbatim/summary switch, and the per-device autoplay switch. Everything else
 // (mode, engine, voices) lives in the pane chip, context menu, and Settings so the
 // strip stays one row.
-export function VoicePlayer({ session, status, mode, onSession, onOpenSettings }: { session: Session; status: VoiceStatus; mode: 'on_demand' | 'auto'; onSession: (session: Session) => void; onOpenSettings: () => void }) {
+export function VoicePlayer({ session, status, mode, commands, onSession, onOpenSettings }: { session: Session; status: VoiceStatus; mode: 'on_demand' | 'auto'; commands:Command[]; onSession: (session: Session) => void; onOpenSettings: () => void }) {
   const [clips, setClips] = useState<VoiceClip[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -118,7 +119,7 @@ export function VoicePlayer({ session, status, mode, onSession, onOpenSettings }
     {mode === 'auto' && <span class="voice-flag" title="Every completed reply generates audio automatically">auto</span>}
     {clip?.status === 'failed' && <span class="voice-error" title={clip.error || 'generation failed'}>failed</span>}
     {error && <span class="voice-error" title={error}>{error.length > 42 ? `${error.slice(0, 42)}…` : error}</span>}
-    <VoiceCommandsButton compact/>
+    <VoiceCommandsButton commands={commands} configuredCommands={status.commands} compact/>
     {/* Trailing, so the controls the strip exists for keep the leading slots. It is the
         route out of the strip into everything the strip cannot hold: engine, voice, model,
         content default, budget, cache. */}

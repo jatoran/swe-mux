@@ -23,12 +23,14 @@ import {
   transcriptTimestampIso,
   transcriptTimestampLabel,
   transcriptToolBoundaryLabel,
+  transcriptToolCallsFromBlocks,
+  transcriptToolInputText,
   type TranscriptMessage,
   type TranscriptSelectionLike,
 } from '../src/transcriptView.ts'
 
 const message = (over: Partial<TranscriptMessage> = {}): TranscriptMessage =>
-  ({ message_id: 'offset:0', ordinal: 0, role: 'assistant', text: 'built it', preceding_tool_calls: 0, ...over })
+  ({ message_id: 'offset:0', ordinal: 0, role: 'assistant', text: 'built it', preceding_tool_calls: 0, preceding_tools: [], ...over })
 
 test('following the bottom survives fractional scroll metrics', () => {
   // Pinned: a browser reports `scrollTop + clientHeight` a pixel or two short of
@@ -80,6 +82,20 @@ test('the seam between two agent messages names how much work is in it', () => {
   // A daemon that ever sent something else must not render "NaN tool calls".
   assert.equal(transcriptToolBoundaryLabel(Number.NaN), '')
   assert.equal(transcriptToolBoundaryLabel(-2), '')
+})
+
+test('tool disclosures keep useful names and inputs without result data', () => {
+  assert.equal(transcriptToolInputText({ command: 'pytest -q', timeout_ms: 1000 }), '{\n  "command": "pytest -q",\n  "timeout_ms": 1000\n}')
+  assert.equal(transcriptToolInputText('  README.md  '), 'README.md')
+  assert.equal(transcriptToolInputText(null), '')
+  assert.deepEqual(transcriptToolCallsFromBlocks([
+    { type: 'text', text: 'Checking.' },
+    { type: 'tool_use', id: 'call-1', name: 'Read', input: { file_path: 'README.md' } },
+    { type: 'tool_result', id: 'call-1', text: 'private output' },
+    { type: 'tool_use', name: '', input: { ignored: true } },
+  ], 'history:4'), [
+    { id: 'call-1', name: 'Read', input: { file_path: 'README.md' } },
+  ])
 })
 
 test('long messages fold, ordinary ones do not', () => {

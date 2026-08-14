@@ -10,8 +10,9 @@ import {
 import { sessionDotSize } from '../src/sessionRowPrefs.ts'
 import {
   buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
-  identityRowTokens, sessionContextArc, shedForWidth,
+  identityRowTokens, sessionContextArc, sessionStandingMark, shedForWidth,
 } from '../src/sessionRowFields.ts'
+import type { StandingActivity } from '../src/types.ts'
 import { shapePath } from '../src/dotShapes.ts'
 
 const NOW = 1_700_000_000
@@ -26,6 +27,11 @@ const session = (overrides: Partial<Session> = {}): Session => ({
 
 const context = (overrides: Partial<ReturnType<typeof emptyRowContext>> = {}) =>
   ({ ...emptyRowContext(NOW), ...overrides })
+
+const STANDING: StandingActivity[] = [{
+  kind: 'subagents', source: 'hook', evidence: 'hook:SubagentStart',
+  since: NOW - 60, expires_at: null, count: 2, detail: null,
+}]
 
 const bottomText = (item: Session, config: SessionRowConfig, ctx = context()) => {
   const tokens = buildSessionRowTokens(item, config, ctx)
@@ -68,6 +74,17 @@ test('a working session is aged from its turn, so tool calls do not reset it', (
   const config = withBottom(defaultSessionRowConfig(), ['duration'])
   const midTurn = session({ state: 'working', state_since: NOW - 3, turn_started_at: NOW - 1320 })
   assert.deepEqual(bottomText(midTurn, config), ['22m'])
+})
+
+test('an interrupt request freezes the visible turn duration', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const pending = session({
+    state: 'working',
+    turn_started_at: NOW - 600,
+    interrupt_pending_at: NOW - 300,
+  })
+  assert.deepEqual(bottomText(pending, config), ['5m'])
+  assert.deepEqual(bottomText(pending, config, context({ now: NOW + 3600 })), ['5m'])
 })
 
 test('an awaiting session is aged from the turn, like every other live state', () => {
@@ -409,6 +426,134 @@ test('the identity projection drops every non-identity field', () => {
   assert.deepEqual(tokens.bottom.left.tokens, [])
   assert.deepEqual(tokens.bottom.right.tokens, [])
   assert.deepEqual(tokens.top.left.tokens.map(token => token.id), ['glyph', 'title'])
+})
+
+// --- the flag strip ----------------------------------------------------------
+
+test('the flag strip is pinned to the top line’s right, away from the title', () => {
+  // The defect this pins: the marks used to follow the title inside the section
+  // that clips, so a title long enough to fill the sidebar hid every one of them.
+  const base = defaultSessionRowConfig()
+  assert.deepEqual(base.top.left.map(slot => slot.id), ['glyph', 'title'])
+  assert.deepEqual(base.top.right.map(slot => slot.id), ['broadcast', 'badges', 'draft'])
+})
+
+test('no amount of shedding removes a flag', () => {
+  // Width shedding drops the lowest-priority token in *every* section. With the
+  // strip alone in the top-right, that would delete the mark saying a subagent
+  // is running at exactly the width that made the row hard to read.
+  const config = defaultSessionRowConfig()
+  const item = session({ broadcast: true, unsent_input: { since: NOW - 60 }, standing_activity: STANDING })
+  const tokens = buildSessionRowTokens(item, config, { ...context(), shed: 99 })
+  assert.deepEqual(tokens.top.left.tokens.map(token => token.id), ['glyph', 'title'])
+  assert.deepEqual(tokens.top.right.tokens.map(token => token.id), ['broadcast', 'badges', 'draft'])
+})
+
+test('the identity projection keeps the strip, because a phone is where drafts are left', () => {
+  const config = defaultSessionRowConfig()
+  const item = session({ unsent_input: { since: NOW - 60 } })
+  const tokens = identityRowTokens(item, config, context())
+  assert.deepEqual(tokens.top.left.tokens.map(token => token.id), ['glyph', 'title'])
+  assert.deepEqual(tokens.top.right.tokens.map(token => token.id), ['draft'])
+})
+
+test('a pre-strip layout relocates its flags once and gains the new one', () => {
+  const config = normalizeSessionRowConfig({
+    version: 1,
+    top: {
+      left: [
+        { id: 'glyph', mode: 'always' }, { id: 'title', mode: 'always' },
+        { id: 'broadcast', mode: 'notable' }, { id: 'badges', mode: 'notable' },
+      ],
+      right: [],
+      separator: 'none',
+    },
+  })
+  assert.equal(config.version, 2)
+  assert.deepEqual(config.top.left.map(slot => slot.id), ['glyph', 'title'])
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['broadcast', 'badges', 'draft'])
+})
+
+test('migration relocates a choice without re-imposing one', () => {
+  // A flag the user had removed is off, and stays off: `draft` arrives placed
+  // because nobody could have declined a field that did not exist.
+  const config = normalizeSessionRowConfig({
+    version: 1,
+    top: { left: [{ id: 'glyph', mode: 'always' }, { id: 'title', mode: 'always' }], right: [], separator: 'none' },
+  })
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['draft'])
+})
+
+test('an already-migrated layout is left exactly as it is', () => {
+  const stored = {
+    ...defaultSessionRowConfig(),
+    top: {
+      left: [{ id: 'title', mode: 'always' }],
+      right: [{ id: 'badges', mode: 'always' }],
+      separator: 'none' as const,
+    },
+  }
+  const config = normalizeSessionRowConfig(stored)
+  assert.deepEqual(config.top.right.map(slot => slot.id), ['badges'], 'no field is re-added')
+  assert.deepEqual(config.top.left.map(slot => slot.id), ['title'])
+})
+
+// --- unsent input ------------------------------------------------------------
+
+test('unsent composer text marks the row, from either device or the daemon', () => {
+  const config = defaultSessionRowConfig()
+  const flags = (item: Session, ctx = context()) =>
+    buildSessionRowTokens(item, config, ctx).top.right.tokens.map(token => token.id)
+  assert.deepEqual(flags(session()), [], 'a quiet session is unmarked')
+  assert.deepEqual(flags(session({ unsent_input: { since: NOW - 60 } })), ['draft'])
+  assert.deepEqual(
+    flags(session(), context({ localDrafts: { s1: NOW - 60 } })),
+    ['draft'],
+    'a device-local draft never reaches the PTY, so only this client can report it',
+  )
+})
+
+test('the mark reports the oldest thing sitting there', () => {
+  // Two sources, two clocks: a phone draft from an hour ago is not made recent
+  // by a keystroke on the desktop a minute ago, and the question the row answers
+  // is how long something has been waiting.
+  const config = defaultSessionRowConfig()
+  const item = session({ unsent_input: { since: NOW - 60 } })
+  const tokens = buildSessionRowTokens(item, config, context({ localDrafts: { s1: NOW - 3600 } }))
+  assert.match(tokens.top.right.tokens[0].title || '', /1h ago/)
+})
+
+test('an ended session has no composer to report', () => {
+  const config = defaultSessionRowConfig()
+  const item = session({ state: 'exited', unsent_input: { since: NOW - 60 } })
+  assert.deepEqual(buildSessionRowTokens(item, config, context()).top.right.tokens, [])
+})
+
+// --- standing activity, in exactly one place ---------------------------------
+
+test('standing activity renders in the row, on the indicator, or nowhere', () => {
+  const base = defaultSessionRowConfig()
+  const item = session({ standing_activity: STANDING })
+  const inRow = (config: SessionRowConfig) =>
+    buildSessionRowTokens(item, config, context()).top.right.tokens.map(token => token.id)
+
+  assert.equal(base.standing, 'row', 'the glyphs carry the kinds and counts, so they are the default')
+  assert.deepEqual(inRow(base), ['badges'])
+  assert.equal(sessionStandingMark(item, base), null)
+
+  const onIndicator: SessionRowConfig = { ...base, standing: 'indicator' }
+  assert.deepEqual(inRow(onIndicator), [], 'one fact must not render twice')
+  assert.equal(sessionStandingMark(item, onIndicator)?.label, '2 subagents')
+
+  const off: SessionRowConfig = { ...base, standing: 'off' }
+  assert.deepEqual(inRow(off), [])
+  assert.equal(sessionStandingMark(item, off), null)
+})
+
+test('the indicator pip is drawn only for a session that has something standing', () => {
+  const config: SessionRowConfig = { ...defaultSessionRowConfig(), standing: 'indicator' }
+  assert.equal(sessionStandingMark(session(), config), null)
+  assert.equal(sessionStandingMark(undefined, config), null)
 })
 
 test('normalization keeps the title, deduplicates, and rejects cross-line fields', () => {

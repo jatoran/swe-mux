@@ -36,6 +36,13 @@ export interface Session {
   last_turn_ms?: number | null
   /** Epoch seconds the current root turn began; absent while no turn is open. */
   turn_started_at?: number | null
+  /** Monotonic identity of the current root-turn generation. */
+  turn_epoch?: number
+  /** Provider-native or mux-synthesized id of the open root turn. */
+  active_turn_id?: string | null
+  /** Operator interruption intent awaiting provider or PTY confirmation. */
+  interrupt_pending_at?: number | null
+  interrupt_pending_source?: string | null
   /** Epoch seconds a human last submitted a request here; absent when unknown.
    *  Not the same question as `turn_started_at`: auto-delivery and injected
    *  teammate messages open turns nobody asked for. Run-scoped. */
@@ -100,6 +107,17 @@ export interface Session {
   observation_stale_since?:number
   observation_diagnostic?:string
   delivery_readiness?:{state:'safe'|'blocked'|'unknown';reason:string;authorized:false}
+  /**
+   * Text sitting unsent in this session's composer, estimated by the daemon from
+   * the bytes written to the PTY (`composer_input.py`). Present only while
+   * something is there, so presence is the whole signal; `since` is when the
+   * composer last went from empty to non-empty, in epoch seconds.
+   *
+   * Cross-device by construction — it reports text typed from any client, on any
+   * machine — and process-scoped: a daemon restart forgets it, because the byte
+   * history it is derived from does not survive one.
+   */
+  unsent_input?:{since:number}|null
   auto_named?:boolean;generated_title?:string
   generated_title_annotation?:{id:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
   voice_mode?: VoiceMode | null

@@ -19,7 +19,8 @@ Four detectors ship together:
 ## Key concepts
 
 - **Deterministic detector, never a narrator.** A finding states what the facts say. The
-  cheap-model "why" is a separate, later layer (CP §14) and its absence never blocks these.
+  cheap-model "why" is a separate layer (`attention-ranking.md`), off by default, and its
+  absence never blocks these.
 - **Evidence is a set.** A loop's case is "this fingerprint repeated three times and nothing
   moved"; one `source_event_seq` pointer would not let a reader check it. Every annotation
   carries the contributing fact references (`evidence_json`).
@@ -156,3 +157,5 @@ A consumer whose substrate is not enabled resolves as blocked and does nothing.
 - `tier0-facts.md` — the substrate every detector reads.
 - `automation-enablement.md` — the opt-in DAG that gates them.
 - `automation.md` — the model tier (observers), which these deliberately are not.
+- `attention-ranking.md` — the consumer that decides which of these findings is worth
+  interrupting a human for, and when.

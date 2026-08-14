@@ -3,7 +3,15 @@ import { api } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
-import { transcriptClamped, transcriptSpeaker, transcriptTimestampIso, transcriptTimestampLabel } from './transcriptView'
+import { TranscriptToolCalls } from './TranscriptToolCalls'
+import {
+  transcriptClamped,
+  transcriptSpeaker,
+  transcriptTimestampIso,
+  transcriptTimestampLabel,
+  transcriptToolCallsFromBlocks,
+  type TranscriptContentBlock,
+} from './transcriptView'
 import type { Project } from './types'
 import { harnessDisplayName, promptDeliveryHarnesses, transcriptHarnesses } from './harnessRegistry'
 import { ModelName } from './ModelName'
@@ -23,7 +31,7 @@ export type HistoryEntry = {
   auto_named?:number;generated_title?:string;matches?:HistoryMatch[];match_count?:number
 }
 type DerivedAnnotation={id:string;tag:string;content:string;provenance:string;resolved_model?:string;confidence?:number;cost_usd?:number;created_at:number}
-type TranscriptMessage={role:'user'|'assistant';ts?:string;content:Array<{type:string;text?:string;name?:string;input?:unknown}>}
+type TranscriptMessage={role:'user'|'assistant';ts?:string;content:TranscriptContentBlock[]}
 type Transcript={entry:HistoryEntry;messages:TranscriptMessage[];annotations:DerivedAnnotation[];matches:HistoryMatch[]}
 type LineageEdge={id:string;parent_run_id:string;child_run_id:string;relation:string;created_at:number}
 type HistoryPage={items:HistoryEntry[];next_cursor:string|null}
@@ -68,8 +76,7 @@ const formatBytes=(bytes?:number|null)=>{
   while(value>=1024&&unit<units.length-1){value/=1024;unit++}
   return `${value>=100||unit===0?Math.round(value):value.toFixed(1)} ${units[unit]}`
 }
-const transcriptBlockText=(block:TranscriptMessage['content'][number])=>block.type==='text'?(block.text||''):block.type==='tool_use'?`${block.name||'tool'}\n${JSON.stringify(block.input,null,2)}`:block.type
-const historyMessageText=(message:TranscriptMessage)=>message.content.map(transcriptBlockText).filter(Boolean).join('\n\n')
+const historyMessageText=(message:TranscriptMessage)=>message.content.filter(block=>block.type==='text').map(block=>block.text||'').filter(Boolean).join('\n\n')
 
 export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSecondOpinion,onHandoff}:Props){
   const [items,setItems]=useState<HistoryEntry[]>([])
@@ -91,6 +98,7 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
   const [activeMatch,setActiveMatch]=useState(0)
   const [expandedMessages,setExpandedMessages]=useState<Set<number>>(()=>new Set())
   const [copiedMessage,setCopiedMessage]=useState<number|null>(null)
+  const [showToolCalls,setShowToolCalls]=useState(false)
   const [lineage,setLineage]=useState<LineageEdge[]>([])
   const [gitProvenance,setGitProvenance]=useState<GitProvenance[]>([])
   const [job,setJob]=useState<BackfillJob|null>(null)
@@ -214,6 +222,14 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
     window.setTimeout(()=>setCopiedMessage(current=>current===ordinal?null:current),COPIED_FLASH_MS)
   }
   const activeOrdinal=transcript?.matches[activeMatch]?.ordinal
+  const historyRows=(transcript?.messages||[]).map((message,ordinal)=>({
+    message,
+    ordinal,
+    text:historyMessageText(message),
+    toolCalls:transcriptToolCallsFromBlocks(message.content,`history:${transcript?.entry.id||'unknown'}:${ordinal}`),
+  }))
+  const availableToolCalls=historyRows.reduce((total,row)=>total+row.toolCalls.length,0)
+  const visibleHistoryRows=historyRows.filter(row=>row.text||(showToolCalls&&row.toolCalls.length))
 
   const scopeProject=projects.find(item=>item.id===project)
   const historyHarnesses=transcriptHarnesses()
@@ -242,21 +258,21 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
         {nextCursor&&!loading&&<button class="history-load-more" onClick={()=>void load(true)}>Load more</button>}
       </aside>
       <main>{transcript?<><div class="transcript-heading"><button class="history-back" onClick={()=>setTranscript(null)}>← Results</button><div><h3>[{transcript.entry.backend}] {historyName(transcript.entry)}</h3><span>{transcript.entry.project_label||'Unassigned'} · {transcript.entry.cwd}</span></div></div>
-        <div class="transcript-actions"><button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume as new</button><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button>{reviewTarget(transcript.entry.backend)&&<button onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {harnessDisplayName(reviewTarget(transcript.entry.backend)!.name)}</button>}{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
+        <div class="transcript-actions"><button class="primary" onClick={()=>void onResume(transcript.entry)}>Resume as new</button><button onClick={()=>void onHandoff(transcript.entry)}>Export handoff</button>{reviewTarget(transcript.entry.backend)&&<button onClick={()=>void onSecondOpinion(transcript.entry)}>Review with {harnessDisplayName(reviewTarget(transcript.entry.backend)!.name)}</button>}<label class="transcript-tool-toggle"><input type="checkbox" checked={showToolCalls} disabled={!availableToolCalls} onChange={event=>setShowToolCalls(event.currentTarget.checked)}/>Tool calls</label>{transcript.matches.length>0&&<div class="transcript-match-nav"><button aria-label="Previous search match" onClick={()=>moveMatch(-1)}>↑</button><span>{activeMatch+1}/{transcript.matches.length}</span><button aria-label="Next search match" onClick={()=>moveMatch(1)}>↓</button></div>}</div>
         <div class="transcript-metadata"><small>Started {timestampLabel(historyStart(transcript.entry))} · last {transcript.entry.last_message_role==='assistant'?'agent':transcript.entry.last_message_role==='user'?'you':'message'} {timestampLabel(transcript.entry.last_message_at)}</small><small>{transcript.entry.exit_reason||transcript.entry.final_state||'indexed'} · <ModelName model={transcript.entry.model}/> · {transcript.entry.external?'external':'mux session'}</small>{providerIdentity(transcript.entry)&&<small>{providerIdentity(transcript.entry)}</small>}<small>{transcript.entry.context_window?`context final ${Math.round((transcript.entry.final_context_pct||0)*100)}% · peak ${Math.round((transcript.entry.peak_context_pct||0)*100)}% · ${transcript.entry.measurement_source||'native observation'}`:'context unavailable'} · tokens in {transcript.entry.tokens_in||0} / out {transcript.entry.tokens_out||0} · cache read {transcript.entry.tokens_cache_read||0} / write {transcript.entry.tokens_cache_write||0} · cost {money.format(transcript.entry.cost_usd||0)}{formatBytes(transcriptBytes(transcript.entry))?` · transcript ${formatBytes(transcriptBytes(transcript.entry))}`:''}</small><small>{transcript.entry.compaction_count?`explicit compactions ${transcript.entry.compaction_count} · ${transcript.entry.compaction_capability||'native evidence'} · confidence ${transcript.entry.compaction_confidence||'unknown'}`:'compaction count unavailable - token drops are not treated as compaction evidence'}</small></div>
         {gitProvenance.length>0&&<section class="transcript-lineage"><h4>Commits from this run</h4>{gitProvenance.map(item=><article key={item.id}><strong>{shortSha(item.commitOid)} · {item.subject||'subject unavailable'}</strong><span>{item.relationship} · {item.confidence}</span><small>{new Date(item.observedAt*1000).toLocaleString()}</small></article>)}</section>}{lineage.length>0&&<section class="transcript-lineage"><h4>Work lineage</h4>{lineage.map(edge=><article><strong>{edge.relation}</strong><span>{edge.parent_run_id} → {edge.child_run_id}</span><small>{new Date(edge.created_at*1000).toLocaleString()}</small></article>)}</section>}{transcript.annotations.length>0&&<section class="transcript-annotations"><h4>Run notes</h4>{transcript.annotations.map(item=><details><summary>{item.tag} · {item.content}</summary><small>{new Date(item.created_at*1000).toLocaleString()} · {item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</small></details>)}</section>}
-        <div class="messages" ref={transcriptBody}>{transcript.messages.length?transcript.messages.map((message,ordinal)=>{
-          const text=historyMessageText(message)
+        <div class="messages" ref={transcriptBody}>{visibleHistoryRows.length?visibleHistoryRows.map(({message,ordinal,text,toolCalls})=>{
           const matched=transcript.matches.some(match=>match.ordinal===ordinal)
           const foldable=transcriptClamped(text)
           const expanded=matched||expandedMessages.has(ordinal)
           const speaker=transcriptSpeaker(message.role)
           const stamp=transcriptTimestampLabel(message.ts)
           return <article data-message-ordinal={ordinal} class={`transcript-message ${message.role} ${matched?'search-match-message':''} ${activeOrdinal===ordinal?'active-search-match':''}`}>
-            <div class="transcript-copy-anchor"><button class={copiedMessage===ordinal?'transcript-copy copied':'transcript-copy'} aria-label={`Copy this ${speaker==='you'?'message':'reply'}`} title={`Copy this ${speaker==='you'?'message':'reply'}`} onClick={()=>void copyMessage(message,ordinal)}>{copiedMessage===ordinal?'Copied':'Copy'}</button></div>
+            {text&&<div class="transcript-copy-anchor"><button class={copiedMessage===ordinal?'transcript-copy copied':'transcript-copy'} aria-label={`Copy this ${speaker==='you'?'message':'reply'}`} title={`Copy this ${speaker==='you'?'message':'reply'}`} onClick={()=>void copyMessage(message,ordinal)}>{copiedMessage===ordinal?'Copied':'Copy'}</button></div>}
             <header><span class="transcript-speaker">{speaker}</span>{stamp&&<time dateTime={transcriptTimestampIso(message.ts)}>{stamp}</time>}</header>
-            <div class={`history-transcript-content ${foldable&&!expanded?'clamped':''}`}>{message.content.map(block=>block.type==='text'?<p>{block.text}</p>:<pre>{transcriptBlockText(block)}</pre>)}</div>
+            {text&&<div class={`history-transcript-content ${foldable&&!expanded?'clamped':''}`}><p>{text}</p></div>}
             {foldable&&!matched&&<button class="transcript-expand" onClick={()=>toggleMessage(ordinal)}>{expanded?'Show less':'Show more'}</button>}
+            {showToolCalls&&<TranscriptToolCalls calls={toolCalls}/>}
           </article>
         }):<div class="no-transcript">No native transcript is available for this session.</div>}</div><textarea ref={manualCopyArea} class="transcript-manual" readOnly aria-hidden="true" tabIndex={-1}/></>:<div class="history-placeholder"><span>◷</span><strong>Select a session</strong><p>Search prompts and replies, then inspect the native transcript.</p></div>}</main>
     </div>

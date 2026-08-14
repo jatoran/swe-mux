@@ -6,6 +6,20 @@
 // cannot live in the component's own state, and everything here is testable
 // under the plain node runner precisely because none of it renders.
 
+export type TranscriptToolCall = {
+  id: string
+  name: string
+  input?: unknown
+}
+
+export type TranscriptContentBlock = {
+  type: string
+  id?: string
+  text?: string
+  name?: string
+  input?: unknown
+}
+
 /** One side of the conversation, already merged and filtered by the daemon. */
 export type TranscriptMessage = {
   message_id: string
@@ -19,6 +33,8 @@ export type TranscriptMessage = {
    * wherever a reply resumed after tool use, which is the boundary the daemon
    * stopped merging across. */
   preceding_tool_calls: number
+  /** Useful native call details at that boundary. Results are never included. */
+  preceding_tools?: TranscriptToolCall[]
 }
 
 /** Why there is nothing to read. `null` means the transcript loaded. */
@@ -30,6 +46,8 @@ export type SessionTranscript = {
   backend: string
   observation_stale_since?: number | null
   messages: TranscriptMessage[]
+  /** Calls made after the newest conversational message. */
+  trailing_tool_calls?: TranscriptToolCall[]
   /** Records the daemon classified as CLI machinery rather than conversation. */
   hidden: number
   truncated: boolean
@@ -274,6 +292,30 @@ export const transcriptSpeaker = (role: TranscriptMessage['role']): string => ro
 export function transcriptToolBoundaryLabel(count: number): string {
   if (!Number.isFinite(count) || count < 1) return ''
   return `${count} tool call${count === 1 ? '' : 's'}`
+}
+
+/** Human-readable native input for one collapsed tool-call disclosure. */
+export function transcriptToolInputText(input: unknown): string {
+  if (input === undefined || input === null) return ''
+  if (typeof input === 'string') return input.trim()
+  try {
+    return JSON.stringify(input, null, 2) || ''
+  } catch {
+    return String(input)
+  }
+}
+
+/** Normalize the tool-use blocks returned by the History transcript route. */
+export function transcriptToolCallsFromBlocks(
+  blocks: TranscriptContentBlock[],
+  sourceId: string,
+): TranscriptToolCall[] {
+  return blocks.flatMap((block, index) => {
+    if (block.type !== 'tool_use') return []
+    const name = String(block.name || '').trim()
+    if (!name) return []
+    return [{ id: String(block.id || `${sourceId}:tool:${index}`), name, input: block.input }]
+  })
 }
 
 export function transcriptConversationText(messages: TranscriptMessage[]): string {

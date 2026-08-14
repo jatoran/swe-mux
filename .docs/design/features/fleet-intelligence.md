@@ -15,10 +15,19 @@ Semantic triage uses the Phase-6 observer/budget substrate; deterministic eviden
 preferred. The shared inbox, interval digest, and checkpoint-based absence report are
 provider-neutral and work in desktop/mobile browsers.
 
+These records are evidence, not a routing decision. Which of them is worth interrupting a
+human for, and when, is decided by `attention-ranking.md`, which consumes the fault-carrying
+events emitted here (`stalled`, `runaway`, `context_pressure`, `claim_unverified`,
+`unattended_attention`, and the `port_collision` interlock) alongside the deterministic
+detectors' annotations. `cross_session_dev_server` stays out of ranking for the same reason it
+stays out of the inbox: it is the documented workflow, not a fault.
+
 The browser labels this surface `All-session health`; `fleet` remains the implementation term
 for the complete set of live/recent sessions. Passive deterministic signals remain distinct
 from optional OpenRouter attention observers. The Attention inbox contains actionable notices;
-the away report aggregates inbox items and run annotations since the last attach/input activity.
+the away report aggregates inbox items and run annotations since the last attach/input activity,
+and carries the ranked items, suppressed counts, and rollover boundaries the digest half of
+`attention-ranking.md` adds to the same response.
 The shared attention-observer setting also enables the 30-minute unread-attention digest.
 
 ## Cross-session intelligence

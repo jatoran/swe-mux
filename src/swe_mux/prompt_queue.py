@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import time
 import uuid
@@ -89,10 +90,33 @@ MAX_SCHEDULE_HORIZON_SECONDS = 30 * 86400
 # a multi-line body sent unwrapped would submit at every newline, so the text
 # is wrapped in bracketed paste with newlines as CR, and the submit is a
 # separate write after the same settle delay the browser uses.
+log = logging.getLogger("swe_mux.prompt_queue")
+
 BRACKETED_PASTE_START = "\x1b[200~"
 BRACKETED_PASTE_END = "\x1b[201~"
 SUBMIT_SEQUENCE = "\r"
 SUBMIT_DELAY_SECONDS = 0.18
+# A CLI turns a large paste into a placeholder chip and is busy while it does,
+# so a fixed 180 ms settle sized for a spoken sentence is not a settle at all
+# for a multi-kilobyte relay: the submit lands mid-consumption and is swallowed,
+# leaving the body sitting in the composer while the queue reports it sent
+# (observed live 2026-08-13: two relay messages parked as
+# `[Pasted Content 2784 chars][Pasted Content 4230 chars]` in a codex composer).
+# The settle therefore scales with the payload, bounded so a huge body cannot
+# stall the delivery path.
+SUBMIT_DELAY_PER_KIB_SECONDS = 0.08
+MAX_SUBMIT_DELAY_SECONDS = 2.0
+# Only a paste big enough to become a placeholder chip is at risk of eating its
+# own submit, and only that case earns a second carriage return: an extra one is
+# a no-op on an empty composer, but it is still a write into someone else's
+# session and is not worth spending on the short bodies that never had the
+# problem.
+LARGE_PASTE_BYTES = 1024
+# How long to watch for the CLI reacting before deciding the submit went
+# nowhere. A consumed submit redraws immediately, so this resolves in a frame or
+# two on the happy path.
+SUBMIT_CONFIRM_SECONDS = 0.6
+SUBMIT_CONFIRM_POLL_SECONDS = 0.05
 
 # Blocked/unknown readiness can be overridden by an explicit, per-send user
 # confirmation — except for the protections the roadmap forbids bypassing:
@@ -1554,6 +1578,53 @@ class PromptQueueService:
             pending=int(summary["pending"]),
         )
 
+    # -- delivery mechanics ---------------------------------------------------
+
+    def _paste_settle(self, byte_count: int) -> float:
+        """How long to wait between the paste and the submit, sized to the body."""
+        scaled = self._submit_delay + (byte_count / 1024.0) * SUBMIT_DELAY_PER_KIB_SECONDS
+        return min(MAX_SUBMIT_DELAY_SECONDS, max(self._submit_delay, scaled))
+
+    async def _reacted(self, session: Any, since: float) -> bool:
+        """Watch for the CLI producing output after a submit.
+
+        Any PTY byte is the evidence: a consumed submit redraws the composer and
+        starts the turn. Session *state* is the wrong signal here — it is derived
+        from transcripts and hooks that can lag seconds behind the keystroke, so
+        it would call a healthy delivery unconfirmed.
+        """
+        deadline = time.monotonic() + SUBMIT_CONFIRM_SECONDS
+        while time.monotonic() < deadline:
+            await asyncio.sleep(SUBMIT_CONFIRM_POLL_SECONDS)
+            if str(getattr(session.record, "state", "")) in {"exited", "crashed"}:
+                raise RuntimeError("the target session ended during delivery")
+            if float(getattr(session.record, "last_activity_ts", 0.0) or 0.0) > since:
+                return True
+        return False
+
+    async def _submit(self, session: Any, message_id: str, byte_count: int) -> bool:
+        """Press submit, and press once more if a large paste ate the first one.
+
+        Returns whether the CLI was seen to react. `False` is not a failed write —
+        the bytes are in the composer either way — it is the difference between
+        "delivered" and "delivered and the CLI took it", which the queue used to
+        report as the same clean send.
+        """
+        before = float(getattr(session.record, "last_activity_ts", 0.0) or 0.0)
+        self._write(session, SUBMIT_SEQUENCE)
+        if await self._reacted(session, before):
+            return True
+        if byte_count < LARGE_PASTE_BYTES:
+            return False
+        log.info(
+            "queue delivery %s: no reaction to the submit after a %d byte paste,"
+            " pressing once more",
+            message_id,
+            byte_count,
+        )
+        self._write(session, SUBMIT_SEQUENCE)
+        return await self._reacted(session, before)
+
     # -- target resolution ----------------------------------------------------
 
     def _live_target(self, target_session_id: str) -> Any:
@@ -1882,10 +1953,10 @@ class PromptQueueService:
         byte_count = len(data.encode("utf-8")) + len(SUBMIT_SEQUENCE)
         try:
             self._write(session, data)
-            await asyncio.sleep(self._submit_delay)
+            await asyncio.sleep(self._paste_settle(byte_count))
             if session.record.state in {"exited", "crashed"}:
                 raise RuntimeError("the target session ended during delivery")
-            self._write(session, SUBMIT_SEQUENCE)
+            submitted = await self._submit(session, message_id, byte_count)
             # Who asked, recorded at the only moment it is knowable. The CLI is
             # about to fire a submit hook indistinguishable from one a person
             # typed, and the transcript will record the prompt identically —
@@ -1921,9 +1992,24 @@ class PromptQueueService:
             raise QueueError(
                 "delivery_failed", f"delivery failed: {exc}", status=502
             ) from exc
+        if not submitted:
+            # The bytes landed and the composer holds them; what did not happen
+            # is the submit. Recording a clean `sent` here is what let a relay
+            # message sit in a CLI's paste placeholder for half an hour while
+            # the queue reported success (observed live 2026-08-13, codex).
+            log.warning(
+                "queue delivery %s wrote %d bytes to %s but the target never left"
+                " idle: the composer may still hold it unsubmitted",
+                message_id,
+                byte_count,
+                target_id,
+            )
         final = await self.store.finalize_delivery(
             delivery_id,
             message_id,
+            # The audit outcome stays `sent`: the write happened, and widening an
+            # enum other readers branch on would be a compatibility change for a
+            # fact that belongs beside it rather than inside it.
             outcome="sent",
             message_state="sent",
             delivery_state=delivery_state,
@@ -1942,6 +2028,7 @@ class PromptQueueService:
             outcome="sent",
             delivery_state=delivery_state,
             confirmed=confirmed,
+            submit_confirmed=submitted,
             initiator=initiator,
             bytes=byte_count,
         )
@@ -1949,6 +2036,7 @@ class PromptQueueService:
             "status": "sent",
             "delivery_id": delivery_id,
             "confirmed": confirmed,
+            "submit_confirmed": submitted,
             "delivery_state": delivery_state,
             "initiator": initiator,
             "message": final,

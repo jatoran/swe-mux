@@ -19,6 +19,7 @@
 .workspace { grid-row:3;display:grid;grid-template-columns:254px minmax(0,1fr);min-height:0 }.sidebar { display:flex;flex-direction:column;min-height:0;background:#0d1014;border-right:1px solid var(--line) }.sidebar-heading { height:calc(38px*var(--ui-scale));flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 13px;font:600 9px 'JetBrains Mono';letter-spacing:.11em;color:#67717f;border-bottom:1px solid #1d2229 }.sidebar-heading button { width:25px;height:calc(25px*var(--ui-scale));border:0;background:transparent;border-radius:5px;color:#7f8997;cursor:pointer }.sidebar-heading button:hover { background:#1b2027;color:var(--green) }
 .project-tree { flex:1;min-height:0;overflow:auto;padding:6px }.project-group { margin-bottom:3px;border:1px solid transparent;border-radius:7px }.project-group.active { background:#101510;border-color:#263123 }.project-row { height:calc(34px*var(--ui-scale));display:grid;grid-template-columns:16px minmax(0,1fr) 20px 24px 24px;align-items:center;padding:0 3px 0 6px;border-radius:6px;color:#858f9c;cursor:pointer }.project-row:hover { background:#171c22;color:#cdd2da }.project-group.active>.project-row { color:#dfe7da }.project-chevron { color:#59636f;font-size:10px }.project-row strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px }.project-row small { text-align:center;color:#65705e;font:9px 'JetBrains Mono' }.project-row button { width:22px;height:calc(22px*var(--ui-scale));border:0;background:transparent;border-radius:4px;color:#65707d;cursor:pointer }.project-row button:hover { color:var(--green);background:#252c25 }.project-group .session-list { overflow:visible;flex:none;padding:2px 4px 5px 15px }.project-group .session-row { height:calc(49px*var(--ui-scale)) }.project-empty { width:100%;height:calc(31px*var(--ui-scale));border:1px dashed #2b3328;border-radius:5px;background:transparent;color:#697564;text-align:left;padding-left:10px;font-size:10px;cursor:pointer }.project-empty:hover { border-color:#55684c;color:#9fbd91 }
 .session-list { overflow:auto;flex:1;padding:7px }.session-row { display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;width:100%;height:calc(55px*var(--ui-scale));padding:8px 7px;border:1px solid transparent;background:transparent;border-radius:7px;cursor:pointer;text-align:left;position:relative;margin-bottom:2px }.session-row:hover { background:#15191f }.session-row.active { background:#1a201a;border-color:#34442d;box-shadow:inset 2px 0 var(--green) }.session-row.awaiting { background:#2b2510;animation:pulse 2s ease-in-out infinite }.session-row.crashed,.session-row.exited { opacity:.62 }.state-dot { display:inline-block;width:7px;height:7px;border-radius:50%;background:#727b88;align-self:start;margin-top:5px;flex:none }.state-dot.running,.state-dot.idle { background:#7fc95a }.state-dot.working { background:var(--blue);box-shadow:0 0 7px #72a7ff88 }.state-dot.starting { background:#ae91d3 }.state-dot.awaiting { background:var(--amber);box-shadow:0 0 8px #e7c768aa }.state-dot.crashed { background:var(--red) }.state-dot.exited { background:#69717d }.state-dot.idle.standing { background:transparent;border:2px solid var(--blue);box-sizing:border-box;box-shadow:0 0 6px #72a7ff55;animation:none }
+.state-dot.working.interrupting { background:var(--amber);box-shadow:0 0 7px #e7c76888;animation:none }
 .session-copy { display:flex;flex-direction:column;gap:4px;min-width:0 }.session-copy strong { font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.session-copy small { font:9px 'JetBrains Mono';color:#697381;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.row-actions { display:none;position:absolute;right:7px;bottom:6px }.session-row:hover .row-actions { display:block }.row-actions button { border:0;background:#262d35;border-radius:4px;color:#aeb5bf;cursor:pointer }.row-actions button:hover { color:var(--red) }
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
@@ -748,6 +749,10 @@ body {
 .transcript-heading h3,.transcript-heading span { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .transcript-actions { flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel2) }
 .transcript-actions>button,.transcript-match-nav button { min-height:31px;border:1px solid var(--line);background:var(--panel);color:var(--text);padding:0 10px;font:inherit;cursor:pointer }
+.transcript-tool-toggle { min-height:31px;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:9px;cursor:pointer }
+.transcript-tool-toggle:has(input:checked) { border-color:var(--accent);color:var(--text) }
+.transcript-tool-toggle:has(input:disabled) { opacity:.45;cursor:not-allowed }
+.transcript-tool-toggle input { margin:0;accent-color:var(--accent) }
 .transcript-metadata { flex:none;max-height:min(160px,28dvh);overflow-x:hidden;overflow-y:auto;padding:7px 16px;border-bottom:1px solid var(--line);scrollbar-gutter:stable }
 .transcript-metadata small { display:block;color:var(--muted);margin:0 0 4px;overflow-wrap:anywhere;line-height:1.35 }
 .transcript-metadata small:last-child { margin-bottom:0 }
@@ -1943,9 +1948,10 @@ body {
 .voice-command-dialog>header button:hover{background:var(--panel2);color:var(--text)}
 .voice-command-dialog-groups{overflow:auto;padding:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
 .voice-command-dialog-groups section{min-width:0}
-.voice-command-dialog-groups h3{margin:0 0 6px;color:var(--green,#8bd450);font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+.voice-command-dialog-groups h3{display:flex;justify-content:space-between;gap:8px;margin:0 0 6px;color:var(--green,#8bd450);font-size:10px;text-transform:uppercase;letter-spacing:.06em}.voice-command-dialog-groups h3 span{color:var(--muted);font-weight:400}
 .voice-command-dialog-groups section>div{display:grid;gap:3px}
 .voice-command-dialog-groups code{display:block;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:normal}
+.voice-dialog-commands article{display:grid;gap:4px;padding:7px 0;border-top:1px solid var(--line)}.voice-dialog-commands article:first-child{border-top:0}.voice-dialog-commands article>small{color:var(--muted)}.voice-dialog-commands article>div{display:grid;gap:3px}
 @media(max-width:760px){
   /* Square, at Run's height rather than the edge toggles' 44px, so the middle of the
      bar stays one row of equal-height controls; the glyph takes the 18px the nav and
@@ -2347,7 +2353,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    dense-index type is unreadable for that. `position:relative` on the host anchors the
    jump-to-latest pill over the body. */
 .transcript-tab{position:relative;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg)}
-.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
+.transcript-tab-head{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:6px 8px;padding:8px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .transcript-tab-meta{min-width:0;display:grid;gap:2px}
 .transcript-tab-head strong{font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transcript-tab-head span{color:var(--muted);font-size:8px}
@@ -2401,6 +2407,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    seam and not as a message: it is the only row in the column nobody said. */
 .transcript-tool-boundary{display:flex;align-items:center;gap:8px;margin:0;padding:4px 9px;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}
 .transcript-tool-boundary::before,.transcript-tool-boundary::after{content:"";flex:1;height:1px;background:var(--line)}
+.transcript-tool-calls{display:grid;gap:4px;padding:6px 9px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 72%,transparent)}
+.messages article .transcript-tool-calls{margin-top:8px;padding:8px 0 0;border:0;border-top:1px solid var(--line);background:transparent}
+.transcript-tool-call{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--muted);font-size:9px}
+.transcript-tool-call>summary,.transcript-tool-call-empty{padding:6px 8px;color:var(--text);font-family:'JetBrains Mono',Consolas,monospace;overflow-wrap:anywhere}
+.transcript-tool-call>summary{cursor:pointer;-webkit-user-select:none;user-select:none}
+.transcript-tool-call>pre{max-height:320px;margin:0;padding:8px;border-top:1px solid var(--line);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#9da8b5;font:9px/1.5 'JetBrains Mono',Consolas,monospace}
 .transcript-jump{position:absolute;right:12px;bottom:12px;z-index:4;min-height:26px;padding:0 10px;border:1px solid var(--accent);border-radius:13px;background:var(--panel);color:var(--accent);font:inherit;font-size:9px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
 /* Off-screen, not `display:none`: the synchronous copy fallback has to be able to focus
    and select it, which a hidden element cannot be. */
@@ -2647,6 +2659,35 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* Dismissed records are history, not attention: readable when asked for, quiet otherwise. */
 .utility-drawer .notification-list article.dismissed{opacity:.55}
 .utility-drawer .notification-empty{margin:0;padding:22px 12px;color:var(--muted);text-align:center;line-height:1.45}
+/* Ranked attention. The channel groups carry the meaning here, so they are drawn
+   as separate blocks with their own heading and rationale rather than as one
+   score-sorted list: a permission prompt and a wrong plan are not the same kind
+   of interruption and must never look like one. */
+.attention-inbox{flex:none;display:grid;gap:6px;padding:8px 9px;border-bottom:1px solid var(--line)}
+.attention-fanout{margin:0;color:var(--text);line-height:1.4}
+.attention-budget,.attention-rule-active{margin:0;color:var(--muted);font-size:9px;line-height:1.4}
+.attention-rule-active button{margin-left:6px;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.attention-rule{display:grid;gap:5px;padding:7px;border:1px solid var(--accent,var(--line));background:var(--panel2)}
+.attention-rule span{display:block;color:var(--muted);line-height:1.4}
+.attention-channel{display:grid;gap:5px}
+.attention-channel h4{margin:6px 0 0;font-weight:400;letter-spacing:.04em;text-transform:uppercase;font-size:9px;color:var(--text)}
+.attention-channel h4 span{color:var(--muted)}
+.attention-channel-hint{margin:0;color:var(--muted);font-size:8px;line-height:1.4}
+.attention-item{display:grid;grid-template-columns:9px minmax(0,1fr);gap:7px;padding:7px;border:1px solid var(--line);background:var(--bg)}
+.attention-item>div{min-width:0;display:grid;gap:3px}
+.attention-item strong{font-weight:400}
+.attention-item span,.attention-item small{color:var(--muted);font-size:8px;line-height:1.4;overflow-wrap:anywhere}
+/* Evidence first: the deterministic summary is the row, the model's "why" is an
+   aside under it, and it is visibly secondary so a narration failure reads as a
+   missing aside rather than as a missing finding. */
+.attention-item .attention-narration{font-style:italic;opacity:.85}
+.attention-item .attention-action{color:var(--text)}
+.attention-item .notification-row-actions{grid-column:2;display:flex;flex-wrap:wrap;gap:6px}
+.attention-item .notification-row-actions button{min-height:27px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}
+.attention-item .notification-row-actions button:disabled{opacity:.45;cursor:not-allowed}
+.attention-channel.interrupt_now .attention-item{border-color:var(--warn,var(--line))}
+.attention-suppressed{color:var(--muted);font-size:8px;align-self:center;line-height:1.4}
+.attention-raw-heading{margin:8px 9px 0;font-weight:400;letter-spacing:.04em;text-transform:uppercase;font-size:9px;color:var(--muted)}
 /* Git: Map is the operational worktree projection; Log is Git's real commit DAG.
    The compact row is the default reading. Paths, filenames, and destructive actions
    exist only in the expanded detail so they do not compete with branch state. */
@@ -3006,6 +3047,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .state-dot.state-indicator svg{width:100%;height:100%;display:block;overflow:visible}
 .state-dot.state-indicator.running,.state-dot.state-indicator.idle{--dot:#7fc95a}
 .state-dot.state-indicator.working{--dot:var(--blue)}
+.state-dot.state-indicator.working.interrupting{--dot:var(--amber)}
 .state-dot.state-indicator.starting{--dot:#ae91d3}
 .state-dot.state-indicator.awaiting{--dot:var(--amber)}
 .state-dot.state-indicator.crashed{--dot:var(--red)}
@@ -3028,6 +3070,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    have no inner geometry to separate. */
 .state-dot.state-indicator{animation:none!important}
 .state-dot.state-indicator.working .ind-core{animation:agent-pulse 1.4s steps(2,end) infinite}
+.state-dot.state-indicator.working.interrupting .ind-core{animation:none}
 .state-dot.state-indicator.awaiting .ind-core{animation:attention-pulse 1.2s ease-in-out infinite}
 /* The gutter column is exactly the indicator, and the indicator is top-aligned
    against the title line rather than centred in the row. Centring put the dot
@@ -3069,6 +3112,30 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* The top line's left section shrinks so a long title ellipsizes in place. */
 .row-line.top{overflow:hidden}
 .row-line.top .row-section.left{flex:1 1 auto;overflow:hidden}
+/* The flag strip: presence marks pinned to the row's right edge.
+   `flex:none` is the whole fix for the defect this replaced. Placed after the
+   title in the left section, the marks were inside the box that clips, so a
+   title long enough to fill the sidebar hid every one of them — and the rows
+   with the most to say about them are exactly the rows with the longest names.
+   Unshrinkable, they are laid out first and the title ellipsizes into whatever
+   is left, which is the correct priority: a name loses its tail and stays
+   recognisable, a flag loses everything. */
+.row-line.top .row-section.right{flex:none;gap:4px;align-items:center;padding-left:8px}
+/* Only the title yields on the top line. Flexbox shrinks every sibling in
+   proportion, so the provider mark's token was squeezed below the mark itself
+   and — not being the last child, which is the only one that clips — its glyph
+   spilled visibly *under* the first letter of a long name. */
+.row-line.top .row-section.left .row-token{flex:none}
+.row-line.top .row-section.left .row-token:last-child{flex:0 1 auto}
+/* The hover/focus lane for `.row-actions`, which is absolutely positioned over
+   the row's right edge. Reserved only while the control is actually shown, so
+   no row pays for it at rest: without it the kill button lands on top of the
+   flags (and, as it always has, on the bottom line's right-hand tokens) at the
+   moment the pointer arrives to read them. */
+.session-row:hover .session-copy,
+.session-row:focus-visible .session-copy,
+.session-row:has(.row-actions button:focus-visible) .session-copy{padding-right:26px}
+@media(hover:none){.session-row:focus-within .session-copy{padding-right:26px}}
 /* The bottom line does the opposite: neither section shrinks, the right one is
    pushed over by `margin-left:auto` only while there is room, and the line
    clips. So the two sections slide together as the sidebar narrows, meet at a
@@ -3108,6 +3175,27 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 }
 .session-row.active .row-title{color:var(--text)}
 .session-row .activity-badges{align-self:center}
+/* Marks in the strip carry no margins of their own — the strip's gap owns the
+   spacing, and the margins that separated them from the title doubled it. */
+.row-line.top .row-section.right .broadcast-flag,
+.row-line.top .row-section.right .activity-badges{margin-left:0}
+/* Unsent input: a caret bar, because the fact is that a cursor is sitting in
+   text you left behind. Teal rather than any state colour — green, blue, amber,
+   and red all already mean something about what the *agent* is doing, and this
+   is the one mark on the row that is about you. It is the same family as the
+   unread edge for the same reason: something here is waiting on you. */
+.row-draft{color:#5cb0b8;font-size:11px;line-height:1;flex:none;align-self:center}
+/* Standing activity collapsed onto the indicator (`standing: 'indicator'`).
+   Sized in pixels, not in the SVG's units, so it stays legible at a 10px
+   indicator; parked in the box's top-right corner, which every shape leaves
+   empty. The halo is what keeps it separate from the context arc when the two
+   are drawn together. */
+.state-dot.state-indicator{position:relative}
+.ind-standing{
+  position:absolute;top:0;right:0;width:5px;height:5px;border-radius:50%;
+  background:var(--blue);box-shadow:0 0 0 1.5px var(--panel);pointer-events:none
+}
+.session-row.active .ind-standing{box-shadow:0 0 0 1.5px #1a201a}
 /* Width shedding is NOT done here. Hiding a token with `display:none` removes
    the token but not the separator already emitted beside it, which rendered a
    narrowed row as `· apply_patch`. The token engine sheds instead, so the

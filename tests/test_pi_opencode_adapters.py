@@ -5,9 +5,13 @@ from pathlib import Path
 
 from swe_mux.adapters import build_agent_adapter
 from swe_mux.adapters.base import SpawnOptions
-from swe_mux.adapters.omp import session_header
-from swe_mux.adapters.opencode import OpenCodeAdapter, materialize_mux_config
-from swe_mux.adapters.pi import PiAdapter, parent_session_path, pi_session_dir_name
+from swe_mux.adapters.omp import omp_hook_path, session_header
+from swe_mux.adapters.opencode import (
+    OpenCodeAdapter,
+    materialize_mux_config,
+    opencode_plugin_path,
+)
+from swe_mux.adapters.pi import PiAdapter, parent_session_path, pi_hook_path, pi_session_dir_name
 from swe_mux.harness import descriptor
 
 PI_HEADER = (
@@ -80,6 +84,24 @@ def test_pi_spawn_injects_the_extension_once(tmp_path: Path) -> None:
     assert spec.argv[1].endswith("pi_mux_hook.ts")
     repeated = adapter.spawn_spec("sid", SpawnOptions(cwd=tmp_path, args=list(spec.argv)))
     assert repeated.argv.count("--extension") == 1
+
+
+def test_pi_family_hooks_preserve_abort_outcome_and_root_turn_identity() -> None:
+    """The native agent_end messages carry the reliable abort reason."""
+    for hook in (omp_hook_path(), pi_hook_path()):
+        source = hook.read_text(encoding="utf-8")
+        assert 'message.stopReason !== "string"' in source
+        assert 'outcome: "interrupted"' in source
+        assert 'turn_id: turnId' in source
+        assert 'emit("task_started"' in source
+
+
+def test_opencode_plugin_correlates_busy_with_its_terminal_event() -> None:
+    source = opencode_plugin_path().read_text(encoding="utf-8")
+    assert "activeRootTurnId ??=" in source
+    assert 'turn_id: turnId' in source
+    assert "outcome: terminalOutcome(props.error)" in source
+    assert "/abort|cancel|interrupt/i" in source
 
 
 def test_pi_sends_no_omp_display_knobs(tmp_path: Path) -> None:

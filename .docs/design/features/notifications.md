@@ -6,6 +6,10 @@ Alerts are normalized root-session events delivered through an optional sound ch
 Supported events cover attention, completion, waiting, failure, and confirmed unexpected provider-quota resets.
 Both delivery channels supplement, but never replace, the durable inbox.
 
+This path is separate from attention ranking and unchanged by it.
+Alerts here are per-event and reach devices; ranked attention incidents (`attention-ranking.md`) are per-incident, budgeted, and surface in-app only.
+No ranked item, channel, or interrupt-budget setting can route to sound or Web Push, and no alert setting changes ranking.
+
 ## Contract
 
 Optional browser-device sounds consume the same normalized event stream as the notification

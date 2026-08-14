@@ -22,6 +22,10 @@ It does not type into a PTY or authorize automation.
   paid entirely by the operator — see the 2026-08-06 correction.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
 
+Interrupt intent does not make a session deliverable.
+`interrupt_pending_at` changes only the visible status and timer; the open root turn continues to block until provider evidence or the owned PTY confirms `turn_aborted`.
+Interrupted, superseded, error, and length outcomes remain blocked by their typed root-turn reason rather than being treated as successful idle completion.
+
 `local_terminal_boundary` is a required readiness check.
 A session whose runtime boundary is `remote` is hard-blocked with `remote_terminal_boundary`, regardless of an otherwise idle-looking prompt.
 An unrecognized or unavailable boundary is hard-blocked with `terminal_boundary_unknown`.
@@ -252,6 +256,16 @@ CLI transcript discovery, schema coverage, root start/completion, and child acti
 checking model prose. They should run on CLI upgrades and periodically in a protected
 authenticated lane, not on every pull request.
 
+**The unsent-composer estimate is not evidence here.** `composer_input.py` keeps a
+finer-grained reading of the same PTY writes — it decrements on backspace, clears on `Esc`, and
+treats a bracketed paste as content — and publishes it as `unsent_input` for the session row
+(`features/terminal-input.md`). This tracker keeps its own coarse `input_revision` boundary and
+never consults it. The two disagree exactly where it matters: an estimate that concluded "the
+composer is empty again" would clear `terminal_input_after_completion` and authorize a send into
+a composer whose contents nothing here can see, which is the false-safe the whole contract
+exists to prevent. A gate may only be relaxed by evidence that cannot be wrong in that
+direction.
+
 ## Diagnostics
 
 `GET /api/automation/injection-safety` returns the v2 research contract, per-session checks,
@@ -264,6 +278,7 @@ actuation is unauthorized.
 
 - `src/swe_mux/observation.py`
 - `src/swe_mux/delivery_readiness.py`
+- `src/swe_mux/composer_input.py` (display-only sibling; deliberately not an input here)
 - `src/swe_mux/screen_mode.py`
 - `src/swe_mux/event_bus.py`
 - `tests/test_delivery_readiness_evidence.py`, `tests/test_screen_mode.py`

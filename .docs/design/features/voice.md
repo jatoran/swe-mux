@@ -304,7 +304,9 @@ executed action — so that number is measured rather than estimated.
   `voiceIntents.ts` strips leading filler, normalizes number words, resolves exact declared aliases and `{text}` slots, and returns `{match, candidates, confidence}`.
   When two slot templates match, the one with more fixed words wins, so `new Codex in Project 2 {text}` cannot be swallowed by the selected-Project `new Codex {text}` shorthand.
   The registry's low-priority catch-all delegates only to the closed grammar in `voiceQueries.ts`; literal command aliases and literal slot templates always outrank it.
-  `App.tsx` generates focus commands for every live session and Project, drawer commands from `DRAWER_TABS`, and direct spawn commands for each Project/backend pair.
+  `App.tsx` generates focus commands for every live session and Project, drawer commands from `DRAWER_TABS`, idempotent open/close commands for the navigation sidebar and side panel, and direct spawn commands for each Project/backend pair.
+  Navigation sidebar commands target the mobile overlay or desktop collapsed state according to the current responsive presentation.
+  Side-panel commands use `open` and `close` rather than a spoken toggle, so a repeated recognition cannot reverse the requested state.
   Session launch accepts the Project name, the stable visible `Project N` address, or no Project qualifier for the selected Project, and the ordinary spawn path focuses the optimistic new tab immediately.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
@@ -317,10 +319,12 @@ executed action — so that number is measured rather than estimated.
   Execution goes back through the mounted `TerminalPane` action bus instead of writing to the PTY directly, and Talk waits for an acknowledgement before reporting success.
   Voice Paste reads clipboard text only and cannot take the visible Paste button's image-attachment branch.
   A missing pane, missing copy selection, or blocked browser clipboard is therefore reported as a failure instead of a false success.
-- **Settings exposes the complete current command surface.**
-  Settings → Voice renders configurable capture-control phrases, the fixed grammar shared with spoken help, and the live registry aliases for current Projects, sessions, workspace panels, launch targets, status, approvals, and the focused session's safe rail actions.
-  `voiceCommandReference.ts` groups registry entries for display and omits only the internal `{text}` catch-all because the closed grammar is listed separately.
+- **Every discovery surface exposes one complete current command catalog.**
+  `voiceCommandReference.ts` combines saved or draft capture-control phrases, fixed query grammar, and live registry aliases for current Projects, sessions, workspace panels, launch targets, status, approvals, and the focused session's safe rail actions.
+  Settings → Voice, both `? Commands` dialogs, and spoken help consume that model instead of maintaining separate lists.
+  The internal `{text}` query catch-all is omitted because the closed grammar is listed explicitly.
   Unavailable guarded commands remain visible with their current requirement, so discovery does not depend on first reaching the required state.
+  A full spoken help request puts every phrase in Talk history and speaks the available groups and counts; a category request such as `voice commands for sessions` speaks that category's complete current entries.
 - **Spoken lookup is a bounded dialog, not open-ended intent inference.**
   The closed grammar covers command help; Project lists; live, active, working, ready, pending, approval, question, rate-limit, stuck, and failed session filters; overall/current/named Project scopes; entity status; navigation; and last-reply reading.
   Natural read-only forms such as `active sessions`, `list approvals`, `do I have pending sessions in the current project`, and `list Project Alpha sessions` normalize into those same typed queries.
@@ -428,7 +432,7 @@ into mobile-voice setup instead.
   `Ctrl`/`Cmd`+`Enter` sends from the textarea; `Escape` releases its keyboard focus.
   faster-whisper returns whole utterances rather than partial words, so the panel signals
   arrival with a brief border flash instead of animating a stream it does not receive.
-- The player strip and Talk panel each expose a `? Commands` action backed by the same fixed help catalog shown in Settings, plus a gear into Settings → Voice.
+- The player strip and Talk panel each expose a `? Commands` action backed by the complete live catalog shown in Settings, plus a gear into Settings → Voice.
   The command catalog is a viewport modal and is not a utility-drawer tab.
   Spoken drawer aliases always open the named tab rather than toggling it closed.
   Spoken `open Notes` also claims the selected drawer note as the current text sink without raising the mobile keyboard; a later pointer or keyboard focus change overrides that claim normally.

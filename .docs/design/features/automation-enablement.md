@@ -22,9 +22,12 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
-  `observation_inbox`, `screenshot_to_agent`).
+  `model_narration`, `observation_inbox`, `screenshot_to_agent`).
   `observation_inbox` is a persisted compatibility id whose current label and surface are
   spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
+- **Consumer that spends**: `model_narration` is the only consumer that costs model calls.
+  It depends on `attention_ranking`, so with ranking off there is nothing to narrate and no
+  path to a call (`attention-ranking.md`).
 - **Enablement DAG**: `requires` edges. Import-time validation rejects cycles, dangling
   deps, and substrate depending on a consumer.
 - **Resolution**: a requested opt-in set → `enabled` (deps satisfied) + `blocked`

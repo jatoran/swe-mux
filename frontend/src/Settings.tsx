@@ -19,8 +19,9 @@ import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
-import { registeredVoiceReference } from './voiceCommandReference'
-import { VOICE_HELP_COMMANDS, type VoiceHelpCategory } from './voiceQueries'
+import {
+  completeVoiceReference, VOICE_ACTION_META, VOICE_ACTION_ORDER,
+} from './voiceCommandReference'
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { RailEditor } from './RailEditor'
@@ -71,6 +72,9 @@ type Config = {
   project_init_scripts:InitScript[]
   auto_delivery_enabled:boolean;auto_delivery_stable_seconds:number
   auto_delivery_max_consecutive:number;auto_delivery_session_ttl_minutes:number
+  agent_messaging_enabled:boolean;agent_message_max_chain_depth:number
+  agent_message_max_thread_turns:number;agent_message_hourly_budget:number
+  agent_message_pending_per_target:number
   auto_delivery_refusal_backoff_seconds:number
   auto_delivery_quiet_start:string;auto_delivery_quiet_end:string
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
@@ -79,6 +83,10 @@ type Config = {
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
+  attention_daily_interrupt_budget:number;attention_hourly_interrupt_cap:number
+  attention_incident_window_seconds:number;attention_breakpoint_markers:boolean
+  attention_narration_enabled:boolean;attention_narration_model:string
+  attention_narration_daily_budget_usd:number
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
   observer_titler_enabled:boolean;observer_summarizer_enabled:boolean
   phase7_observers_enabled:boolean
@@ -202,28 +210,6 @@ type NoteChordState = 'default'|'bind'|'release'
 const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordState =>
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
-// Canonical order + labels for the configurable conversation commands. The action
-// set is fixed (each is wired to code in ConversationControl); only the wake words
-// and phrases are editable. Mirrors VOICE_COMMAND_ACTIONS in config.py.
-const VOICE_ACTION_ORDER=['send','append','cancel','undo','mute','read','summary','verbatim','interrupt','help','standby','resume','comms_on','comms_off','stop'] as const
-const VOICE_ACTION_META:Record<string,{label:string;hint:string}>={
-  send:{label:'Send / submit',hint:'submit the buffered message'},
-  append:{label:'Append',hint:'append the buffer without submitting'},
-  cancel:{label:'Cancel / clear',hint:'clear the whole draft'},
-  undo:{label:'Undo',hint:'remove the last transcribed phrase'},
-  mute:{label:'Mute',hint:'stop playback, keep listening'},
-  read:{label:'Read reply',hint:'speak the latest reply'},
-  summary:{label:'Summary mode',hint:'switch spoken replies to summaries'},
-  verbatim:{label:'Verbatim mode',hint:'switch spoken replies to verbatim'},
-  interrupt:{label:'Interrupt',hint:'stop playback and send Ctrl-C to the agent'},
-  help:{label:'Help',hint:'list the commands'},
-  standby:{label:'Standby',hint:'keep listening but ignore speech until resumed'},
-  resume:{label:'Resume',hint:'leave standby and act on speech again'},
-  comms_on:{label:'Voice Comms on',hint:'request short spoken replies from the focused agent'},
-  comms_off:{label:'Voice Comms off',hint:'restore normal replies and prior read-aloud settings'},
-  stop:{label:'Stop listening',hint:'turn conversation mode off (releases the mic)'},
-}
-
 export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
@@ -243,7 +229,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
-  const liveVoiceReference=useMemo(()=>registeredVoiceReference(voiceCommands),[voiceCommands])
+  const completeVoiceCatalog=useMemo(()=>completeVoiceReference(voiceCommands,draft?.voice_commands||[]),[voiceCommands,draft?.voice_commands])
   const [usageRefreshMessage, setUsageRefreshMessage] = useState('')
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
@@ -780,14 +766,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         </Fragment>}
 
         {activeTab==='agents'&&<section><h3>Agents</h3>{harnesses().map(harness=><Fragment key={harness.name}><label>{harness.display_name} executable<input value={draft.harness_exe[harness.name]||''} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label><label>{harness.display_name} default args<input value={harnessArgs[harness.name]||'[]'} onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label></Fragment>)}<label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
-          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant expires on its own.</p></div></div>
+          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p></div></div>
           <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
           <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
-          <label>Grant expiry minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
+          <label>Grant lapses after this many idle minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
           <label>Back-off seconds after a refused attempt<input type="number" min="0" max="3600" step="0.5" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /></label>
           <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
           <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
+          <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them.</p>
+          <div class="keybinding-heading"><div><strong>AGENT MESSAGING</strong><p>Bounds on messages agents address to each other. A message still enters the target's queue under every rule above; these limit how far one thread may travel.</p></div></div>
+          <label class="check"><span>Allow agent-to-agent messages</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
+          <label>Relay hops before a thread must be restarted by a human<input type="number" min="1" max="10" value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /></label>
+          <label>Messages in one thread<input type="number" min="1" max="100" value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /></label>
+          <label>Messages one session may originate per hour<input type="number" min="1" max="1000" value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
+          <label>Pending messages allowed per target<input type="number" min="1" max="100" value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
+          <p>Hops bound how far a hand-off propagates: each new session a thread reaches counts one, and reaching back to a session already upstream is refused outright as a ring. A relay that needs to go further is a fresh thread a human starts, not a limit to raise until it disappears.</p>
         </section>}
 
         {activeTab==='accounts'&&<AccountSettings/>}
@@ -851,6 +845,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          <h3>Attention</h3>
+          <p>Ranking decides which findings are worth interrupting you for. The daily budget is a hard bound counted per incident, so several detectors describing one event spend one slot. Cheap-to-resolve work never spends any. Ranked items appear in Alerts and are never pushed to a device.</p>
+          <label>Daily interrupts<input type="number" min="0" max="100" value={draft.attention_daily_interrupt_budget} onInput={event=>change('attention_daily_interrupt_budget',Number(event.currentTarget.value))}/></label>
+          <label>Hourly burst cap<input type="number" min="0" max="100" value={draft.attention_hourly_interrupt_cap} onInput={event=>change('attention_hourly_interrupt_cap',Number(event.currentTarget.value))}/></label>
+          <label>Incident window seconds<input type="number" min="60" max="86400" value={draft.attention_incident_window_seconds} onInput={event=>change('attention_incident_window_seconds',Number(event.currentTarget.value))}/></label>
+          <label class="check"><span>Report shell breakpoints (OSC 133)</span><input type="checkbox" checked={draft.attention_breakpoint_markers} onChange={event=>change('attention_breakpoint_markers',event.currentTarget.checked)}/></label>
+          <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
+          <label for="narration-model-picker">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/></label>
+          <label>Narration daily dollars<input type="number" step="0.01" min="0" max="100" value={draft.attention_narration_daily_budget_usd} onInput={event=>change('attention_narration_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <details class="settings-advanced"><summary>Advanced rules.toml editor</summary><p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p><label>rules.toml<textarea value={rules} onInput={event=>setRules(event.currentTarget.value)} /></label></details>
           <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
         </section>}
@@ -912,20 +915,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <h3>Complete voice command reference</h3>
           <p>Say a configured wake word before every command. <code>Project N</code> uses the visible sidebar order. <code>Session N</code> uses the selected Project. Braced values such as <code>{'{text}'}</code> are spoken content, not literal words.</p>
           <div class="voice-command-reference">
-            {(Object.keys(VOICE_HELP_COMMANDS) as VoiceHelpCategory[]).map((category,index)=>{
-              const title=category[0].toUpperCase()+category.slice(1)
-              return <details open={index===0} key={category}>
-                <summary>{title} grammar <span>{VOICE_HELP_COMMANDS[category].length}</span></summary>
-                <div class="voice-reference-phrases">{VOICE_HELP_COMMANDS[category].map(command=><code key={command}>{command}</code>)}</div>
-              </details>
-            })}
-            {liveVoiceReference.map(group=><details key={group.id}>
-              <summary>{group.title} <span>{group.commands.length}</span></summary>
-              <div class="voice-reference-commands">{group.commands.map(command=><article key={command.id}>
+            {completeVoiceCatalog.map((section,index)=><details open={index===0} key={section.id}>
+              <summary>{section.title} <span>{section.phrases.length+section.commands.length}</span></summary>
+              {!!section.phrases.length&&<div class="voice-reference-phrases">{section.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>}
+              {!!section.commands.length&&<div class="voice-reference-commands">{section.commands.map(command=><article key={command.id}>
                 <strong>{command.label}</strong>
                 {!command.available&&<small>{command.disabledReason||'Unavailable in the current workspace state'}</small>}
                 <div class="voice-reference-phrases">{command.phrases.map(phrase=><code key={phrase}>{phrase}</code>)}</div>
-              </article>)}</div>
+              </article>)}</div>}
             </details>)}
           </div>
           <h4>Test what the recognizer actually hears</h4>
