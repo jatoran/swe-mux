@@ -186,7 +186,12 @@ def test_parsed_messages_carry_text_and_tool_calls(store: Path) -> None:
     # A turn that only ran tools is still a turn, and its reasoning is not rendered:
     # every other dialect shows the reply rather than the model's private working.
     assert messages[1]["content"] == [
-        {"type": "tool_use", "name": "bash", "input": {"command": "pytest"}}
+        {
+            "type": "tool_use",
+            "id": "call-1",
+            "name": "bash",
+            "input": {"command": "pytest"},
+        }
     ]
     assert messages[2]["content"] == [{"type": "text", "text": "all green"}]
 
@@ -194,10 +199,13 @@ def test_parsed_messages_carry_text_and_tool_calls(store: Path) -> None:
 def test_the_conversation_view_hides_tool_turns_and_counts_them(store: Path) -> None:
     view = conversation_view(None, "opencode", native_id=SESSION)
     assert [item["role"] for item in view["messages"]] == ["user", "assistant"]
-    assert view["hidden"] == 1
+    assert view["hidden"] == 0
     # The reader is told how much work happened in the gap rather than left to infer
     # that two messages written either side of a tool call were one thought.
     assert view["messages"][-1]["preceding_tool_calls"] == 1
+    assert view["messages"][-1]["preceding_tools"] == [
+        {"id": "call-1", "name": "bash", "input": {"command": "pytest"}}
+    ]
     # Identity is opencode's own primary key, which survives compaction; a byte
     # offset would not.
     assert view["messages"][-1]["message_id"] == "record:msg_3"

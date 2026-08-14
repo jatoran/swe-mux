@@ -7172,6 +7172,7 @@ async def session_transcript(request: web.Request) -> web.Response:
         # conversation as this session's.
         "observation_stale_since": record.observation_stale_since,
         "messages": [],
+        "trailing_tool_calls": [],
         "hidden": 0,
         "truncated": False,
         "reason": None,

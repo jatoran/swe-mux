@@ -76,6 +76,21 @@ def write_conversation(path: Path) -> Path:
         {
             "type": "assistant",
             "timestamp": "2026-08-02T10:00:02Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "Read",
+                        "input": {"file_path": "README.md"},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-08-02T10:00:03Z",
             "message": {"role": "assistant", "content": [{"type": "text", "text": "built"}]},
         },
     ]
@@ -94,6 +109,10 @@ async def test_the_conversation_is_returned_with_machinery_counted(tmp_path: Pat
         ("assistant", "built"),
     ]
     assert body["hidden"] == 1
+    assert body["messages"][-1]["preceding_tools"] == [
+        {"id": "call-1", "name": "Read", "input": {"file_path": "README.md"}}
+    ]
+    assert body["trailing_tool_calls"] == []
     assert body["truncated"] is False
     assert body["reason"] is None
     assert body["agent_run_id"] == "run-1"
@@ -115,6 +134,7 @@ async def test_a_shell_pane_is_an_empty_reason_not_an_error(tmp_path: Path) -> N
         "backend": "shell",
         "observation_stale_since": None,
         "messages": [],
+        "trailing_tool_calls": [],
         "hidden": 0,
         "truncated": False,
         "reason": "not_agent",

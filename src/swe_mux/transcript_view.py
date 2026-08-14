@@ -34,6 +34,38 @@ def _codex_blocks(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
+def _tool_input(value: Any) -> Any:
+    """Preserve native tool input, decoding JSON argument strings when possible."""
+    if not isinstance(value, str):
+        return value
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    return decoded
+
+
+def _message_blocks(content: Any, native_tool_type: str) -> list[dict[str, Any]]:
+    """Conversation text and tool inputs only, never results or private reasoning."""
+    blocks: list[dict[str, Any]] = []
+    for item in _blocks(content):
+        kind = item.get("type")
+        if kind == "text" and item.get("text"):
+            blocks.append({"type": "text", "text": item["text"]})
+            continue
+        if kind != native_tool_type:
+            continue
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": item.get("id") or item.get("tool_use_id"),
+                "name": item.get("name") or item.get("tool") or "tool",
+                "input": _tool_input(item.get("input", item.get("arguments"))),
+            }
+        )
+    return blocks
+
+
 def _opencode_blocks(parts: Any) -> list[dict[str, Any]]:
     """Renderable blocks from one opencode message's parts, in stored order.
 
@@ -53,6 +85,7 @@ def _opencode_blocks(parts: Any) -> list[dict[str, Any]]:
             blocks.append(
                 {
                     "type": "tool_use",
+                    "id": item.get("id") or item.get("callID") or item.get("call_id"),
                     "name": item.get("tool") or "tool",
                     "input": state.get("input") if isinstance(state, dict) else None,
                 }
@@ -82,7 +115,10 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         # the parse path.
         if event.get("isSidechain") is True:
             return None
-        blocks = _blocks((event.get("message") or {}).get("content"))
+        blocks = _message_blocks(
+            (event.get("message") or {}).get("content"),
+            native_tool_type="tool_use",
+        )
     elif dialect == "pi":
         # oh-my-pi and upstream pi write the same message record.
         if event.get("type") != "message":
@@ -91,7 +127,7 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         role = native_message.get("role")
         if role not in {"user", "assistant"}:
             return None
-        blocks = _blocks(native_message.get("content"))
+        blocks = _message_blocks(native_message.get("content"), native_tool_type="toolCall")
     elif dialect == "codex":  # noqa: SIM114 - distinct dialects, distinct shapes
         payload = event.get("payload") or {}
         payload_type = payload.get("type")
@@ -122,13 +158,8 @@ def _native_conversation_message(event: dict[str, Any], backend: str) -> dict[st
         blocks = _opencode_blocks(event.get("parts"))
     else:
         assert_never(dialect)
-    if not any(block.get("type") == "text" and block.get("text") for block in blocks):
-        # A turn that only ran tools is still a turn. Codex reaches the same
-        # outcome by appending its `function_call` records as their own messages in
-        # `parse_transcript`; opencode carries them inside the message they belong
-        # to, so the message survives on its blocks instead.
-        if dialect != "opencode" or not blocks:
-            return None
+    if not blocks:
+        return None
     return {"role": role, "ts": timestamp, "content": blocks}
 
 
@@ -639,8 +670,11 @@ def parse_transcript(
                         "content": [
                             {
                                 "type": "tool_use",
+                                "id": payload.get("call_id") or payload.get("id"),
                                 "name": payload.get("name") or "tool",
-                                "input": payload.get("arguments") or payload.get("input"),
+                                "input": _tool_input(
+                                    payload.get("arguments") or payload.get("input")
+                                ),
                             }
                         ],
                     }
@@ -823,47 +857,71 @@ _CODEX_TOOL_CALL_TYPES = frozenset({"function_call", "custom_tool_call"})
 _ASSISTANT_ACKNOWLEDGEMENTS = frozenset({"no response requested."})
 
 
-def _tool_calls(event: dict[str, Any], backend: str) -> int:
-    """How many tool invocations this record makes.
+def _tool_call_details(event: dict[str, Any], backend: str) -> list[dict[str, Any]]:
+    """Tool names and inputs this record carries, without results or telemetry.
 
-    Calls only, never their results. A result cannot occur without the call that
-    produced it, so counting both would double every number, and the two are not
-    reliably paired anyway once a run is interrupted mid-tool.
-
-    Claude and OMP name the call in a content block (which OMP may put in the
-    same record as the text that introduces it, so a record can both be a message
-    and end a segment); Codex names it in the payload type. An unrecognised shape
-    counts zero, which merges a turn exactly as it does today rather than cutting
-    a reply at a boundary that is not there.
+    Native call ids are retained when available. The record identity plus block
+    position is the stable fallback for UI keys. Unknown shapes return no detail
+    rather than inventing metadata.
     """
     dialect = transcript_dialect(backend)
+    native: list[dict[str, Any]] = []
     if dialect == "claude":
         if event.get("type") != "assistant" or event.get("isSidechain") is True:
-            return 0
-        blocks = _blocks((event.get("message") or {}).get("content"))
-        return sum(1 for block in blocks if block.get("type") == "tool_use")
-    if dialect == "pi":
+            return []
+        native = [
+            block
+            for block in _blocks((event.get("message") or {}).get("content"))
+            if block.get("type") == "tool_use"
+        ]
+    elif dialect == "pi":
         if event.get("type") != "message":
-            return 0
-        native = event.get("message") or {}
-        if native.get("role") != "assistant":
-            return 0
-        return sum(1 for block in _blocks(native.get("content")) if block.get("type") == "toolCall")
-    if dialect == "codex":
+            return []
+        message = event.get("message") or {}
+        if message.get("role") != "assistant":
+            return []
+        native = [
+            block for block in _blocks(message.get("content")) if block.get("type") == "toolCall"
+        ]
+    elif dialect == "codex":
         if event.get("type") != "response_item":
-            return 0
-        return 1 if (event.get("payload") or {}).get("type") in _CODEX_TOOL_CALL_TYPES else 0
-    if dialect == "opencode":
-        # Tool calls are parts of the message they belong to, so the count is per
-        # record rather than one record per call.
+            return []
+        payload = event.get("payload") or {}
+        if payload.get("type") not in _CODEX_TOOL_CALL_TYPES:
+            return []
+        native = [payload]
+    elif dialect == "opencode":
         if event.get("type") != "message":
-            return 0
+            return []
         if (event.get("message") or {}).get("role") != "assistant":
-            return 0
-        return sum(1 for part in _blocks(event.get("parts")) if part.get("type") == "tool")
-    if dialect is None:
-        return 0
-    assert_never(dialect)
+            return []
+        native = [part for part in _blocks(event.get("parts")) if part.get("type") == "tool"]
+    elif dialect is None:
+        return []
+    else:
+        assert_never(dialect)
+
+    details: list[dict[str, Any]] = []
+    record_id = _record_identity(event)
+    for index, item in enumerate(native):
+        state = item.get("state")
+        name = str(item.get("name") or item.get("tool") or "").strip()
+        if not name:
+            continue
+        native_id = item.get("id") or item.get("call_id") or item.get("callID")
+        tool_input = (
+            state.get("input")
+            if isinstance(state, dict)
+            else item.get("input", item.get("arguments"))
+        )
+        details.append(
+            {
+                "id": str(native_id or f"{record_id}:tool:{index}"),
+                "name": name,
+                "input": _tool_input(tool_input),
+            }
+        )
+    return details
 
 
 def _message_text(blocks: Any) -> str:
@@ -898,17 +956,17 @@ def _claude_user_is_machinery(event: dict[str, Any], text: str) -> bool:
 
 def _conversation_records(
     events: list[dict[str, Any]], backend: str
-) -> tuple[list[dict[str, Any]], int]:
-    """``(kept, hidden_count)`` conversational text records, in file order.
+) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+    """``(kept, hidden_count, trailing_tools)`` in native record order.
 
-    Each kept record carries the number of tool calls made since the previous one
-    in ``preceding_tool_calls``. Tool activity inside a record counts as coming
-    *after* its text, which is the order OMP writes it: one record holds the
-    narration and the calls that narration introduces.
+    Each kept record carries the tool names and inputs since the previous one.
+    Tool activity inside a record counts as coming *after* its text, which is the
+    order OMP writes it: one record holds the narration and the calls that
+    narration introduces. Calls after the last message are returned separately.
     """
     kept: list[dict[str, Any]] = []
     hidden = 0
-    pending_tools = 0
+    pending_tools: list[dict[str, Any]] = []
     dialect = transcript_dialect(backend)
     # Same precedence rule the indexing parse uses: when a Codex rollout carries
     # current `response_item/message` records, its legacy `event_msg` copies are
@@ -920,18 +978,19 @@ def _conversation_records(
         for event in events
     )
     for event in events:
-        tools = _tool_calls(event, backend)
+        tools = _tool_call_details(event, backend)
         message = _native_conversation_message(event, backend)
         if message is None:
-            pending_tools += tools
+            pending_tools.extend(tools)
             continue
         if backend == "codex" and codex_response_messages and event.get("type") != "response_item":
-            pending_tools += tools
+            pending_tools.extend(tools)
             continue
         text = _message_text(message.get("content"))
         if not text:
-            hidden += 1
-            pending_tools += tools
+            if not tools:
+                hidden += 1
+            pending_tools.extend(tools)
             continue
         if message["role"] == "user":
             # Each dialect hides a different kind of non-user record. Codex's
@@ -948,11 +1007,11 @@ def _conversation_records(
                 machinery = False
             if machinery:
                 hidden += 1
-                pending_tools += tools
+                pending_tools.extend(tools)
                 continue
         elif text.casefold() in _ASSISTANT_ACKNOWLEDGEMENTS:
             hidden += 1
-            pending_tools += tools
+            pending_tools.extend(tools)
             continue
         kept.append(
             {
@@ -960,11 +1019,12 @@ def _conversation_records(
                 "role": message["role"],
                 "ts": message.get("ts"),
                 "text": text,
-                "preceding_tool_calls": pending_tools,
+                "preceding_tool_calls": len(pending_tools),
+                "preceding_tools": pending_tools,
             }
         )
         pending_tools = tools
-    return kept, hidden
+    return kept, hidden, pending_tools
 
 
 def _record_identity(event: dict[str, Any]) -> str:
@@ -1039,7 +1099,7 @@ def conversation_view(
     # and lets the window below do the trimming.
     size = path.stat().st_size if path is not None else 0
     max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
-    records, hidden = _conversation_records(
+    records, hidden, trailing_tools = _conversation_records(
         conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id), backend
     )
     messages = _merge_assistant_segments(records)
@@ -1049,6 +1109,7 @@ def conversation_view(
         truncated = True
     return {
         "messages": [{"ordinal": index, **message} for index, message in enumerate(messages)],
+        "trailing_tool_calls": trailing_tools,
         "hidden": hidden,
         "truncated": truncated,
     }
