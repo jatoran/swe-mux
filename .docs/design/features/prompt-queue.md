@@ -163,6 +163,32 @@ separately opt-in.
 - The queue holds messages *toward* sessions; it is not a transcript, a conversation
   archive, or a second history store.
 
+## Delivery mechanics
+
+The body is written wrapped in bracketed paste, then the submit is a separate
+write after a settle.
+
+- **The settle scales with the payload.** A CLI turns a large paste into a
+  placeholder chip and is busy building one, so a fixed delay sized for a spoken
+  sentence lands the submit mid-consumption and the keystroke is swallowed. The
+  body then sits in the composer, unsent, while the queue reports success
+  (observed live 2026-08-13: two relay messages parked as
+  `[Pasted Content 2784 chars][Pasted Content 4230 chars]` in a codex composer).
+  The settle is bounded so a huge body cannot stall delivery.
+- **A large paste gets one more submit if nothing reacted.** An extra carriage
+  return on an empty composer is a no-op, while a swallowed one loses the
+  message outright; the costs are asymmetric. Bodies under the large-paste
+  threshold never had the problem and get exactly one submit.
+- **Reaction, not state, is the confirmation signal.** Any PTY byte after the
+  submit is the evidence, because a consumed submit redraws immediately. Session
+  state is derived from transcripts and hooks that lag seconds behind a
+  keystroke, so it would report healthy deliveries as unconfirmed.
+- **An unconfirmed submit is reported, not hidden.** The write happened either
+  way, so the audit outcome stays `sent`; `submit_confirmed` on the
+  `queue_delivery` event and the send result carry the difference, with a log
+  line naming the message and target. Silence here is what made a lost relay
+  message look delivered.
+
 ## Key files
 
 - `src/swe_mux/prompt_queue.py` — `PromptQueueStore` (SQLite, single-worker,
