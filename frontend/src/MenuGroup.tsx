@@ -59,6 +59,14 @@ export function MenuGroup({ id, label, openId, onOpenChange, children, disabled,
 
   const clear = () => { if (timer.current) { window.clearTimeout(timer.current); timer.current = 0 } }
   useEffect(() => clear, [])
+  // The host menu unmounting *is* the menu closing, and `openId` lives above the
+  // menu so it outlives it: without this, a group left expanded is still expanded
+  // the next time that menu is opened - on a different session, Project, or sort
+  // target. Kept here rather than at each of the several places a menu opens so
+  // no future host has to remember it.
+  const latest = useRef({ open, onOpenChange })
+  latest.current = { open, onOpenChange }
+  useEffect(() => () => { if (latest.current.open) latest.current.onOpenChange(null) }, [])
   useEffect(() => { if (!open) setBox(null) }, [open])
 
   // Measured after the panel is in the DOM so the flip and clamp use its real size.

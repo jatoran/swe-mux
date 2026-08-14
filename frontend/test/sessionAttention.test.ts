@@ -60,6 +60,33 @@ test('the local overlay clears a row before the daemon confirms it', () => {
   assert.equal(ackedSeq(session('a', 'claude', 5, { read_turn_seq: 1 }), { a: 3 }), 3)
 })
 
+test('a hand-marked session is unread whatever the counters and the state say', () => {
+  // The pin is a statement, not a measurement. Every ordinary reason a row would
+  // read as caught up has to lose to it, or the click looks ignored.
+  const caughtUp = session('a', 'claude', 4, { state: 'idle', read_turn_seq: 4, unread_pin: true })
+  assert.equal(isUnread(caughtUp, { a: 4 }), true)
+  assert.equal(isUnread(session('a', 'claude', 9, { state: 'working', unread_pin: true }), {}), true)
+  assert.equal(isUnread(session('fresh', 'claude', 0, { state: 'idle', unread_pin: true }), {}), true)
+  // Not a way to light up a row that has no read state at all, though.
+  assert.equal(isUnread(session('s', 'shell', 5, { state: 'idle', unread_pin: true }), {}), false)
+  assert.equal(isUnread(session('d', 'claude', 5, { state: 'exited', unread_pin: true }), {}), false)
+})
+
+test('a hand-marked session is never acknowledged by the dwell timer', () => {
+  // The case the pin exists for: the pane the menu was opened on is on screen,
+  // so without this it would be re-read a dwell later and the mark would appear
+  // to have done nothing.
+  const pinned = [session('here', 'claude', 3, { state: 'idle', unread_pin: true })]
+  assert.deepEqual(pendingAcks(pinned, ['here'], {}), [])
+})
+
+test('marking unread discards the overlay that would report the row read', () => {
+  // `ackedSeq` takes the max of server mark and overlay, so an entry left from
+  // the acknowledgement being undone would outvote the rolled-back mark.
+  const pinned = [session('a', 'claude', 4, { state: 'idle', read_turn_seq: 3, unread_pin: true })]
+  assert.deepEqual(pruneAcks({ a: 4 }, pinned), {})
+})
+
 test('pending acknowledgements cover on-screen agents that are behind', () => {
   const sessions = [
     session('seen', 'claude', 2, { state: 'idle', read_turn_seq: 2 }),

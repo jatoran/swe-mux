@@ -520,11 +520,20 @@ def note_turn_completion(
     record.turn_seq = int(getattr(record, "turn_seq", 0) or 0) + 1
     record.last_turn_end_ts = now
     record.last_turn_evidence = f"{source}:{evidence}" if evidence else source
+    # A hand-set unread mark is about the turns the user has already seen listed,
+    # so a *new* turn retires it: the row is unread on the ordinary counter
+    # comparison from here on, and leaving the pin set would suppress the dwell
+    # acknowledgement of every future turn as well.
+    record.unread_pin = False
     return int(record.turn_seq)
 
 
 def acknowledge_turns(
-    record: Any, turn_seq: int | None = None, *, now: float | None = None
+    record: Any,
+    turn_seq: int | None = None,
+    *,
+    explicit: bool = False,
+    now: float | None = None,
 ) -> bool:
     """Mark this session read up to `turn_seq` (its current counter when None).
 
@@ -534,13 +543,45 @@ def acknowledge_turns(
     cannot un-read what the first already cleared, which is what makes two
     browsers and a phone converge instead of fighting. Returns True when the
     mark actually moved.
+
+    `explicit` distinguishes the user clicking "mark as read" from the dwell
+    timer catching up an on-screen pane. Only the former clears a hand-set
+    unread pin; the implicit path is refused outright while one is set, which is
+    what lets a pane you are still looking at stay unread.
     """
+    pinned = bool(getattr(record, "unread_pin", False))
+    if pinned and not explicit:
+        return False
+    if pinned:
+        record.unread_pin = False
     current = int(getattr(record, "turn_seq", 0) or 0)
     target = current if turn_seq is None else min(int(turn_seq), current)
     if target <= int(getattr(record, "read_turn_seq", 0) or 0):
-        return False
+        # Clearing the pin is itself a state change worth publishing, even on a
+        # session with no counted turn for the mark to advance over.
+        return pinned
     record.read_turn_seq = target
     record.read_at = time.time() if now is None else now
+    return True
+
+
+def mark_unread(record: Any) -> bool:
+    """Flag this session unread on the user's explicit say-so.
+
+    Rolls the read mark back to just before the latest counted turn rather than
+    to zero: "I have not read the last thing this agent said" is what the menu
+    item means, and clearing the whole history would relight the row again the
+    moment some other device acknowledged an older turn. Returns True when
+    something actually changed, so an idempotent second call publishes nothing.
+    """
+    current = int(getattr(record, "turn_seq", 0) or 0)
+    read = int(getattr(record, "read_turn_seq", 0) or 0)
+    target = min(read, max(current - 1, 0))
+    if bool(getattr(record, "unread_pin", False)) and target == read:
+        return False
+    record.unread_pin = True
+    record.read_turn_seq = target
+    record.read_at = None
     return True
 
 

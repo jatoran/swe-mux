@@ -604,11 +604,28 @@ export function useConversation(
   }
 }
 
-function MicIcon(){
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
+// One glyph, two states. The slash is the whole "off" signal now that the button
+// carries no word, so it has to survive at 12px: a diagonal over the mic reads at
+// that size where a redrawn muted-mic body does not.
+function MicIcon({slashed}:{slashed:boolean}){
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="8" y="3" width="8" height="12" rx="4"/>
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>
+    {slashed&&<path d="M4 3.5l16 17"/>}
+  </svg>
 }
 
-/** The workspace-level Talk toggle. App places it immediately before Run in each toolbar. */
+/**
+ * The workspace-level Talk toggle. App places it immediately before Run in each toolbar.
+ *
+ * Icon only, and lit only while capture is actually running. It used to wear the
+ * green chip in every state, which made the one thing a microphone control has to
+ * answer - "is this listening to me right now?" - unreadable from the button, and
+ * "Talk" alongside the mic said nothing the mic did not. Off is the same recessed
+ * treatment as the unconfigured state, because both mean "not listening"; the
+ * slashed glyph is what distinguishes off from on, and `aria-pressed` plus the
+ * label carry it for anyone not reading the glyph.
+ */
 export function ConversationToggle({
   conversation,
   configured,
@@ -632,7 +649,7 @@ export function ConversationToggle({
       ? 'Microphone conversation is disabled - open Voice settings'
       : `${label}${conversation.target?` - target: ${conversation.target.label}`:' - focus an agent or text surface to choose a target'}`}
     onClick={configured?()=>conversation.toggle():onOpenSettings}
-  ><MicIcon/><span>Talk</span></button>
+  ><MicIcon slashed={!active}/></button>
 }
 
 /** The global draft card exists only while workspace-level capture is running. */

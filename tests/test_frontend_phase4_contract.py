@@ -35,7 +35,13 @@ def test_mobile_workspace_and_recovery_contracts_remain_available() -> None:
     # test_no_context_menu_reorders_or_reshapes_anything owns that invariant.
     assert "contextMenu.source!=='mobile'" not in combined
     assert "mobileMoveRow" not in combined
-    assert "tabMenu.source==='mobile'" in combined
+    # `New terminal as tab` was the mobile tab menu's other source-aware row and is
+    # gone with it: no context menu spawns a session on any platform, because that is
+    # the Run button's job and the Run button is on the mobile rail (`ui.md`).
+    # What remains source-aware is the close path — mobile has no per-tab close
+    # button, so `Close tab` routes through closeMobileTab to keep neighbour focus.
+    assert ">New terminal as tab</button>" not in combined
+    assert "if(target.source==='mobile'){closeMobileTab(target.leaf);return}" in combined
     # The device-local rail permutation went with the row that was its only writer.
     # Orphaning it would have been worse than removing it: a phone that had already
     # saved an order would have stayed pinned to it, with no surface able to change

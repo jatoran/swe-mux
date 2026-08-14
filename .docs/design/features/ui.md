@@ -121,6 +121,24 @@ responsive controls.
   The strictness is deliberate: a window parked visible on a second monitor with nobody at the
   desk is exactly the case that has to keep its marks, and erring this way only leaves a row lit
   slightly longer than needed.
+- **The user can say so directly, and that outranks all of it.** A single
+  `Mark as read` / `Mark as unread` toggle on the session menu and in the palette
+  (`session.toggleRead`) writes the same `POST /sessions/{id}/read`, with `{"read": true|false}`
+  instead of a cursor.
+  Marking unread is the only thing in this system allowed to move the mark **backwards**, and it
+  is deliberately narrow about how far: back to just before the latest counted turn, meaning "I
+  have not read the last thing this agent said", not "forget the whole history" - which would
+  relight the row again as soon as another device acknowledged some older turn.
+  It also sets `unread_pin` on the session record, which is what makes the mark survive being
+  applied to a pane that is on screen: without it the dwell acknowledgement above would re-read
+  the row a second later and the click would appear to have done nothing.
+  While the pin is set, implicit acknowledgement is refused by the daemon and not even attempted
+  by the client (`pendingAcks` skips it), and the pin forces the unread tier regardless of the
+  counters or the session's state - it is a statement, not a measurement, so marking a *working*
+  agent unread lights the row now rather than whenever it happens to settle.
+  Two things clear it: the user marking it read, or the agent completing another turn, which
+  supersedes the pin and leaves the row unread on the ordinary counter comparison anyway.
+  Being server-held, the mark converges across devices exactly like the acknowledgement does.
 - The row's kill control appears on hover, and on keyboard focus via `:focus-visible`; selecting
   a row does not reveal it.
   `:focus-within` did reveal it, because clicking a row leaves DOM focus on it, so every selected
@@ -268,6 +286,31 @@ responsive controls.
 - Touch has neither of those routes, so mobile simply does not reorder: the rail follows the
   layout projection, and the device-local permutation the touch row used to write was deleted
   along with it rather than left orphaned (see `workspace-layout.md` § mobile projection).
+- **No context menu spawns a session either**, by the same argument one step further.
+  `New terminal as tab` is gone from the session menu on every source and from the mobile tab
+  menu.
+  It creates *new* work, which is the Run menu's job everywhere else (see the Run bullet above),
+  and reading it off a menu opened on some other session made the pane it landed in a guess.
+  The palette keeps `pane.stackNew` for the focused pane, where "as a tab in *which* pane" has an
+  answer.
+- **The session menu is tiered by source.** A session's own header (`⋯`, or right-click on the
+  pane bar) is its full-detail surface and carries `Copy working directory`,
+  `Insert prompt template…` and `Processes and previews…`.
+  A sidebar row, a desktop tab title and a mobile tab do not.
+  Those menus are opened by pointing at a session from a list, and what a person points at a list
+  row for is Rename, read state, broadcast, and Kill; three rows of rarely-wanted plumbing in
+  between only pushed those further down.
+  Same actions, same registry commands, one surface each.
+- **Read state is one row, not two.** `Mark as read` / `Mark as unread` is a single toggle whose
+  label states the action it performs, on every source, for live agent sessions.
+  Listing both halves would make the reader work out which of the pair is currently true before
+  clicking, which is the one thing the label already tells them.
+  The mechanism is below, under the turn counter.
+- **Read aloud is collapsed behind a `MenuGroup`** labelled with its current mode
+  (`Read aloud · auto on reply`), holding the three modes plus `Speak last reply now`.
+  Four flat rows plus a subtitle for a per-session setting most sessions never change is the
+  exact case the group mechanism exists for, and carrying the mode in the header means the common
+  case - reading what it is set to - still needs no click.
 - The **resource** menu is the one exception that keeps a directional row — `Open in split`,
   because a note or an opened file has no tab to drag until it is already in a pane.
   It uses a non-clickable label with directional arrow buttons, enabling only directions valid
@@ -942,6 +985,18 @@ responsive controls.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
   The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
   The Talk toggle is app chrome directly before Run on mobile and desktop.
+  It is a square, icon-only microphone button that is **lit only while capture is actually
+  running**: green edge, green fill and a plain mic when on, and a recessed neutral box with a
+  slashed mic when off.
+  It used to wear the green chip in every state, which made the one question a microphone
+  control has to answer - "is this listening to me right now?" - unanswerable from the button.
+  The word "Talk" went with it: beside a microphone glyph it said nothing the glyph did not, and
+  it was costing 16px of a phone toolbar that also has to fit nav, quota, the Project name, Run
+  and the drawer toggle.
+  A dashed edge is the third state, microphone input disabled in Settings, where the button opens
+  Settings rather than listening - off and unconfigured both mean "not listening", but only one
+  of them can start.
+  `aria-pressed` and the `aria-label` carry the same three states for anyone not reading the glyph.
   Active Talk renders in the focused terminal pane's `.voice-overlay`, immediately after the read-aloud strip, while its capture, draft, target, and history remain app-owned (`features/voice.md`).
   The Talk history header is its disclosure control, and its expanded or collapsed state persists device-locally across focus-driven view remounts.
   The compact panel header contains phase and last latency only; response and transcript prose belongs in Talk history, while transient phase detail remains screen-reader text and a badge tooltip.

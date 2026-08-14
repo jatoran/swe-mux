@@ -56,6 +56,12 @@ export interface Session {
    */
   turn_seq?: number; read_turn_seq?: number; last_turn_end_ts?: number
   /**
+   * Set by an explicit "Mark as unread". Forces the unread tier and suppresses
+   * the dwell acknowledgement, so a pane the user is still looking at stays
+   * flagged; the daemon retires it when the agent completes another turn.
+   */
+  unread_pin?: boolean
+  /**
    * What Git says about the checkout this session works in — never about the
    * session. Sessions sharing a working tree share one measurement, because
    * `git status` answers for the whole repository however it is invoked; `root`

@@ -205,6 +205,7 @@ from .session import (
     acknowledge_turns,
     clear_all_standing_activity,
     clear_standing_activity,
+    mark_unread,
     note_remote_shell_submission,
     pty_tail_explain,
     pty_tail_state,
@@ -4552,12 +4553,22 @@ async def patch_session(request: web.Request) -> web.Response:
 
 
 async def mark_session_read(request: web.Request) -> web.Response:
-    """Acknowledge this session's completed turns up to `turn_seq`.
+    """Acknowledge this session's completed turns, or hand-mark it unread.
 
     Separate from PATCH because it is written on a dwell timer whenever a human
     is actually looking at a pane, and must not carry PATCH's history metadata
     write. The acknowledgement is clamped and monotone in `acknowledge_turns`, so
     a replayed or out-of-order call is a no-op rather than a lost notification.
+
+    Three shapes, because the dwell timer and the user must not be able to
+    impersonate each other:
+
+    - `{"turn_seq": N}` (or an empty body) - implicit catch-up. Refused while an
+      explicit unread pin is set, which is what keeps a pane the user marked
+      unread from being re-read out from under them by the timer.
+    - `{"read": true}` - explicit read. Clears the pin and acknowledges every
+      counted turn.
+    - `{"read": false}` - explicit unread. Sets the pin and rolls the mark back.
     """
     session = request.app["sessions"].resolve(request.match_info["sid"])
     body = await request.json() if request.body_exists else {}
@@ -4566,7 +4577,15 @@ async def mark_session_read(request: web.Request) -> web.Response:
     raw = body.get("turn_seq")
     if raw is not None and (not isinstance(raw, int) or isinstance(raw, bool) or raw < 0):
         raise ValueError("turn_seq must be a non-negative integer")
-    if acknowledge_turns(session.record, raw):
+    read = body.get("read")
+    if read is not None and not isinstance(read, bool):
+        raise ValueError("read must be a boolean")
+    changed = (
+        mark_unread(session.record)
+        if read is False
+        else acknowledge_turns(session.record, raw, explicit=read is True)
+    )
+    if changed:
         session.publish_update()
         # Other devices hold their own copy of the mark; this is what converges
         # them. A client that acknowledged it itself already shows the result.
@@ -4574,6 +4593,7 @@ async def mark_session_read(request: web.Request) -> web.Response:
             "session_read",
             session_id=session.record.id,
             turn_seq=session.record.read_turn_seq,
+            unread=session.record.unread_pin,
         )
     return json_response(
         {
@@ -4581,6 +4601,7 @@ async def mark_session_read(request: web.Request) -> web.Response:
             "turn_seq": session.record.turn_seq,
             "read_turn_seq": session.record.read_turn_seq,
             "read_at": session.record.read_at,
+            "unread_pin": session.record.unread_pin,
         }
     )
 

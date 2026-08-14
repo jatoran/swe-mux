@@ -2643,6 +2643,39 @@ export function App() {
     }
   }
 
+  // One menu item, not two. "Mark as read" and "Mark as unread" are the same
+  // decision, and listing both makes the reader work out which of the pair is
+  // currently true before clicking - which is exactly what a label stating the
+  // action already tells them.
+  //
+  // Optimistic on the same discipline as the dwell acknowledgement: the row has
+  // to flip on the click, and the daemon's own snapshot follows over the socket.
+  // `unread_pin` is what makes marking the pane you are looking at stick - the
+  // dwell timer would otherwise re-read it a second later (sessionAttention.ts).
+  const toggleSessionRead = async (session: Session) => {
+    setContextMenu(null)
+    const unread = isUnread(session, ackedTurns)
+    const turns = Number(session.turn_seq || 0)
+    updateSession({
+      ...session,
+      unread_pin: !unread,
+      read_turn_seq: unread ? turns : Math.max(turns - 1, 0),
+    })
+    setAckedTurns(current => {
+      if (!unread) {
+        if (!(session.id in current)) return current
+        const { [session.id]: _cleared, ...rest } = current
+        return rest
+      }
+      return current[session.id] >= turns ? current : { ...current, [session.id]: turns }
+    })
+    try {
+      await api('POST', `/api/sessions/${session.id}/read`, { read: unread })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   // On open, place the caret in the name field with the current name selected so typing
   // replaces it. On touch, focus() also raises the on-screen keyboard. rAF waits for the
   // modal to paint so the focus lands (and Android shows Gboard) reliably.
@@ -3956,6 +3989,7 @@ export function App() {
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
     { id: 'session.regenerateTitle', label: 'Regenerate generated title', category: 'session', available: !!commandSession && isAgent(commandSession) && commandSession.auto_named !== false && !isEndedSession(commandSession), disabledReason: 'Select a live auto-named agent session', run: () => commandSession && void regenerateSessionTitle(commandSession) },
     { id: 'session.clearStandingActivity', label: 'Clear standing activity (subagents / background tasks)', category: 'session', available: !!commandSession && activityBadges(commandSession).length > 0, disabledReason: 'Select a session with a standing-activity badge', run: () => commandSession && void clearStandingActivity(commandSession) },
+    { id: 'session.toggleRead', label: commandSession && isUnread(commandSession, ackedTurns) ? 'Mark selected session read' : 'Mark selected session unread', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Read state is tracked for live agent sessions', run: () => commandSession && void toggleSessionRead(commandSession) },
     { id: 'session.copyId', label: 'Copy selected session ID', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.id).catch(() => setError('Clipboard access was blocked.')) ; setContextMenu(null) } },
     { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(workingCwd(commandSession)).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
     { id: 'session.openSplitHorizontal', label: 'Open selected session in split right', category: 'pane', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void openInSplit(commandSession, 'horizontal') },
@@ -5096,7 +5130,7 @@ export function App() {
       </div>
     </div>}
 
-    {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 520)) }}>
+    {contextMenu && <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Session actions for ${sessionName(contextMenu.session)}`} style={{ left: clampContextMenuLeft(contextMenu.x, innerWidth), top: Math.max(4, Math.min(contextMenu.y, innerHeight - 430)) }}>
       <div class="context-title">{sessionStateDot(contextMenu.session,rowConfig.dotShape)}<strong>{sessionName(contextMenu.session)}</strong></div>
       <div class="context-session-info">
         <span title="Process ID of the session's root process">PID {contextMenu.session.pid}</span>
@@ -5108,9 +5142,19 @@ export function App() {
       {contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>}
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       {activityBadges(contextMenu.session).length>0&&<button onClick={() => runNamedCommand('session.clearStandingActivity')}>Clear standing activity</button>}
+      {isAgent(contextMenu.session)&&!isEndedSession(contextMenu.session)&&<button onClick={()=>runNamedCommand('session.toggleRead')}>{isUnread(contextMenu.session,ackedTurns)?'Mark as read':'Mark as unread'}</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
-      <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
-      <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
+      {/* Pane-only, deliberately. A session's own ⋯ header menu is where its
+          full detail lives, and these are errands you run while working *in* a
+          session rather than while pointing at one from a list. On a sidebar row
+          or a tab title they were pure length: three rows of rarely-wanted
+          plumbing between the two things those menus are actually opened for,
+          Rename and Kill. Same actions, same commands, one surface. */}
+      {contextMenu.source==='pane'&&<>
+        <button onClick={() => runNamedCommand('session.copyCwd')}>Copy working directory</button>
+        <button onClick={()=>{const target=contextMenu.session;setPromptScope(projects.find(project=>project.id===target.project_id)||null);setPromptTargetId(target.id);setContextMenu(null);setPromptLibraryOpen(true)}}>Insert prompt template…</button>
+        <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
+      </>}
       {/* No context menu touches tab order or pane geometry on any platform — not split,
           stack, dissolve, or move. They answer "how is the workspace laid out", which is
           not the question a menu opened on a session or a tab is asked, and the direction
@@ -5120,14 +5164,17 @@ export function App() {
           its rail is simply the projection's order — see mobileWorkspace. The device-local
           permutation overlay that used to back the touch row went with it, deliberately:
           left in place it could not be written any more, but a phone that had already
-          saved one would have stayed permanently pinned to it with no way out. */}
-      <button onClick={() => runNamedCommand('processes.open')}>Processes and previews…</button>
-      <button onClick={()=>{const target=contextMenu.session;setContextMenu(null);void spawnTerminal(target.project_id,'stack',undefined,target.id)}}>New terminal as tab</button>
-      {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<>
-        <div class="context-subtitle">READ ALOUD</div>
+          saved one would have stayed permanently pinned to it with no way out.
+          `New terminal as tab` went the same way, on every source including the ⋯ menu:
+          it spawns a *new* session, which is the Run button's whole job, and reading it
+          off a menu opened on some other session made the pane it landed in a guess. */}
+      {voiceStatus?.enabled&&isAgent(contextMenu.session)&&<MenuGroup id="session-voice" label={`Read aloud · ${voiceModeLabel(effectiveVoiceMode(contextMenu.session))}`} openId={menuGroup} onOpenChange={setMenuGroup} hint="Spoken replies for this session">
+        {/* Four flat rows for a setting most sessions never change, sitting between
+            the actions this menu exists for. Behind one row carrying its current
+            mode, so the common case reads the state without opening anything. */}
         {(['off','on_demand','auto'] as VoiceMode[]).map(mode=><button key={mode} onClick={()=>{void setVoiceMode(contextMenu.session,mode);setContextMenu(null)}}>{effectiveVoiceMode(contextMenu.session)===mode?'✓ ':''}{mode==='off'?'Off':mode==='on_demand'?'On demand':'Auto on reply'}</button>)}
         <button onClick={()=>{const target=contextMenu.session;setContextMenu(null);void speakLastReply(target)}}>Speak last reply now</button>
-      </>}
+      </MenuGroup>}
       <div class="context-rule" />
       <button onClick={() => runNamedCommand('session.broadcastMembership')}>{contextMenu.session.broadcast ? 'Remove from broadcast' : 'Add to broadcast'}</button>
       <button class="danger" onClick={() => runNamedCommand('session.killImmediate')}>{isEndedSession(contextMenu.session) ? 'Remove from sidebar' : 'Kill session'}</button>
@@ -5225,9 +5272,9 @@ export function App() {
     {tabMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu tab-context-menu" role="menu" aria-label={`Tab actions for ${tabMenu.label}`} style={{left:clampContextMenuLeft(tabMenu.x,innerWidth),top:Math.max(4,Math.min(tabMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>{tabMenu.label}</strong></div>
       {/* Same rule as the session menu above, on every platform: no context menu moves,
-          splits or reorders. Rearranging a resource tab is a drag; the keyboard route is
-          the palette. */}
-      {tabMenu.source==='mobile'&&<button onClick={()=>{const target=tabMenu;setTabMenu(null);void spawnTerminal(target.projectId,'stack',undefined,target.leaf.id)}}>New terminal as tab</button>}
+          splits or reorders, and none of them spawns a session. Rearranging a resource
+          tab is a drag; the keyboard route is the palette; new work is the Run button,
+          which is on the mobile rail too. */}
       {fileMenuTarget(tabMenu)&&<>
         <button title={fileMenuTarget(tabMenu)!.absolute} onClick={()=>void revealFileResource(tabMenu)}>Open in default explorer</button>
         <button title={fileMenuTarget(tabMenu)!.absolute} onClick={()=>void copyFileClipboard(tabMenu,'absolute')}>Copy full path</button>

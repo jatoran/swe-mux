@@ -281,6 +281,17 @@ class SessionRecord:
     # a reload - the discipline attention records already use for `read_at`.
     read_turn_seq: int = 0
     read_at: float | None = None
+    # Set only by an explicit "mark unread" from a menu or the palette, and the
+    # one thing allowed to move the mark backwards. `acknowledge_turns` is
+    # monotone so a device that is behind can never un-read what another already
+    # cleared; a human saying "I have not dealt with this yet" is the single case
+    # that has to, and it also has to survive the dwell timer that would
+    # otherwise re-acknowledge the very pane the menu was opened on. So the flag
+    # carries both halves: the mark rolls back one turn, and implicit
+    # acknowledgement is suppressed until the user reads it explicitly or the
+    # agent completes another turn (which supersedes the pin - see
+    # `note_turn_completion`).
+    unread_pin: bool = False
     git: GitState = field(default_factory=GitState)
     pinned_attention: bool = False
     broadcast: bool = False

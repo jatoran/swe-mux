@@ -18,8 +18,16 @@
 //     second device never saw the first device's marks at all.
 //
 // A server-held integer fixes both: repaints cannot move it, it survives a
-// reload, and every device compares against the same number. Kept free of
-// runtime imports so the logic can be unit tested under the node runner.
+// reload, and every device compares against the same number.
+//
+// One thing overrides the comparison: `unread_pin`, set by an explicit "Mark as
+// unread". Everything above is a measurement of what the agent did, and the pin
+// is the user contradicting it, so it wins outright - including over the dwell
+// acknowledgement, which would otherwise re-read the very pane the menu was
+// opened on. The daemon retires it on the session's next completed turn.
+//
+// Kept free of runtime imports so the logic can be unit tested under the node
+// runner.
 import type { Session } from './types'
 import { isObservedHarness } from './harnessRegistry.ts'
 
@@ -71,9 +79,16 @@ export function ackedSeq(session: Session, acked: AckMap): number {
  *
  * A mid-turn agent is deliberately excluded even when it is behind: the row
  * turns unread the moment it settles, not while it runs.
+ *
+ * An explicit `unread_pin` outranks both halves of that. It is a statement, not
+ * a measurement, so it holds whatever the counters and the state say - marking a
+ * working agent unread and having the row stay read until it happened to settle
+ * would read as the click being ignored.
  */
 export function isUnread(session: Session, acked: AckMap): boolean {
-  if (!isAgentSession(session) || !SETTLED.includes(session.state)) return false
+  if (!isAgentSession(session)) return false
+  if (session.unread_pin) return true
+  if (!SETTLED.includes(session.state)) return false
   return turnSeq(session) > ackedSeq(session, acked)
 }
 
@@ -84,12 +99,16 @@ export function isUnread(session: Session, acked: AckMap): boolean {
  * acknowledged so a dwell timer restarts when a *new* turn lands and not on the
  * unrelated snapshot churn of a busy fleet - while an agent is mid-turn its
  * `turn_seq` does not move, which is what makes the timer able to fire at all.
+ *
+ * A hand-marked session is skipped: the daemon refuses the implicit
+ * acknowledgement anyway, and sending it would still flip this tab's optimistic
+ * overlay and undo the mark locally.
  */
 export function pendingAcks(sessions: Session[], visibleIds: Iterable<string>, acked: AckMap): Array<[string, number]> {
   const visible = visibleIds instanceof Set ? visibleIds : new Set(visibleIds)
   const out: Array<[string, number]> = []
   for (const session of sessions) {
-    if (!visible.has(session.id) || !isAgentSession(session)) continue
+    if (!visible.has(session.id) || !isAgentSession(session) || session.unread_pin) continue
     const seq = turnSeq(session)
     if (seq > ackedSeq(session, acked)) out.push([session.id, seq])
   }
@@ -111,7 +130,10 @@ export function pruneAcks(prev: AckMap, sessions: Session[]): AckMap {
   let changed = false
   for (const id in prev) {
     const session = byId.get(id)
-    if (session && prev[id] > Number(session.read_turn_seq || 0)) next[id] = prev[id]
+    // A hand-marked session drops its overlay too: the entry was written by an
+    // earlier acknowledgement of the same turns, and `ackedSeq` takes the max,
+    // so keeping it would report the row read against the mark just rolled back.
+    if (session && !session.unread_pin && prev[id] > Number(session.read_turn_seq || 0)) next[id] = prev[id]
     else changed = true
   }
   return changed ? next : prev

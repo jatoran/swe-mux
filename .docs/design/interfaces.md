@@ -473,17 +473,28 @@ an asynchronous `title_regenerate_requested` event. It is limited to live auto-n
 runs; ended, shell, and manually named sessions are rejected. Provider and budget failures remain
 visible through automation diagnostics and never block the agent lifecycle.
 
-`POST /sessions/{id}/read` takes an optional `{turn_seq?: number}` (the session's current
-`turn_seq` when omitted) and returns `{id, turn_seq, read_turn_seq, read_at}`.
-It acknowledges completed turns for the **user**, not for one browser: the mark lives on the
-session record, so it follows every device and survives a reload.
-The write is monotone and clamped to the counter the daemon has actually reached - a device that
-is behind cannot un-read what another cleared, and no client can acknowledge a turn that has not
-happened and silently swallow the next real one.
-A no-op acknowledgement emits nothing; a real one publishes a session update and a `session_read`
-event so other devices converge.
-Separate from `PATCH /sessions/{id}` because it is written on a dwell timer whenever a human is
-looking at a pane and must not carry that route's history metadata write.
+`POST /sessions/{id}/read` returns `{id, turn_seq, read_turn_seq, read_at, unread_pin}` and takes
+one of three bodies, because its two writers - the dwell timer and the user - must not be able to
+impersonate each other:
+- `{turn_seq?: number}` (the session's current `turn_seq` when omitted, and an empty body is the
+  same thing) is the **implicit** acknowledgement written on a dwell timer whenever a human is
+  looking at a pane. Monotone and clamped to the counter the daemon has actually reached - a
+  device that is behind cannot un-read what another cleared, and no client can acknowledge a turn
+  that has not happened and silently swallow the next real one. Refused outright while
+  `unread_pin` is set.
+- `{read: true}` is an **explicit** read: it clears `unread_pin` and acknowledges every counted
+  turn.
+- `{read: false}` is an **explicit** unread: it sets `unread_pin` and rolls `read_turn_seq` back
+  to just before the latest counted turn. This is the only write in the system that moves the mark
+  backwards, and the pin is what keeps the dwell timer from undoing it on a pane that is still on
+  screen. The daemon retires the pin when the session next completes a turn.
+
+The mark is acknowledged for the **user**, not for one browser: it lives on the session record, so
+it follows every device and survives a reload.
+A no-op call emits nothing; a real one publishes a session update and a `session_read` event
+(carrying `turn_seq` and `unread`) so other devices converge.
+Separate from `PATCH /sessions/{id}` because the dwell-timer path must not carry that route's
+history metadata write.
 
 `POST /sessions/{id}/standing-activity/clear` takes an optional
 `{kind?: 'loop'|'cron'|'background_tasks'|'subagents'}` (the whole set when omitted or when the

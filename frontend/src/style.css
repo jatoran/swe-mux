@@ -1853,15 +1853,26 @@ body {
 .voice-overlay{position:absolute;top:6px;left:6px;right:6px;display:flex;flex-direction:column;gap:5px;pointer-events:none}
 .voice-overlay>*{pointer-events:auto}
 .voice-overlay>.voice-strip{border:1px solid var(--line);box-shadow:4px 5px 0 #0008}
-.conversation-talk-toggle{flex:none;width:auto;min-width:50px;height:calc(21px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:0 7px;border:1px solid color-mix(in srgb,var(--green,#8bd450) 44%,var(--line));background:color-mix(in srgb,var(--green,#8bd450) 8%,transparent);color:var(--green,#8bd450);font:9px 'JetBrains Mono';white-space:nowrap;cursor:pointer}
-.conversation-talk-toggle:hover{background:color-mix(in srgb,var(--green,#8bd450) 17%,transparent);color:var(--text)}
-.conversation-talk-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green,#8bd450) 18%,transparent)}
-.conversation-talk-toggle.setup{border-color:var(--line);background:transparent;color:var(--muted)}
+/* Lit only while capture is running. It wore the green chip in every state before,
+   which made the one question a microphone control has to answer - "is this
+   listening to me right now?" - unreadable from the button; and with the glyph
+   carrying the state the word "Talk" beside a microphone said nothing, so the
+   button is square and icon-only.
+   The box is described by four custom properties because `.app-identity button` is a
+   generic icon-button reset that outranks this class, so the header needs its own
+   copy of the box; pointing both copies at the same variables is what stops them
+   drifting apart. The dashed edge is the third state - microphone input disabled in
+   Settings, so the button opens Settings instead of listening. It needs its own mark
+   now that off is no longer green: off and unconfigured both mean "not listening",
+   but only one of them can start. */
+.conversation-talk-toggle{--talk-edge:var(--line);--talk-edge-style:solid;--talk-fill:transparent;--talk-ink:var(--muted);flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px var(--talk-edge-style) var(--talk-edge);background:var(--talk-fill);color:var(--talk-ink);cursor:pointer}
+.conversation-talk-toggle:hover{--talk-fill:var(--panel2);--talk-ink:var(--text)}
+.conversation-talk-toggle.active{--talk-edge:var(--green,#8bd450);--talk-fill:color-mix(in srgb,var(--green,#8bd450) 18%,transparent);--talk-ink:var(--green,#8bd450)}
+.conversation-talk-toggle.active:hover{--talk-fill:color-mix(in srgb,var(--green,#8bd450) 28%,transparent)}
+.conversation-talk-toggle.setup{--talk-edge-style:dashed}
 .conversation-talk-toggle svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.app-identity .conversation-talk-toggle{flex:none;width:auto;min-width:50px;height:calc(21px*var(--ui-scale));padding:0 7px;border:1px solid color-mix(in srgb,var(--green,#8bd450) 44%,var(--line));background:color-mix(in srgb,var(--green,#8bd450) 8%,transparent);color:var(--green,#8bd450)}
-.app-identity .conversation-talk-toggle:hover{background:color-mix(in srgb,var(--green,#8bd450) 17%,transparent);color:var(--text)}
-.app-identity .conversation-talk-toggle.active{border-color:var(--green,#8bd450);background:color-mix(in srgb,var(--green,#8bd450) 18%,transparent)}
-.app-identity .conversation-talk-toggle.setup{border-color:var(--line);background:transparent;color:var(--muted)}
+.app-identity .conversation-talk-toggle{flex:none;width:calc(21px*var(--ui-scale));min-width:21px;height:calc(21px*var(--ui-scale));padding:0;border:1px var(--talk-edge-style) var(--talk-edge);background:var(--talk-fill);color:var(--talk-ink)}
+.app-identity .conversation-talk-toggle:hover{background:var(--talk-fill);color:var(--talk-ink)}
 .conversation-layer{position:fixed;right:12px;top:calc(38px*var(--ui-scale));z-index:24;width:min(620px,calc(100vw - 24px));pointer-events:none}
 .conversation-layer>*{pointer-events:auto}
 .dictation-panel{display:grid;gap:4px;min-width:0;max-height:min(72dvh,560px);padding:5px 8px 6px;border:1px solid var(--line);background:var(--panel);box-shadow:4px 5px 0 #0008;font:9px 'JetBrains Mono';color:var(--muted);overflow:hidden}
@@ -1936,7 +1947,11 @@ body {
 .voice-command-dialog-groups section>div{display:grid;gap:3px}
 .voice-command-dialog-groups code{display:block;padding:4px 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:normal}
 @media(max-width:760px){
-  .mobile-toolbar>.conversation-talk-toggle{min-width:52px;height:calc(36px*var(--ui-scale));padding:0 6px;font-size:9px}
+  /* Square, at Run's height rather than the edge toggles' 44px, so the middle of the
+     bar stays one row of equal-height controls; the glyph takes the 18px the nav and
+     drawer marks use, because a 12px icon in a 36px thumb target reads as a mistake. */
+  .mobile-toolbar>.conversation-talk-toggle{width:calc(36px*var(--ui-scale));min-width:36px;height:calc(36px*var(--ui-scale));padding:0}
+  .mobile-toolbar>.conversation-talk-toggle svg{width:18px;height:18px}
   .conversation-layer{left:0;right:0;top:calc(46px*var(--ui-scale));width:auto;padding:0 max(5px,env(safe-area-inset-right)) 0 max(5px,env(safe-area-inset-left))}
   .dictation-target button{min-width:44px;height:calc(30px*var(--ui-scale));font-size:10px}
   .dictation-actions button{min-width:42px;height:calc(28px*var(--ui-scale))}

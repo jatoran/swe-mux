@@ -20,6 +20,7 @@ from swe_mux.session import (
     acknowledge_turns,
     apply_state_transition,
     is_turn_completion,
+    mark_unread,
 )
 
 
@@ -210,6 +211,58 @@ def test_acknowledgement_is_monotone_and_clamped_to_reality() -> None:
     assert acknowledge_turns(record) is False
 
 
+def test_a_hand_marked_session_stays_unread_until_the_user_or_a_turn_clears_it() -> None:
+    record = SessionRecord("s1", "n", "p", "codex", "x", ".", "codex.exe", [])
+    record.turn_seq = 3
+    assert acknowledge_turns(record) is True
+    assert record.read_turn_seq == 3
+
+    # The one thing allowed to move the mark backwards, and only back to just
+    # before the latest turn: "I have not read the last thing this agent said".
+    assert mark_unread(record) is True
+    assert record.unread_pin is True
+    assert record.read_turn_seq == 2
+    assert record.read_at is None
+    # Idempotent, so a second click publishes nothing.
+    assert mark_unread(record) is False
+
+    # The dwell timer looking at the same pane must not undo it.
+    assert acknowledge_turns(record, 3) is False
+    assert record.read_turn_seq == 2
+    assert record.unread_pin is True
+
+    # The user saying so does.
+    assert acknowledge_turns(record, 3, explicit=True) is True
+    assert record.unread_pin is False
+    assert record.read_turn_seq == 3
+
+
+def test_an_explicit_read_clears_the_pin_even_with_no_turn_to_advance_over() -> None:
+    # A session marked unread before it ever completed a turn has nothing for the
+    # mark to move over, so clearing the pin is the whole state change - and it
+    # has to report as one, or the row stays lit with no way out.
+    record = SessionRecord("s1", "n", "p", "codex", "x", ".", "codex.exe", [])
+    assert mark_unread(record) is True
+    assert (record.unread_pin, record.read_turn_seq) == (True, 0)
+    assert acknowledge_turns(record, explicit=True) is True
+    assert record.unread_pin is False
+    assert acknowledge_turns(record, explicit=True) is False
+
+
+def test_a_new_turn_retires_a_hand_set_unread_mark() -> None:
+    # The mark is about the turns the user has already been offered. Leaving the
+    # pin set once the agent speaks again would suppress the dwell
+    # acknowledgement of every future turn as well.
+    session = _session()
+    session.record.state = "working"
+    mark_unread(session.record)
+    assert _settle(session, "idle") is True
+    assert session.record.turn_seq == 1
+    assert session.record.unread_pin is False
+    # And the ordinary counter comparison keeps the row unread anyway.
+    assert session.record.read_turn_seq < session.record.turn_seq
+
+
 # --- the endpoint -----------------------------------------------------------
 
 
@@ -272,7 +325,14 @@ async def test_the_read_endpoint_rejects_a_nonsense_cursor() -> None:
     session.publish_update = lambda: None
     session.record.turn_seq = 2
 
-    for body in ({"turn_seq": -1}, {"turn_seq": "2"}, {"turn_seq": True}, []):
+    for body in (
+        {"turn_seq": -1},
+        {"turn_seq": "2"},
+        {"turn_seq": True},
+        {"read": "true"},
+        {"read": 1},
+        [],
+    ):
         with pytest.raises(ValueError):
             await mark_session_read(_read_request(session, body, EventsStub()))
 
@@ -281,3 +341,45 @@ async def test_the_read_endpoint_rejects_a_nonsense_cursor() -> None:
     session.record.read_turn_seq = 0
     await mark_session_read(_read_request(session, None, EventsStub()))
     assert session.record.read_turn_seq == 2
+
+
+async def test_the_read_endpoint_separates_the_dwell_timer_from_the_user() -> None:
+    """The two writers of this endpoint must not be able to impersonate each other.
+
+    `{"turn_seq": N}` is the dwell timer catching up an on-screen pane;
+    `{"read": false}` and `{"read": true}` are the menu item. Only the latter may
+    move the mark backwards, and only the latter may clear a mark it set.
+    """
+    from swe_mux.server import mark_session_read
+
+    emitted: list[tuple[str, dict[str, Any]]] = []
+
+    class EventsStub:
+        async def emit(self, event_type: str, **payload: Any) -> None:
+            emitted.append((event_type, payload))
+
+    session = _session()
+    session.publish_update = lambda: None
+    session.record.turn_seq = 3
+    session.record.read_turn_seq = 3
+    events = EventsStub()
+
+    payload = json.loads(
+        (await mark_session_read(_read_request(session, {"read": False}, events))).text
+    )
+    assert (payload["unread_pin"], payload["read_turn_seq"]) == (True, 2)
+    assert emitted[-1][1]["unread"] is True
+
+    # The pane is still on screen, so the dwell timer keeps firing. It must not
+    # win, and it must not emit - a converging device would show the row read.
+    before = len(emitted)
+    await mark_session_read(_read_request(session, {"turn_seq": 3}, events))
+    assert session.record.read_turn_seq == 2
+    assert session.record.unread_pin is True
+    assert len(emitted) == before
+
+    payload = json.loads(
+        (await mark_session_read(_read_request(session, {"read": True}, events))).text
+    )
+    assert (payload["unread_pin"], payload["read_turn_seq"]) == (False, 3)
+    assert emitted[-1][1]["unread"] is False

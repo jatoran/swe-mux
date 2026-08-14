@@ -26,9 +26,33 @@ test('tab context-menu openers target without activating',()=>{
   assert.doesNotMatch(stack,/onContextMenu=\{event=>\{[^}]*setActiveId/, 'desktop right-click must not select a terminal')
 
   const menu=section('{contextMenu && <div', '{projectMenu && <div')
-  assert.doesNotMatch(menu,/runNamedCommand\('pane\.stackNew'\)/, 'new-tab placement must use the menu target, not focused pane state')
-  assert.match(menu,/spawnTerminal\(target\.project_id,'stack',undefined,target\.id\)/)
+  assert.doesNotMatch(menu,/runNamedCommand\('pane\.stackNew'\)|spawnTerminal\(/, 'no session menu spawns a terminal: new work is the Run button, and a menu opened on some other session makes the landing pane a guess')
   assert.match(menu,/setPromptTargetId\(target\.id\)/, 'secondary prompt UI must retain the menu target after the menu closes')
+})
+
+test('session menus keep pane-only plumbing off sidebar rows and tab titles',()=>{
+  const menu=section('{contextMenu && <div', '{projectMenu && <div')
+  // One gate, three rows. Sidebar, desktop-tab and mobile-tab menus are opened to
+  // rename or kill; the ⋯ menu in a session's own header keeps the full set.
+  const gated=menu.slice(menu.indexOf("{contextMenu.source==='pane'&&<>"),menu.indexOf('</>}',menu.indexOf("{contextMenu.source==='pane'&&<>")))
+  assert.ok(gated.length>0,'pane-only group is missing')
+  for(const item of ['session.copyCwd','setPromptLibraryOpen(true)','processes.open']){
+    assert.ok(gated.includes(item),`${item} must sit inside the pane-only group`)
+    assert.equal(menu.split(item).length-1,1,`${item} must appear once, gated`)
+  }
+
+  // Read state is one row whose label states the action, not a pair the reader
+  // has to disambiguate.
+  assert.match(menu,/\{isUnread\(contextMenu\.session,ackedTurns\)\?'Mark as read':'Mark as unread'\}/)
+  assert.equal(menu.split("runNamedCommand('session.toggleRead')").length-1,1)
+
+  // Read aloud is four rows for a setting most sessions never touch, so it sits
+  // behind one collapsed group carrying its current mode.
+  assert.match(menu,/<MenuGroup id="session-voice" label=\{`Read aloud · \$\{voiceModeLabel\(effectiveVoiceMode\(contextMenu\.session\)\)\}`\}/)
+  assert.doesNotMatch(menu,/context-subtitle">READ ALOUD/)
+
+  const tabMenu=section('{tabMenu&&<div', 'Close tab</button>')
+  assert.doesNotMatch(tabMenu,/spawnTerminal\(/, 'resource tab menus do not spawn terminals either')
 })
 
 test('mobile long-press consumes its follow-up click and background close preserves selection',()=>{
