@@ -42,6 +42,8 @@ from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
 from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
+from .attention_narration import AttentionNarrator
+from .attention_ranking import AttentionRankingService
 from .auto_delivery import AutoDeliveryController
 from .automation import (
     OBSERVER_SCHEMAS,
@@ -615,6 +617,9 @@ def create_app(
             web.get("/api/lineage", list_lineage),
             web.post("/api/lineage", create_lineage),
             web.get("/api/attention/absence", absence_report),
+            web.get("/api/attention/inbox", attention_inbox),
+            web.post("/api/attention/items/{item_id}/feedback", attention_feedback),
+            web.post("/api/attention/rules", attention_rule_decision),
             web.get("/api/automation/injection-safety", injection_safety),
             web.post("/api/history/{sid}/second-opinion", second_opinion),
             web.get("/api/history/{sid}/handoff", export_handoff),
@@ -1252,6 +1257,19 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         tier0, automation_store, sessions, events, resolve_context=consumer_context
     )
     consumers.start()
+    # Phase 6.5: the consumer of everything above. It routes findings into four
+    # channels under a hard daily interrupt budget and writes no session.
+    attention_narrator = AttentionNarrator(automation_store, config, openrouter)
+    attention_ranking = AttentionRankingService(
+        automation_store,
+        sessions,
+        events,
+        config,
+        resolve_context=consumer_context,
+        narrator=attention_narrator,
+    )
+    await attention_ranking.restore()
+    attention_ranking.start()
     scan_timeline.start()
     git_provenance_service.start()
     git_monitor.start()
@@ -1337,6 +1355,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         status_timeline=status_timeline,
         tier0=tier0,
         deterministic_consumers=consumers,
+        attention_ranking=attention_ranking,
+        attention_narrator=attention_narrator,
         project_contexts=project_contexts,
         scan_timeline=scan_timeline,
         provider_accounts=provider_accounts,
@@ -1404,6 +1424,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     await automation.stop()
     await scan_timeline.stop()
     await consumers.stop()
+    # The fan-out estimate is built from weeks of interaction samples; persisting
+    # them is what keeps a daemon restart from resetting the estimate to unknown.
+    await attention_ranking.persist_telemetry()
+    await attention_ranking.stop()
     await auto_delivery.stop()
     await prompt_queue.stop()
     await voice.stop()
@@ -2515,8 +2539,46 @@ async def create_lineage(request: web.Request) -> web.Response:
 
 
 async def absence_report(request: web.Request) -> web.Response:
+    """The away report: the raw record, plus ranked items and rollover boundaries.
+
+    One endpoint rather than two. The original keys (sessions, annotations,
+    notifications) are unchanged for existing readers; the digest adds what
+    ranking knows — which findings mattered, what was held back and why, and where
+    a conversation was replaced mid-absence.
+    """
     since = float(request.query["since"]) if request.query.get("since") else None
-    return json_response(await request.app["fleet"].absence_report(since))
+    report = await request.app["fleet"].absence_report(since)
+    digest = await request.app["attention_ranking"].digest(report["since"])
+    return json_response({**report, **digest, "since": report["since"]})
+
+
+async def attention_inbox(request: web.Request) -> web.Response:
+    limit = int(request.query.get("limit", 200))
+    return json_response(await request.app["attention_ranking"].inbox(limit=limit))
+
+
+async def attention_feedback(request: web.Request) -> web.Response:
+    """Record what the user did with one ranked item; the only learning input."""
+    body = await request.json()
+    action = str(body.get("action") or "")
+    updated = await request.app["attention_ranking"].feedback(
+        request.match_info["item_id"], action
+    )
+    if updated is None:
+        raise KeyError(request.match_info["item_id"])
+    return json_response(updated)
+
+
+async def attention_rule_decision(request: web.Request) -> web.Response:
+    """Accept or reject a behaviour-mined demotion rule. Never applied silently."""
+    body = await request.json()
+    incident_class = str(body.get("incident_class") or "")
+    channel = str(body.get("channel") or "")
+    if not incident_class or not channel:
+        raise ValueError("incident_class and channel are required")
+    ranking = request.app["attention_ranking"]
+    await ranking.decide_rule(incident_class, channel, bool(body.get("accept", False)))
+    return json_response({"rules": [rule.snapshot() for rule in await ranking.rules()]})
 
 
 async def injection_safety(request: web.Request) -> web.Response:
@@ -4470,6 +4532,10 @@ async def get_background_health(request: web.Request) -> web.Response:
             # A detector that stopped producing findings is indistinguishable from
             # a quiet fleet unless the loop's own liveness is reported.
             "deterministic_consumers": consumers.status(),
+            # Ranking that stopped routing looks exactly like a quiet fleet from
+            # the inbox, so its counters and its loop liveness are reported here.
+            "attention_ranking": request.app["attention_ranking"].status(),
+            "attention_narration": request.app["attention_narrator"].status(),
             "project_contexts": request.app["project_contexts"].status(),
             "scan_timeline": request.app["scan_timeline"].status(),
             "mcp": request.app["mcp"].status(),

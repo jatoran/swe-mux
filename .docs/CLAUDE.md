@@ -81,6 +81,12 @@
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
   `technical/frontend/workspace-state.md`
+- Changing attention ranking, the interrupt budget, the four delivery channels, breakpoint
+  detection, the absence digest, mined demotion rules, or model narration:
+  `design/features/attention-ranking.md`, `design/features/deterministic-consumers.md`,
+  `design/features/fleet-intelligence.md`, `design/features/automation-enablement.md`,
+  `design/interfaces.md`, `design/data-model.md`, `technical/backend/packages.md`,
+  `technical/backend/sqlite.md`, `technical/frontend/packages.md`
 - Changing automation, observers, attention, or legacy hooks:
   `design/features/automation.md`, `design/features/fleet-intelligence.md`,
   `design/features/meta-hooks.md`, `design/features/delivery-readiness.md`

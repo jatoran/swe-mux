@@ -84,6 +84,12 @@ acceptance coverage, migrations, diagnostics, and relevant design/interface docs
   provider-account selection for the harnesses that declare account management.
 - Universal rules, normalized events, read-only OpenRouter observers, annotations,
   budgets, composite attention, fleet intelligence, and compatibility hooks.
+- Attention ranking (Phase 6.5): detector findings and fleet faults grouped into incidents and
+  routed to four cost-to-resolve channels under a hard daily interrupt budget, with a measured
+  fan-out estimate, OSC 133 breakpoint delivery from the user's own shells, behaviour-mined
+  demotion rules that require explicit acceptance, the absence digest with rollover boundaries,
+  and optional budgeted narration. In-app only: nothing here reaches a device.
+  `design/features/attention-ranking.md`.
 - Status detection v2 and its durable diagnostics: the standing-activity axis, the `cli_state`
   layer, the persisted `status_timeline` ledger with on-change layer readings, and the
   time-ranged state-log and diagnostic-bundle endpoints behind `STATUS_INCIDENT_RUNBOOK.md`.
@@ -153,7 +159,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                       -> Phase 5.8  SSH boundary handling in terminals      [correctness done; profiles deferred]
                         -> Phase 6  Agent Context + instruction coverage    [coverage done; rest deferred/culled]
                            (return-path channel 2: standing context, not pull) [CP §7]
-                          -> Phase 6.5  Attention ranking + narration       [ranking open; narration gated]
+                          -> Phase 6.5  Attention ranking + narration       [done: CP steps 6-7]
                             -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
                               -> Phase 7.5  mux MCP v1 semantic memory      [open, gated on 5.5: CP step 8]
                                 -> Phase 7.6  mux MCP session control       [open: CP step 9]
@@ -203,7 +209,7 @@ document and are not duplicated here.
 | 3 · Deterministic consumers | shipped (Phase 3.7) | writes drafts through the Phase 4 queue once it exists |
 | 3.5 · Run boundary contract | **Phase 5.4** | not a control-plane step of its own, but a hard prerequisite for steps 4–8, which inherit their boundary from it and must never implement conversation-change detection themselves |
 | 4–5 · Project context + scan timeline | **Phase 5.5** | shipped; context is one user-owned Markdown file, and the timeline is opt-in at the global, Project, and current-run levels with explicit full-session backfill and Phase 5.4's run boundary |
-| 6–7 · Attention ranking + narration | **Phase 6.5** | ranking needs Phase 2 telemetry, Phase 3 notification channels, and Phase 5.4 (never rank a finding from a replaced conversation against the live one); narration is separately gated on the annotation surface being read |
+| 6–7 · Attention ranking + narration | **Phase 6.5** | shipped; the four channels are in-app surfaces and route to no push path, and both halves stop at Phase 5.4's run boundary |
 | 8 · Cross-session + mux MCP v1 | **Phase 7.5** | semantic half only; the memory-source reads moved to Phase 5.6. Needs the CP 5 timeline, the Phase 6 harness-coverage fix, the Phase 7 typed operations, and Phase 5.4 run-scoped retrieval |
 | 9 · Agent session control | **Phase 7.6** | the first agent-reachable actuation; needs the Phase 1/5 readiness predicate, a graceful-stop daemon op that does not exist yet (Phase 7), and the Phase 6.5 attention channels so a remote interrupt is never silent |
 | §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
@@ -1711,33 +1717,56 @@ Build the ranking half first, and gate narration on the annotation surface actua
 If the annotations are not being looked at today, narration is polish on an unused feature and
 the honest fix is to make annotations worth reading, not to describe them more fluently.
 
-- [ ] Model narration (CP §14): the `llm` action kind over normalized slices, stateless,
+**Shipped 2026-08-13.** Behaviour and invariants: `design/features/attention-ranking.md`.
+
+The narration gate was resolved by decision rather than by measurement: the user stated
+plainly that annotations were not going to be read, which is the same evidence the gate was
+waiting for and the reason ranking is what makes them reachable at all. Narration ships
+alongside it, off by default, because ranking gives it something worth narrating.
+
+The delivery half carries one standing constraint the user set explicitly: **ranked items
+never push.** The four channels are in-app surfaces, and the interrupt budget bounds how
+often something is presented as urgent rather than how often a device buzzes. The older
+settle-gated `waiting` push alert is untouched.
+
+- [x] Model narration (CP §14): the `llm` action kind over normalized slices, stateless,
   read-only, budgeted. A narration failure degrades to the deterministic detector's output,
   never to silence and never to a fabricated cause.
   Gated on evidence that the deterministic annotations are being read.
-- [ ] Attention ranking / inbox (CP §6.7): fan-out estimate, a daily interrupt budget, the
+  (`attention_narration.py`; typed `disabled`/`no_model`/`budget`/`failed`/`empty` statuses,
+  metered under `builtin:attention-narration`, per-project `model_narration` opt-in.)
+- [x] Attention ranking / inbox (CP §6.7): fan-out estimate, a daily interrupt budget, the
   four delivery channels, and breakpoint delivery.
-- [ ] Honor the interrupt budget as a hard bound. A usually-wrong signal is worse than no
+  (Fan-out from measured burst duration over inter-burst gaps, reporting
+  `insufficient_samples` instead of a number below five samples; breakpoint delivery from OSC
+  133 markers emitted by the user's own shells, agent panes excluded.)
+- [x] Honor the interrupt budget as a hard bound. A usually-wrong signal is worse than no
   signal; the same trust logic as the return-path precision gate.
-- [ ] **Rank against the live run only.** A finding anchored to a run the session has rolled
+  (Counted per *incident*, so several detectors describing one event share one slot; the
+  hourly cap is only a burst limiter beneath the daily bound.)
+- [x] **Rank against the live run only.** A finding anchored to a run the session has rolled
   past describes a conversation the agent can no longer act on, and surfacing it spends
   interrupt budget on something the user already resolved by clearing. Annotations from
   superseded runs stay inspectable in the session's history and are excluded from ranking
   (`agent_run_id != record.agent_run_id`) rather than deleted. Narration slices likewise stop
   at the run boundary — a "why" assembled across two conversations is a fabricated cause.
-- [ ] Absence report / digest (CP §6.8) for the time the user was away. A rollover inside the
+  (Checked on arrival *and* on every inbox read, so an item ranked before a `/clear` is
+  demoted after it.)
+- [x] Absence report / digest (CP §6.8) for the time the user was away. A rollover inside the
   absence window is shown as a boundary in the digest, not smoothed over: "you cleared here"
   is exactly the context that makes the rest of the digest readable.
+  (Delivered as extra keys on the existing `GET /api/attention/absence` rather than a second
+  endpoint; its original keys are unchanged.)
 
 ### Phase 6.5 exit criteria
 
-- [ ] Ranking never exceeds the configured daily interrupt budget, and suppressed items remain
+- [x] Ranking never exceeds the configured daily interrupt budget, and suppressed items remain
   inspectable rather than discarded.
-- [ ] Every ranked item traces to the deterministic facts and annotations behind it; narration
+- [x] Every ranked item traces to the deterministic facts and annotations behind it; narration
   is presentation over evidence, not a substitute for it.
-- [ ] No ranked item, narration slice, or digest entry mixes evidence from two agent runs of
+- [x] No ranked item, narration slice, or digest entry mixes evidence from two agent runs of
   the same session.
-- [ ] Disabling narration leaves the deterministic detectors and their annotations intact.
+- [x] Disabling narration leaves the deterministic detectors and their annotations intact.
 
 ## Phase 7 — Windows product maturity, CLI control, and diagnostics
 

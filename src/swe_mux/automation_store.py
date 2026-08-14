@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 6
+AUTOMATION_SCHEMA_VERSION = 7
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -38,6 +38,11 @@ _OPERATIONAL_PRUNE_TABLES = (
     "automation_notifications",
     "automation_budget_ledger",
     "observer_batches",
+    # Ranked attention items and the behaviour samples mined from them. Both are
+    # derived from annotations and notifications that outlive them, so neither
+    # earns the durable window: an item is a routing decision about a moment.
+    "attention_items",
+    "attention_feedback",
 )
 _DURABLE_PRUNE_TABLES = (
     "automation_annotations",
@@ -113,6 +118,34 @@ CREATE TABLE IF NOT EXISTS automation_notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_unread
   ON automation_notifications(read_at,created_at DESC);
+CREATE TABLE IF NOT EXISTS attention_items (
+  id TEXT PRIMARY KEY, incident_key TEXT NOT NULL UNIQUE,
+  project_id TEXT, session_id TEXT, agent_run_id TEXT,
+  incident_class TEXT NOT NULL, kinds_json TEXT NOT NULL,
+  title TEXT NOT NULL, summary TEXT NOT NULL, action TEXT,
+  channel TEXT NOT NULL, cost_to_resolve TEXT NOT NULL,
+  score REAL NOT NULL, confidence REAL NOT NULL,
+  evidence_json TEXT NOT NULL, contributions INTEGER NOT NULL DEFAULT 1,
+  narration TEXT, narration_status TEXT NOT NULL DEFAULT 'none',
+  suppressed_reason TEXT, state TEXT NOT NULL DEFAULT 'open',
+  budget_day TEXT, delivered_at REAL, resolved_at REAL,
+  created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attention_state
+  ON attention_items(state,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attention_channel
+  ON attention_items(channel,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attention_run
+  ON attention_items(agent_run_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_attention_budget
+  ON attention_items(budget_day,created_at DESC);
+CREATE TABLE IF NOT EXISTS attention_feedback (
+  id TEXT PRIMARY KEY, item_id TEXT NOT NULL, incident_class TEXT NOT NULL,
+  channel TEXT NOT NULL, action TEXT NOT NULL, latency_seconds REAL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attention_feedback_class
+  ON attention_feedback(incident_class,created_at DESC);
 CREATE TABLE IF NOT EXISTS automation_model_cache (
   id INTEGER PRIMARY KEY CHECK(id=1), models_json TEXT NOT NULL,
   fetched_at REAL NOT NULL, error TEXT
@@ -523,6 +556,17 @@ class AutomationStore:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(sql, args).fetchall()
             return [dict(row) for row in rows]
+
+        return await self._run(op)
+
+    async def annotation(self, identity: str) -> dict[str, Any] | None:
+        """One annotation by id, for a consumer that only holds an `annotation_created`."""
+
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM automation_annotations WHERE id=?", (identity,)
+            ).fetchone()
+            return dict(row) if row else None
 
         return await self._run(op)
 
@@ -1083,6 +1127,254 @@ class AutomationStore:
 
         return await self._run(op)
 
+    async def upsert_attention_item(
+        self,
+        *,
+        incident_key: str,
+        project_id: str | None,
+        session_id: str | None,
+        agent_run_id: str | None,
+        incident_class: str,
+        kinds: list[str],
+        title: str,
+        summary: str,
+        action: str | None,
+        channel: str,
+        cost_to_resolve: str,
+        score: float,
+        confidence: float,
+        evidence: list[dict[str, Any]],
+        suppressed_reason: str | None = None,
+        budget_day: str | None = None,
+        delivered_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Create one ranked incident, or fold a further finding into the existing one.
+
+        The incident is the unit of interruption: several detectors reporting the
+        same underlying event share one ``incident_key`` and therefore one budget
+        slot. A merge deliberately does **not** re-route the incident — the channel
+        and the budget slot were decided when it first appeared, and re-deciding on
+        every contributing finding is how one event becomes four interruptions.
+        """
+        identity = str(uuid.uuid4())
+        now = time.time()
+
+        def op() -> dict[str, Any]:
+            row = self._db.execute(
+                "SELECT * FROM attention_items WHERE incident_key=?", (incident_key,)
+            ).fetchone()
+            if row is not None:
+                merged_kinds = sorted({*json.loads(row["kinds_json"]), *kinds})
+                merged_evidence = [*json.loads(row["evidence_json"]), *evidence][-200:]
+                self._db.execute(
+                    "UPDATE attention_items SET kinds_json=?,evidence_json=?,title=?,"
+                    "summary=?,action=?,score=?,confidence=?,contributions=contributions+1,"
+                    "updated_at=? WHERE id=?",
+                    (
+                        json.dumps(merged_kinds, separators=(",", ":")),
+                        json.dumps(merged_evidence, separators=(",", ":")),
+                        title,
+                        summary,
+                        action,
+                        max(float(row["score"]), score),
+                        max(float(row["confidence"]), confidence),
+                        now,
+                        row["id"],
+                    ),
+                )
+                self._db.commit()
+                updated = self._db.execute(
+                    "SELECT * FROM attention_items WHERE id=?", (row["id"],)
+                ).fetchone()
+                return {**_attention_row(updated), "created": False}
+            self._db.execute(
+                "INSERT INTO attention_items"
+                "(id,incident_key,project_id,session_id,agent_run_id,incident_class,"
+                "kinds_json,title,summary,action,channel,cost_to_resolve,score,confidence,"
+                "evidence_json,contributions,narration,narration_status,suppressed_reason,"
+                "state,budget_day,delivered_at,resolved_at,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NULL,'none',?,'open',?,?,NULL,?,?)",
+                (
+                    identity,
+                    incident_key,
+                    project_id,
+                    session_id,
+                    agent_run_id,
+                    incident_class,
+                    json.dumps(sorted(set(kinds)), separators=(",", ":")),
+                    title,
+                    summary,
+                    action,
+                    channel,
+                    cost_to_resolve,
+                    score,
+                    confidence,
+                    json.dumps(evidence[-200:], separators=(",", ":")),
+                    suppressed_reason,
+                    budget_day,
+                    delivered_at,
+                    now,
+                    now,
+                ),
+            )
+            self._db.commit()
+            created_row = self._db.execute(
+                "SELECT * FROM attention_items WHERE id=?", (identity,)
+            ).fetchone()
+            return {**_attention_row(created_row), "created": True}
+
+        return await self._run(op)
+
+    async def attention_items(
+        self,
+        *,
+        state: str | None = None,
+        channel: str | None = None,
+        since: float | None = None,
+        include_suppressed: bool = True,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM attention_items WHERE 1=1"
+        args: list[Any] = []
+        if state:
+            sql += " AND state=?"
+            args.append(state)
+        if channel:
+            sql += " AND channel=?"
+            args.append(channel)
+        if since is not None:
+            sql += " AND created_at>=?"
+            args.append(since)
+        if not include_suppressed:
+            sql += " AND suppressed_reason IS NULL"
+        sql += " ORDER BY score DESC, created_at DESC LIMIT ?"
+        args.append(max(1, min(limit, 1000)))
+
+        def op() -> list[dict[str, Any]]:
+            return [_attention_row(row) for row in self._db.execute(sql, args).fetchall()]
+
+        return await self._run(op)
+
+    async def attention_item_by_key(self, incident_key: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM attention_items WHERE incident_key=?", (incident_key,)
+            ).fetchone()
+            return _attention_row(row) if row else None
+
+        return await self._run(op)
+
+    async def attention_item(self, item_id: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM attention_items WHERE id=?", (item_id,)
+            ).fetchone()
+            return _attention_row(row) if row else None
+
+        return await self._run(op)
+
+    async def update_attention_item(
+        self,
+        item_id: str,
+        *,
+        channel: str | None = None,
+        state: str | None = None,
+        narration: str | None = None,
+        narration_status: str | None = None,
+        suppressed_reason: str | None = None,
+        delivered_at: float | None = None,
+        resolved_at: float | None = None,
+    ) -> dict[str, Any] | None:
+        assignments: list[str] = []
+        args: list[Any] = []
+        for column, value in (
+            ("channel", channel),
+            ("state", state),
+            ("narration", narration),
+            ("narration_status", narration_status),
+            ("suppressed_reason", suppressed_reason),
+            ("delivered_at", delivered_at),
+            ("resolved_at", resolved_at),
+        ):
+            if value is not None:
+                assignments.append(f"{column}=?")
+                args.append(value)
+        if not assignments:
+            return await self.attention_item(item_id)
+        assignments.append("updated_at=?")
+        args.extend([time.time(), item_id])
+
+        def op() -> dict[str, Any] | None:
+            self._db.execute(
+                f"UPDATE attention_items SET {','.join(assignments)} WHERE id=?", args
+            )
+            self._db.commit()
+            row = self._db.execute(
+                "SELECT * FROM attention_items WHERE id=?", (item_id,)
+            ).fetchone()
+            return _attention_row(row) if row else None
+
+        return await self._run(op)
+
+    async def attention_interrupts_used(self, day: str) -> int:
+        """Interrupt slots already spent on one calendar day, counted per incident."""
+
+        def op() -> int:
+            row = self._db.execute(
+                "SELECT COUNT(*) count FROM attention_items "
+                "WHERE budget_day=? AND delivered_at IS NOT NULL",
+                (day,),
+            ).fetchone()
+            return int(row["count"])
+
+        return await self._run(op)
+
+    async def record_attention_feedback(
+        self,
+        *,
+        item_id: str,
+        incident_class: str,
+        channel: str,
+        action: str,
+        latency_seconds: float | None,
+    ) -> dict[str, Any]:
+        identity = str(uuid.uuid4())
+        created = time.time()
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO attention_feedback"
+                "(id,item_id,incident_class,channel,action,latency_seconds,created_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (identity, item_id, incident_class, channel, action, latency_seconds, created),
+            )
+            self._db.commit()
+
+        await self._run(op)
+        return {
+            "id": identity,
+            "item_id": item_id,
+            "incident_class": incident_class,
+            "channel": channel,
+            "action": action,
+            "latency_seconds": latency_seconds,
+            "created_at": created,
+        }
+
+    async def attention_feedback_stats(self, since: float) -> list[dict[str, Any]]:
+        """Per class/channel act-versus-dismiss counts, the input to rule mining."""
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT incident_class,channel,action,COUNT(*) count,"
+                "AVG(latency_seconds) mean_latency FROM attention_feedback "
+                "WHERE created_at>=? GROUP BY incident_class,channel,action",
+                (since,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await self._run(op)
+
     async def firings(
         self, *, rule_id: str | None = None, limit: int = 200
     ) -> list[dict[str, Any]]:
@@ -1505,6 +1797,14 @@ class AutomationStore:
         self._closed = True
         self._executor.submit(self._db.close).result()
         self._executor.shutdown(wait=True)
+
+
+def _attention_row(row: sqlite3.Row) -> dict[str, Any]:
+    """Decode one stored incident, keeping the JSON columns as their parsed shape."""
+    item = dict(row)
+    item["kinds"] = json.loads(item.pop("kinds_json"))
+    item["evidence"] = json.loads(item.pop("evidence_json"))
+    return item
 
 
 def _normalize_error(value: str) -> str:

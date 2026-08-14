@@ -1274,6 +1274,35 @@ tab's live-filtered cheap and standard model pickers.
 content: requested and resolved model, generation, provider, finish reason, HTTP status,
 retryability, token and cost usage, latency, and response content type and length.
 
+## Attention ranking
+
+Behaviour and invariants: `features/attention-ranking.md`.
+
+`GET /api/attention/inbox[?limit=N]` returns open ranked incidents grouped by channel
+(`interrupt_now`, `next_breakpoint`, `inbox`, `digest`), plus `budget` (daily bound, used,
+remaining, hourly burst limiter), `fanout` (`ok` with a `sustainable_agents` estimate, or
+`insufficient_samples` with no number), `resumption_lag`, `suppressed` counts by reason,
+mined `rules`, and `delivery`. `delivery` is always `{"push": false, "surface": "in_app"}`:
+ranked items reach no device, and the response states that rather than implying it.
+
+`POST /api/attention/items/{item_id}/feedback` with `{"action": "acted"|"dismissed"}` resolves
+one item and records the only input rule mining reads. An unknown item is 404; any other
+action is rejected.
+
+`POST /api/attention/rules` with `{incident_class, channel, accept}` accepts or rejects a
+mined demotion rule and returns the current rule set. An accepted rule expires after 14 days
+and returns as proposed, which is the periodic forced re-judgment.
+
+`GET /api/attention/absence[?since=<epoch>]` is the away report. Its original keys
+(`sessions`, `annotations`, `notifications`, `since`) are unchanged; it additionally carries
+`items`, `boundaries` (each rollover rendered as an explicit boundary rather than smoothed
+over), `suppressed`, `fanout`, and `resumption_lag`.
+
+Ranking emits `attention_item_ranked` and `attention_breakpoint`; a shell pane whose command
+finished emits `shell_command_finished` with its exit status. Loop health and narration
+counters are under `attention_ranking` and `attention_narration` in
+`GET /api/diagnostics/background`.
+
 ## CLI
 
 ```text

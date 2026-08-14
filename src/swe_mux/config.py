@@ -544,6 +544,24 @@ class Config:
     scan_timeline_enabled: bool = False
     scan_timeline_model: str = "deepseek/deepseek-v4-flash"
     scan_timeline_run_token_budget: int = 100_000
+    # Phase 6.5 attention ranking. The daily budget is the hard bound on how many
+    # times ranking may decide something is worth interrupting for; the hourly cap
+    # is only a burst limiter beneath it. Cheap-blocking work (a permission
+    # prompt) never spends either. Ranked items surface in-app and are never
+    # routed to web push, which is why no push setting appears here.
+    attention_daily_interrupt_budget: int = 4
+    attention_hourly_interrupt_cap: int = 2
+    # Findings about one underlying event inside this window are one incident and
+    # spend one slot between them.
+    attention_incident_window_seconds: float = 3600.0
+    # OSC 133 shell-integration markers in the user's own shells, which is how a
+    # next-breakpoint item learns the human just finished something.
+    attention_breakpoint_markers: bool = True
+    # Narration is the one model-cost part of the phase, off until asked for.
+    attention_narration_enabled: bool = False
+    attention_narration_model: str = ""
+    attention_narration_daily_budget_usd: float = 0.10
+    attention_narration_max_output_tokens: int = 200
     openrouter_cheap_model: str = ""
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
@@ -889,6 +907,16 @@ def _validate(config: Config) -> None:
         errors["scan_timeline_model"] = "must be an exact OpenRouter model id"
     if not 512 <= config.scan_timeline_run_token_budget <= 1_000_000:
         errors["scan_timeline_run_token_budget"] = "must be between 512 and 1000000"
+    if not 0 <= config.attention_daily_interrupt_budget <= 100:
+        errors["attention_daily_interrupt_budget"] = "must be between 0 and 100"
+    if not 0 <= config.attention_hourly_interrupt_cap <= 100:
+        errors["attention_hourly_interrupt_cap"] = "must be between 0 and 100"
+    if not 60 <= config.attention_incident_window_seconds <= 86_400:
+        errors["attention_incident_window_seconds"] = "must be between 60 and 86400"
+    if not 0 <= config.attention_narration_daily_budget_usd <= 100:
+        errors["attention_narration_daily_budget_usd"] = "must be between 0 and 100"
+    if not 32 <= config.attention_narration_max_output_tokens <= 2048:
+        errors["attention_narration_max_output_tokens"] = "must be between 32 and 2048"
     if not 1 <= config.openrouter_request_timeout_seconds <= 120:
         errors["openrouter_request_timeout_seconds"] = "must be between 1 and 120"
     if config.tts_default_mode not in {"off", "on_demand", "auto"}:

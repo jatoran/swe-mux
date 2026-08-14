@@ -1397,7 +1397,14 @@ responsive controls.
   state of its own — `note` reports empty/written/open, `queue` its pending count — so it was pure
   navigation, and on a phone it cost 40 px of a bar that also has to fit the session name and
   path. The session context menu and the palette still open the inspector directly.
-- **Alerts** shows open attention records first and dismissed ones only on request. Each row
+- **Alerts** leads with ranked attention (`attention-ranking.md`): the fan-out headline, the
+  daily interrupt budget, incidents grouped by channel, any behaviour-mined rule awaiting an
+  explicit decision, and the count of what was held back and why. Ranking is the reading; the
+  raw record list under it is how the decision is checked. It is one tab rather than two
+  because a second app-wide icon would compete with the one that already exists for exactly
+  this subject, and the phone rail has no room for it.
+  Ranked items surface here and nowhere else — no sound, no push.
+  Below the ranked view, Alerts shows open attention records first and dismissed ones only on request. Each row
   dismisses (or restores) and the footer clears the lot; both write `read_at` server-side, so
   the state follows the user to every device and to the dashboard inbox rather than being a
   per-browser hide. The tab lists what the daemon retains for 90 days, which made it

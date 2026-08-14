@@ -79,6 +79,10 @@ type Config = {
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
+  attention_daily_interrupt_budget:number;attention_hourly_interrupt_cap:number
+  attention_incident_window_seconds:number;attention_breakpoint_markers:boolean
+  attention_narration_enabled:boolean;attention_narration_model:string
+  attention_narration_daily_budget_usd:number
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
   observer_titler_enabled:boolean;observer_summarizer_enabled:boolean
   phase7_observers_enabled:boolean
@@ -851,6 +855,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          <h3>Attention</h3>
+          <p>Ranking decides which findings are worth interrupting you for. The daily budget is a hard bound counted per incident, so several detectors describing one event spend one slot. Cheap-to-resolve work never spends any. Ranked items appear in Alerts and are never pushed to a device.</p>
+          <label>Daily interrupts<input type="number" min="0" max="100" value={draft.attention_daily_interrupt_budget} onInput={event=>change('attention_daily_interrupt_budget',Number(event.currentTarget.value))}/></label>
+          <label>Hourly burst cap<input type="number" min="0" max="100" value={draft.attention_hourly_interrupt_cap} onInput={event=>change('attention_hourly_interrupt_cap',Number(event.currentTarget.value))}/></label>
+          <label>Incident window seconds<input type="number" min="60" max="86400" value={draft.attention_incident_window_seconds} onInput={event=>change('attention_incident_window_seconds',Number(event.currentTarget.value))}/></label>
+          <label class="check"><span>Report shell breakpoints (OSC 133)</span><input type="checkbox" checked={draft.attention_breakpoint_markers} onChange={event=>change('attention_breakpoint_markers',event.currentTarget.checked)}/></label>
+          <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
+          <label for="narration-model-picker">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/></label>
+          <label>Narration daily dollars<input type="number" step="0.01" min="0" max="100" value={draft.attention_narration_daily_budget_usd} onInput={event=>change('attention_narration_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <details class="settings-advanced"><summary>Advanced rules.toml editor</summary><p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p><label>rules.toml<textarea value={rules} onInput={event=>setRules(event.currentTarget.value)} /></label></details>
           <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
         </section>}

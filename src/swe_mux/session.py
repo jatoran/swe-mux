@@ -49,7 +49,7 @@ from .models import (
     StandingActivityKind,
 )
 from .pty_host import PtyHost, merge_environment
-from .runtime_cwd import Osc7Parser, OscSignalParser, classify_osc7_location
+from .runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser, classify_osc7_location
 from .screen_mode import (
     BRACKETED_PASTE_TOGGLE,
     SCREEN_TOGGLE,
@@ -1922,6 +1922,7 @@ class Session:
         self.ignored_detection_runs: set[tuple[str, str]] = set()
         self.osc7 = Osc7Parser()
         self.osc_signals = OscSignalParser()
+        self.osc133 = Osc133Parser()
         self.cwd_debounce_task: asyncio.Task[Any] | None = None
         self.cwd_switches: deque[float] = deque()
         self.cwd_telemetry_dropped = 0
@@ -5836,6 +5837,7 @@ class SessionManager:
             session.screen.feed(chunk)
             session.bracketed_paste.feed(chunk)
             session.osc_signals.feed(chunk)
+            self._note_shell_breakpoints(session, chunk)
             prompt_uris = session.osc7.feed(chunk)
             if prompt_uris and "first_prompt" not in session.record.startup_timing_ms:
                 session.record.startup_timing_ms["first_prompt"] = round(
@@ -5854,6 +5856,27 @@ class SessionManager:
                 session.publish_update()
             if prompt_uris:
                 self._schedule_startup_measurement(session, "first_prompt")
+
+    def _note_shell_breakpoints(self, session: Session, chunk: bytes) -> None:
+        """Report the human's own command finishing, from OSC 133 in a shell pane.
+
+        Only a shell counts. An agent pane's "finished" is the agent's breakpoint,
+        not the human's, and the whole point of this signal is that swe-mux owns
+        the terminal the human is working in themselves. Emitted in the background
+        because it is telemetry on the PTY fan-out path and must never add latency
+        to output delivery.
+        """
+        if session.record.backend in AGENT_BACKENDS:
+            return
+        markers = session.osc133.feed(chunk)
+        if not any(marker == "D" for marker, _ in markers):
+            return
+        self.events.emit_background(
+            "shell_command_finished",
+            session_id=session.record.id,
+            source="daemon",
+            exit_status=session.osc133.last_exit_status,
+        )
 
     def _queue_agent_ready_check(self, session: Session) -> None:
         """Use settled PTY output only while semantic startup evidence is absent."""

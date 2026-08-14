@@ -62,7 +62,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'context', label: 'Context', heading: 'Instructions & Memory', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
-  { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - notifications and attention records', scope: 'app' },
+  { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - what needs you now, and every attention record behind it', scope: 'app' },
 ]
 
 /** Tabs that open a document into the workspace instead of typing into it.

@@ -37,6 +37,7 @@
 - Backend detection and observation: `features/backends.md`
 - Evidence replay and delivery readiness: `features/delivery-readiness.md`
 - Fleet attention and intelligence: `features/fleet-intelligence.md`
+- Attention ranking, interrupt budget, and narration: `features/attention-ranking.md`
 - Git awareness and worktrees: `features/git.md`
 - Sessions: `features/sessions.md`
 - Multi-device terminal input and shared geometry: `features/terminal-input.md`

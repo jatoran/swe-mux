@@ -21,6 +21,13 @@
   it does not gate it. A profile whose own args include `-Command`/`-File` has no prompt to
   instrument and no room for a second script, so it is left alone — except with cwd
   integration explicitly on, which still rejects it. Rationale: `backends.md`.
+- The same bootstrap emits OSC 133 shell-integration markers (`D` command finished with its
+  exit status, then `A` prompt start), reported as the `breakpoint-osc133` capability and
+  controlled globally by `attention_breakpoint_markers`. The prompt function runs exactly when
+  the human's own command has finished, which is the breakpoint attention ranking delivers
+  against (`attention-ranking.md`). `$?` is read as the wrapper's first statement, because
+  anywhere later it reports the wrapper's own last operation. A profile carrying
+  `-Command`/`-File` degrades to no markers rather than failing to spawn.
 - WSL translates the canonical Windows Project root through the selected distribution.
 
 ## Current compatibility limits
