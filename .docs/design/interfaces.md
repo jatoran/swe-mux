@@ -574,6 +574,8 @@ Rows also carry `idle_reason`, the idle-axis sibling of `awaiting_reason`:
 `delivery_state` is unchanged) while the agent has background work that will wake it back
 up. Completion sounds and push alerts skip that turn end; the next one is the moment worth
 the user's attention.
+Rows carry `turn_started_at`, monotonic `turn_epoch`, and nullable `active_turn_id` for the open root-turn generation.
+Rows also carry nullable `interrupt_pending_at` and `interrupt_pending_source`; these expose exact operator interrupt intent without claiming completion or changing delivery readiness.
 Rows carry nullable `agent_loaded_at`, the start of the current Claude or Codex process generation.
 Unlike `agent_run_started_at`, it survives an in-process conversation rollover and daemon adoption.
 Rows carry `standing_activity`, the standing-engagement annotation axis: a list of

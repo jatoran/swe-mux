@@ -32,10 +32,17 @@ function safePayload(value) {
   )
 }
 
+function terminalOutcome(error) {
+  const name = String(error?.name ?? error?.message ?? "error")
+  return /abort|cancel|interrupt/i.test(name) ? "interrupted" : "error"
+}
+
 export const MuxHook = async ({ serverUrl, directory, worktree }) => {
   const url = process.env.MUX_HOOK_URL
   const secret = process.env.MUX_HOOK_SECRET
   let nextSequence = 0
+  let nextRootTurn = 0
+  let activeRootTurnId = null
   let deliveryTail = Promise.resolve()
   // The pane's current conversation. opencode reports a session id on nearly
   // every event, so this only backfills the few that do not carry one.
@@ -106,6 +113,7 @@ export const MuxHook = async ({ serverUrl, directory, worktree }) => {
           // `foreign_conversation_hook_ignored`: the pane kept reporting the
           // retired conversation and its measurements as live.
           const replacing = currentSession !== null && currentSession !== sessionID
+          activeRootTurnId = null
           return emit("SessionStart", sessionID, {
             source: replacing ? "new" : "startup",
             previous_session_id: replacing ? currentSession : undefined,
@@ -116,25 +124,36 @@ export const MuxHook = async ({ serverUrl, directory, worktree }) => {
           // {type:"idle"} | {type:"busy"} | {type:"retry",attempt,message,next}
           const status = props.status?.type
           if (status !== "busy") return
+          activeRootTurnId ??= `opencode-root-${++nextRootTurn}`
           return emit("turn_started", sessionID, {
             status,
+            turn_id: activeRootTurnId,
             opencode_event: type,
           })
         }
-        case "session.idle":
+        case "session.idle": {
           // The one unambiguous root-completion signal opencode emits.
+          const turnId = activeRootTurnId
+          activeRootTurnId = null
           return emit("turn_ended", sessionID, {
             root_completion: true,
+            turn_id: turnId,
             opencode_event: type,
           })
+        }
         case "session.compacted":
           return emit("context_compacted", sessionID, { opencode_event: type })
-        case "session.error":
+        case "session.error": {
+          const turnId = activeRootTurnId
+          activeRootTurnId = null
           return emit("turn_ended", sessionID, {
             root_completion: true,
+            turn_id: turnId,
+            outcome: terminalOutcome(props.error),
             error: props.error?.name ?? "error",
             opencode_event: type,
           })
+        }
         case "session.deleted":
           return emit("SessionEnd", sessionID, {
             reason: "deleted",

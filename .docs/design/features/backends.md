@@ -251,6 +251,9 @@ Run it deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1`, `SWEMUX_RUN_LIVE_SUBAG
   `HookAPI` surface.
   It posts authenticated normalized lifecycle events through `MUX_HOOK_URL`, emits one
   monotonically increasing source sequence, and retries a failed delivery with the same envelope.
+  Each `agent_start` also mints a root `turn_id` that its `agent_end` echoes.
+  The terminal payload derives `outcome` from the final assistant message in `agent_end.messages`, because OMP 17.2.10 clears its transient abort flag before extension subscribers run while retaining `stopReason: "aborted"` in that message list.
+  An aborted root closes as interrupted even when `willContinue` is true; continuation describes the next agent run and may never reopen a root turn that another source already closed.
   Source launches copy the checked-out asset, while a frozen desktop rebuild copies the entire
   `swe_mux/assets` directory into the bundle, so the standard redeploy flow refreshes the source
   used by newly materialized packages.
@@ -334,6 +337,7 @@ Run it deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1`, `SWEMUX_RUN_LIVE_SUBAG
 - **pi has no approval flow, so its descriptor does not claim one.**
   pi runs a tool as soon as the model asks for it; gating is something a user extension implements over `tool_call` (pi ships `examples/extensions/permission-gate.ts` doing exactly that).
   Its `normalized_events` therefore omits `approval_needed`, which keeps the replay corpus from demanding a fixture for evidence pi cannot produce.
+  Its sibling extension independently applies the same root-ID and final-assistant-outcome contract as OMP, because upstream pi's `agent_end.messages` is also the durable abort source.
 - **pi has no MCP client**, so the mux MCP server is not registered for it and its MCP configuration table is empty rather than searched.
   Exposing mux's tools to pi would mean registering them as extension-provided native tools, which is a different mechanism and is not done.
 - **opencode does have MCP, and mux registers its server in the same per-session config layer that carries the plugin** — `type: remote`, the mux Streamable HTTP url, and an `Authorization` bearer header.
@@ -379,6 +383,8 @@ Run it deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1`, `SWEMUX_RUN_LIVE_SUBAG
   A failure to materialize the config forfeits the plugin, never the pane.
 - **opencode reports both halves of an approval** (`permission.updated` raises, `permission.replied` resolves), which is the discriminator Codex still lacks.
   Its one unambiguous root-completion signal is `session.idle`; `session.status` carries `busy`/`idle`/`retry`.
+  The plugin assigns one synthetic root ID on the first `busy` status, reuses it across duplicate busy reports, and echoes it from `session.idle` or `session.error`.
+  Abort, cancel, and interrupt-shaped error names normalize to `interrupted`; other errors normalize to `error`.
   Its live bus emits more types than the SDK's typed union (measured: `message.part.delta`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`), so the plugin classifies known types and drops the rest rather than guessing.
 - **A first turn on a self-minting harness reads as historical, and that is not a fault.**
   A harness that mints its own conversation id cannot be bound until it reports one, and by then it has usually written its header and often the whole first turn.

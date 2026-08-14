@@ -1390,6 +1390,188 @@ async def test_a_refused_close_leaves_the_turn_running() -> None:
     assert session.record.last_turn_ms is None
 
 
+async def test_interrupted_task_complete_closes_even_when_provider_will_continue() -> None:
+    """OMP/pi continuation is about the next run, not this aborted run."""
+    session = cast(Any, ReplaySession("omp"))
+    events = EventBus()
+    queue = events.subscribe()
+
+    await apply_hook_observation(
+        session, "task_started", {"turn_id": "omp-root-1"}, events
+    )
+    session.clock.advance(4.0)
+    await apply_hook_observation(
+        session,
+        "task_complete",
+        {
+            "turn_id": "omp-root-1",
+            "outcome": "interrupted",
+            "stop_reason": "aborted",
+            "will_continue": True,
+        },
+        events,
+    )
+
+    assert session.record.state == "idle"
+    assert session.record.turn_started_at is None
+    assert session.record.active_turn_id is None
+    aborted = [event for event in drain(queue) if event.type == "turn_aborted"]
+    assert len(aborted) == 1
+    assert aborted[0].payload["outcome"] == "interrupted"
+    assert aborted[0].payload["turn_id"] == "omp-root-1"
+
+
+async def test_interrupt_intent_is_pending_until_terminal_evidence_arrives() -> None:
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn, note_interrupt_intent
+
+    session = cast(Any, ReplaySession("codex"))
+    events = EventBus()
+    await _begin_root_turn(
+        session, events, source="transcript", turn_id="turn-1"
+    )
+    session.clock.advance(9.0)
+
+    assert note_interrupt_intent(session, "\x03", source="voice") is True
+    requested_at = session.record.interrupt_pending_at
+    assert requested_at == session.clock.wall()
+    assert session.record.state == "working"
+    assert session.record.turn_started_at is not None
+
+    session.clock.advance(1.0)
+    await _finish_root_turn(
+        session,
+        events,
+        source="transcript",
+        outcome="interrupted",
+        turn_id="turn-1",
+    )
+    assert session.record.interrupt_pending_at is None
+    assert session.record.interrupt_pending_source is None
+    assert session.record.state == "idle"
+
+
+async def test_continuation_hint_cannot_reopen_a_turn_closed_by_transcript() -> None:
+    """A late agent_end must not recreate working with no active turn or timer."""
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("omp"))
+    events = EventBus()
+    await _begin_root_turn(
+        session, events, source="transcript", turn_id="omp-root-1"
+    )
+    session.clock.advance(4.0)
+    await _finish_root_turn(
+        session, events, source="transcript", turn_id="omp-root-1"
+    )
+
+    await apply_hook_observation(
+        session,
+        "task_complete",
+        {"turn_id": "omp-root-1", "will_continue": True},
+        events,
+    )
+
+    assert session.record.state == "idle"
+    assert session.record.turn_started_at is None
+    assert session.observation_state["root_turn_active"] is False
+
+
+async def test_new_prompt_repairs_missing_terminal_boundary_and_resets_timer() -> None:
+    """A later root request proves the prior request is no longer in flight."""
+    from swe_mux.observation import _begin_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    events = EventBus()
+    queue = events.subscribe()
+    await _begin_root_turn(
+        session,
+        events,
+        source="transcript",
+        evidence="user_prompt_record",
+        logical_root=True,
+        prompt="first request",
+    )
+    first_started = session.record.turn_started_at
+    first_epoch = session.record.turn_epoch
+    session.observation_state["turn_saw_activity"] = True
+    session.clock.advance(47.0)
+
+    await _begin_root_turn(
+        session,
+        events,
+        source="transcript",
+        evidence="user_prompt_record",
+        logical_root=True,
+        prompt="second request",
+    )
+
+    assert session.record.state == "working"
+    assert session.record.turn_epoch == first_epoch + 1
+    assert session.record.turn_started_at == session.clock.wall()
+    assert session.record.turn_started_at != first_started
+    assert session.status_health_counters["turn_boundary_recovered"] == 1
+    emitted = drain(queue)
+    recovered = [event for event in emitted if event.type == "turn_aborted"]
+    assert len(recovered) == 1
+    assert recovered[0].payload["outcome"] == "superseded"
+    assert recovered[0].payload["recovered_boundary"] is True
+
+
+async def test_hook_and_transcript_prompt_evidence_share_one_turn_generation() -> None:
+    """Two sources reporting one submission must not look like two turns."""
+    from swe_mux.observation import _begin_root_turn
+
+    session = cast(Any, ReplaySession("claude"))
+    events = EventBus()
+    await _begin_root_turn(
+        session,
+        events,
+        source="hook",
+        logical_root=True,
+        prompt="same request",
+    )
+    started = session.record.turn_started_at
+    epoch = session.record.turn_epoch
+    session.clock.advance(2.0)
+
+    await _begin_root_turn(
+        session,
+        events,
+        source="transcript",
+        logical_root=True,
+        prompt="same request",
+    )
+
+    assert session.record.turn_epoch == epoch
+    assert session.record.turn_started_at == started
+    assert "turn_boundary_recovered" not in session.status_health_counters
+
+
+async def test_stale_terminal_id_cannot_close_the_new_turn() -> None:
+    """A retried completion for generation N cannot terminate generation N+1."""
+    from swe_mux.observation import _begin_root_turn, _finish_root_turn
+
+    session = cast(Any, ReplaySession("codex"))
+    events = EventBus()
+    await _begin_root_turn(
+        session, events, source="transcript", turn_id="turn-1"
+    )
+    session.clock.advance(10.0)
+    await _begin_root_turn(
+        session, events, source="transcript", turn_id="turn-2"
+    )
+    second_started = session.record.turn_started_at
+
+    await _finish_root_turn(
+        session, events, source="transcript", turn_id="turn-1"
+    )
+
+    assert session.record.state == "working"
+    assert session.record.active_turn_id == "turn-2"
+    assert session.record.turn_started_at == second_started
+    assert session.status_health_counters["stale_turn_terminal_ignored"] == 1
+
+
 async def test_a_human_submit_dates_the_last_prompt() -> None:
     from swe_mux.observation import apply_hook_observation
 

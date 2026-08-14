@@ -76,6 +76,17 @@ test('a working session is aged from its turn, so tool calls do not reset it', (
   assert.deepEqual(bottomText(midTurn, config), ['22m'])
 })
 
+test('an interrupt request freezes the visible turn duration', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['duration'])
+  const pending = session({
+    state: 'working',
+    turn_started_at: NOW - 600,
+    interrupt_pending_at: NOW - 300,
+  })
+  assert.deepEqual(bottomText(pending, config), ['5m'])
+  assert.deepEqual(bottomText(pending, config, context({ now: NOW + 3600 })), ['5m'])
+})
+
 test('an awaiting session is aged from the turn, like every other live state', () => {
   // It used to report time in state here, so a permission prompt collapsed the
   // number to seconds and answering it sprang the number back to the turn

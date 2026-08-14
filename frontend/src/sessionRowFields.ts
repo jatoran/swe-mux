@@ -256,9 +256,13 @@ function durationToken(session: Session, context: SessionRowContext): { text: st
     return { text: formatRowDuration(seconds), title: `last turn took ${formatRowDuration(seconds)}`, seconds }
   }
   if (session.turn_started_at) {
-    const seconds = ageOf(session.turn_started_at, context.now)
+    const effectiveNow = session.interrupt_pending_at ?? context.now
+    const seconds = ageOf(session.turn_started_at, effectiveNow)
     if (seconds === null) return null
-    return { text: formatRowDuration(seconds), title: `this turn has run ${formatRowDuration(seconds)}`, seconds }
+    const title = session.interrupt_pending_at
+      ? `turn ran ${formatRowDuration(seconds)} before interruption was requested`
+      : `this turn has run ${formatRowDuration(seconds)}`
+    return { text: formatRowDuration(seconds), title, seconds }
   }
   if (!session.state_since) return null
   const seconds = ageOf(session.state_since, context.now)

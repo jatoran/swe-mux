@@ -26,6 +26,11 @@
 - `SessionRecord.observation_stale_since`: volatile. Set when the followed transcript is
   provably no longer this PTY's conversation and no successor could be corroborated; it
   revokes the transcript's authority over hooks and hard-blocks delivery.
+- `SessionRecord.turn_epoch`, `active_turn_id`, and `turn_started_at` identify the open root-turn generation and its clock.
+  The epoch increases on every root open, the opaque ID is provider-native or mux-synthesized when available, and both the ID and start timestamp clear on terminal evidence.
+  A mismatched terminal ID is diagnosable stale evidence and cannot close a newer generation.
+- `SessionRecord.interrupt_pending_at` and `interrupt_pending_source` expose operator interrupt intent separately from lifecycle proof.
+  They freeze the user-visible timer and status wording while delivery remains blocked, clear on terminal evidence or a new root generation, and expire when an interrupt cannot be confirmed.
 - `SessionRecord.standing_activity`: the standing-engagement annotation axis — a list of
   `StandingActivity {kind: loop|cron|background_tasks|subagents, source, evidence, since,
   expires_at, count, detail}`. Not states: SessionState, `awaiting_reason`, and delivery are
