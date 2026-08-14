@@ -89,6 +89,23 @@ function contentText(content: unknown): string {
     .join("\n");
 }
 
+function agentOutcome(messages: unknown): { outcome: string; stopReason?: string } {
+  if (!Array.isArray(messages)) return { outcome: "completed" };
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; stopReason?: unknown } | undefined;
+    if (!message || message.role !== "assistant" || typeof message.stopReason !== "string") continue;
+    const stopReason = message.stopReason;
+    if (["aborted", "cancelled", "canceled", "interrupted"].includes(stopReason)) {
+      return { outcome: "interrupted", stopReason };
+    }
+    if (stopReason === "error" || stopReason === "length") {
+      return { outcome: stopReason, stopReason };
+    }
+    return { outcome: "completed", stopReason };
+  }
+  return { outcome: "completed" };
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -97,6 +114,8 @@ export default function sweMuxHook(pi: ExtensionAPI): void {
   const url = process.env.MUX_HOOK_URL;
   const secret = process.env.MUX_HOOK_SECRET;
   let nextSequence = 0;
+  let nextRootTurn = 0;
+  let activeRootTurnId: string | undefined;
   let deliveryTail = Promise.resolve();
 
   async function post(envelope: HookEnvelope): Promise<void> {
@@ -175,17 +194,28 @@ export default function sweMuxHook(pi: ExtensionAPI): void {
       pi_event: "turn_end",
     }),
   );
-  pi.on("agent_start", (_event, ctx) =>
-    emit("task_started", { ...sessionPayload(ctx), pi_event: "agent_start" }),
-  );
-  pi.on("agent_end", (event, ctx) =>
-    emit("task_complete", {
+  pi.on("agent_start", (_event, ctx) => {
+    activeRootTurnId = `pi-root-${++nextRootTurn}`;
+    return emit("task_started", {
+      ...sessionPayload(ctx),
+      turn_id: activeRootTurnId,
+      pi_event: "agent_start",
+    });
+  });
+  pi.on("agent_end", (event, ctx) => {
+    const terminal = agentOutcome((event as { messages?: unknown }).messages);
+    const turnId = activeRootTurnId;
+    activeRootTurnId = undefined;
+    return emit("task_complete", {
       ...sessionPayload(ctx),
       will_continue:
         (event as { willContinue?: boolean }).willContinue === true,
+      turn_id: turnId,
+      outcome: terminal.outcome,
+      stop_reason: terminal.stopReason,
       pi_event: "agent_end",
-    }),
-  );
+    });
+  });
   pi.on("tool_call", (event, ctx) =>
     emit("PreToolUse", {
       ...sessionPayload(ctx),

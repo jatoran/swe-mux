@@ -1704,6 +1704,9 @@ def reset_session_observation_state(session: Any, evidence: str) -> None:
         "root_completion_seen": False,
         "codex_scope": "root",
     }
+    session.record.active_turn_id = None
+    session.record.interrupt_pending_at = None
+    session.record.interrupt_pending_source = None
     if isinstance(hook_sequences, dict):
         session.observation_state["hook_sequences"] = dict(hook_sequences)
     if isinstance(hook_sequence_duplicates, int) and hook_sequence_duplicates >= 0:
@@ -3281,6 +3284,10 @@ class SessionManager:
         # first idle with the old run's last turn.
         record.last_turn_ms = None
         record.turn_started_at = None
+        record.turn_epoch = 0
+        record.active_turn_id = None
+        record.interrupt_pending_at = None
+        record.interrupt_pending_source = None
         # Same scope: a prompt addressed to the conversation being replaced was
         # not addressed to this one, and carrying it over would report the new
         # run as hours into work nobody has asked it for yet.
@@ -5306,11 +5313,43 @@ class SessionManager:
         A legitimately long tool call keeps "esc to interrupt" on screen, so the PTY
         check never cuts it short.
         """
-        from .observation import transcript_tail_turn_state
+        from .observation import (
+            INTERRUPT_PTY_SETTLE_SECONDS,
+            _finish_root_turn,
+            expire_interrupt_intent,
+            transcript_tail_turn_state,
+        )
 
         record = session.record
         if await SessionManager._check_ssh_boundary_state(self, session, now):
             return
+        interrupt_requested_at = record.interrupt_pending_at
+        if interrupt_requested_at is not None:
+            interrupt_pty = self._pty_tail_explanation(session)
+            interrupt_pty_state = cast(PtyTailState, interrupt_pty["outcome"])
+            self._note_pty_tail_readings(session, interrupt_pty, now=now)
+            interrupt_age = max(0.0, now - interrupt_requested_at)
+            if (
+                interrupt_age >= INTERRUPT_PTY_SETTLE_SECONDS
+                and interrupt_pty_state == "idle"
+                and session.observation_state.get("root_turn_active")
+            ):
+                session.note_watchdog_recovery(
+                    "interrupt_confirmed_pty",
+                    stalled_seconds=interrupt_age,
+                    tail_verdict="interrupt_intent+pty_idle",
+                )
+                await _finish_root_turn(
+                    session,
+                    self.events,
+                    source="watchdog-pty",
+                    outcome="interrupted",
+                    force=True,
+                    inferred=True,
+                    evidence="interrupt_intent+pty_idle",
+                )
+                return
+            expire_interrupt_intent(session, now=now)
         if not has_observable_transcript(record.backend):
             return
         # Annotation TTL sweep runs before any early return below: expiry is

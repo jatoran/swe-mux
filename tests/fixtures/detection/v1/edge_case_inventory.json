@@ -25,7 +25,7 @@
     "esc_pause_without_marker": {
       "fixture": "claude-esc-pause-without-marker.json",
       "guard": "tests/test_observation.py::test_watchdog_pty_backstop_idles_open_tail_at_idle_prompt",
-      "root_cause": "ESC can pause a turn without writing the interrupt marker, leaving an open tool tail with no terminal record; only the PTY idle-prompt backstop may recover it after STATE_WATCHDOG_PTY_STUCK_SECONDS."
+      "root_cause": "ESC can end a turn without writing the interrupt marker, leaving an open tool tail with no terminal record. Mux records exact interrupt input as intent, freezes the displayed timer, and accepts this session's idle PTY as confirmation after the short repaint settle; the long generic PTY backstop remains for interruptions mux did not originate."
     },
     "long_tool_esc_interrupt": {
       "fixture": "claude-long-tool-never-cut.json",

@@ -436,6 +436,7 @@ _OPENCODE_GLOBAL_INSTRUCTIONS = (".config", "opencode", "AGENTS.md")
 _NORMALIZED_AGENT_EVENTS = (
     "turn_started",
     "turn_ended",
+    "turn_aborted",
     "tool_use",
     "tool_result",
     "approval_needed",
@@ -449,6 +450,7 @@ _NORMALIZED_AGENT_EVENTS = (
 _PI_NORMALIZED_EVENTS = (
     "turn_started",
     "turn_ended",
+    "turn_aborted",
     "tool_use",
     "tool_result",
 )

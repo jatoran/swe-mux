@@ -54,6 +54,36 @@
         "opencode_event": "session.idle"
       },
       "expect_state": "idle"
+    },
+    {
+      "kind": "hook",
+      "event": "UserPromptSubmit",
+      "payload": {
+        "agent": "build",
+        "opencode_event": "chat.message"
+      },
+      "expect_state": "working"
+    },
+    {
+      "kind": "hook",
+      "event": "turn_started",
+      "payload": {
+        "status": "busy",
+        "turn_id": "opencode-root-2",
+        "opencode_event": "session.status"
+      }
+    },
+    {
+      "kind": "hook",
+      "event": "turn_ended",
+      "payload": {
+        "root_completion": true,
+        "turn_id": "opencode-root-2",
+        "outcome": "interrupted",
+        "error": "MessageAbortedError",
+        "opencode_event": "session.error"
+      },
+      "expect_state": "idle"
     }
   ],
   "expected": {
@@ -86,9 +116,32 @@
         "source": "hook",
         "scope": "root",
         "outcome": "completed"
+      },
+      {
+        "type": "turn_started",
+        "source": "hook",
+        "scope": "root"
+      },
+      {
+        "type": "turn_aborted",
+        "source": "hook",
+        "scope": "root",
+        "outcome": "interrupted"
       }
     ],
     "states": [
+      {
+        "previous": "idle",
+        "state": "working",
+        "source": "hook",
+        "proof": "proven"
+      },
+      {
+        "previous": "working",
+        "state": "idle",
+        "source": "hook",
+        "proof": "proven"
+      },
       {
         "previous": "idle",
         "state": "working",
@@ -108,7 +161,7 @@
       "unknown": 0,
       "unknown_signatures": {}
     },
-    "delivery_state": "unknown",
-    "delivery_reason": "readiness_debounce_pending"
+    "delivery_state": "blocked",
+    "delivery_reason": "root_turn_interrupted"
   }
 }

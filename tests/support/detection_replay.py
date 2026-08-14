@@ -14,15 +14,19 @@ from swe_mux.event_bus import EventBus
 from swe_mux.harness import HARNESSES, is_agent_harness
 from swe_mux.models import MuxEvent, SessionRecord, SessionState
 from swe_mux.observation import (
+    INTERRUPT_PTY_SETTLE_SECONDS,
     IncrementalJsonlDecoder,
     _dispatch_transcript_event,
+    _finish_root_turn,
     _finish_transcript_catchup,
     _record_parser_observation,
     _transcript_authoritative,
     apply_hook_observation,
     classify_transcript_event,
+    expire_interrupt_intent,
     foreign_conversation_hook_id,
     hook_event_scope,
+    note_interrupt_intent,
     tail_turn_state,
 )
 from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
@@ -496,8 +500,10 @@ class DetectionReplay:
             # Raw child output, which is where the daemon reads the screen switch.
             self.session.screen.feed(str(step["data"]).encode("utf-8", "surrogateescape"))
         elif kind == "input":
+            data = str(step.get("data") or "")
             self.session.input_revision += 1
             self.session.last_input_event_ts = self.clock.monotonic()
+            note_interrupt_intent(self.session, data, source="terminal_input")
             if step.get("submit") is True and session_is_unwitnessed(self.session):
                 self.session.observation_state["unwitnessed_turn_armed"] = True
             await self.events.emit(
@@ -505,7 +511,7 @@ class DetectionReplay:
                 session_id=self.session.record.id,
                 source="daemon",
                 input_owner=True,
-                bytes=int(step.get("bytes", 1)),
+                bytes=int(step.get("bytes", len(data.encode("utf-8")) or 1)),
             )
         elif kind == "terminal_response":
             await self.events.emit(
@@ -608,6 +614,30 @@ class DetectionReplay:
             backend=session.record.backend,
             cli_state_status=session_cli_state_status(session),
         )
+        interrupt_requested_at = session.record.interrupt_pending_at
+        if interrupt_requested_at is not None:
+            interrupt_age = max(0.0, now - interrupt_requested_at)
+            if (
+                interrupt_age >= INTERRUPT_PTY_SETTLE_SECONDS
+                and pty_state == "idle"
+                and session.observation_state.get("root_turn_active")
+            ):
+                session.note_watchdog_recovery(
+                    "interrupt_confirmed_pty",
+                    stalled_seconds=interrupt_age,
+                    tail_verdict="interrupt_intent+pty_idle",
+                )
+                await _finish_root_turn(
+                    session,
+                    self.events,
+                    source="watchdog-pty",
+                    outcome="interrupted",
+                    force=True,
+                    inferred=True,
+                    evidence="interrupt_intent+pty_idle",
+                )
+                return
+            expire_interrupt_intent(session, now=now)
         unwitnessed = session_is_unwitnessed(session)
         # Startup-dialog tracking and the classifier-drift self-check mirror the
         # production pass through the same shared helpers.

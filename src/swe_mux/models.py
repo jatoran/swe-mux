@@ -140,6 +140,20 @@ class SessionRecord:
     #: ``state_since`` restarts on each of them, so a busy agent's timer reset
     #: every few seconds and never reported the length of the actual work.
     turn_started_at: float | None = None
+    #: Monotonic root-turn generation within this observation identity.
+    #: Consumers can distinguish a restarted timer from an update to the same
+    #: turn without inferring identity from timestamps.
+    turn_epoch: int = 0
+    #: Provider-native or mux-synthesized identity of the open root turn.
+    #: None while no root turn is open or when the harness has not supplied an
+    #: identity yet. Terminal evidence carrying a different id is stale and may
+    #: not close the active generation.
+    active_turn_id: str | None = None
+    #: Epoch seconds when the operator first requested an unresolved interruption
+    #: of the active root turn. This is intent, not proof of completion: delivery
+    #: remains blocked until provider or PTY evidence closes the turn.
+    interrupt_pending_at: float | None = None
+    interrupt_pending_source: str | None = None
     #: Epoch seconds a **human** last submitted a request to this session; None
     #: when none has been observed on this run.
     #:

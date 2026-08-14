@@ -22,6 +22,10 @@ It does not type into a PTY or authorize automation.
   paid entirely by the operator — see the 2026-08-06 correction.
 - `unknown` means evidence is missing, stale, replaced, or degraded. Unknown is never safe.
 
+Interrupt intent does not make a session deliverable.
+`interrupt_pending_at` changes only the visible status and timer; the open root turn continues to block until provider evidence or the owned PTY confirms `turn_aborted`.
+Interrupted, superseded, error, and length outcomes remain blocked by their typed root-turn reason rather than being treated as successful idle completion.
+
 `local_terminal_boundary` is a required readiness check.
 A session whose runtime boundary is `remote` is hard-blocked with `remote_terminal_boundary`, regardless of an otherwise idle-looking prompt.
 An unrecognized or unavailable boundary is hard-blocked with `terminal_boundary_unknown`.

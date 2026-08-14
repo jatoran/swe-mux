@@ -36,6 +36,13 @@ export interface Session {
   last_turn_ms?: number | null
   /** Epoch seconds the current root turn began; absent while no turn is open. */
   turn_started_at?: number | null
+  /** Monotonic identity of the current root-turn generation. */
+  turn_epoch?: number
+  /** Provider-native or mux-synthesized id of the open root turn. */
+  active_turn_id?: string | null
+  /** Operator interruption intent awaiting provider or PTY confirmation. */
+  interrupt_pending_at?: number | null
+  interrupt_pending_source?: string | null
   /** Epoch seconds a human last submitted a request here; absent when unknown.
    *  Not the same question as `turn_started_at`: auto-delivery and injected
    *  teammate messages open turns nobody asked for. Run-scoped. */

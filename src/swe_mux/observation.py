@@ -15,7 +15,13 @@ from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
 from .event_bus import EventBus
-from .harness import Backend, descriptor, native_id_matches, reports_lifecycle_hooks
+from .harness import (
+    Backend,
+    descriptor,
+    is_agent_harness,
+    native_id_matches,
+    reports_lifecycle_hooks,
+)
 from .models import SessionState
 from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
@@ -36,6 +42,8 @@ log = logging.getLogger(__name__)
 OBSERVATION_SCHEMA_VERSION = "2"
 PARSER_DEGRADE_MIN_EVENTS = 20
 PARSER_DEGRADE_UNKNOWN_RATIO = 0.25
+INTERRUPT_PTY_SETTLE_SECONDS = 2.0
+INTERRUPT_INTENT_TIMEOUT_SECONDS = 120.0
 
 CLAUDE_KNOWN_RECORDS = {
     "ai-title",
@@ -926,6 +934,7 @@ async def _finish_transcript_catchup(
     )
     state["root_turn_active"] = False
     state["root_completion_seen"] = False
+    _clear_active_turn_identity(session, state)
     if not historical_seen:
         # An empty replacement is still authoritative cancel/revert evidence.
         if session.record.state in {"working", "awaiting"}:
@@ -961,6 +970,7 @@ async def _finish_transcript_catchup(
         # ended yesterday explaining how long today's work has taken.
         state["turn_started_at"] = 0.0
         session.record.turn_started_at = None
+        _clear_active_turn_identity(session, state)
         await _transition(
             session, events, "idle", source="transcript", evidence="catchup:settled"
         )
@@ -1465,6 +1475,193 @@ async def _resume_from_awaiting(
     )
 
 
+def _turn_id(value: object) -> str | None:
+    """Normalize an optional provider turn identity without inventing one."""
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
+def _prompt_identity(prompt: str | None) -> str | None:
+    """Content identity used only to coalesce hook/transcript start evidence."""
+    if prompt is None:
+        return None
+    normalized = prompt.strip()
+    if not normalized:
+        return None
+    return hashlib.sha256(normalized.encode("utf-8", "replace")).hexdigest()
+
+
+def _clear_active_turn_identity(session: Session, state: dict[str, Any]) -> None:
+    state.pop("active_turn_id", None)
+    state.pop("logical_turn_sources", None)
+    state.pop("active_prompt_identity", None)
+    session.record.active_turn_id = None
+
+
+def _clear_interrupt_intent(session: Session, *, reason: str) -> bool:
+    record = session.record
+    if record.interrupt_pending_at is None:
+        return False
+    requested_at = record.interrupt_pending_at
+    requested_source = record.interrupt_pending_source
+    record.interrupt_pending_at = None
+    record.interrupt_pending_source = None
+    state = _observation_state(session)
+    state.pop("interrupt_pending_at", None)
+    state.pop("interrupt_pending_source", None)
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is not None:
+        ledger.append(
+            {
+                "ts": _session_now(session),
+                "kind": "interrupt_intent_resolved",
+                "reason": reason,
+                "requested_at": requested_at,
+                "requested_source": requested_source,
+                "turn_epoch": record.turn_epoch,
+            }
+        )
+    return True
+
+
+def note_interrupt_intent(session: Session, data: str, *, source: str) -> bool:
+    """Record an exact operator interrupt key without claiming the turn ended."""
+    if data not in {"\x1b", "\x03"} or not is_agent_harness(session.record.backend):
+        return False
+    state = _observation_state(session)
+    if not state.get("root_turn_active") or session.record.state != "working":
+        return False
+    now = _session_now(session)
+    first_request = session.record.interrupt_pending_at is None
+    if first_request:
+        session.record.interrupt_pending_at = now
+        session.record.interrupt_pending_source = source
+        state["interrupt_pending_at"] = now
+        state["interrupt_pending_source"] = source
+        counters = getattr(session, "status_health_counters", None)
+        if isinstance(counters, dict):
+            counters["interrupt_intents"] = counters.get("interrupt_intents", 0) + 1
+        ledger = getattr(session, "state_transitions", None)
+        if ledger is not None:
+            ledger.append(
+                {
+                    "ts": now,
+                    "kind": "interrupt_intent",
+                    "source": source,
+                    "turn_id": session.record.active_turn_id,
+                    "turn_epoch": session.record.turn_epoch,
+                }
+            )
+        log.info(
+            "operator requested root turn interruption",
+            extra={
+                "session": session.record.id,
+                "backend": session.record.backend,
+                "source": source,
+                "turn_id": session.record.active_turn_id,
+                "turn_epoch": session.record.turn_epoch,
+            },
+        )
+    _publish_update(session)
+    return True
+
+
+def expire_interrupt_intent(session: Session, *, now: float) -> bool:
+    requested_at = session.record.interrupt_pending_at
+    if requested_at is None or now - requested_at < INTERRUPT_INTENT_TIMEOUT_SECONDS:
+        return False
+    if not _clear_interrupt_intent(session, reason="timeout"):
+        return False
+    counters = getattr(session, "status_health_counters", None)
+    if isinstance(counters, dict):
+        counters["interrupt_intent_timeouts"] = (
+            counters.get("interrupt_intent_timeouts", 0) + 1
+        )
+    _publish_update(session)
+    return True
+
+
+def _note_turn_boundary_recovery(
+    session: Session,
+    *,
+    source: str,
+    evidence: str | None,
+    previous_turn_id: str | None,
+    next_turn_id: str | None,
+) -> None:
+    counters = getattr(session, "status_health_counters", None)
+    if isinstance(counters, dict):
+        counters["turn_boundary_recovered"] = counters.get("turn_boundary_recovered", 0) + 1
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is not None:
+        ledger.append(
+            {
+                "ts": _session_now(session),
+                "kind": "turn_boundary_recovered",
+                "source": source,
+                "evidence": evidence,
+                "previous_turn_id": previous_turn_id,
+                "next_turn_id": next_turn_id,
+                "turn_epoch": session.record.turn_epoch,
+            }
+        )
+    log.warning(
+        "recovered missing root turn boundary",
+        extra={
+            "session": session.record.id,
+            "backend": session.record.backend,
+            "source": source,
+            "evidence": evidence,
+            "previous_turn_id": previous_turn_id,
+            "next_turn_id": next_turn_id,
+            "turn_epoch": session.record.turn_epoch,
+        },
+    )
+
+
+async def _supersede_active_root_turn(
+    session: Session,
+    events: EventBus,
+    *,
+    source: str,
+    evidence: str | None,
+    next_turn_id: str | None,
+) -> None:
+    """Close a provably older root turn without publishing a false idle gap."""
+    state = _observation_state(session)
+    previous_turn_id = _turn_id(state.get("active_turn_id"))
+    previous_epoch = session.record.turn_epoch
+    state["root_turn_active"] = False
+    state["root_completion_seen"] = True
+    payload: dict[str, Any] = {
+        "recovered_boundary": True,
+        "turn_epoch": previous_epoch,
+    }
+    if previous_turn_id is not None:
+        payload["turn_id"] = previous_turn_id
+    _record_turn_duration(session, state, payload)
+    _clear_active_turn_identity(session, state)
+    _note_turn_boundary_recovery(
+        session,
+        source=source,
+        evidence=evidence,
+        previous_turn_id=previous_turn_id,
+        next_turn_id=next_turn_id,
+    )
+    await events.emit(
+        "turn_aborted",
+        session_id=session.record.id,
+        source=source,
+        scope="root",
+        outcome="superseded",
+        **payload,
+    )
+
+
 async def _begin_root_turn(
     session: Session,
     events: EventBus,
@@ -1472,6 +1669,9 @@ async def _begin_root_turn(
     source: str,
     evidence: str | None = None,
     started_at: float | None = None,
+    turn_id: object = None,
+    logical_root: bool = False,
+    prompt: str | None = None,
 ) -> None:
     """Open a root turn, or join the one already open.
 
@@ -1481,6 +1681,8 @@ async def _begin_root_turn(
     came back reading "0s" and then aged from the restart rather than the work.
     """
     state = _observation_state(session)
+    incoming_turn_id = _turn_id(turn_id)
+    prompt_identity = _prompt_identity(prompt) if logical_root else None
     if source == "transcript":
         # Ordered, in-band evidence of new work supersedes the prior close.
         state["closed_by_transcript"] = False
@@ -1493,6 +1695,59 @@ async def _begin_root_turn(
         if callable(note):
             note(source)
         return
+    if state["root_turn_active"]:
+        active_turn_id = _turn_id(state.get("active_turn_id"))
+        different_native_turn = bool(
+            incoming_turn_id
+            and active_turn_id
+            and incoming_turn_id != active_turn_id
+        )
+        logical_sources = state.get("logical_turn_sources")
+        if not isinstance(logical_sources, list):
+            logical_sources = []
+        prior_prompt_identity = state.get("active_prompt_identity")
+        cross_source_corroboration = bool(
+            logical_root
+            and logical_sources
+            and source not in logical_sources
+            and (
+                prompt_identity is None
+                or prior_prompt_identity is None
+                or prompt_identity == prior_prompt_identity
+            )
+        )
+        first_logical_evidence = bool(
+            logical_root
+            and not logical_sources
+            and not state.get("turn_saw_activity")
+        )
+        answering_awaiting = bool(logical_root and session.record.state == "awaiting")
+        if different_native_turn or (
+            logical_root
+            and not cross_source_corroboration
+            and not first_logical_evidence
+            and not answering_awaiting
+        ):
+            await _supersede_active_root_turn(
+                session,
+                events,
+                source=source,
+                evidence=evidence,
+                next_turn_id=incoming_turn_id,
+            )
+        else:
+            if incoming_turn_id and not active_turn_id:
+                state["active_turn_id"] = incoming_turn_id
+                session.record.active_turn_id = incoming_turn_id
+            if logical_root:
+                if source not in logical_sources:
+                    logical_sources.append(source)
+                state["logical_turn_sources"] = logical_sources
+                if prompt_identity is not None:
+                    state["active_prompt_identity"] = prompt_identity
+            await _transition(session, events, "working", source=source, evidence=evidence)
+            _publish_update(session)
+            return
     if (
         not state["root_turn_active"]
         and session.record.state not in {"working", "awaiting"}
@@ -1503,10 +1758,22 @@ async def _begin_root_turn(
         # when a hook or transcript source has gone missing.
         session.state_source_priority = -1
     await _transition(session, events, "working", source=source, evidence=evidence)
-    if state["root_turn_active"]:
-        return
+    _clear_interrupt_intent(session, reason="new_root_turn")
     state["root_turn_active"] = True
     state["root_completion_seen"] = False
+    session.record.turn_epoch += 1
+    state["turn_epoch"] = session.record.turn_epoch
+    if incoming_turn_id is not None:
+        state["active_turn_id"] = incoming_turn_id
+        session.record.active_turn_id = incoming_turn_id
+    else:
+        state.pop("active_turn_id", None)
+        session.record.active_turn_id = None
+    state["logical_turn_sources"] = [source] if logical_root else []
+    if prompt_identity is not None:
+        state["active_prompt_identity"] = prompt_identity
+    else:
+        state.pop("active_prompt_identity", None)
     # Same clock the turn is *closed* against, so the two ends of one measurement
     # cannot come from different time sources — under the replay harness, and
     # equally under transcript catch-up, where the wall clock is not the turn's.
@@ -1519,7 +1786,15 @@ async def _begin_root_turn(
     # state, which restarts on every tool call and approval inside that turn.
     session.record.turn_started_at = state["turn_started_at"]
     state["turn_saw_activity"] = False
-    await events.emit("turn_started", session_id=session.record.id, source=source, scope="root")
+    _publish_update(session)
+    await events.emit(
+        "turn_started",
+        session_id=session.record.id,
+        source=source,
+        scope="root",
+        turn_epoch=session.record.turn_epoch,
+        turn_id=incoming_turn_id,
+    )
 
 
 def _background_wait_reason(session: Session) -> str | None:
@@ -1614,7 +1889,11 @@ def _turn_close_landed(session: Session, accepted: bool) -> bool:
 
 
 def _restore_refused_turn(
-    state: dict[str, Any], was_active: bool, was_completion_seen: bool
+    session: Session,
+    state: dict[str, Any],
+    was_active: bool,
+    was_completion_seen: bool,
+    active_turn_id: str | None,
 ) -> None:
     """Put back the turn bookkeeping a refused close had already taken down.
 
@@ -1627,6 +1906,51 @@ def _restore_refused_turn(
     """
     state["root_turn_active"] = was_active
     state["root_completion_seen"] = was_completion_seen
+    if active_turn_id is not None:
+        state["active_turn_id"] = active_turn_id
+    else:
+        state.pop("active_turn_id", None)
+    session.record.active_turn_id = active_turn_id
+
+
+def _note_stale_turn_terminal(
+    session: Session,
+    *,
+    source: str,
+    evidence: str | None,
+    terminal_turn_id: str,
+    active_turn_id: str,
+) -> None:
+    counters = getattr(session, "status_health_counters", None)
+    if isinstance(counters, dict):
+        counters["stale_turn_terminal_ignored"] = (
+            counters.get("stale_turn_terminal_ignored", 0) + 1
+        )
+    ledger = getattr(session, "state_transitions", None)
+    if ledger is not None:
+        ledger.append(
+            {
+                "ts": _session_now(session),
+                "kind": "stale_turn_terminal_ignored",
+                "source": source,
+                "evidence": evidence,
+                "terminal_turn_id": terminal_turn_id,
+                "active_turn_id": active_turn_id,
+                "turn_epoch": session.record.turn_epoch,
+            }
+        )
+    log.warning(
+        "ignored stale root turn terminal event",
+        extra={
+            "session": session.record.id,
+            "backend": session.record.backend,
+            "source": source,
+            "evidence": evidence,
+            "terminal_turn_id": terminal_turn_id,
+            "active_turn_id": active_turn_id,
+            "turn_epoch": session.record.turn_epoch,
+        },
+    )
 
 
 async def _finish_root_turn(
@@ -1641,6 +1965,21 @@ async def _finish_root_turn(
     **payload: Any,
 ) -> None:
     state = _observation_state(session)
+    terminal_turn_id = _turn_id(payload.get("turn_id"))
+    active_turn_id = _turn_id(state.get("active_turn_id"))
+    if terminal_turn_id and active_turn_id and terminal_turn_id != active_turn_id:
+        _note_stale_turn_terminal(
+            session,
+            source=source,
+            evidence=evidence,
+            terminal_turn_id=terminal_turn_id,
+            active_turn_id=active_turn_id,
+        )
+        return
+    if terminal_turn_id and state.get("root_turn_active") and active_turn_id is None:
+        state["active_turn_id"] = terminal_turn_id
+        session.record.active_turn_id = terminal_turn_id
+        active_turn_id = terminal_turn_id
     if source == "transcript":
         # Latch the transcript's authoritative turn boundary so a late, unordered
         # hook cannot reopen "working" afterward (set before the early-return so a
@@ -1706,9 +2045,17 @@ async def _finish_root_turn(
             evidence=evidence, inferred=inferred, idle_reason=idle_reason,
         )
         if not _turn_close_landed(session, accepted):
-            _restore_refused_turn(state, was_active, was_completion_seen)
+            _restore_refused_turn(
+                session, state, was_active, was_completion_seen, active_turn_id
+            )
             return
         _record_turn_duration(session, state, payload)
+        _clear_active_turn_identity(session, state)
+        _clear_interrupt_intent(session, reason=outcome)
+        _publish_update(session)
+        payload.setdefault("turn_epoch", session.record.turn_epoch)
+        if active_turn_id is not None:
+            payload.setdefault("turn_id", active_turn_id)
         await events.emit(
             "turn_ended",
             session_id=session.record.id,
@@ -1727,9 +2074,17 @@ async def _finish_root_turn(
             evidence=evidence, inferred=inferred,
         )
         if not _turn_close_landed(session, accepted):
-            _restore_refused_turn(state, was_active, was_completion_seen)
+            _restore_refused_turn(
+                session, state, was_active, was_completion_seen, active_turn_id
+            )
             return
         _record_turn_duration(session, state, payload)
+        _clear_active_turn_identity(session, state)
+        _clear_interrupt_intent(session, reason=outcome)
+        _publish_update(session)
+        payload.setdefault("turn_epoch", session.record.turn_epoch)
+        if active_turn_id is not None:
+            payload.setdefault("turn_id", active_turn_id)
         await events.emit(
             "turn_aborted",
             session_id=session.record.id,
@@ -1770,6 +2125,23 @@ def hook_event_scope(event_type: str, payload: dict[str, Any]) -> str:
     if payload.get("agent_id") and event_type not in {"SessionStart", "SessionEnd"}:
         return "subagent"
     return "root"
+
+
+def _hook_turn_outcome(payload: dict[str, Any]) -> str:
+    """Normalize terminal hook payloads without treating continuation as success."""
+    raw = str(
+        payload.get("outcome")
+        or payload.get("stop_reason")
+        or payload.get("stopReason")
+        or ""
+    ).strip().lower()
+    if raw in {"aborted", "abort", "cancelled", "canceled", "interrupted"}:
+        return "interrupted"
+    if raw in {"error", "failed", "failure"} or payload.get("error"):
+        return "error"
+    if raw in {"length", "max_tokens", "token_limit"}:
+        return "length"
+    return "completed"
 
 
 def conversation_unbound(session: Session) -> bool:
@@ -3088,7 +3460,15 @@ async def apply_hook_observation(
             _note_prompt_authorship(session)
         if _transcript_authoritative(session):
             return
-        await _begin_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
+        await _begin_root_turn(
+            session,
+            events,
+            source="hook",
+            evidence=f"hook:{event_type}",
+            turn_id=payload.get("turn_id"),
+            logical_root=event_type == "UserPromptSubmit",
+            prompt=(str(payload.get("prompt") or "") if event_type == "UserPromptSubmit" else None),
+        )
     elif event_type == "PreToolUse":
         if _transcript_authoritative(session):
             return
@@ -3269,17 +3649,41 @@ async def apply_hook_observation(
             scope="root",
             turn_index=payload.get("turn_index"),
         )
-    elif event_type == "task_complete" and payload.get("will_continue") is True:
-        await _transition(
-            session, events, "working", source="hook", evidence="hook:task_continuing"
+    elif event_type == "task_complete" and _hook_turn_outcome(payload) != "completed":
+        outcome = _hook_turn_outcome(payload)
+        await _finish_root_turn(
+            session,
+            events,
+            source="hook",
+            outcome=outcome,
+            force=True,
+            evidence=f"hook:task_complete:{outcome}",
+            turn_id=payload.get("turn_id"),
+            stop_reason=payload.get("stop_reason"),
         )
+    elif event_type == "task_complete" and payload.get("will_continue") is True:
+        # This is continuation intent, not a root start. If another source has
+        # already closed the turn, moving the record back to working creates a
+        # turnless timer that no later boundary can repair. The following
+        # task_started event owns the next transition.
+        if _observation_state(session).get("root_turn_active"):
+            await _transition(
+                session, events, "working", source="hook", evidence="hook:task_continuing"
+            )
     elif event_type in {"Stop", "turn_ended", "agent-turn-complete", "task_complete"}:
         # SessionStart normally binds Codex before the first turn. Its completion
         # notify remains a compatibility/repair path when lifecycle hooks are
         # disabled, untrusted, or unavailable. Bind before closing the turn so the
         # transcript can be exact-matched and catch-up replays the turn that just ran.
         await _bind_native_id_from_hook(session, payload, events)
-        await _finish_root_turn(session, events, source="hook", evidence=f"hook:{event_type}")
+        await _finish_root_turn(
+            session,
+            events,
+            source="hook",
+            outcome=_hook_turn_outcome(payload),
+            evidence=f"hook:{event_type}",
+            turn_id=payload.get("turn_id"),
+        )
         # A harness whose measurements live in its own store has no transcript
         # record to carry them, so the turn boundary is where they are read.
         await _refresh_database_measurements(session)
@@ -3459,7 +3863,12 @@ async def _claude(session: Session, event: dict[str, Any], events: EventBus) -> 
             # A fresh prompt while blocked means the user answered and moved on.
             await _resume_from_awaiting(session, events, event, evidence="user_prompt_record")
             await _begin_root_turn(
-                session, events, source="transcript", evidence="user_prompt_record"
+                session,
+                events,
+                source="transcript",
+                evidence="user_prompt_record",
+                logical_root=True,
+                prompt=text,
             )
             await events.emit(
                 "transcript_message",
@@ -3689,9 +4098,16 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         # Tooling or the model is running again, so any approval was answered.
         await _resume_from_awaiting(session, events, event, evidence=str(payload_type))
     if payload_type == "user_message":
-        _remember_user_prompt(session, {"prompt": str(payload.get("message") or "")})
+        prompt = str(payload.get("message") or "")
+        _remember_user_prompt(session, {"prompt": prompt})
         await _begin_root_turn(
-            session, events, source="transcript", evidence=str(payload_type)
+            session,
+            events,
+            source="transcript",
+            evidence=str(payload_type),
+            turn_id=payload.get("turn_id"),
+            logical_root=True,
+            prompt=prompt,
         )
         await events.emit(
             "transcript_message",
@@ -3702,7 +4118,11 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         )
     elif payload_type == "task_started":
         await _begin_root_turn(
-            session, events, source="transcript", evidence=str(payload_type)
+            session,
+            events,
+            source="transcript",
+            evidence=str(payload_type),
+            turn_id=payload.get("turn_id"),
         )
     elif payload_type == "task_complete":
         await _finish_root_turn(
@@ -4240,20 +4660,20 @@ async def _omp_tool_result(
 async def _omp_reconcile_branch_state(
     session: Session, active_chain: list[dict[str, Any]], events: EventBus
 ) -> None:
-    state = _observation_state(session)
     verdict = _omp_chain_turn_state(active_chain)
     if verdict == "open":
-        state["root_turn_active"] = True
-        state["root_completion_seen"] = False
-        await _transition(
-            session, events, "working", source="transcript", force=True,
+        await _begin_root_turn(
+            session,
+            events,
+            source="transcript",
             evidence="omp:active_branch_open",
         )
     elif verdict == "ended":
-        state["root_turn_active"] = False
-        state["root_completion_seen"] = True
-        await _transition(
-            session, events, "idle", source="transcript", force=True,
+        await _finish_root_turn(
+            session,
+            events,
+            source="transcript",
+            force=True,
             evidence="omp:active_branch_ended",
         )
 
@@ -4289,7 +4709,12 @@ async def _omp(session: Session, event: dict[str, Any], events: EventBus) -> Non
             _remember_user_prompt(session, {"prompt": text})
             await _resume_from_awaiting(session, events, event, evidence="omp:user_message")
             await _begin_root_turn(
-                session, events, source="transcript", evidence="omp:user_message"
+                session,
+                events,
+                source="transcript",
+                evidence="omp:user_message",
+                logical_root=True,
+                prompt=text,
             )
             await events.emit(
                 "transcript_message",

@@ -125,6 +125,7 @@ from .observation import (
     conversation_rollover_decision,
     foreign_conversation_hook_id,
     hook_event_scope,
+    note_interrupt_intent,
 )
 from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
@@ -4928,6 +4929,7 @@ def _record_operator_input(
     now = time.monotonic()
     session.input_revision += 1
     note_remote_shell_submission(session, data)
+    note_interrupt_intent(session, data, source=source)
     session.last_input_event_ts = now
     session.last_input_report_ts = now
     events.emit_background(
@@ -9297,6 +9299,7 @@ async def _handle_terminal_input(
         cancel_pending_approval(session, "terminal_input")
         session.input_revision += 1
         note_remote_shell_submission(session, data)
+        note_interrupt_intent(session, data, source="terminal_input")
         session.last_input_event_ts = now
         # Typing is the strongest evidence of where the human is; it renews this
         # connection's protection from a background pane's passive re-claim.

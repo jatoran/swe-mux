@@ -43,6 +43,7 @@ export function stateDotClass(state: SessionState | undefined): string {
 export function sessionDotClass(session: Session | undefined): string {
   if (!session) return stateDotClass(undefined)
   const base = stateDotClass(session.state)
+  if (session.state === 'working' && session.interrupt_pending_at) return `${base} interrupting`
   return session.state === 'idle' && hasRunningActivity(session) ? `${base} standing` : base
 }
 
@@ -143,6 +144,7 @@ export function sessionStatus(session: Session): string {
       : ''
   const badges = activityBadges(session)
   const standing = badges.map(badge => ` · ${badge.label}`).join('')
+  if (session.state === 'working' && session.interrupt_pending_at) return `interrupt requested${standing}${context}`
   if (session.state === 'working') return `working${session.state_detail ? ` · ${session.state_detail}` : ''}${standing}${context}`
   if (session.state === 'idle') {
     // The background annotation supersedes the derived idle_reason text: one
