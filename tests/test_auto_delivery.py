@@ -41,6 +41,9 @@ def record(sid: str, **kw: Any) -> Any:
         project_id="p1",
         project_scope_id="scope-1",
         cwd="C:/repo",
+        # The grant is measured against this, so a session is "in use" by
+        # default and a test that wants a lapse has to say so.
+        last_activity_ts=time.time(),
     )
     defaults.update(kw)
     return SimpleNamespace(**defaults)
@@ -288,17 +291,21 @@ async def test_the_consecutive_cap_disables_the_grant_and_a_human_send_resets_it
 
 
 @pytest.mark.asyncio
-async def test_expiry_ends_the_current_grant_and_a_new_run_defaults_on(
+async def test_an_idle_conversation_lapses_and_a_new_run_defaults_on(
     harness: Harness,
 ) -> None:
+    record = harness.manager.sessions["s1"].record
     await harness.auto.enable_session("s1")
-    await harness.store.set_auto_policy("s1", expires_at=time.time() - 1)
+    # Nobody has touched this conversation for longer than the window.
+    idle_seconds = harness.auto.config.auto_delivery_session_ttl_minutes * 60 + 60
+    record.last_activity_ts = time.time() - idle_seconds
+    await harness.store.set_auto_policy("s1", enabled_at=time.time() - idle_seconds)
     await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
     await harness.settle()
     assert await harness.auto.tick() == []
     policy = await harness.store.auto_policy("s1")
     assert policy is not None and not policy["enabled"]
-    assert "expired" in str(policy["disabled_reason"])
+    assert "lapsed" in str(policy["disabled_reason"])
 
     await harness.auto.enable_session("s1")
     harness.manager.sessions["s1"].record.agent_run_id = "run-replaced"
@@ -308,6 +315,65 @@ async def test_expiry_ends_the_current_grant_and_a_new_run_defaults_on(
     assert replaced["agent_run_id"] == "run-replaced"
     assert replaced["sends_used"] == 0
     assert next(row for row in status["sessions"] if row["session_id"] == "s1")["run_matches"]
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_in_use_keeps_its_grant_past_the_written_expiry(
+    harness: Harness,
+) -> None:
+    """The bound is idleness, not the conversation's age.
+
+    Measuring it from the grant's own creation is what silently disabled
+    auto-delivery on every long-lived session in the fleet (observed live
+    2026-08-13 at `sends_used: 0`), so an agent-authored message arrived armed
+    and then waited for a human forever.
+    """
+    await harness.auto.enable_session("s1")
+    await harness.store.set_auto_policy("s1", expires_at=time.time() - 1)
+    await harness.service.enqueue(target_session_id="s1", body="go", armed=True)
+    await harness.settle()
+    # Delivered rather than lapsed, and the window moved with the conversation.
+    assert await harness.auto.tick() != []
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and policy["enabled"]
+    assert float(policy["expires_at"]) > time.time()
+
+
+@pytest.mark.asyncio
+async def test_a_lapsed_grant_returns_when_the_conversation_is_used_again(
+    harness: Harness,
+) -> None:
+    """A lapse records that time passed, not a decision, so it is recoverable.
+
+    Every other disabled state is a decision and must stay until a human clears
+    it; a grant that ran down while nobody was looking is the conversation
+    default, and the default comes back when the conversation does.
+    """
+    record = harness.manager.sessions["s1"].record
+    await harness.auto.enable_session("s1")
+    idle_seconds = harness.auto.config.auto_delivery_session_ttl_minutes * 60 + 60
+    record.last_activity_ts = time.time() - idle_seconds
+    await harness.store.set_auto_policy("s1", enabled_at=time.time() - idle_seconds)
+    await harness.auto.tick()
+    lapsed = await harness.store.auto_policy("s1")
+    assert lapsed is not None and not lapsed["enabled"]
+
+    record.last_activity_ts = time.time()
+    await harness.auto.status()
+    restored = await harness.store.auto_policy("s1")
+    assert restored is not None and restored["enabled"]
+    assert restored["disabled_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_opt_out_is_never_restored_by_the_conversation_default(
+    harness: Harness,
+) -> None:
+    await harness.auto.disable_session("s1", reason="disabled by user")
+    await harness.auto.status()
+    policy = await harness.store.auto_policy("s1")
+    assert policy is not None and not policy["enabled"]
+    assert policy["disabled_reason"] == "disabled by user"
 
 
 @pytest.mark.asyncio

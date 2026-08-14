@@ -306,6 +306,36 @@ async def test_chain_depth_bounds_propagation_not_conversation(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_the_shipped_default_carries_a_relay_across_a_whole_fleet(
+    tmp_path: Path,
+) -> None:
+    """A hand-off passed down every session is the shape the default must allow.
+
+    The previous default of 3 refused the fourth hop, which killed an
+    operator-authored relay silently in the middle rather than at the point it
+    was written. Breadth stays bounded by the hourly budget, the per-target
+    backlog, and the ring detector; this is depth.
+    """
+    sessions = [live_session(f"s{index}") for index in range(1, 7)]
+    harness = Harness(tmp_path, *sessions)
+    try:
+        for index in range(1, 6):
+            sender = harness.manager.sessions[f"s{index}"]
+            message = await harness.messaging.notify(
+                sender, target=f"s{index + 1}", body=f"relay hop {index}"
+            )
+            assert message["chain_depth"] == index
+            await harness.store.finalize_delivery(
+                f"delivery-{index}",
+                message["message_id"],
+                outcome="sent",
+                message_state="sent",
+            )
+    finally:
+        harness.close()
+
+
+@pytest.mark.asyncio
 async def test_a_reply_to_the_sender_is_allowed_and_threaded(tmp_path: Path) -> None:
     """The case that made replies impossible: A→B→A is a conversation, not a ring."""
     harness = Harness(tmp_path, live_session("s1"), live_session("s2"))

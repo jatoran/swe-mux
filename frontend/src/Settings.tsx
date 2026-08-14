@@ -71,6 +71,9 @@ type Config = {
   project_init_scripts:InitScript[]
   auto_delivery_enabled:boolean;auto_delivery_stable_seconds:number
   auto_delivery_max_consecutive:number;auto_delivery_session_ttl_minutes:number
+  agent_messaging_enabled:boolean;agent_message_max_chain_depth:number
+  agent_message_max_thread_turns:number;agent_message_hourly_budget:number
+  agent_message_pending_per_target:number
   auto_delivery_refusal_backoff_seconds:number
   auto_delivery_quiet_start:string;auto_delivery_quiet_end:string
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
@@ -784,14 +787,22 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         </Fragment>}
 
         {activeTab==='agents'&&<section><h3>Agents</h3>{harnesses().map(harness=><Fragment key={harness.name}><label>{harness.display_name} executable<input value={draft.harness_exe[harness.name]||''} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label><label>{harness.display_name} default args<input value={harnessArgs[harness.name]||'[]'} onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label></Fragment>)}<label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
-          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant expires on its own.</p></div></div>
+          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p></div></div>
           <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
           <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
-          <label>Grant expiry minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
+          <label>Grant lapses after this many idle minutes<input type="number" min="1" max="1440" value={draft.auto_delivery_session_ttl_minutes} onInput={e=>change('auto_delivery_session_ttl_minutes',Number(e.currentTarget.value))} /></label>
           <label>Back-off seconds after a refused attempt<input type="number" min="0" max="3600" step="0.5" value={draft.auto_delivery_refusal_backoff_seconds} onInput={e=>change('auto_delivery_refusal_backoff_seconds',Number(e.currentTarget.value))} /></label>
           <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
           <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
+          <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them.</p>
+          <div class="keybinding-heading"><div><strong>AGENT MESSAGING</strong><p>Bounds on messages agents address to each other. A message still enters the target's queue under every rule above; these limit how far one thread may travel.</p></div></div>
+          <label class="check"><span>Allow agent-to-agent messages</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
+          <label>Relay hops before a thread must be restarted by a human<input type="number" min="1" max="10" value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /></label>
+          <label>Messages in one thread<input type="number" min="1" max="100" value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /></label>
+          <label>Messages one session may originate per hour<input type="number" min="1" max="1000" value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
+          <label>Pending messages allowed per target<input type="number" min="1" max="100" value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
+          <p>Hops bound how far a hand-off propagates: each new session a thread reaches counts one, and reaching back to a session already upstream is refused outright as a ring. A relay that needs to go further is a fresh thread a human starts, not a limit to raise until it disappears.</p>
         </section>}
 
         {activeTab==='accounts'&&<AccountSettings/>}

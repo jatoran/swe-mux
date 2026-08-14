@@ -85,6 +85,13 @@ DEFAULT_POLICY_BY = "conversation-default"
 FAILED_DELIVERY_REASON = (
     "a delivery failed mid-send; verify the terminal before re-enabling"
 )
+# A grant that ran out while nobody was using the conversation. Distinct from
+# every other disable reason because it is the only one that is *not* a decision:
+# an opt-out, an exhausted send budget, and a failed delivery each record
+# something that happened and stay until a human resolves it, while this records
+# only that time passed. It is therefore the one reason the conversation default
+# may restore on its own when the session is in use again.
+LAPSED_REASON = "auto-delivery grant lapsed while the conversation was idle"
 
 
 def _minutes(value: str) -> int | None:
@@ -334,9 +341,18 @@ class AutoDeliveryController:
                 ):
                     continue
                 row = by_session.get(str(session_id))
-                if row is not None and str(row.get("agent_run_id") or "") == run_id:
-                    continue
-                if row is not None and row.get("disabled_reason") == FAILED_DELIVERY_REASON:
+                same_run = row is not None and str(row.get("agent_run_id") or "") == run_id
+                if same_run:
+                    # One exception to "a row bound to this run is authoritative":
+                    # a grant that merely *lapsed* while the conversation was idle
+                    # recorded no decision, so the conversation default comes back
+                    # when the conversation does. Every other disabled state —
+                    # an opt-out, an exhausted send budget, a failed delivery —
+                    # stays until a human resolves it.
+                    assert row is not None
+                    if not self._restorable(row, record, now=time.time()):
+                        continue
+                elif row is not None and row.get("disabled_reason") == FAILED_DELIVERY_REASON:
                     continue
                 if row is not None and not row.get("agent_run_id") and row.get("disabled_reason"):
                     # A user can opt out during startup before run identity is
@@ -345,7 +361,10 @@ class AutoDeliveryController:
                 by_session[str(session_id)] = await self._enable_session_unlocked(
                     str(session_id),
                     by=DEFAULT_POLICY_BY,
-                    accept_agent_messages=True,
+                    # Restoring a lapsed grant on the *same* run must not also
+                    # restore a setting the user changed during it; only a fresh
+                    # run gets the accept-agent-messages default with it.
+                    accept_agent_messages=None if same_run else True,
                 )
                 changed = True
             if changed:
@@ -443,6 +462,27 @@ class AutoDeliveryController:
                 delivered.append(sent)
         return delivered
 
+    def _restorable(self, row: dict[str, Any], record: Any, *, now: float) -> bool:
+        """True for a lapsed grant on a conversation that is being used again."""
+        if row.get("enabled"):
+            return False
+        if row.get("disabled_reason") != LAPSED_REASON:
+            return False
+        return now < self._idle_deadline(record, {"enabled_at": 0.0})
+
+    def _idle_deadline(self, record: Any, policy: dict[str, Any]) -> float:
+        """When this grant lapses if the conversation stays untouched from now.
+
+        Derived from the session's own last activity so an active conversation
+        keeps its standing permission and a forgotten one loses it.
+        """
+        ttl = max(1, int(self.config.auto_delivery_session_ttl_minutes)) * 60
+        last_activity = float(getattr(record, "last_activity_ts", 0.0) or 0.0)
+        enabled_at = float(policy.get("enabled_at") or 0.0)
+        # A grant written before the session has produced any activity still gets
+        # its full window, rather than lapsing on the next tick.
+        return max(last_activity, enabled_at) + ttl
+
     async def _consider(
         self, session_id: str, policy: dict[str, Any], *, quiet: bool
     ) -> str | None:
@@ -461,12 +501,26 @@ class AutoDeliveryController:
                 session_id, reason="target agent run was replaced", by="controller"
             )
             return None
+        # The grant is bounded by *idleness*, not by the conversation's age.
+        # Measuring it from the moment the grant was written meant a session
+        # older than the TTL lost auto-delivery permanently while actively in
+        # use — observed live 2026-08-13 with every session in the fleet reading
+        # `grant expired` at `sends_used: 0`, so an agent-authored message
+        # arrived armed and then sat there forever. What the bound is for is a
+        # standing permission on a conversation nobody is watching; that is what
+        # it now measures.
+        deadline = self._idle_deadline(record, policy)
+        if now >= deadline:
+            await self.disable_session(session_id, reason=LAPSED_REASON, by="controller")
+            return None
         expires_at = policy.get("expires_at")
         if expires_at and now >= float(expires_at):
-            await self.disable_session(
-                session_id, reason="auto-delivery grant expired", by="controller"
+            # Still in use, so the window moves with the conversation. Written at
+            # most once per TTL per active session rather than on every tick.
+            await self.queue.store.set_auto_policy(
+                session_id, expires_at=deadline, updated_by="controller"
             )
-            return None
+            policy = {**policy, "expires_at": deadline}
         max_sends = int(policy.get("max_sends") or 0)
         if max_sends and int(policy.get("sends_used") or 0) >= max_sends:
             await self.disable_session(
@@ -477,9 +531,9 @@ class AutoDeliveryController:
             return None
         if quiet:
             return None
-        deadline = self._backoff.get(session_id)
-        if deadline is not None:
-            if monotonic < deadline:
+        backoff_until = self._backoff.get(session_id)
+        if backoff_until is not None:
+            if monotonic < backoff_until:
                 return None
             self._backoff.pop(session_id, None)
 

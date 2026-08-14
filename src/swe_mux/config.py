@@ -492,8 +492,11 @@ class Config:
     # Consecutive automatic sends allowed before the grant disables itself. A
     # manual send by the user resets the count — it is evidence of attention.
     auto_delivery_max_consecutive: int = 3
-    # A grant expires on its own; standing authorization is what turns a
-    # bounded convenience into an unattended actuator.
+    # How long a conversation may sit *idle* before its grant lapses. Standing
+    # authorization is what turns a bounded convenience into an unattended
+    # actuator, and idleness is the thing that makes it unattended. Measuring it
+    # from the grant's creation instead disabled auto-delivery on every session
+    # older than the window while it was actively in use.
     auto_delivery_session_ttl_minutes: int = 60
     # Local-time quiet window (HH:MM). Auto-delivery pauses inside it; manual
     # sends are unaffected.
@@ -515,8 +518,17 @@ class Config:
     # that has not spoken in it yet. `max_thread_turns` bounds *volume* within a
     # single thread, which is what actually stops two agents talking forever.
     # Replying to whoever messaged you is an ordinary turn under both.
-    agent_message_max_chain_depth: int = 3
-    agent_message_max_thread_turns: int = 6
+    #
+    # Depth 3 was calibrated when the only shape anyone used was "tell one
+    # sibling", and it forbids an ordinary operator-authored relay across a
+    # fleet outright: a hand-off passed down five sessions is refused at the
+    # fourth with no way for the chain to continue. The hazard the bound exists
+    # for is *breadth* - one injected instruction fanning out - which the hourly
+    # budget, the per-target backlog, and the ring detector all bound
+    # separately. The default is now one longer than a full pass over a
+    # typical fleet, and it is still a bound rather than an invitation.
+    agent_message_max_chain_depth: int = 6
+    agent_message_max_thread_turns: int = 12
     # `mux.requestSpawn` creates an inert Fleet Queue approval draft and nothing
     # else; approval is a human act.
     request_spawn_enabled: bool = True

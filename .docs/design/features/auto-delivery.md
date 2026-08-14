@@ -19,11 +19,24 @@ message on behalf of the user; a per-conversation opt-out remains available.
   an enabled policy for each live Claude/Codex `agent_run_id`; no extra toggle is required.
   Turning a conversation off is sticky for that run.
 - **The per-conversation grant is bounded and dies on its own.** It records the
-  `agent_run_id` it was made against and carries an expiry (`auto_delivery_session_ttl_minutes`,
-  default 60) and a consecutive-send cap (`auto_delivery_max_consecutive`, default 3).
+  `agent_run_id` it was made against and carries a consecutive-send cap
+  (`auto_delivery_max_consecutive`, default 3) and a lapse window
+  (`auto_delivery_session_ttl_minutes`, default 60).
   Standing authorization is what turns a bounded convenience into an unattended actuator, so
-  expiry and the send cap still stop it. A **manual** send resets the consecutive count —
+  the lapse and the send cap still stop it. A **manual** send resets the consecutive count —
   a human at the keyboard is exactly the evidence the cap exists to require.
+- **The grant is bounded by idleness, not by the conversation's age.** The window is measured
+  from the session's own last activity, so a conversation in use keeps its grant and one
+  nobody has touched for the window loses it. Measuring it from the grant's creation instead
+  meant every session older than the window silently lost auto-delivery while being actively
+  worked in: observed live 2026-08-13 with the whole fleet reading
+  `disabled_reason: grant expired` at `sends_used: 0`, so an agent-authored message arrived
+  `armed` and then waited for a human indefinitely.
+- **A lapse is recoverable; a decision is not.** Lapsing records only that time passed, so the
+  conversation default restores it once the session is in use again, without touching a
+  separate `accept_agent_messages` choice made during that run. Every other disabled state —
+  an explicit opt-out, an exhausted consecutive-send budget, an ambiguous failed delivery —
+  records something that happened and stays until a human clears it.
 - **Same live run only.** A replaced run (resume, branch, restart into a new conversation,
   or an in-CLI `/clear`/`/new` — `backends.md`) receives a fresh default grant rather than
   inheriting the prior run's expiry or send count. A user opt-out applies only to the run it

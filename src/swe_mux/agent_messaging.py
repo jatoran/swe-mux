@@ -270,8 +270,10 @@ class AgentMessagingService:
             raise QueueError(
                 "chain_depth_exceeded",
                 f"this would carry the thread through {depth} relaying sessions"
-                f" (limit {max_depth}); it may continue between the sessions"
-                " already in it",
+                f" (limit {max_depth}, `agent_message_max_chain_depth`); it may"
+                " continue between the sessions already in it. A relay that has"
+                " to reach further needs a human to start a fresh thread, so say"
+                " so rather than stopping silently",
                 status=429,
             )
 
