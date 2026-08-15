@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   SOFT_KEYBOARD_MIN_INSET_PX,
+  VISIBLE_PAINTED_ROWS_WORTH_READING,
   clampPeekOffset,
   deepActiveElement,
+  hiddenOutputDeservesPeek,
   nextPeekOffset,
   peekToggleVisible,
   raisesSoftKeyboard,
@@ -197,6 +199,51 @@ test('the peek toggle appears for a reader, not for every raised keyboard', () =
   assert.equal(peekToggleVisible(415, true, false, false), true)
   // No keyboard, no slide, no button — whatever the scroll state says.
   assert.equal(peekToggleVisible(0, true, true, true), false)
+})
+
+const hiddenOutput = {
+  hiddenChanged: true,
+  hiddenHasText: true,
+  visiblePainted: 0,
+  peekOffset: 0,
+  sinceInputMs: null as number | null,
+  inputGraceMs: 1500,
+}
+
+test('a reader with nothing on screen is moved to the output they cannot see', () => {
+  // The case the trigger was written for: a first message and its reply both land in the
+  // half the keyboard hides, on a grid whose visible half is blank.
+  assert.equal(hiddenOutputDeservesPeek(hiddenOutput), true)
+  assert.equal(
+    hiddenOutputDeservesPeek({ ...hiddenOutput, visiblePainted: VISIBLE_PAINTED_ROWS_WORTH_READING }),
+    true,
+  )
+})
+
+test('a reader with something on screen is left alone', () => {
+  // The bug: the condition was only ever stated as intent, so the jump fired for the whole
+  // life of every session. An agent CLI repaints its whole screen constantly, so "the
+  // hidden rows changed" is true on nearly every frame, and the pane scrolled itself to the
+  // top by itself — most visibly right after a message, which is when the reader had
+  // stopped typing long enough for the input grace to lapse.
+  assert.equal(hiddenOutputDeservesPeek({ ...hiddenOutput, visiblePainted: 12 }), false)
+  assert.equal(
+    hiddenOutputDeservesPeek({
+      ...hiddenOutput, visiblePainted: VISIBLE_PAINTED_ROWS_WORTH_READING + 1,
+    }),
+    false,
+  )
+})
+
+test('nothing moves for a reader who is typing, or one already at the top', () => {
+  assert.equal(hiddenOutputDeservesPeek({ ...hiddenOutput, sinceInputMs: 200 }), false)
+  assert.equal(hiddenOutputDeservesPeek({ ...hiddenOutput, sinceInputMs: 1600 }), true)
+  assert.equal(hiddenOutputDeservesPeek({ ...hiddenOutput, peekOffset: 200 }), false)
+})
+
+test('nothing moves for an unchanged or blank hidden region', () => {
+  assert.equal(hiddenOutputDeservesPeek({ ...hiddenOutput, hiddenChanged: false }), false)
+  assert.equal(hiddenOutputDeservesPeek({ ...hiddenOutput, hiddenHasText: false }), false)
 })
 
 test('a cyclic shadow tree terminates', () => {

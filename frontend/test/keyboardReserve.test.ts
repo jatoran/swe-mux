@@ -34,6 +34,7 @@ const base = {
   reserveRows: 22,
   painted: 6,
   eligible: true,
+  keyboardWanted: true,
   measurable: true,
   now: 100_000,
   changedAt: 0,
@@ -77,6 +78,33 @@ test('a reservation cannot flap on a streaming reply', () => {
   // a reservation the very next reading would release.
   assert.equal(nextReserveState({ ...base, painted: 26 }).reserved, false)
   assert.equal(nextReserveState({ ...base, painted: 23 }).reserved, true)
+})
+
+test('the strip goes back when there is no keyboard to cover it', () => {
+  // The defect this closes: the predicate had no keyboard term at all, so a pane that
+  // reserved once held the strip until its own content filled the smaller grid — which an
+  // agent TUI with whitespace in its layout never does. It read as a session rendering on
+  // half the screen with the keyboard collapsed, permanently.
+  const gone = nextReserveState({ ...base, reserved: true, keyboardWanted: false })
+  assert.equal(gone.reserved, false)
+  assert.equal(gone.reason, 'keyboard_gone')
+  assert.equal(nextReserveState({ ...base, keyboardWanted: false }).reason, 'no_keyboard')
+})
+
+test('an untrustworthy grid is no reason to keep half the screen', () => {
+  // `measurable` guards the shrink, and only the shrink. Growing back cannot destroy rows,
+  // so a replaying buffer must not be able to strand a reservation.
+  const releasing = nextReserveState({
+    ...base, reserved: true, keyboardWanted: false, measurable: false,
+  })
+  assert.equal(releasing.reserved, false)
+  assert.equal(releasing.reason, 'keyboard_gone')
+})
+
+test('a keyboard on its way is enough to reserve before it arrives', () => {
+  // The reservation has to be in place before the keyboard finishes animating in, or the
+  // grid it was meant to pre-size is already full and the shrink is refused.
+  assert.equal(nextReserveState({ ...base, keyboardWanted: true }).reserved, true)
 })
 
 test('a pane that cannot reserve gives the space straight back', () => {

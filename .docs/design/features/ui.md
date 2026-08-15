@@ -1651,6 +1651,25 @@ responsive controls.
   reader who types has stopped reading) and losing the keyboard ends it outright (the whole grid
   fits again). Output deliberately does **not** end it: a streaming reply is exactly when a reader
   is peeking, so snapping back on writes would make the toggle useless when it is most needed.
+- The one output that *does* move the pane is `hiddenOutput`, and it is narrow on purpose
+  (`hiddenOutputDeservesPeek`). It exists for a reader parked at the composer **with nothing to
+  look at** — a first message and its reply both landing in the half the keyboard hides — so it
+  fires only while the visible half is blank, on top of the existing "not already peeking" and
+  "not mid-sentence" guards. That condition used to be stated only as intent, and an agent CLI
+  repaints its whole screen constantly, so "the hidden rows changed" was true on nearly every
+  frame and the pane jumped to the top by itself for the whole life of every session — most
+  visibly just after sending a message, which is when the reader had stopped typing long enough
+  for the input grace to lapse.
+- A keyboard reservation (`keyboardReserve.ts`) is held only while a keyboard is up or one is on
+  its way, where "on its way" is a typing gesture within `RESERVE_INTENT_WINDOW_MS` — the
+  reservation has to be in place before the keyboard finishes animating in, or the grid it was
+  meant to pre-size is already full and the shrink is refused. The predicate originally had no
+  keyboard term at all: its only release was the session's own content filling the smaller grid,
+  which an agent TUI with whitespace in its layout never reaches, so a pane that reserved once
+  held ~40% of the screen back permanently and read as a session rendering on half the screen
+  with the keyboard collapsed. The keyboard check is asked *before* `measurable`, because holding
+  still on an untrustworthy grid is the right answer to "may I shrink this" and the wrong one to
+  "may I stop shrinking it" — growing back cannot destroy rows.
 - Every other mobile surface shortens rather than sliding, and the asymmetry is the whole point:
   a terminal must not resize because shrinking an alternate-screen PTY destroys rows, while a note
   editor, file view, or drawer reflows losslessly. Shortening is strictly better where it is safe,

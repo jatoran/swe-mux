@@ -18,6 +18,13 @@
 // back the moment the session grows into it. The dangerous direction (shrinking a full
 // screen) is the one case the predicate refuses; growing back is lossless.
 //
+// "Up front" means the moment before a keyboard arrives, not indefinitely. A reservation
+// is held only while a keyboard is up or one is on its way (`keyboardWanted`), because
+// with no keyboard there is nothing for the held-back strip to be covered by and the pane
+// is simply half a screen. That was the original rule's real defect: it had no keyboard
+// term at all, so the only way out was the session's own content filling the smaller grid,
+// which an agent TUI with whitespace in its layout never does.
+//
 // Nothing here knows which harness is running. Painted extent, not a per-CLI table of
 // startup layouts, is what decides — a harness that draws its whole UI immediately never
 // qualifies, one that starts sparse does, and both answers come from the same grid read.
@@ -37,6 +44,17 @@ export const RESERVE_RELEASE_MARGIN_ROWS = 1
 
 /** Minimum time between reservation changes, so a streaming reply cannot drive a resize burst. */
 export const RESERVE_DWELL_MS = 4000
+
+/**
+ * How long after a typing gesture the pane still counts as being typed into.
+ *
+ * The reservation has to be in place *before* the keyboard finishes animating in, or the
+ * grid it was supposed to pre-size is already full and the shrink is refused. Focus moving
+ * to the input is the earliest honest signal that a keyboard is coming, and this is how
+ * long that signal is trusted for. Long enough to cover the animation, short enough that a
+ * pane the reader has walked away from does not keep holding space back.
+ */
+export const RESERVE_INTENT_WINDOW_MS = 2500
 
 /**
  * What to reserve before this device has ever shown its keyboard, as a fraction of the
@@ -87,6 +105,18 @@ export type ReserveInput = {
    */
   eligible: boolean
   /**
+   * Whether a keyboard is up, or on its way because the reader just moved to type.
+   *
+   * The reservation buys one thing: the keyboard covers dead space instead of
+   * conversation. With no keyboard it covers nothing, and all the reservation does is
+   * hold back half the screen from somebody who is reading — which is exactly how it was
+   * reported, as a pane that "only renders on half the screen even when I collapse the
+   * keyboard". Nothing in the original predicate ever asked about the keyboard, so a pane
+   * that reserved once kept the strip until its content happened to fill the smaller grid,
+   * and an agent TUI with any whitespace in its layout never gets there.
+   */
+  keyboardWanted: boolean
+  /**
    * Whether the grid can be trusted right now. A replaying or unsettled buffer reads as
    * emptier than the session really is, and reserving on that reading would shrink a PTY
    * whose content simply has not arrived yet — the one resize this module exists to avoid.
@@ -106,10 +136,18 @@ export type ReserveDecision = { reserved: boolean; reason: string }
  * releasing happens as soon as the session has filled the smaller grid, which is the
  * point the reader stops wanting the reservation and starts wanting the rows. Releasing
  * ignores the dwell timer: giving space back is the safe direction and should never wait.
+ *
+ * The keyboard check comes before `measurable` for that same reason. Holding still on an
+ * untrustworthy grid is the right answer when the question is "may I shrink this", and the
+ * wrong one when the question is "may I stop shrinking it": growing back cannot destroy
+ * rows, so an unreadable grid is no reason to keep half the screen from a reader.
  */
 export function nextReserveState(input: ReserveInput): ReserveDecision {
-  const { reserved, rows, reserveRows, painted, eligible, measurable, now, changedAt } = input
+  const {
+    reserved, rows, reserveRows, painted, eligible, keyboardWanted, measurable, now, changedAt,
+  } = input
   if (!eligible) return { reserved: false, reason: reserved ? 'ineligible' : 'idle' }
+  if (!keyboardWanted) return { reserved: false, reason: reserved ? 'keyboard_gone' : 'no_keyboard' }
   if (!measurable) return { reserved, reason: 'unmeasurable' }
   if (reserved) {
     if (painted >= rows - RESERVE_RELEASE_MARGIN_ROWS) return { reserved: false, reason: 'grew_into_grid' }

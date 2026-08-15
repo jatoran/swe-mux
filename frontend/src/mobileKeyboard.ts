@@ -185,6 +185,54 @@ export function lastSoftKeyboardInset():number {
 export type PeekTrigger = 'toggle'|'input'|'keyboardClosed'|'output'|'hiddenOutput'
 
 /**
+ * Whether output landing in the hidden half is worth moving the pane for.
+ *
+ * The trigger above is written for one situation: a reader parked at the composer *with
+ * nothing to look at*, whose first message and its reply both land off-screen. The
+ * condition was never written down, only the intent, so it fired for the whole life of
+ * every session — and an agent CLI repaints its entire screen constantly, so "the hidden
+ * rows changed" is true on nearly every frame. What the reader saw was a pane that
+ * jumped to the top by itself, most obviously right after they sent a message, which is
+ * exactly when they had stopped typing long enough for the input grace to lapse.
+ *
+ * So ask the question the intent implies: is there anything on the part of the grid they
+ * can already see? If there is, they are reading it, and output arriving above is not
+ * worth yanking the view for — they can drag up whenever they want it. Only a reader
+ * looking at blank rows has nothing to lose by being moved.
+ */
+export function hiddenOutputDeservesPeek(input:{
+  /** The hidden rows differ from the last reading at this same inset. */
+  hiddenChanged:boolean
+  /** The hidden region has something on it, rather than being blank too. */
+  hiddenHasText:boolean
+  /** Rows with anything on them in the part of the grid the reader can see. */
+  visiblePainted:number
+  /** Where the pane is parked; anything but the composer means they are already reading. */
+  peekOffset:number
+  /** Milliseconds since the reader last typed, or null if they never have. */
+  sinceInputMs:number|null
+  /** How recently counts as "still typing". */
+  inputGraceMs:number
+}):boolean {
+  const { hiddenChanged, hiddenHasText, visiblePainted, peekOffset, sinceInputMs, inputGraceMs } = input
+  if(!hiddenChanged||!hiddenHasText)return false
+  // Already at the top, or typing rather than waiting: the pane moving is an interruption.
+  if(peekOffset>0)return false
+  if(sinceInputMs!==null&&sinceInputMs<inputGraceMs)return false
+  return visiblePainted<=VISIBLE_PAINTED_ROWS_WORTH_READING
+}
+
+/**
+ * Painted rows in the visible half that still count as "nothing to look at".
+ *
+ * Not zero. A fresh agent pane parks a prompt marker, a border, or a one-line hint at the
+ * bottom of the screen and nothing else, and a reader staring at that has as little to
+ * read as one staring at a blank grid. Past a couple of rows there is real content on
+ * screen and the pane should hold still.
+ */
+export const VISIBLE_PAINTED_ROWS_WORTH_READING = 2
+
+/**
  * How far a terminal's grid is pushed back down after `trigger`, in pixels.
  *
  * Zero is the composer; `inset` is the top of the grid; everything between is a reader

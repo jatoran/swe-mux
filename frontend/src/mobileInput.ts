@@ -113,6 +113,23 @@ export function terminalScrollSteps(pixels: number, rowHeight: number): Terminal
   return { steps, remainder: pixels - steps * rowHeight }
 }
 
+/**
+ * Where a vertical drag goes: the application's own viewport, or xterm's buffer.
+ *
+ * `smart` follows the live mouse mode, and it has to stay that way. It is tempting to add
+ * a fallback here — a Claude pane declares `owns_scroll_viewport`, so why not route to the
+ * application whenever the harness says it owns one, whatever the mode says? Because
+ * forwarding is a `WheelEvent` at xterm, and xterm only turns that into a mouse report
+ * while a mouse mode is active. With none active it falls back to its alternate-buffer
+ * behaviour and sends **cursor keys** instead, which in an agent composer walks the prompt
+ * history and can replace what the reader was typing. A dead gesture is better than that.
+ *
+ * When this genuinely reads `terminal` on an alternate screen with no scrollback, the
+ * gesture does nothing, and the fault is upstream: the child's mouse modes went missing.
+ * That was a real bug — a bounded attach replay dropped them on any deep session — and it
+ * is fixed where it belongs, in the daemon's replay preamble (`STICKY_PRIVATE_MODES`),
+ * not by guessing here.
+ */
 export function mobileDragTarget(mode: MobileVerticalDrag, mouseTracking: boolean): MobileDragTarget {
   if (mode === 'disabled') return 'disabled'
   if (mode === 'smart') return mouseTracking ? 'application' : 'terminal'

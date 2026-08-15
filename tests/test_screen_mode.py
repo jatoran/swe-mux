@@ -8,7 +8,12 @@ undeliverable, and one that invented a toggle would do the opposite.
 
 from __future__ import annotations
 
-from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
+from swe_mux.screen_mode import (
+    STICKY_PRIVATE_MODES,
+    BracketedPasteParser,
+    ScreenModeParser,
+    StickyModeParser,
+)
 
 
 def test_nothing_is_claimed_until_the_child_says_something() -> None:
@@ -106,3 +111,78 @@ def test_the_bracketed_paste_carry_stays_bounded() -> None:
     parser = BracketedPasteParser()
     parser.feed(b"\x1b[?" + b"9" * 400)
     assert len(parser._tail) <= 16
+
+
+# The startup sequence measured from a real Claude Code session on 2026-08-14. Every one
+# of these modes appears exactly once, inside the first 130 bytes, and never again.
+CLAUDE_STARTUP = (
+    b"\x1b[1t\x1b[c\x1b[?1004h\x1b[?9001h\x1b[?25h\x1b[?2004h\x1b[?2031h"
+    b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
+)
+
+
+def test_sticky_modes_are_unknown_until_the_child_sets_them() -> None:
+    parser = StickyModeParser()
+    assert parser.enabled == {}
+    assert parser.preamble(b"") == b""
+
+
+def test_a_claude_startup_leaves_every_reporting_mode_restatable() -> None:
+    parser = StickyModeParser()
+    parser.feed(CLAUDE_STARTUP)
+    # A window from deep in the session mentions none of them, so all of them come back.
+    assert parser.preamble(b"conversation output\n" * 50) == (
+        b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h\x1b[?2031h"
+    )
+
+
+def test_each_sticky_mode_is_tracked_on_its_own() -> None:
+    # A child that asked for button-event tracking and not any-event tracking gets back
+    # exactly what it asked for; inventing 1003 would have it reporting bare motion.
+    parser = StickyModeParser()
+    parser.feed(b"\x1b[?1002h\x1b[?1006h")
+    assert parser.preamble(b"") == b"\x1b[?1002h\x1b[?1006h"
+    parser.feed(b"\x1b[?1002l")
+    assert parser.preamble(b"") == b"\x1b[?1006h"
+
+
+def test_a_combined_set_sequence_sets_every_mode_it_names() -> None:
+    parser = StickyModeParser()
+    parser.feed(b"\x1b[?1000;1006h")
+    assert parser.preamble(b"") == b"\x1b[?1000h\x1b[?1006h"
+
+
+def test_a_window_that_carries_a_mode_speaks_for_it() -> None:
+    # The window's own toggle is the child's most recent word. Restating over it would
+    # be the daemon contradicting the child.
+    parser = StickyModeParser()
+    parser.feed(b"\x1b[?1000h\x1b[?1006h")
+    assert parser.preamble(b"\x1b[?1000l") == b"\x1b[?1006h"
+
+
+def test_a_sticky_toggle_split_across_reads_is_still_seen() -> None:
+    sequence = b"\x1b[?1000;1002;1003;1006h"
+    for cut in range(1, len(sequence)):
+        parser = StickyModeParser()
+        parser.feed(sequence[:cut])
+        parser.feed(sequence[cut:] + b"after")
+        assert parser.enabled.get(1006) is True, cut
+
+
+def test_untracked_private_modes_are_ignored() -> None:
+    parser = StickyModeParser()
+    parser.feed(b"\x1b[?25l\x1b[?1049h\x1b[?2004h\x1b[?9001h")
+    assert parser.preamble(b"") == b""
+
+
+def test_the_sticky_carry_stays_bounded() -> None:
+    parser = StickyModeParser()
+    parser.feed(b"\x1b[?" + b"9" * 400)
+    assert len(parser._tail) <= 40
+
+
+def test_the_mouse_group_is_declared_sticky() -> None:
+    # The regression this exists for: without these four a phone drag has nothing to
+    # forward and dies against an alternate screen with no scrollback.
+    for mode in (1000, 1002, 1003, 1006):
+        assert mode in STICKY_PRIVATE_MODES
