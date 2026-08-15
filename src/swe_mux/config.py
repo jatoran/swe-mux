@@ -1178,8 +1178,11 @@ def _is_auto_managed_windows_powershell_default(config: Config) -> bool:
         and profile.env == {}
         and profile.platforms == ["windows"]
         and profile.cwd_strategy == "native"
-        and profile.marker == "ps"
-        and profile.capabilities == ["interactive", "agent-aware"]
+        # `marker` and `capabilities` are deliberately absent. Both are display-only
+        # (a scannable tag and a derived summary), and comparing them here made
+        # editing a cosmetic field silently opt the profile out of the PowerShell 7
+        # auto-upgrade, with nothing saying so. Everything that distinguishes "the
+        # default we created" from "a profile the user shaped" is already above.
         and not profile.cwd_integration
         and profile.enabled
         and profile.backend == "shell"

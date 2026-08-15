@@ -27,6 +27,36 @@ The Python type is `LaunchProfile` and the TypeScript type is `LaunchProfile`.
   An agent launch never reaches the resolver that implements them.
 - Applying a profile to a backend it does not declare is refused at the spawn boundary, in both directions.
 
+### Arguments are typed as a command line and stored as argv
+
+The stored field is `list[str]`, because that is what a spawn is: an executable and a list of arguments handed to the OS with no shell between them.
+The *entry* is a command line, parsed by `frontend/src/commandLine.ts`.
+
+Both argument fields in the product use it: a profile's `Arguments`, and Settings → Agents → default args.
+Those previously wanted one argv token per line and a JSON array respectively, which was two syntaxes for one concept, neither labelled, and both of which turned the obvious `--model claude-opus-4-8` into a single argument the CLI then rejected.
+
+The rules are Windows rules, not POSIX:
+
+- Whitespace separates arguments; double quotes group and are removed.
+- `""` inside a quoted run is a literal quote, matching `CommandLineToArgvW`.
+- **A backslash is literal.** This is the reason the tokenizer is not `shlex`: swe-mux is Windows-first and its arguments carry paths, and a POSIX tokenizer would silently eat every separator in `C:\Users\Jatora\Projects`.
+
+An unterminated quote keeps what was typed rather than discarding the tail, because the field parses on every keystroke and half-typed input is the normal state.
+
+The editor shows the resulting command line beneath the field, and states that the adapter adds the conversation id, the settings file, and the MCP registration around it.
+
+### Capabilities are derived, never typed
+
+`derive_capabilities` in `profiles.py` is the single implementation, called by both `resolve_profile` and `/api/profiles`, so the label a user reads cannot disagree with the pane they get.
+
+- `interactive` and `agent-aware` for a shell; `wsl` and `agent-bridge-unavailable` for a WSL profile, whose distribution does not share the Windows PATH the agent shims live on.
+- `cwd-osc7` when cwd integration is on, and `breakpoint-osc133` when `attention_breakpoint_markers` is on, both only for a PowerShell profile without `-Command`/`-File`.
+- Empty for an agent profile: it contributes arguments to a CLI and has no shell to instrument. The harness registry already declares what the harness supports.
+
+The stored `capabilities` list stays in the record so existing configuration loads, but it is no longer read. It was previously a free-text field that nothing branched on, that could be edited to claim `agent-aware` about the one shell where the agent bridge provably does not work, and that omitted the only two entries that were genuinely computed. `resolve_profile` derived those two at every spawn and discarded them.
+
+`marker` is likewise display-only, and no longer an input: the list tag is derived from the backend and the executable. Neither field is read by `_is_auto_managed_windows_powershell_default` any more, because comparing a cosmetic field there meant editing it silently opted the profile out of the PowerShell 7 auto-upgrade.
+
 ### The three argument slots
 
 Least specific first:
@@ -119,7 +149,8 @@ An agent profile named there would make every plain `New terminal` unspawnable.
 ## Key files
 
 - `src/swe_mux/config.py` - `LaunchProfile`, validation, the reserved-argument check at save time.
-- `src/swe_mux/profiles.py` - `find_profile`, `resolve_profile` (shell), `resolve_agent_profile`.
+- `src/swe_mux/profiles.py` - `find_profile`, `resolve_profile` (shell), `resolve_agent_profile`, `derive_capabilities`, `profile_payload`.
+- `frontend/src/commandLine.ts` - the Windows-rules tokenizer and the launch preview.
 - `src/swe_mux/harness.py` - `reserved_launch_args`, `reserved_launch_arg_conflict`.
 - `src/swe_mux/server.py` - `_spawn_from_body`, `_project_agent_profile`.
 - `src/swe_mux/spawn_contract.py`

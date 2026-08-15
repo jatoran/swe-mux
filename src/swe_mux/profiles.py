@@ -80,7 +80,6 @@ def detected_profiles() -> list[LaunchProfile]:
                 executable,
                 ["-NoLogo"],
                 marker="ps",
-                capabilities=["interactive", "agent-aware"],
             )
         )
     if executable := _available("pwsh.exe"):
@@ -91,7 +90,6 @@ def detected_profiles() -> list[LaunchProfile]:
                 executable,
                 ["-NoLogo"],
                 marker="ps7",
-                capabilities=["interactive", "agent-aware"],
             )
         )
     if executable := _available("cmd.exe"):
@@ -102,7 +100,6 @@ def detected_profiles() -> list[LaunchProfile]:
                 executable,
                 ["/Q"],
                 marker="cmd",
-                capabilities=["interactive", "agent-aware"],
             )
         )
     wsl = _available("wsl.exe")
@@ -117,23 +114,36 @@ def detected_profiles() -> list[LaunchProfile]:
                     ["--distribution", distro],
                     cwd_strategy="wsl",
                     marker="wsl",
-                    capabilities=["interactive", "wsl", "agent-bridge-unavailable"],
                 )
             )
     return profiles
 
 
 def profile_payload(config: Config) -> dict[str, object]:
-    configured = [asdict(profile) for profile in config.shell_profiles]
+    """Every profile, with its capabilities derived rather than echoed back.
+
+    The stored `capabilities` list is left in the record for configuration
+    compatibility, but what goes out is what `resolve_profile` will actually
+    produce. Echoing the stored list is how a profile came to advertise
+    `agent-aware` about a WSL distribution where the agent shims cannot reach.
+    """
+    breakpoints = bool(getattr(config, "attention_breakpoint_markers", True))
+
+    def published(profile: LaunchProfile, **extra: object) -> dict[str, object]:
+        return {
+            **asdict(profile),
+            "capabilities": list(derive_capabilities(profile, breakpoints=breakpoints)),
+            **extra,
+        }
+
     configured_ids = {profile.id for profile in config.shell_profiles}
-    detected = [
-        {**asdict(profile), "configured": profile.id in configured_ids}
-        for profile in detected_profiles()
-    ]
     return {
         "default_profile_id": config.default_shell_profile,
-        "profiles": configured,
-        "detected": detected,
+        "profiles": [published(profile) for profile in config.shell_profiles],
+        "detected": [
+            published(profile, configured=profile.id in configured_ids)
+            for profile in detected_profiles()
+        ],
     }
 
 
@@ -293,6 +303,44 @@ def _powershell_bootstrap(*, osc7: bool, breakpoints: bool = False) -> str:
     )
 
 
+def derive_capabilities(profile: LaunchProfile, *, breakpoints: bool) -> tuple[str, ...]:
+    """What a pane started from this profile will actually support.
+
+    Derived, never stored. `capabilities` used to be a free-text field the user
+    typed: nothing branched on it, it could be made to say `agent-aware` about a
+    WSL profile that provably is not, and the two entries worth having
+    (`cwd-osc7`, `breakpoint-osc133`) were computed at every spawn by
+    `resolve_profile` and then discarded. One function now answers the question,
+    and both the resolver and `/api/profiles` call it, so the label a user reads
+    cannot disagree with the pane they get.
+
+    `breakpoints` is the global `attention_breakpoint_markers` setting, passed in
+    rather than read here so this stays a pure function of its inputs.
+    """
+    if is_agent_harness(profile.backend):
+        # An agent profile contributes arguments to a CLI. It has no shell to
+        # instrument, so none of the shell capabilities can be true of it, and the
+        # harness registry already declares what the harness itself supports.
+        return ()
+    found = ["interactive"]
+    executable_name = Path(profile.executable).name.casefold()
+    scripted = any(item.casefold() in _POWERSHELL_SCRIPT_ARGS for item in profile.args)
+    if profile.cwd_strategy == "wsl":
+        # The agent shims live on the Windows PATH, which a WSL process does not
+        # share, so a CLI launched inside the distribution is never mux-instrumented.
+        found.extend(["wsl", "agent-bridge-unavailable"])
+        return tuple(found)
+    found.append("agent-aware")
+    if executable_name in _POWERSHELL_NAMES and not scripted:
+        # The bootstrap that carries both markers is the same one that repairs the
+        # shim PATH, and a profile carrying -Command/-File has no room for it.
+        if profile.cwd_integration:
+            found.append("cwd-osc7")
+        if breakpoints:
+            found.append("breakpoint-osc133")
+    return tuple(dict.fromkeys(found))
+
+
 def resolve_profile(
     config: Config, profile_id: str, cwd: Path, *, interactive: bool = True
 ) -> ResolvedProfile:
@@ -315,7 +363,8 @@ def resolve_profile(
     if not Path(executable).is_file() and not _available(executable):
         raise ValueError({"profile_id": f"executable not found: {profile.executable}"})
     argv = list(profile.args)
-    capabilities = list(profile.capabilities)
+    breakpoints = bool(getattr(config, "attention_breakpoint_markers", True))
+    capabilities = list(derive_capabilities(profile, breakpoints=breakpoints))
     executable_name = Path(executable).name.casefold()
     if interactive and executable_name in _POWERSHELL_NAMES:
         if any(item.casefold() in _POWERSHELL_SCRIPT_ARGS for item in argv):
@@ -333,7 +382,6 @@ def resolve_profile(
         else:
             if not any(item.casefold() == "-noexit" for item in argv):
                 argv.append("-NoExit")
-            breakpoints = bool(getattr(config, "attention_breakpoint_markers", True))
             argv.extend(
                 [
                     "-Command",
@@ -342,10 +390,6 @@ def resolve_profile(
                     ),
                 ]
             )
-            if profile.cwd_integration:
-                capabilities.append("cwd-osc7")
-            if breakpoints:
-                capabilities.append("breakpoint-osc133")
     if profile.cwd_strategy == "wsl":
         argv.extend(["--cd", _wsl_cwd(executable, argv, cwd)])
     return ResolvedProfile(

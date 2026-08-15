@@ -30,6 +30,7 @@ import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, ta
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './PromptLibrary'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
+import { formatCommandLine, launchPreview, parseCommandLine } from './commandLine'
 import { ModelPicker } from './ModelPicker'
 import { includeSelectedModel } from './modelFilter'
 
@@ -141,7 +142,7 @@ type SettingsBundle = {
   config:Config
   automation_rules:{text:string}|null
   keybindings:KeybindingsResponse|null
-  profiles:{detected:LaunchProfile[]}|null
+  profiles:{profiles:LaunchProfile[];detected:LaunchProfile[]}|null
   projects:Project[]|null
   automation:AutomationStatus|null
   provider:ProviderStatus|null
@@ -226,6 +227,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [bindingError, setBindingError] = useState('')
   const [harnessArgs, setHarnessArgs] = useState<Record<string,string>>({})
   const [detectedProfiles, setDetectedProfiles] = useState<LaunchProfile[]>([])
+  //: Profiles exactly as the daemon last published them, which is the only place
+  //: derived capabilities come from. Never edited; compared against the draft.
+  const [savedProfiles, setSavedProfiles] = useState<LaunchProfile[]>([])
+  //: The arguments field holds typed text, not the stored argv, because a
+  //: controlled input rebuilt from argv on every keystroke eats a trailing space
+  //: the moment you type one. Parsed into argv on each change; re-seeded only when
+  //: the selection changes.
+  const [argsText, setArgsText] = useState('')
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
@@ -269,7 +278,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         return
       }
       setConfig(next); setDraft(next); setRules(rulesData.text);setSavedRules(rulesData.text)
-      setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)])))
+      setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])))
       setBindings(keyData.bindings);setSavedBindings(keyData.bindings);setBindingDefaults(keyData.defaults||{})
       setBindingCommands(keyData.commands||[]);setBindingPolicy({
         browser_reserved:keyData.policy?.browser_reserved||[],desktop_only:keyData.policy?.desktop_only||[],application_reserved:keyData.policy?.application_reserved||[],
@@ -277,7 +286,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       })
       if(Object.keys(keyData.rejected||{}).length)setBindingError(`Ignored saved shortcuts · ${Object.entries(keyData.rejected).map(([chord,message])=>`${displayChord(chord)}: ${message}`).join(' · ')}`)
       setStatus('ready')
-      if(bundle.profiles)setDetectedProfiles(bundle.profiles.detected)
+      // Both halves of the profile payload are kept. `detected` seeds "restore
+      // detected"; `profiles` carries the daemon's *derived* capabilities, which
+      // /api/config does not (it returns the stored list, which is now vestigial).
+      if(bundle.profiles){setDetectedProfiles(bundle.profiles.detected);setSavedProfiles(bundle.profiles.profiles)}
       setAutomation(bundle.automation);setProvider(bundle.provider); setUsage(bundle.usage)
       configureCustomTheme(next.custom_theme); applyTheme(next.theme)
     }).catch(error => setStatus(error.message))
@@ -304,7 +316,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   const dirty = useMemo(() => Boolean(config&&draft&&(
     !sameDraftValue(config,draft)
-    ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==JSON.stringify(args))
+    ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==formatCommandLine(args))
     ||rules!==savedRules
     ||!sameDraftValue(bindings,savedBindings)
   )),[config,draft,harnessArgs,rules,savedRules,bindings,savedBindings])
@@ -485,19 +497,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const save = async ():Promise<boolean> => {
     if (!draft || !config) return false
-    let savingDraft: Config
-    try {
-      const parsedHarnessArgs=Object.fromEntries(Object.entries(harnessArgs).map(([name,text])=>{
-        const args:unknown=JSON.parse(text)
-        if(!Array.isArray(args)||!args.every(value=>typeof value==='string'))throw new Error('invalid harness args')
-        return [name,args]
-      }))
-      savingDraft = {
-        ...draft,
-        harness_args:parsedHarnessArgs,
-        project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns),
-      }
-    } catch { setErrors({agent_args:'agent args must be JSON arrays of strings'}); return false }
+    // Both argument fields in this app now take a command line and store argv.
+    // This one used to want a JSON array while the profile editor wanted one token
+    // per line: two syntaxes for one concept, neither of them labelled.
+    const savingDraft: Config = {
+      ...draft,
+      harness_args:Object.fromEntries(
+        Object.entries(harnessArgs).map(([name,text])=>[name,parseCommandLine(text)]),
+      ),
+      project_ignore_patterns:normalizeIgnorePatterns(draft.project_ignore_patterns),
+    }
     setStatus('saving…')
     const body: Record<string,unknown> = {_revision:config.revision}
     for (const key of Object.keys(savingDraft) as (keyof Config)[]) {
@@ -513,7 +522,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         api('PUT','/api/automation/rules',{text:rules}),
         api('PUT','/api/keybindings',{bindings}),
       ])
-      setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)])));setErrors({})
+      setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)])));setErrors({})
       setSavedRules(rules);setSavedBindings(bindings)
       setStatus(next.restart_required.length ? `saved · restart required: ${next.restart_required.join(', ')}` : 'saved · hot applied')
       configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next)
@@ -526,7 +535,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const reset = async () => {
     const next = await api<Config>('POST','/api/config/reset',{})
-    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,JSON.stringify(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); setStatus('defaults restored')
+    setConfig(next); setDraft(next);setHarnessArgs(Object.fromEntries(Object.entries(next.harness_args).map(([name,args])=>[name,formatCommandLine(args)]))); configureCustomTheme(next.custom_theme); applyTheme(next.theme); applyNoteEditorConfig(next); onUiScalePreview(next); setStatus('defaults restored')
   }
   const exportConfig = () => {
     if (!draft) return
@@ -644,6 +653,29 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const selectedProfileIndex=draft?.shell_profiles.findIndex(profile=>profile.id===selectedProfileId)??-1
   const selectedProfile=selectedProfileIndex>=0?draft?.shell_profiles[selectedProfileIndex]:undefined
+  // Re-seed the arguments text only when the selection moves. Keyed on the id and
+  // not on the profile object, which is rebuilt on every keystroke.
+  useEffect(()=>{
+    const profile=draft?.shell_profiles.find(item=>item.id===selectedProfileId)
+    setArgsText(formatCommandLine(profile?.args||[]))
+  },[selectedProfileId])
+  /** A short scannable tag, derived rather than typed. */
+  const profileTag=(profile:LaunchProfile)=>{
+    if(profile.backend!=='shell')return (harnessDescriptor(profile.backend)?.cli_name||profile.backend).slice(0,3)
+    const name=(profile.executable.split(/[\\/]/).pop()||'').replace(/\.exe$/i,'').toLowerCase()
+    if(name==='pwsh')return 'ps7'
+    if(name==='powershell')return 'ps'
+    return name.slice(0,3)||'sh'
+  }
+  /** What the daemon last derived for this profile, and whether it is now stale. */
+  const savedCapabilities=(profile:LaunchProfile)=>savedProfiles.find(item=>item.id===profile.id)?.capabilities
+  const capabilitiesStale=(profile:LaunchProfile)=>{
+    const saved=savedProfiles.find(item=>item.id===profile.id)
+    if(!saved)return true
+    return saved.backend!==profile.backend||saved.executable!==profile.executable
+      ||saved.cwd_strategy!==profile.cwd_strategy||saved.cwd_integration!==profile.cwd_integration
+      ||formatCommandLine(saved.args)!==formatCommandLine(profile.args)
+  }
   // Before the bundle lands the panel renders its full chrome — header, tab
   // rail, footer — with a placeholder in the content area, so opening Settings
   // paints immediately and the chosen tab can be selected while data loads.
@@ -710,7 +742,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured launch profiles">
-              {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profile.marker}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.backend==='shell'?'shell':harnessDisplayName(profile.backend)} · {profile.enabled?'on':'off'}</small></button>)}
+              {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profileTag(profile)}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.backend==='shell'?'shell':harnessDisplayName(profile.backend)} · {profile.enabled?'on':'off'}</small></button>)}
               <div class="profile-index-actions"><button onClick={()=>addProfile()}>+ add shell</button>{harnesses().map(harness=><button key={harness.name} onClick={()=>addProfile(undefined,harness.name)}>+ add {harness.display_name}</button>)}<button onClick={restoreDetected}>restore detected</button></div>
             </div>
             {selectedProfile&&<article class="profile-editor">
@@ -719,13 +751,20 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <label>Label<input value={selectedProfile.label} onInput={e=>updateProfile(selectedProfileIndex,{label:e.currentTarget.value})}/></label>
               <label>Backend<select value={selectedProfile.backend} onChange={e=>updateProfile(selectedProfileIndex,{backend:e.currentTarget.value as ProjectBackend})}><option value="shell">Shell</option>{harnesses().map(harness=><option value={harness.name}>{harness.display_name}</option>)}</select></label>
               <label>Executable{selectedProfile.backend!=='shell'&&<em> optional</em>}<input value={selectedProfile.executable} placeholder={selectedProfile.backend==='shell'?'':draft.harness_exe[selectedProfile.backend]||''} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.currentTarget.value})}/></label>
-              <label>Arguments<textarea value={selectedProfile.args.join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{args:e.currentTarget.value.split('\n').filter(Boolean)})}/></label>
+              <label>Arguments<input value={argsText} spellcheck={false} placeholder={selectedProfile.backend==='shell'?'-NoLogo':'--model claude-opus-4-8'} onInput={e=>{const text=e.currentTarget.value;setArgsText(text);updateProfile(selectedProfileIndex,{args:parseCommandLine(text)})}}/></label>
+              <p class="profile-hint">Type it as you would in a terminal. Quote anything containing a space: <code>--append-system-prompt "be terse"</code>. A backslash is literal, so Windows paths need no escaping.</p>
               {selectedProfile.backend!=='shell'&&reservedConflict(selectedProfile.backend,selectedProfile.args)&&<p class="error" role="alert">{reservedConflict(selectedProfile.backend,selectedProfile.args)} is built by swe-mux for {harnessDisplayName(selectedProfile.backend)} and cannot be set here.</p>}
               <label>Environment<textarea value={Object.entries(selectedProfile.env).map(([key,value])=>`${key}=${value}`).join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{env:Object.fromEntries(e.currentTarget.value.split('\n').filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)]}))})}/></label>
-              <label>Marker<input value={selectedProfile.marker} onInput={e=>updateProfile(selectedProfileIndex,{marker:e.currentTarget.value})}/></label>
               {selectedProfile.backend==='shell'&&<><label>Cwd strategy<select value={selectedProfile.cwd_strategy} onChange={e=>updateProfile(selectedProfileIndex,{cwd_strategy:e.currentTarget.value as LaunchProfile['cwd_strategy']})}><option value="native">native</option><option value="home">home</option><option value="wsl">wsl</option></select></label>
               <label class="check"><span>Live cwd telemetry</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label></>}
-              <label>Capabilities<input value={selectedProfile.capabilities.join(', ')} onInput={e=>updateProfile(selectedProfileIndex,{capabilities:e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean)})}/></label>
+              <div class="profile-preview"><span>LAUNCHES</span><code>{launchPreview(selectedProfile.executable||(selectedProfile.backend!=='shell'?draft.harness_exe[selectedProfile.backend]||selectedProfile.backend:''),selectedProfile.backend==='shell'?[]:parseCommandLine(harnessArgs[selectedProfile.backend]||''),selectedProfile.args)}</code>
+                <small>{selectedProfile.backend==='shell'?'swe-mux appends its own bootstrap to an interactive PowerShell profile.':'swe-mux adds the conversation id, the per-session settings file, and the MCP registration around these.'}</small>
+              </div>
+              <div class="profile-capabilities"><span>SUPPORTS</span>
+                {(savedCapabilities(selectedProfile)||[]).map(item=><em key={item}>{item}</em>)}
+                {!(savedCapabilities(selectedProfile)||[]).length&&<em class="muted">nothing yet</em>}
+                <small>{capabilitiesStale(selectedProfile)?'Derived by the daemon; recomputed when you save.':'Derived by the daemon from this profile.'}</small>
+              </div>
               <div class="profile-editor-actions"><button onClick={()=>moveProfile(selectedProfileIndex,-1)}>move up</button><button onClick={()=>moveProfile(selectedProfileIndex,1)}>move down</button><button onClick={()=>addProfile(selectedProfile)}>duplicate</button><button onClick={()=>updateProfile(selectedProfileIndex,{enabled:!selectedProfile.enabled})}>{selectedProfile.enabled?'disable':'enable'}</button>{/* The last *shell* profile is what cannot go: `default_shell_profile` must name
     one, and with none left the select above has no options, so the save would fail
     on a field the user could no longer set. Agent profiles are freely removable. */}
@@ -796,7 +835,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>
         </Fragment>}
 
-        {activeTab==='agents'&&<section><h3>Agents</h3>{harnesses().map(harness=><Fragment key={harness.name}><label>{harness.display_name} executable<input value={draft.harness_exe[harness.name]||''} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label><label>{harness.display_name} default args<input value={harnessArgs[harness.name]||'[]'} onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label></Fragment>)}<label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
+        {activeTab==='agents'&&<section><h3>Agents</h3>{harnesses().map(harness=><Fragment key={harness.name}><label>{harness.display_name} executable<input value={draft.harness_exe[harness.name]||''} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label><label>{harness.display_name} default args<input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder="--model claude-opus-4-8" onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label><p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminal. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p></Fragment>)}<label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
           <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p></div></div>
           <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>

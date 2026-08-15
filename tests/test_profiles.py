@@ -11,7 +11,12 @@ from swe_mux import server
 from swe_mux.adapters import CodexAdapter
 from swe_mux.config import Config, LaunchProfile, load_config, update_config
 from swe_mux.models import ProjectRecord
-from swe_mux.profiles import detected_profiles, resolve_profile
+from swe_mux.profiles import (
+    derive_capabilities,
+    detected_profiles,
+    profile_payload,
+    resolve_profile,
+)
 from swe_mux.server import resume_history, spawn_session
 
 
@@ -73,8 +78,69 @@ def test_detected_presets_include_native_shells_and_wsl_capability(
 
     assert {"powershell", "pwsh", "cmd", "wsl-ubuntu"} <= set(profiles)
     assert profiles["cmd"].args == ["/Q"]
-    assert "agent-aware" in profiles["pwsh"].capabilities
-    assert "agent-bridge-unavailable" in profiles["wsl-ubuntu"].capabilities
+    # Capabilities are derived from the profile now, not written beside it. The
+    # hand-written copy could be edited to claim `agent-aware` about the one shell
+    # where the agent shims provably cannot reach.
+    assert "agent-aware" in derive_capabilities(profiles["pwsh"], breakpoints=True)
+    assert "agent-bridge-unavailable" in derive_capabilities(
+        profiles["wsl-ubuntu"], breakpoints=True
+    )
+
+
+def test_capabilities_describe_what_the_pane_will_actually_support() -> None:
+    """One function answers this, and `resolve_profile` calls the same one.
+
+    The two entries worth having were previously computed at every spawn and then
+    discarded, so the only capabilities a user ever saw were the ones typed by hand.
+    """
+    powershell = LaunchProfile("p", "PowerShell 7", "pwsh.exe", ["-NoLogo"])
+    assert derive_capabilities(powershell, breakpoints=True) == (
+        "interactive",
+        "agent-aware",
+        "breakpoint-osc133",
+    )
+
+    powershell.cwd_integration = True
+    assert "cwd-osc7" in derive_capabilities(powershell, breakpoints=True)
+    assert "breakpoint-osc133" not in derive_capabilities(powershell, breakpoints=False)
+
+    # A profile handed a script has no prompt to instrument and no room for the
+    # bootstrap, so it earns neither marker.
+    scripted = LaunchProfile("s", "Scripted", "pwsh.exe", ["-Command", "Get-Date"])
+    assert derive_capabilities(scripted, breakpoints=True) == ("interactive", "agent-aware")
+
+    # cmd runs the shims fine but cannot carry the PowerShell bootstrap.
+    assert derive_capabilities(
+        LaunchProfile("c", "Cmd", "cmd.exe", ["/Q"]), breakpoints=True
+    ) == ("interactive", "agent-aware")
+
+    # An agent profile contributes arguments to a CLI; it has no shell to instrument.
+    agent = LaunchProfile("a", "Claude (plan)", "", ["--permission-mode", "plan"])
+    agent.backend = "claude"
+    assert derive_capabilities(agent, breakpoints=True) == ()
+
+
+def test_the_profiles_payload_publishes_derived_capabilities_not_stored_ones() -> None:
+    """What a user reads must be what a spawn produces.
+
+    The stored list stays in the record so existing `config.toml` files load, but it
+    is no longer echoed back: a profile could otherwise keep advertising a
+    capability the daemon would never grant it.
+    """
+    lying = LaunchProfile(
+        "wsl-ubuntu",
+        "WSL: Ubuntu",
+        "wsl.exe",
+        ["--distribution", "Ubuntu"],
+        cwd_strategy="wsl",
+        capabilities=["interactive", "agent-aware", "invented"],
+    )
+
+    payload = profile_payload(Config(shell_profiles=[lying], default_shell_profile="wsl-ubuntu"))
+
+    published = cast(list[dict[str, Any]], payload["profiles"])[0]["capabilities"]
+    assert published == ["interactive", "wsl", "agent-bridge-unavailable"]
+    assert "invented" not in published
 
 
 def test_wsl_profile_translates_windows_cwd(
