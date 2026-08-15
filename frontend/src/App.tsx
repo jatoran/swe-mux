@@ -101,6 +101,7 @@ import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutoria
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
 import { TRANSCRIPT_CHANGED_EVENT, TURN_ENDED_EVENT } from './transcriptView'
 import { eventRequiresFleetRefresh } from './eventRefresh'
+import { loadedUiBuildId, uiUpdateReloadReady, uiUpdateRequired } from './uiBuild'
 import { applyNoteEditorConfig } from './noteEditorSettings'
 import {
   DEFAULT_UI_SCALE, applyUiScale, createUiScaleWheelIntent, uiScaleConfigKey,
@@ -372,6 +373,8 @@ export function App() {
   // reloads itself once the successor daemon answers /api/health.
   const [daemonReloading, setDaemonReloading] = useState(false)
   const [redeploying, setRedeploying] = useState(false)
+  const loadedBuildId = useRef(loadedUiBuildId())
+  const [uiUpdateAvailable, setUiUpdateAvailable] = useState(false)
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
   // '' browses every Project; a Project id prefilters the archive to it.
   const [historyScope,setHistoryScope]=useState('')
@@ -1669,6 +1672,10 @@ export function App() {
         if (socket !== next) return
         try {
           const event = JSON.parse(String(message.data))
+          if (event.type === 'events_hello') {
+            setUiUpdateAvailable(uiUpdateRequired(loadedBuildId.current, event.ui_build_id))
+            return
+          }
           if (event.type === 'events_ready' || event.type === 'events_cursor' || event.type === 'events_gap') {
             const sequence = Number(event.sequence)
             if (Number.isSafeInteger(sequence) && sequence >= 0 && sequence > lastEventSeq.current) lastEventSeq.current = sequence
@@ -1758,6 +1765,16 @@ export function App() {
     })
     return () => { stopLivenessWatch(); presence.stop(); clearHandshakeWatchdog(); if (retry) clearTimeout(retry); if(refreshTimer)clearTimeout(refreshTimer);if(socket){socket.onclose=null;socket.close()} }
   }, [])
+
+  useEffect(() => {
+    if (!uiUpdateAvailable) return
+    const reloadWhenHidden = () => {
+      if (uiUpdateReloadReady(true, document.visibilityState)) location.reload()
+    }
+    reloadWhenHidden()
+    document.addEventListener('visibilitychange', reloadWhenHidden)
+    return () => document.removeEventListener('visibilitychange', reloadWhenHidden)
+  }, [uiUpdateAvailable])
 
   useEffect(()=>{if(!notificationToast)return;const timer=window.setTimeout(()=>setNotificationToast(null),5000);return()=>clearTimeout(timer)},[notificationToast])
 
@@ -4940,6 +4957,11 @@ export function App() {
     {voiceStatus&&!conversationPaneId&&<ConversationSurface conversation={conversation} commands={commands} configuredCommands={voiceStatus.commands} onOpenSettings={()=>openSettings('Voice')}/>}
 
     <ContinuityBanner />
+    {uiUpdateAvailable && <div class="ui-update-banner" role="status" aria-live="polite">
+      <strong>UI update ready</strong>
+      <span>This device will reload when the page is hidden.</span>
+      <button onClick={() => location.reload()}>Reload now</button>
+    </div>}
     {broadcast && <div class="broadcast-banner"><strong>Broadcast input is on</strong><span>Keystrokes mirror to sessions in the broadcast set.</span><button onClick={() => setBroadcast(false)}>Stop broadcasting</button></div>}
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>

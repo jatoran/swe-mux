@@ -65,6 +65,8 @@ continues to own every terminal.
   Move and resize events are debounced and atomically saved; minimized and hidden presentation
   are never persisted. Relaunch, redeploy, rollback, and login startup therefore restore the same
   usable geometry, while a missing or invalid state uses the centered 1440 x 920 default.
+  An in-app redeploy separately samples whether any desktop app window is visible immediately before the stop, then relaunches the successful or rolled-back bundle with that same visible or tray-hidden presentation.
+  Direct script invocations retain explicit `--hidden` behavior and otherwise launch visibly; `--restore-visibility` is reserved for callers that need the sampled presentation.
   Saved bounds are fitted to the current monitor working areas before window creation, so removing
   a monitor or reducing its resolution cannot restore the title bar off-screen.
 - Start with Windows writes the exact current executable/config command to the current-user Run
@@ -136,7 +138,9 @@ continues to own every terminal.
   is already down; a stubborn leftover is moved aside to `swe-mux.prev.stale-*`.
   A failed build never touches the running app, and a new build that never reports healthy is
   rolled back to `swe-mux.prev` (failed bundle kept at `dist/swe-mux.failed`), so a remote
-  client cannot be stranded. The endpoint validates source checkout + `uv`, requires the
+  client cannot be stranded.
+  The UI endpoint invokes the script with `--restore-visibility`, so every relaunch path uses the presentation captured immediately before the old shell is stopped.
+  The endpoint validates source checkout + `uv`, requires the
   attached supervisor (or `force`), and is single-flight via `<data_dir>/redeploy.lock` with
   output in `<data_dir>/redeploy.log`.
 - Packaged `--daemon-child` re-enters the daemon entry inside a separate process; source mode

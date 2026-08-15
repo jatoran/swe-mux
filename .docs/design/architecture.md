@@ -50,6 +50,7 @@ automatic fallback whenever the supervisor is unreachable.
 - `desktop.py`: Windows single-instance shell, tray/window lifecycle, login startup, daemon
   supervision, and desktop control token.
 - `desktop_window_state.py`: versioned desktop geometry persistence and monitor-safe restore.
+- `ui_build.py`: strict parsing and stat-cached lookup of the identity embedded in the served production document.
 - `__main__.py`: reusable aiohttp runner and standalone/desktop-child daemon entry.
 - `projects.py`: explicit Project and Group lifecycle.
 - `git_projects.py`: derived Git worktree/repository identity.
@@ -83,7 +84,8 @@ automatic fallback whenever the supervisor is unreachable.
 - `operational_telemetry.py`: durable bounded process, quota/reset, compaction, and tool
   evidence plus transcript reconciliation and retention.
 - `provider_accounts.py`: private auth snapshots, provider selection, and safe quota polling.
-- `frontend/src/App.tsx`: Project/Group sidebar and layout coordination.
+- `frontend/src/App.tsx`: Project/Group sidebar and layout coordination, including reconnect-time UI identity comparison and visibility-safe update reloads.
+- `frontend/src/uiBuild.ts`: production build identity validation and reload policy.
 - `frontend/src/layout.ts`: typed layout-v6 transformations, resource identities, and browser
   migrations.
 - `frontend/src/mobileWorkspace.ts`: pure depth-first mobile tab projection and close fallback.

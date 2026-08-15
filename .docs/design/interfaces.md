@@ -84,6 +84,7 @@ detached from the daemon's lifetime (log: `<data_dir>/redeploy.log`, lock:
 log}`. The script builds into `dist/.staging` while this daemon keeps serving,
 stops it only after a successful build, swaps the bundle (previous kept at
 `dist/swe-mux.prev`), and rolls back if the new build never reports healthy.
+The endpoint passes `--restore-visibility`; the script samples whether a desktop shell window is visible immediately before the stop and uses that presentation for success, swap-failure relaunch, and rollback relaunch.
 GET returns `{running, pid, log_tail, available}` so the UI can detect an
 early build failure while the old daemon is still alive.
 
@@ -142,10 +143,19 @@ machine-local and user-authored, so no trust fingerprint is involved.
 ```text
 GET  /projects/{project_id}/actions
 GET  /projects/{project_id}/actions/diff
+GET  /projects/{project_id}/actions/source
+PUT  /projects/{project_id}/actions/source  {text, revision}
 POST /projects/{project_id}/actions/trust   {fingerprint}            # every present file
 POST /projects/{project_id}/actions/trust   {source, fingerprint}    # one file
 POST /projects/{project_id}/actions/run     {action_id, inputs}
 ```
+
+The source routes read and write `.swe-mux/actions.toml` for the Run menu's editor. `GET`
+returns `{path, exists, text, revision, starter}`, answering a missing file with a starter
+template rather than a 404. `PUT` validates the text before writing, refuses a stale
+`revision` and an unparseable file, returns import `diagnostics` for a file that parses with
+problems, and returns the fresh catalog. A save always changes the file's bytes and therefore
+un-approves it.
 
 Action discovery is inert. The catalog returns `fingerprint`, `trusted`, contributing `sources`,
 per-file approval state in `files`, normalized actions/steps with `description`, `source_path`,
@@ -1315,7 +1325,11 @@ contracts described in the corresponding `features/` documents.
 The keybinding policy separates `browser_reserved`, `desktop_only`, `application_reserved`,
 and `terminal_reserved`; application-reserved UI scale chords are rejected as configurable bindings.
 
-`GET /events[?after_seq=N][&session=<id>]` is the live event stream. `after_seq` is a resume
+`GET /events[?after_seq=N][&session=<id>]` is the live event stream.
+Every accepted connection first receives `{"type":"events_hello","ui_build_id":string|null,"daemon_generation":string}`.
+`ui_build_id` is the SHA-256 identity embedded in the served production `index.html`, or `null` when the frontend has no valid identity, and `GET /api/health` exposes the same field.
+Production clients compare it with the identity in their loaded document; a mismatch means a newer UI is available, while equal or absent identities do not request a reload.
+`after_seq` is a resume
 cursor: the client tracks the highest `seq` it has applied and sends it on reconnect, and the
 server replays up to 64 events above it, oldest first, with each replayed event marked
 `replay: true`.

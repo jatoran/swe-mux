@@ -32,7 +32,7 @@ or via ``POST /api/daemon/redeploy`` (the UI menu entry): the agent's own
 session survives step 3 because its PTY lives in the supervisor, and the
 relaunched daemon reattaches it.
 
-    uv run python packaging/redeploy_desktop.py [--hidden] [--no-launch]
+    uv run python packaging/redeploy_desktop.py [--hidden|--restore-visibility] [--no-launch]
 """
 
 from __future__ import annotations
@@ -191,6 +191,50 @@ def partition_app_processes() -> tuple[list[int], list[int]]:
     return shell, helpers
 
 
+def app_window_visible() -> bool:
+    """Whether a visible top-level window belongs to the desktop app."""
+
+    if sys.platform != "win32":
+        return False
+    shell_pids = set(partition_app_processes()[0])
+    if not shell_pids:
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    found = False
+    user32 = ctypes.windll.user32
+    enum_callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.EnumWindows.argtypes = [enum_callback, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+
+    @enum_callback
+    def inspect_window(handle, _parameter) -> bool:  # noqa: ANN001 - Win32 callback
+        nonlocal found
+        if not user32.IsWindowVisible(handle):
+            return True
+        process_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(handle, ctypes.byref(process_id))
+        if process_id.value in shell_pids:
+            found = True
+            return False
+        return True
+
+    user32.EnumWindows(inspect_window, 0)
+    return found
+
+
+def resolve_relaunch_hidden(*, hidden: bool, restore_visibility: bool) -> bool:
+    """Choose launch presentation, probing only for UI-triggered redeploys."""
+
+    return hidden or (restore_visibility and not app_window_visible())
+
+
 def terminate_pids(pids: list[int], *, grace: float = 3.0) -> None:
     """Terminate then kill specific pids, never a whole image name."""
     import psutil
@@ -253,7 +297,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Rebuild and relaunch the frozen desktop app while live sessions survive"
     )
     parser.add_argument("--config", type=Path, help="config path (default: ~/.mux/config.toml)")
-    parser.add_argument("--hidden", action="store_true", help="relaunch minimized to tray")
+    presentation = parser.add_mutually_exclusive_group()
+    presentation.add_argument("--hidden", action="store_true", help="relaunch minimized to tray")
+    presentation.add_argument(
+        "--restore-visibility",
+        action="store_true",
+        help="restore whether the desktop window is visible when the app stops",
+    )
     parser.add_argument("--no-launch", action="store_true", help="rebuild but do not relaunch")
     parser.add_argument("--skip-build", action="store_true", help="bounce processes only")
     parser.add_argument(
@@ -362,6 +412,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         args, when="the swap would fail; the running app was never touched"
     ):
         return 2
+    args.hidden = resolve_relaunch_hidden(
+        hidden=args.hidden, restore_visibility=args.restore_visibility
+    )
+    if args.restore_visibility:
+        presentation = "hidden in the tray" if args.hidden else "with its window visible"
+        log(f"desktop presentation captured; relaunching {presentation}")
     stop_app_processes(config)
 
     # -- swap ---------------------------------------------------------------

@@ -161,7 +161,8 @@ async def test_redeploy_spawn_contract(tmp_path: Path, monkeypatch: Any) -> None
     command = captured["command"]
     assert command[0].lower().endswith(("uv", "uv.exe"))
     assert any(str(part).endswith("redeploy_desktop.py") for part in command)
-    assert "--hidden" in command
+    assert "--restore-visibility" in command
+    assert "--hidden" not in command
     kwargs = captured["kwargs"]
     # cwd is the source root, never inside dist/ (directory-lock hazard), and
     # the child env is scrubbed of parent-Claude session markers.
@@ -231,6 +232,23 @@ def test_redeploy_health_wait_allows_cold_start_but_stops_on_process_exit(
     assert module.APP_HEALTH_TIMEOUT_SECONDS >= 300
     assert module.wait_healthy(SimpleNamespace(), process=process) is None
     assert len(health_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("window_visible", "expected_hidden"),
+    [(True, False), (False, True)],
+)
+def test_ui_redeploy_restores_desktop_window_visibility(
+    monkeypatch: Any, window_visible: bool, expected_hidden: bool
+) -> None:
+    module = _redeploy_module()
+    monkeypatch.setattr(module, "app_window_visible", lambda: window_visible)
+
+    assert (
+        module.resolve_relaunch_hidden(hidden=False, restore_visibility=True)
+        is expected_hidden
+    )
+    assert module.resolve_relaunch_hidden(hidden=True, restore_visibility=False) is True
 
 
 def test_in_session_helpers_are_not_confused_with_the_shell_or_daemon() -> None:

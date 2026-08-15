@@ -177,6 +177,35 @@ boundary entirely: they are typed by the user into machine-local settings rather
 from a checkout, so there is nothing to fingerprint and nothing repository-supplied to approve.
 Worktree setup is different: it is committed repository configuration, but it has authority only after the user explicitly selects New worktree session, and only for the newly created Git-listed root before that one session starts.
 
+## Authoring
+
+The Run menu's **Author** section opens `.swe-mux/actions.toml` in a TOML editor, with
+a collapsible syntax summary and a link to the full reference.
+A Project with no actions file opens on a starter template that parses as written, so
+the first thing a new author sees after saving is not a syntax error in text they did
+not type.
+
+**One editor serves both authoring and editing.** The file is the unit a human reasons
+about and the unit trust is granted over, so a per-action form would have to reassemble
+it anyway and would always trail the format.
+
+- The text is validated *before* anything is written. A file that cannot be parsed is
+  refused, so a working file is never replaced by a broken one.
+- A file that parses but reports an import diagnostic is still saved and the
+  diagnostics are returned, because refusing would trap an author mid-edit on a
+  multi-action file where one entry is wrong.
+- A revision guard, the same shape the Project file editor uses, refuses a save whose
+  base changed elsewhere.
+- **A save always un-approves the file.** An editor that could write a command and
+  grant it authority in one step would make the approval meaningless, so the next run
+  asks again, with a diff.
+
+This repository ships its own `.swe-mux/actions.toml` as a worked example, covering a
+single-command action, an action with a typed input, a step with its own `cwd`, and a
+two-step action. `tests/test_project_actions_v2.py` asserts it parses with no
+diagnostics, which is the only fixture exercising the format against real commands
+rather than a string written inside a test.
+
 ## The agent surface
 
 Two MCP tools (`mux-mcp.md`), both thin callers over the same services the Run menu uses:
@@ -206,6 +235,8 @@ would be a second authority path.
 ```text
 GET  /api/projects/{project_id}/actions
 GET  /api/projects/{project_id}/actions/diff
+GET  /api/projects/{project_id}/actions/source
+PUT  /api/projects/{project_id}/actions/source  {text, revision}
 POST /api/projects/{project_id}/actions/trust   {fingerprint}            # every present file
 POST /api/projects/{project_id}/actions/trust   {source, fingerprint}    # one file
 POST /api/projects/{project_id}/actions/run     {action_id, inputs}
@@ -220,8 +251,9 @@ prompt that follows is expected rather than a surprise.
 
 ## Key files
 
-- `src/swe_mux/project_actions.py`
+- `src/swe_mux/project_actions.py` (`parse_native_actions`, `read_actions_source`, `write_actions_source`, `STARTER_ACTIONS_TOML`)
 - `src/swe_mux/assets/project-actions-schema.md` (the authoring reference)
+- `.swe-mux/actions.toml` (this repository's own worked example)
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/server.py` (`_start_project_action`, `_arm_action_timeout`, `diff_project_actions`)
 - `src/swe_mux/mcp.py` (`project_actions`, `run_action`)

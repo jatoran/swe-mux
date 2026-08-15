@@ -150,7 +150,9 @@ from .project_actions import (
     ActionStep,
     ProjectActionService,
     action_spawn_body,
+    read_actions_source,
     substituted_action,
+    write_actions_source,
 )
 from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
@@ -259,6 +261,7 @@ from .transcript_view import (
     final_reply_text,
     parse_transcript_with_watermark,
 )
+from .ui_build import read_ui_build_id
 from .usage import UsageManager
 from .voice import (
     DICTATION_PROFILE,
@@ -535,6 +538,15 @@ def _apply_security_headers(response: web.StreamResponse, request: web.Request) 
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
 
 
+def _apply_static_cache_headers(response: web.StreamResponse, request: web.Request) -> None:
+    if request.path == "/":
+        # The document names content-addressed assets and carries the UI build identity.
+        # Revalidate it on every open/reload so a post-redeploy browser cannot boot stale HTML.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif request.path.startswith("/assets/"):
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+
+
 @web.middleware
 async def security_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
     host = request_host(request)
@@ -553,6 +565,7 @@ async def security_middleware(request: web.Request, handler: Handler) -> web.Str
     if websocket:
         return response
     _apply_security_headers(response, request)
+    _apply_static_cache_headers(response, request)
     return response
 
 
@@ -684,6 +697,8 @@ def create_app(
             web.delete("/api/projects/{project_id}", delete_project),
             web.get("/api/projects/{project_id}/actions", list_project_actions),
             web.get("/api/projects/{project_id}/actions/diff", diff_project_actions),
+            web.get("/api/projects/{project_id}/actions/source", get_project_actions_source),
+            web.put("/api/projects/{project_id}/actions/source", put_project_actions_source),
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
@@ -1681,6 +1696,7 @@ async def health(request: web.Request) -> web.Response:
             "ok": True,
             "live_sessions": live,
             "version": "0.1.0",
+            "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
             "supervisor": connected,
             "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),
             # Supervised sessions this daemon could not rebuild (snapshot drift,
@@ -1949,7 +1965,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         str(root),
         "python",
         str(root / "packaging" / "redeploy_desktop.py"),
-        "--hidden",
+        "--restore-visibility",
     ]
     # Without this the script targets ~/.mux, so a daemon on an alternate config
     # reads the wrong supervisor discovery file and aborts — or worse,
@@ -6435,6 +6451,54 @@ async def _project_profile_id(request: web.Request, project) -> str:  # type: ig
     return await _project_profile_id_for(request.app, project)
 
 
+async def get_project_actions_source(request: web.Request) -> web.Response:
+    """The native action file's text, or a starter template when it does not exist."""
+    project = _action_project(request)
+    return json_response(await asyncio.to_thread(read_actions_source, project.root))
+
+
+async def put_project_actions_source(request: web.Request) -> web.Response:
+    """Validate and save the native action file, then return the fresh catalog.
+
+    Saving changes the file's bytes, so it un-approves itself and the next run asks
+    for approval again. That is the trust boundary working as designed and not a
+    regression: an editor that could write a command *and* approve it would make the
+    approval meaningless. The response carries the catalog so the caller can show the
+    new state immediately.
+    """
+    project = _action_project(request)
+    body = await request.json()
+    text = body.get("text")
+    if not isinstance(text, str):
+        raise ValueError({"text": "is required"})
+    diagnostics = await asyncio.to_thread(
+        write_actions_source, project.root, text, str(body.get("revision") or "missing")
+    )
+    service: ProjectActionService = request.app["project_actions"]
+    catalog = service.catalog(project.root)
+    log.info(
+        "project_actions_source_saved project_id=%s bytes=%d actions=%d diagnostics=%d",
+        project.id,
+        len(text.encode("utf-8")),
+        len(catalog.actions),
+        len(diagnostics),
+    )
+    await request.app["events"].emit(
+        "project_actions_source_saved",
+        source="user",
+        project_id=project.id,
+        actions=len(catalog.actions),
+        diagnostics=len(diagnostics),
+    )
+    return json_response(
+        {
+            **await asyncio.to_thread(read_actions_source, project.root),
+            "diagnostics": diagnostics,
+            "catalog": catalog.snapshot(),
+        }
+    )
+
+
 async def _start_project_action(
     app: web.Application,
     project: ProjectRecord,
@@ -10612,6 +10676,13 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
         last_sequence = int(raw_cursor) if raw_cursor else 0
     except ValueError:
         raise web.HTTPBadRequest(text="after_seq must be an integer") from None
+    await ws.send_json(
+        {
+            "type": "events_hello",
+            "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
+            "daemon_generation": str(request.app.get("daemon_generation") or "legacy"),
+        }
+    )
     queue = bus.subscribe(name="events-ws")
     try:
         if last_sequence > 0:

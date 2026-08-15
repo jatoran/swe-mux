@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientWebSocketResponse, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from swe_mux import server
@@ -17,14 +17,29 @@ from swe_mux.server import events_ws
 
 
 def _app(
-    history: HistoryIndex, events: EventBus, presence: DevicePresenceStore | None = None
+    history: HistoryIndex,
+    events: EventBus,
+    presence: DevicePresenceStore | None = None,
+    frontend_dir: Path | None = None,
 ) -> web.Application:
     app = web.Application()
     app["history"] = history
     app["events"] = events
     app["device_presence"] = presence or DevicePresenceStore()
+    app["frontend_dir"] = frontend_dir or Path("__missing_frontend__")
+    app["daemon_generation"] = "test-generation"
     app.router.add_get("/events", events_ws)
     return app
+
+
+async def _receive_hello(
+    ws: ClientWebSocketResponse, *, build_id: str | None = None
+) -> None:
+    assert await ws.receive_json() == {
+        "type": "events_hello",
+        "ui_build_id": build_id,
+        "daemon_generation": "test-generation",
+    }
 
 
 async def _seed(
@@ -44,8 +59,16 @@ async def test_cold_open_sends_only_the_latest_watermark(tmp_path: Path) -> None
     history = HistoryIndex(tmp_path / "mux.db")
     try:
         await _seed(history, 30)
-        async with TestClient(TestServer(_app(history, EventBus()))) as client:
+        frontend = tmp_path / "static"
+        frontend.mkdir()
+        build_id = "a" * 64
+        (frontend / "index.html").write_text(
+            f'<meta name="ui-build" content="{build_id}">', encoding="utf-8"
+        )
+        app = _app(history, EventBus(), frontend_dir=frontend)
+        async with TestClient(TestServer(app)) as client:
             ws = await client.ws_connect("/events")
+            await _receive_hello(ws, build_id=build_id)
             first = await ws.receive_json()
             await ws.close()
         assert first == {"type": "events_ready", "sequence": 30}
@@ -60,6 +83,7 @@ async def test_reconnect_with_a_cursor_delivers_exactly_the_gap(tmp_path: Path) 
         await _seed(history, 10)
         async with TestClient(TestServer(_app(history, EventBus()))) as client:
             ws = await client.ws_connect("/events?after_seq=7")
+            await _receive_hello(ws)
             seqs = [(await ws.receive_json())["seq"] for _ in range(3)]
             await ws.close()
         assert seqs == [8, 9, 10]
@@ -77,6 +101,7 @@ async def test_large_reconnect_gap_skips_replay_and_advances_to_watermark(
         await _seed(history, 30)
         async with TestClient(TestServer(_app(history, EventBus()))) as client:
             ws = await client.ws_connect("/events?after_seq=2")
+            await _receive_hello(ws)
             frame = await ws.receive_json()
             await ws.close()
         assert frame == {
@@ -96,6 +121,7 @@ async def test_live_events_follow_the_cold_watermark_without_duplication(tmp_pat
         await _seed(history, 2)
         async with TestClient(TestServer(_app(history, bus))) as client:
             ws = await client.ws_connect("/events")
+            await _receive_hello(ws)
             assert await ws.receive_json() == {"type": "events_ready", "sequence": 2}
             await bus.emit("state_changed", session_id="s1", source="daemon", state="live")
             live = await ws.receive_json()
@@ -113,6 +139,7 @@ async def test_browser_omits_audit_hook_payloads_and_advances_the_cursor(tmp_pat
         await _seed(history, 3, event_type="PostToolUse")
         async with TestClient(TestServer(_app(history, EventBus()))) as client:
             ws = await client.ws_connect("/events?after_seq=1")
+            await _receive_hello(ws)
             assert await ws.receive_json() == {"type": "events_cursor", "sequence": 3}
             await ws.close()
     finally:
@@ -126,6 +153,7 @@ async def test_live_audit_hooks_are_omitted_but_later_state_is_delivered(tmp_pat
     try:
         async with TestClient(TestServer(_app(history, bus))) as client:
             ws = await client.ws_connect("/events")
+            await _receive_hello(ws)
             assert await ws.receive_json() == {"type": "events_ready", "sequence": 0}
             await bus.emit("tool_result", session_id="s1", source="daemon", content="large")
             await bus.emit("state_changed", session_id="s1", source="daemon", state="live")
@@ -188,6 +216,7 @@ async def test_the_socket_carries_device_presence_and_forgets_it_on_close(
     try:
         async with TestClient(TestServer(_app(history, EventBus(), presence))) as client:
             ws = await client.ws_connect("/events")
+            await _receive_hello(ws)
             await ws.send_json(
                 {
                     "type": "presence",
