@@ -9,14 +9,14 @@ import pytest
 
 from swe_mux import server
 from swe_mux.adapters import CodexAdapter
-from swe_mux.config import Config, ShellProfile, load_config, update_config
+from swe_mux.config import Config, LaunchProfile, load_config, update_config
 from swe_mux.models import ProjectRecord
 from swe_mux.profiles import detected_profiles, resolve_profile
 from swe_mux.server import resume_history, spawn_session
 
 
-def profile(profile_id: str = "pwsh") -> ShellProfile:
-    return ShellProfile(
+def profile(profile_id: str = "pwsh") -> LaunchProfile:
+    return LaunchProfile(
         profile_id,
         "PowerShell 7",
         "pwsh.exe",
@@ -82,7 +82,7 @@ def test_wsl_profile_translates_windows_cwd(
 ) -> None:
     wsl = tmp_path / "wsl.exe"
     wsl.write_bytes(b"fixture")
-    configured = ShellProfile(
+    configured = LaunchProfile(
         "wsl-ubuntu",
         "WSL: Ubuntu",
         str(wsl),

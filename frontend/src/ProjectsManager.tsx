@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
-import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, ShellProfile } from './types'
-import { allBackendNames } from './harnessRegistry'
+import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
+import { allBackendNames, harnessDisplayName } from './harnessRegistry'
 import { useDismissLevel } from './modalFocus'
 
 // The Projects registry is the ONLY per-Project editor. Settings holds global
@@ -20,6 +20,9 @@ type Layer = 'device' | 'repo'
 
 type PortableValues = {
   default_shell_profile?: string
+  /** Backend name to launch profile id. A selection only; the profile itself is
+   *  defined on the device, because argv for an agent CLI is an authority field. */
+  default_agent_profiles?: Record<string, string>
   preferred_backend?: ProjectBackend
   prompt_library_scope?: PromptLibraryScope
   notification_sounds_enabled?: boolean
@@ -144,15 +147,23 @@ function AutomationOptIns({ project, busy, onError }: {
 
 export type ProjectPatch =
   Partial<Pick<Project, 'name' | 'group_id' | 'sidebar_visible'>>
-  & { default_backend?: ProjectBackend | null; default_profile_id?: string | null }
+  & {
+    default_backend?: ProjectBackend | null
+    default_profile_id?: string | null
+    default_agent_profiles?: Record<string, string>
+  }
 
-type Overrides = { default_backend?: ProjectBackend; default_profile_id?: string }
+type Overrides = {
+  default_backend?: ProjectBackend
+  default_profile_id?: string
+  default_agent_profiles: Record<string, string>
+}
 
 type Props = {
   projects:Project[]
   groups:ProjectGroup[]
   sessions:Session[]
-  profiles:ShellProfile[]
+  profiles:LaunchProfile[]
   initialProjectId?:string
   initialTab?:ProjectsManagerTab
   onClose:()=>void
@@ -179,7 +190,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const [filter,setFilter]=useState<'all'|'visible'|'hidden'>('all')
   const [name,setName]=useState('')
   const [groupId,setGroupId]=useState('')
-  const [overrides,setOverrides]=useState<Overrides>({})
+  const [overrides,setOverrides]=useState<Overrides>({default_agent_profiles:{}})
   const [config,setConfig]=useState<ProjectConfig|null>(null)
   const [values,setValues]=useState<PortableValues>({})
   const [savedValues,setSavedValues]=useState<PortableValues>({})
@@ -196,9 +207,9 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   useEffect(()=>{if(!selected&&ordered[0])setSelectedId(ordered[0].id)},[selected,ordered])
   useEffect(()=>{
     setName(selected?.name||'');setGroupId(selected?.group_id||'')
-    setOverrides({default_backend:selected?.default_backend,default_profile_id:selected?.default_profile_id})
+    setOverrides({default_backend:selected?.default_backend,default_profile_id:selected?.default_profile_id,default_agent_profiles:{...(selected?.default_agent_profiles||{})}})
     setConfirmDelete(false);setError('')
-  },[selected?.id,selected?.name,selected?.group_id,selected?.default_backend,selected?.default_profile_id])
+  },[selected?.id,selected?.name,selected?.group_id,selected?.default_backend,selected?.default_profile_id,JSON.stringify(selected?.default_agent_profiles||{})])
 
   // The portable layer lives in the checkout, so it is read per Project rather than
   // taken from the registry payload — its revision is what guards the write.
@@ -231,11 +242,42 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     setOverrides(current=>({...current,default_profile_id:layer==='device'&&value?value:undefined}))
     setValues(current=>({...current,default_shell_profile:layer==='repo'&&value?value:undefined}))
   }
+  // One selection per harness, in the same two layers. The repo layer stores an id
+  // and never argv, so a checkout can say which locally-defined profile to use
+  // without carrying arguments of its own.
+  const agentProfileLayer=(backend:string):Layer=>
+    overrides.default_agent_profiles[backend]?'device':values.default_agent_profiles?.[backend]?'repo':'device'
+  const agentProfileValue=(backend:string)=>
+    overrides.default_agent_profiles[backend]||values.default_agent_profiles?.[backend]||''
+  // Only harnesses that actually have a profile get a row. A selector whose only
+  // option is "none" teaches nothing and makes the panel longer for every harness
+  // the user has never configured.
+  const harnessesWithProfiles=useMemo(()=>{
+    const grouped=new Map<string,LaunchProfile[]>()
+    for(const profile of profiles){
+      if(profile.backend==='shell')continue
+      grouped.set(profile.backend,[...(grouped.get(profile.backend)||[]),profile])
+    }
+    return [...grouped.entries()]
+  },[profiles])
+  const setAgentProfile=(backend:string,value:string,layer:Layer)=>{
+    const without=(map:Record<string,string>)=>{const next={...map};delete next[backend];return next}
+    setOverrides(current=>({...current,default_agent_profiles:layer==='device'&&value
+      ?{...current.default_agent_profiles,[backend]:value}
+      :without(current.default_agent_profiles)}))
+    setValues(current=>{
+      const next=layer==='repo'&&value
+        ?{...(current.default_agent_profiles||{}),[backend]:value}
+        :without(current.default_agent_profiles||{})
+      return {...current,default_agent_profiles:Object.keys(next).length?next:undefined}
+    })
+  }
 
   const detailsDirty=!!selected&&(name.trim()!==selected.name||(groupId||null)!==(selected.group_id||null))
   const overridesDirty=!!selected&&(
     (overrides.default_backend||null)!==(selected.default_backend||null)
     ||(overrides.default_profile_id||null)!==(selected.default_profile_id||null)
+    ||JSON.stringify(overrides.default_agent_profiles)!==JSON.stringify(selected.default_agent_profiles||{})
   )
   const portableDirty=!sameDraftValue(values,savedValues)
   const dirty=detailsDirty||overridesDirty||portableDirty
@@ -250,6 +292,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
           group_id:groupId||null,
           default_backend:overrides.default_backend||null,
           default_profile_id:overrides.default_profile_id||null,
+          default_agent_profiles:overrides.default_agent_profiles,
         })
       }
       if(config&&portableDirty){
@@ -313,10 +356,16 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               </div>
               <div class="project-setting">
                 <label><span class="project-setting-name">Shell profile{profileValue&&<em class="project-setting-chip">{profileLayer==='repo'?'repo':'device'}</em>}</span>
-                  <select value={profileValue} disabled={busy} onChange={event=>setProfile(event.currentTarget.value,profileLayer)}><option value="">Inherit ({effective?.profile_id||'default'})</option>{profiles.map(profile=><option value={profile.id}>{profile.label}</option>)}</select>
+                  <select value={profileValue} disabled={busy} onChange={event=>setProfile(event.currentTarget.value,profileLayer)}><option value="">Inherit ({effective?.profile_id||'default'})</option>{profiles.filter(profile=>profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select>
                 </label>
                 {layerRow(profileLayer,layer=>setProfile(profileValue,layer),!!profileValue)}
               </div>
+              {harnessesWithProfiles.map(([backend,harnessProfiles])=><div class="project-setting" key={backend}>
+                <label><span class="project-setting-name">{harnessDisplayName(backend)} launch profile{agentProfileValue(backend)&&<em class="project-setting-chip">{agentProfileLayer(backend)==='repo'?'repo':'device'}</em>}</span>
+                  <select value={agentProfileValue(backend)} disabled={busy} onChange={event=>setAgentProfile(backend,event.currentTarget.value,agentProfileLayer(backend))}><option value="">None (plain launch)</option>{harnessProfiles.map(profile=><option value={profile.id}>{profile.label}</option>)}</select>
+                </label>
+                {layerRow(agentProfileLayer(backend),layer=>setAgentProfile(backend,agentProfileValue(backend),layer),!!agentProfileValue(backend))}
+              </div>)}
               <label><span class="project-setting-name">Prompt library scope<em class="project-setting-chip">repo</em></span>
                 <select value={values.prompt_library_scope||''} disabled={busy||!config} onChange={event=>setValues(current=>({...current,prompt_library_scope:(event.currentTarget.value||undefined) as PromptLibraryScope|undefined}))}><option value="">Inherit ({SCOPE_LABELS[effective?.prompt_library_scope||'both']})</option>{(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=><option value={scope}>{SCOPE_LABELS[scope]}</option>)}</select>
               </label>

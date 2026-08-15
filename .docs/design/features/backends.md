@@ -77,6 +77,8 @@ Provider-account and external-usage iteration derives from independent descripto
 Direct `claude` and `codex` branches remain only where provider data shapes, parser records, authentication, argv, or resume behavior differ.
 Adapter construction, shim generation, and launcher dispatch derive from the registry and each descriptor's adapter family.
 Executable and argument overrides live in the per-harness `harness_exe` and `harness_args` configuration maps.
+Those are the harness-wide defaults.
+A named alternative for one harness is a launch profile, which contributes a second argument slot between `harness_args` and whatever the launch itself asked for (`launch-profiles.md`).
 
 ## Where a harness deviation lives
 
@@ -118,6 +120,9 @@ Add one descriptor before adding provider-specific consumers.
 The descriptor is the source of truth for all generic surfaces.
 
 - Every harness declares identity and launch fields: `name`, `display_name`, `executable`, `default_args`, `data_home`, `adapter_family`, `config_dir_name`, and `script_base_name`.
+- Every harness declares `reserved_launch_args`: the argv its adapter builds for itself, which a user-authored launch profile may not set.
+  Declared rather than inferred because the consequence of missing one is silent and total: a profile passing its own `--settings` replaces the file holding a pane's hook identity, so the CLI runs, the pane looks healthy, and the session is never observed again.
+  An entry ending in `=` or `.` matches by prefix, which names a value-carrying config override without reserving the flag that introduces it.
 - Every harness declares `transcript_dialect`: the reader that parses its records, or `None` when it writes none.
   Reuse an existing dialect whenever the records are the same shape; a new dialect obliges a new reader branch and a sample record in the registry test.
 - An npm-distributed harness needs no launch special-casing on Windows: `resolve_npm_shim_pty_command` reads the `.cmd` shim and resolves it to the package's own executable or to Node plus its entrypoint, because ConPTY cannot execute a batch shim.

@@ -386,7 +386,13 @@ class ProjectRecord:
     layout: dict[str, Any] | None = None
     default_backend: str | None = None
     layout_revision: int = 0
+    #: The shell launch profile `New terminal` uses in this Project.
     default_profile_id: str | None = None
+    #: Per-harness launch profile this Project starts agent sessions with, keyed by
+    #: backend name. Separate from `default_profile_id` because a Project genuinely
+    #: has one answer per backend: the terminal default and the Claude default are
+    #: unrelated choices, and one field would make selecting either clear the other.
+    default_agent_profiles: dict[str, str] = field(default_factory=dict)
     #: Optional machine-local Git comparison ref. None means automatic inference.
     git_compare_ref: str | None = None
     resource_open_mode: Literal["dock", "popout"] | None = None

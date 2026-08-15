@@ -161,7 +161,8 @@ interface Project {
   layout_revision: number
   git_compare_ref: string | null
   default_backend?: 'shell' | 'claude' | 'codex'
-  default_profile_id?: string
+  default_profile_id?: string                       // shell launch profile
+  default_agent_profiles?: Record<string, string>   // backend -> launch profile id
   portable_options: ProjectPortableOptions
   effective_options: ProjectEffectiveOptions
   option_sources: Record<string, 'global' | 'project_record' | 'project_file'>
@@ -529,7 +530,7 @@ interface SpawnRequest {
   project_id: string
   backend?: 'shell' | 'claude' | 'codex'
   name?: string
-  profile_id?: string
+  profile_id?: string               // a launch profile whose own backend must match
   executable?: string
   argv?: string[]
   resume_native_id?: string
@@ -552,9 +553,15 @@ Project's own repository is admitted even though it sits outside the root, becau
 parallel agent checkout is the same codebase on another branch. Git is the authority, so no
 arbitrary absolute path qualifies; only worktree roots do; and the query runs only after
 plain containment has already failed. Project Actions do not get this exception
-(`features/git.md`). `env` merges over the shell profile's
+(`features/git.md`). `env` merges over the launch profile's
 environment and under mux's own identity variables, so a spawned shell can never present
-another session's hook credentials. Both exist because a Project Action step declares its own
+another session's hook credentials.
+
+`profile_id` is accepted for every backend, not only `shell`. The named profile must declare
+the backend the request asked for, and it may not set argv the adapter builds for itself; both
+refusals live in `resolve_agent_profile` rather than in this contract, because parsing cannot
+see the profile (`features/launch-profiles.md`). With no `profile_id`, an agent spawn applies
+the Project's default for that harness when it has a usable one. Both exist because a Project Action step declares its own
 directory and environment; encoding them into `argv` instead is what previously forced a
 swe-mux executable into every task's process tree.
 

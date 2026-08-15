@@ -25,11 +25,11 @@ import {
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { RailEditor } from './RailEditor'
-import { allBackendNames, harnessDisplayName, harnesses } from './harnessRegistry'
+import { allBackendNames, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './PromptLibrary'
-import type { ShellProfile, Project } from './types'
+import type { LaunchProfile, Project, ProjectBackend } from './types'
 import { ModelPicker } from './ModelPicker'
 import { includeSelectedModel } from './modelFilter'
 
@@ -67,7 +67,7 @@ type Config = {
   ccusage_enabled:boolean; ccusage_refresh_minutes:number
   usage_commands:Record<string,string[]>
   custom_theme:CustomTheme
-  default_shell_profile:string; shell_profiles:ShellProfile[]
+  default_shell_profile:string; shell_profiles:LaunchProfile[]
   project_ignore_patterns:string[]
   project_init_scripts:InitScript[]
   auto_delivery_enabled:boolean;auto_delivery_stable_seconds:number
@@ -141,7 +141,7 @@ type SettingsBundle = {
   config:Config
   automation_rules:{text:string}|null
   keybindings:KeybindingsResponse|null
-  profiles:{detected:ShellProfile[]}|null
+  profiles:{detected:LaunchProfile[]}|null
   projects:Project[]|null
   automation:AutomationStatus|null
   provider:ProviderStatus|null
@@ -225,7 +225,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [capturingCommand, setCapturingCommand] = useState<string|null>(null)
   const [bindingError, setBindingError] = useState('')
   const [harnessArgs, setHarnessArgs] = useState<Record<string,string>>({})
-  const [detectedProfiles, setDetectedProfiles] = useState<ShellProfile[]>([])
+  const [detectedProfiles, setDetectedProfiles] = useState<LaunchProfile[]>([])
   const [usage, setUsage] = useState<UsageStatus | null>(null)
   const [voiceInfo, setVoiceInfo] = useState<VoiceStatusInfo | null>(null)
   const [latencyReport, setLatencyReport] = useState<LatencyReportPayload | null>(null)
@@ -545,17 +545,33 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       change('custom_theme',custom); change('theme','custom'); configureCustomTheme(custom); applyTheme('custom'); setErrors({})
     } catch { setErrors({custom_theme:'theme file must contain valid JSON semantic tokens'}) }
   }
-  const updateProfile = (index:number, changes:Partial<ShellProfile>) => {
+  const updateProfile = (index:number, changes:Partial<LaunchProfile>) => {
     const previous=draft!.shell_profiles[index]
     change('shell_profiles',draft!.shell_profiles.map((profile,itemIndex)=>itemIndex===index?{...profile,...changes}:profile))
     if(changes.id&&selectedProfileId===previous.id)setSelectedProfileId(changes.id)
   }
-  const addProfile = (source?:ShellProfile) => {
-    const base = source || {id:'shell',label:'New shell',executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'sh',capabilities:['interactive'],cwd_integration:false,enabled:true}
+  const addProfile = (source?:LaunchProfile, backend:ProjectBackend='shell') => {
+    const base:LaunchProfile = source || (backend==='shell'
+      ? {id:'shell',label:'New shell',executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'sh',capabilities:['interactive'],cwd_integration:false,enabled:true,backend:'shell'}
+      // An agent profile leaves `executable` empty so it inherits `harness_exe`, and
+      // carries no shell capabilities: it contributes arguments, not a command line.
+      : {id:backend,label:`New ${harnessDescriptor(backend)?.display_name||backend} profile`,executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'ag',capabilities:[],cwd_integration:false,enabled:true,backend})
     let id=base.id, suffix=2
     while(draft!.shell_profiles.some(profile=>profile.id===id)) id=`${base.id}-${suffix++}`
     change('shell_profiles',[...draft!.shell_profiles,{...base,id,args:[...base.args],env:{...base.env},capabilities:[...base.capabilities]}])
     setSelectedProfileId(id)
+  }
+  /** Reserved argv for the selected profile's backend, as the daemon declares it. */
+  const reservedArgs = (backend:string) => harnessDescriptor(backend)?.reserved_launch_args||[]
+  /** The first reserved token these arguments set, matching the daemon's own rule. */
+  const reservedConflict = (backend:string, args:string[]) => {
+    for(const argument of args){
+      for(const token of reservedArgs(backend)){
+        if(token.endsWith('=')||token.endsWith('.')){ if(argument.startsWith(token)) return token }
+        else if(argument===token||argument.startsWith(`${token}=`)) return token
+      }
+    }
+    return ''
   }
   // Init scripts are ordinary config rows; the id is generated once and then left
   // alone, because the Add-project dialog selects by id and a label edit must not
@@ -681,25 +697,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback.</p>
           <label>Claude width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
           <p>Claude Code's renderer can leave stale and duplicated cells when its width changes by a lot, so a Claude pane dragged past this many columns adds margin instead of resizing the terminal again. That is why a wide Claude pane stops growing its text while Codex and shell panes keep filling the space. Raise it for wide diffs and long log lines; choose <strong>No limit</strong> to let Claude fill its pane like every other session, and watch for leftover text on the right after a resize. Phone and other compact panes are never limited - they are narrower than the smallest setting here.</p>
-          <label>Global default profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled).map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
+          <label>Global default terminal profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
+          <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
           <div class="profile-browser">
-            <div class="profile-index" aria-label="Configured terminal profiles">
-              {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profile.marker}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.enabled?'on':'off'}</small></button>)}
-              <div class="profile-index-actions"><button onClick={()=>addProfile()}>+ add profile</button><button onClick={restoreDetected}>restore detected</button></div>
+            <div class="profile-index" aria-label="Configured launch profiles">
+              {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profile.marker}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.backend==='shell'?'shell':harnessDisplayName(profile.backend)} · {profile.enabled?'on':'off'}</small></button>)}
+              <div class="profile-index-actions"><button onClick={()=>addProfile()}>+ add shell</button>{harnesses().map(harness=><button key={harness.name} onClick={()=>addProfile(undefined,harness.name)}>+ add {harness.display_name}</button>)}<button onClick={restoreDetected}>restore detected</button></div>
             </div>
             {selectedProfile&&<article class="profile-editor">
-              <header><strong>PROFILE::{selectedProfile.label}</strong><button aria-label="Collapse terminal profile" onClick={()=>setSelectedProfileId(null)}>×</button></header>
+              <header><strong>PROFILE::{selectedProfile.label}</strong><button aria-label="Collapse launch profile" onClick={()=>setSelectedProfileId(null)}>×</button></header>
               <label>Profile ID<input value={selectedProfile.id} onInput={e=>updateProfile(selectedProfileIndex,{id:e.currentTarget.value})}/></label>
               <label>Label<input value={selectedProfile.label} onInput={e=>updateProfile(selectedProfileIndex,{label:e.currentTarget.value})}/></label>
-              <label>Executable<input value={selectedProfile.executable} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.currentTarget.value})}/></label>
+              <label>Backend<select value={selectedProfile.backend} onChange={e=>updateProfile(selectedProfileIndex,{backend:e.currentTarget.value as ProjectBackend})}><option value="shell">Shell</option>{harnesses().map(harness=><option value={harness.name}>{harness.display_name}</option>)}</select></label>
+              <label>Executable{selectedProfile.backend!=='shell'&&<em> optional</em>}<input value={selectedProfile.executable} placeholder={selectedProfile.backend==='shell'?'':draft.harness_exe[selectedProfile.backend]||''} onInput={e=>updateProfile(selectedProfileIndex,{executable:e.currentTarget.value})}/></label>
               <label>Arguments<textarea value={selectedProfile.args.join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{args:e.currentTarget.value.split('\n').filter(Boolean)})}/></label>
+              {selectedProfile.backend!=='shell'&&reservedConflict(selectedProfile.backend,selectedProfile.args)&&<p class="error" role="alert">{reservedConflict(selectedProfile.backend,selectedProfile.args)} is built by swe-mux for {harnessDisplayName(selectedProfile.backend)} and cannot be set here.</p>}
               <label>Environment<textarea value={Object.entries(selectedProfile.env).map(([key,value])=>`${key}=${value}`).join('\n')} onInput={e=>updateProfile(selectedProfileIndex,{env:Object.fromEntries(e.currentTarget.value.split('\n').filter(line=>line.includes('=')).map(line=>{const at=line.indexOf('=');return [line.slice(0,at),line.slice(at+1)]}))})}/></label>
               <label>Marker<input value={selectedProfile.marker} onInput={e=>updateProfile(selectedProfileIndex,{marker:e.currentTarget.value})}/></label>
-              <label>Cwd strategy<select value={selectedProfile.cwd_strategy} onChange={e=>updateProfile(selectedProfileIndex,{cwd_strategy:e.currentTarget.value as ShellProfile['cwd_strategy']})}><option value="native">native</option><option value="home">home</option><option value="wsl">wsl</option></select></label>
-              <label class="check"><span>Live cwd telemetry</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label>
+              {selectedProfile.backend==='shell'&&<><label>Cwd strategy<select value={selectedProfile.cwd_strategy} onChange={e=>updateProfile(selectedProfileIndex,{cwd_strategy:e.currentTarget.value as LaunchProfile['cwd_strategy']})}><option value="native">native</option><option value="home">home</option><option value="wsl">wsl</option></select></label>
+              <label class="check"><span>Live cwd telemetry</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label></>}
               <label>Capabilities<input value={selectedProfile.capabilities.join(', ')} onInput={e=>updateProfile(selectedProfileIndex,{capabilities:e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean)})}/></label>
               <div class="profile-editor-actions"><button onClick={()=>moveProfile(selectedProfileIndex,-1)}>move up</button><button onClick={()=>moveProfile(selectedProfileIndex,1)}>move down</button><button onClick={()=>addProfile(selectedProfile)}>duplicate</button><button onClick={()=>updateProfile(selectedProfileIndex,{enabled:!selectedProfile.enabled})}>{selectedProfile.enabled?'disable':'enable'}</button><button class="danger" disabled={draft.shell_profiles.length===1} onClick={()=>{change('shell_profiles',draft.shell_profiles.filter((_,index)=>index!==selectedProfileIndex));setSelectedProfileId(null)}}>remove</button></div>
-              <small>swe-mux wraps this shell process only and never edits your shell profile files.</small>
+              <small>{selectedProfile.backend==='shell'?'swe-mux wraps this shell process only and never edits your shell profile files.':`These arguments follow the ${harnessDisplayName(selectedProfile.backend)} default args and precede anything the launch itself asks for. Reserved: ${reservedArgs(selectedProfile.backend).join(' ')||'none'}.`}</small>
             </article>}
             {!selectedProfile&&<div class="profile-placeholder"><span>TERMINAL::PROFILES</span><strong>Select a profile to inspect or edit it.</strong><p>Nothing is expanded until you choose one.</p></div>}
           </div>

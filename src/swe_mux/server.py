@@ -114,7 +114,7 @@ from .logsetup import current_log_level, set_log_level
 from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
-from .models import MuxEvent, StandingActivityKind
+from .models import MuxEvent, ProjectRecord, StandingActivityKind
 from .network_usage import (
     MeteredWebSocketResponse,
     NetworkUsage,
@@ -143,7 +143,7 @@ from .preview_capture import (
     capture_loopback,
 )
 from .processes import PreviewRegistry, ProcessInspector
-from .profiles import profile_payload, resolve_profile
+from .profiles import find_profile, profile_payload, resolve_agent_profile, resolve_profile
 from .project_actions import ProjectActionService, action_spawn_body
 from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
@@ -4186,6 +4186,56 @@ def _decorate_conversation_holders(app: web.Application, items: list[dict[str, A
         }
 
 
+async def _project_agent_profile(
+    backend: str,
+    project: ProjectRecord,
+    project_values: dict[str, Any],
+    config: Config,
+    *,
+    app: web.Application,
+    project_id: str,
+) -> str | None:
+    """This Project's default launch profile for one harness, if it has a usable one.
+
+    Two sources, machine-local first: the Project record (chosen in the UI) and then
+    the committed `.swe-mux/config.toml`. The committed one names a profile the user
+    defined locally; it never carries argv of its own.
+
+    An unusable default degrades to a diagnostic rather than to a failed spawn. It is
+    a *default*, so refusing would make one stale id in a shared repository file stop
+    every agent session in the Project from starting, which is a worse outcome than
+    starting without the arguments and saying so. An explicitly requested
+    `profile_id` is the opposite case and still raises.
+    """
+    selected = project.default_agent_profiles.get(backend) or (
+        project_values.get("default_agent_profiles") or {}
+    ).get(backend)
+    if not selected:
+        return None
+    try:
+        resolve_agent_profile(config, str(selected), backend)
+    except ValueError as exc:
+        detail = exc.args[0] if exc.args else str(exc)
+        message = detail.get("profile_id", str(detail)) if isinstance(detail, dict) else str(detail)
+        log.warning(
+            "project_launch_profile_unavailable project_id=%s backend=%s profile_id=%s reason=%s",
+            project_id,
+            backend,
+            selected,
+            message,
+        )
+        await app["events"].emit(
+            "project_launch_profile_unavailable",
+            source="projects",
+            project_id=project_id,
+            backend=backend,
+            profile_id=str(selected),
+            error=message,
+        )
+        return None
+    return str(selected)
+
+
 async def _spawn_from_body(
     app: web.Application, body: dict[str, Any], *, initial_output: bytes | None = None
 ) -> Session:
@@ -4226,8 +4276,6 @@ async def _spawn_from_body(
     )
     if spec.completion_mode == "one_shot" and backend != "shell":
         raise ValueError("one-shot completion is available only for shell sessions")
-    if spec.profile_id and is_agent_harness(backend):
-        raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
     # A spawn may target a subdirectory of its own project (a task that runs in
     # ./frontend); the containment check is here because this is the only layer
     # that knows which project owns the request.
@@ -4262,6 +4310,36 @@ async def _spawn_from_body(
         executable = profile.executable
         argv = [*profile.argv, *argv]
         profile_env = profile.env
+    elif is_agent_harness(backend) and not executable:
+        # Three argument slots, least specific first: the harness's global
+        # `harness_args`, then this profile's, then whatever the request itself asked
+        # for. The adapters already concatenate `default_args` before `opts.args`, so
+        # prepending here is the whole of the composition and no adapter changes.
+        selected = spec.profile_id or await _project_agent_profile(
+            backend,
+            owning_project,
+            project_values,
+            config,
+            app=app,
+            project_id=project_id,
+        )
+        if selected:
+            profile_started_at = time.perf_counter()
+            agent_profile = resolve_agent_profile(config, selected, backend)
+            startup_timing_ms["profile_resolution"] = round(
+                (time.perf_counter() - profile_started_at) * 1000, 1
+            )
+            profile_id = agent_profile.profile_id
+            executable = agent_profile.executable or executable
+            argv = [*agent_profile.argv, *argv]
+            profile_env = agent_profile.env or None
+            log.info(
+                "launch_profile_applied project_id=%s backend=%s profile_id=%s args=%d",
+                project_id,
+                backend,
+                profile_id,
+                len(agent_profile.argv),
+            )
     if spec.seed_text:
         if not is_agent_harness(backend):
             raise ValueError({"seed_text": "seed prompts require an agent backend"})
@@ -6074,6 +6152,17 @@ async def _project_snapshot(  # type: ignore[no-untyped-def]
         or config.default_shell_profile,
         "prompt_library_scope": values.get("prompt_library_scope") or "both",
         "notification_sounds_enabled": values.get("notification_sounds_enabled", True),
+        # Which launch profile each harness starts with here, after the Project
+        # record and the committed file have both had their say. Empty for a harness
+        # with no default, which the Run menu renders as the plain harness entry.
+        "agent_profile_ids": {
+            harness: selection
+            for harness in agent_harnesses()
+            if (
+                selection := project.default_agent_profiles.get(harness)
+                or (values.get("default_agent_profiles") or {}).get(harness)
+            )
+        },
     }
     sources = {
         "backend": "project_record"
@@ -6135,11 +6224,33 @@ async def patch_project(request: web.Request) -> web.Response:
     backend = body.get("default_backend")
     if backend is not None and backend != "shell" and not is_agent_harness(backend):
         raise ValueError({"default_backend": "must be shell, a registered agent, or null"})
+    config: Config = request.app["config"]
     profile_id = body.get("default_profile_id")
     if profile_id is not None and profile_id not in {
-        profile.id for profile in request.app["config"].shell_profiles
+        profile.id for profile in config.shell_profiles if profile.backend == "shell"
     }:
-        raise ValueError({"default_profile_id": "unknown shell profile"})
+        raise ValueError({"default_profile_id": "unknown shell launch profile"})
+    if "default_agent_profiles" in body:
+        selections = body["default_agent_profiles"]
+        if not isinstance(selections, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in selections.items()
+        ):
+            raise ValueError(
+                {"default_agent_profiles": "must be a map of backend to launch profile id"}
+            )
+        for harness, selection in selections.items():
+            profile = find_profile(config, selection)
+            if profile is None or profile.backend != harness or not profile.enabled:
+                # Named individually rather than as one message, because a caller
+                # sending several selections needs to know which one is wrong.
+                raise ValueError(
+                    {
+                        f"default_agent_profiles.{harness}": (
+                            f"unknown or mismatched launch profile: {selection}"
+                        )
+                    }
+                )
     project = await request.app["projects"].update(request.match_info["project_id"], **body)
     activity = await request.app["history"].project_last_activity()
     return json_response(await _project_snapshot(request, project, activity))

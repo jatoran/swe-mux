@@ -1,7 +1,8 @@
+import { Fragment } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { fitScrollingMenuInViewport } from './menuPosition'
-import type { Project, ProjectAction, ProjectActionCatalog, ProjectBackend, Session } from './types'
+import type { LaunchProfile, Project, ProjectAction, ProjectActionCatalog, ProjectBackend, Session } from './types'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import { isAbsolutePath } from './gitWorktrees'
 import { normalizeWorktreeBranchInput, worktreePathForBranch } from './worktreeLaunch'
@@ -11,9 +12,11 @@ import { useDismissLevel } from './modalFocus'
 type Anchor={x:number;y:number}
 type Props={
   project:Project
+  /** Every enabled launch profile, shells included; this menu filters to agents. */
+  profiles:LaunchProfile[]
   anchor:Anchor
   onClose:()=>void
-  onLaunch:(backend:ProjectBackend)=>void
+  onLaunch:(backend:ProjectBackend,profileId?:string)=>void
   onCustom:()=>void
   onSessions:(sessions:Session[])=>void
   onWorktreeCreated:(path:string,backend:ProjectBackend)=>void
@@ -27,8 +30,20 @@ const sourceLabel:Record<ProjectAction['source'],string>={
 type WorktreeDraft={backend:ProjectBackend;branch:string;startPoint:string;path:string;pathEdited:boolean}
 type WorktreeCreateResult={ok:true;path:string}
 
-export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,onError}:Props){
+export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,onError}:Props){
   const harnesses=promptDeliveryHarnesses()
+  // A harness plus its launch profiles, so "Claude" and "Claude (plan)" sit together
+  // rather than in a separate list where the relationship is lost.
+  const profilesFor=(backend:string)=>profiles.filter(profile=>profile.backend===backend)
+  // The bare harness entry is not "no profile" - it is "however this Project starts
+  // this harness", which is the Project default when one is set. Saying so on the
+  // entry itself is the only place a reader finds out; the alternative is a menu
+  // where two entries silently do the same thing.
+  const defaultProfileLabel=(backend:string)=>{
+    const selected=project.effective_options?.agent_profile_ids?.[backend]
+    if(!selected)return ''
+    return profiles.find(profile=>profile.id===selected)?.label||selected
+  }
   const launchBackends=['shell',...harnesses.map(harness=>harness.name)]
   const preferred=project.effective_options?.backend||project.default_backend||harnesses[0]?.name||'shell'
   const [catalog,setCatalog]=useState<ProjectActionCatalog|null>(null)
@@ -152,7 +167,10 @@ export function ProjectRunMenu({project,anchor,onClose,onLaunch,onCustom,onSessi
         <div><button type="button" disabled={!!busy} onClick={()=>setWorktreeOpen(false)}>Back</button><button class="primary" type="submit" disabled={!!busy}>{busy?'Creating…':'Create and start'}</button></div>
       </form>:<>
       <div class="run-menu-section"><small>NEW SESSION</small>
-        {harnesses.map(harness=><button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span aria-hidden="true">▶</span><div><strong>{harness.display_name}</strong></div></button>)}
+        {harnesses.map(harness=><Fragment key={harness.name}>
+          <button role="menuitem" aria-label={`Start ${harness.display_name} session`} disabled={!!busy} onClick={()=>onLaunch(harness.name)}><span aria-hidden="true">▶</span><div><strong>{harness.display_name}</strong>{defaultProfileLabel(harness.name)&&<em>{defaultProfileLabel(harness.name)}</em>}</div></button>
+          {profilesFor(harness.name).map(profile=><button role="menuitem" key={profile.id} aria-label={`Start ${harness.display_name} session using ${profile.label}`} disabled={!!busy} title={profile.args.join(' ')} onClick={()=>onLaunch(harness.name,profile.id)}><span aria-hidden="true">▶</span><div><strong>{profile.label}</strong><em>{profile.args.join(' ')||harness.display_name}</em></div></button>)}
+        </Fragment>)}
         <button data-tutorial="run-choice-shell" role="menuitem" aria-label="Start shell session" disabled={!!busy} onClick={()=>onLaunch('shell')}><span aria-hidden="true">&gt;_</span><div><strong>Shell</strong></div></button>
         <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>
       </div>

@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS projects (
   position INTEGER NOT NULL, group_id TEXT, layout_json TEXT,
   default_backend TEXT, layout_revision INTEGER NOT NULL DEFAULT 0,
   default_profile_id TEXT, resource_open_mode TEXT,
-  git_compare_ref TEXT,
+  git_compare_ref TEXT, default_agent_profiles_json TEXT,
   sidebar_visible INTEGER NOT NULL DEFAULT 1,
   created_at REAL NOT NULL DEFAULT 0,
   last_used_at REAL NOT NULL DEFAULT 0
@@ -344,6 +344,24 @@ def _message_timestamp(value: Any) -> float | None:
     return None
 
 
+def _string_map(value: Any) -> dict[str, str]:
+    """A stored JSON object read back as a string map, or empty on anything else.
+
+    Fails to an empty map rather than raising: this column is read while listing
+    Projects at startup, and one row written by a newer build (or hand-edited) must
+    not stop the sidebar from loading.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(item) for key, item in parsed.items() if isinstance(item, str)}
+
+
 def _tune_connection(db: sqlite3.Connection) -> None:
     """Apply per-connection SQLite pragmas that bound write-latency and cache cost.
 
@@ -568,6 +586,13 @@ class HistoryIndex:
 
         if "git_compare_ref" not in project_columns:
             self._db.execute("ALTER TABLE projects ADD COLUMN git_compare_ref TEXT")
+        if "default_agent_profiles_json" not in project_columns:
+            # One column rather than one per harness: the set of harnesses is a
+            # registry, and a schema that had to change whenever a harness was added
+            # would make adding one a database migration.
+            self._db.execute(
+                "ALTER TABLE projects ADD COLUMN default_agent_profiles_json TEXT"
+            )
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_history_agent_project "
             "ON history(agent_visible,project_id,spawned_at DESC)"
@@ -832,6 +857,7 @@ class HistoryIndex:
                     default_backend=row["default_backend"],
                     layout_revision=row["layout_revision"],
                     default_profile_id=row["default_profile_id"],
+                    default_agent_profiles=_string_map(row["default_agent_profiles_json"]),
                     git_compare_ref=row["git_compare_ref"],
                     resource_open_mode=row["resource_open_mode"],
                     sidebar_visible=bool(row["sidebar_visible"]),
@@ -869,7 +895,8 @@ class HistoryIndex:
             self._db.execute(
                 "INSERT INTO projects(id,name,root,position,group_id,layout_json,default_backend,"
                 "layout_revision,default_profile_id,resource_open_mode,sidebar_visible,"
-                "created_at,last_used_at,git_compare_ref) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "created_at,last_used_at,git_compare_ref,default_agent_profiles_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,"
                 "position=excluded.position,group_id=excluded.group_id,"
                 "layout_json=excluded.layout_json,default_backend=excluded.default_backend,"
@@ -878,7 +905,8 @@ class HistoryIndex:
                 "resource_open_mode=excluded.resource_open_mode,"
                 "sidebar_visible=excluded.sidebar_visible,created_at=excluded.created_at,"
                 "last_used_at=excluded.last_used_at,"
-                "git_compare_ref=excluded.git_compare_ref",
+                "git_compare_ref=excluded.git_compare_ref,"
+                "default_agent_profiles_json=excluded.default_agent_profiles_json",
                 (
                     project.id,
                     project.name,
@@ -894,6 +922,9 @@ class HistoryIndex:
                     project.created_at,
                     project.last_used_at,
                     project.git_compare_ref,
+                    json.dumps(project.default_agent_profiles)
+                    if project.default_agent_profiles
+                    else None,
                 ),
             )
             self._db.commit()

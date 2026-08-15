@@ -541,12 +541,12 @@ def test_only_a_shell_reports_a_human_breakpoint() -> None:
 
 
 def test_a_shell_profile_reports_the_human_breakpoint(tmp_path: Path) -> None:
-    from swe_mux.config import Config, ShellProfile
+    from swe_mux.config import Config, LaunchProfile
     from swe_mux.profiles import resolve_profile
 
     executable = tmp_path / "pwsh.exe"
     executable.write_bytes(b"fixture")
-    profile = ShellProfile("plain", "Plain", str(executable), ["-NoLogo"])
+    profile = LaunchProfile("plain", "Plain", str(executable), ["-NoLogo"])
     config = Config(shell_profiles=[profile], default_shell_profile=profile.id)
     resolved = resolve_profile(config, profile.id, tmp_path)
     assert "breakpoint-osc133" in resolved.capabilities

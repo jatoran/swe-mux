@@ -291,8 +291,6 @@ class SpawnRequest:
             raise ValueError({"argv": "must be an array of strings"})
         if backend and backend != "shell" and not is_agent_harness(backend):
             raise ValueError({"backend": "must be shell or a registered agent"})
-        if profile and is_agent_harness(backend):
-            raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
         if profile and executable:
             raise ValueError({"executable": "cannot be combined with profile_id"})
         if executable is not None and not str(executable).strip():

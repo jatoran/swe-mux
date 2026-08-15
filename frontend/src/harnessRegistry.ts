@@ -69,6 +69,11 @@ export interface HarnessDescriptor {
   cli_name?: string
   /** Argv tokens preceding a conversation id when resuming. */
   resume_argv?: string[]
+  /** Argv the adapter builds for itself, which a launch profile may not set.
+   *  An entry ending in `=` or `.` matches by prefix. Optional because a browser
+   *  may be older than the daemon; absent means "no hint", never "nothing is
+   *  reserved" - the daemon is the one that refuses. */
+  reserved_launch_args?: string[]
   /** What a user types to invoke an authored skill (`/`, `$`, `/skill:`). */
   skill_invocation_prefix?: string
   capabilities: HarnessCapabilities

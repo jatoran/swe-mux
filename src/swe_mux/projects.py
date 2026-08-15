@@ -230,6 +230,13 @@ class ProjectManager:
             changes["layout"] = normalize_layout(changes["layout"])
         if "sidebar_visible" in changes:
             changes["sidebar_visible"] = bool(changes["sidebar_visible"])
+        selections = changes.get("default_agent_profiles")
+        if isinstance(selections, dict):
+            # An empty value clears the selection for that harness rather than
+            # storing a blank id that later reads as "a profile called ''".
+            changes["default_agent_profiles"] = {
+                str(key): str(value) for key, value in selections.items() if str(value).strip()
+            }
         for key in (
             "name",
             "root",
@@ -237,6 +244,7 @@ class ProjectManager:
             "layout",
             "default_backend",
             "default_profile_id",
+            "default_agent_profiles",
             "git_compare_ref",
             "resource_open_mode",
             "sidebar_visible",

@@ -27,6 +27,7 @@ PROJECT_CONFIG_VERSION = 1
 LEGACY_AUTOMATION_IDS = frozenset({"project_card"})
 PROJECT_CONFIG_FIELDS = {
     "default_shell_profile",
+    "default_agent_profiles",
     "preferred_backend",
     "resource_open_mode",
     "prompt_library_scope",
@@ -962,6 +963,25 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError(f"unknown project fields: {', '.join(unknown)}")
     if "default_shell_profile" in parsed and not isinstance(parsed["default_shell_profile"], str):
         raise ValueError("default_shell_profile must be a string")
+    if "default_agent_profiles" in parsed:
+        # A *selection*, never a definition. The committed file may name a launch
+        # profile the user defined locally; it may not carry argv of its own. Argv
+        # for an agent CLI is an authority field (`--dangerously-skip-permissions`
+        # lives there), so repository-supplied argv would be a real escalation while
+        # naming a locally-authored profile is the same kind of statement
+        # `preferred_backend` already makes.
+        agent_profiles = parsed["default_agent_profiles"]
+        if not isinstance(agent_profiles, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in agent_profiles.items()
+        ):
+            raise ValueError("default_agent_profiles must be a table of backend to profile id")
+        unknown_backends = sorted(key for key in agent_profiles if not is_agent_harness(key))
+        if unknown_backends:
+            raise ValueError(
+                f"default_agent_profiles names unregistered harnesses: "
+                f"{', '.join(unknown_backends)}"
+            )
     preferred_backend = parsed.get("preferred_backend")
     if (
         preferred_backend is not None
@@ -1042,6 +1062,12 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
             "notification_sounds_enabled = "
             + ("true" if values["notification_sounds_enabled"] else "false")
         )
+    if agent_profiles := values.get("default_agent_profiles"):
+        pairs = ", ".join(
+            f"{json.dumps(str(key))} = {json.dumps(str(value))}"
+            for key, value in sorted(agent_profiles.items())
+        )
+        lines.append(f"default_agent_profiles = {{ {pairs} }}")
     if patterns := values.get("ignore_patterns"):
         encoded = ", ".join(json.dumps(str(pattern)) for pattern in patterns)
         lines.append(f"ignore_patterns = [{encoded}]")

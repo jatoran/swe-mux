@@ -57,7 +57,7 @@
 - Remote access and browser boundary: `features/remote-access.md`
 - Windows desktop and tray lifecycle: `features/desktop-shell.md`
 - Browser UI: `features/ui.md`
-- Shell profiles: `features/shell-profiles.md`
+- Launch profiles: `features/launch-profiles.md`
 - Provider accounts: `features/provider-accounts.md`
 - Usage analytics: `features/usage.md`
 - Read aloud and hands-free conversation: `features/voice.md`

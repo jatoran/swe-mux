@@ -9,7 +9,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from swe_mux.config import Config, ShellProfile
+from swe_mux.config import Config, LaunchProfile
 from swe_mux.project_actions import (
     ActionStep,
     ProjectActionService,
@@ -120,7 +120,7 @@ def test_action_spawn_carries_cwd_and_runs_no_swe_mux_binary(
     config = Config(
         data_dir=tmp_path / "data",
         default_shell_profile="test",
-        shell_profiles=[ShellProfile("test", "Test", "pwsh.exe", ["-NoLogo"])],
+        shell_profiles=[LaunchProfile("test", "Test", "pwsh.exe", ["-NoLogo"])],
     )
 
     body = action_spawn_body(step, project_id="project-a", config=config, profile_id="test")
@@ -218,7 +218,7 @@ def test_shell_task_args_reach_the_spawned_command_line(tmp_path: Path) -> None:
     config = Config(
         data_dir=tmp_path / "data",
         default_shell_profile="test",
-        shell_profiles=[ShellProfile("test", "Test", "pwsh.exe", ["-NoLogo"])],
+        shell_profiles=[LaunchProfile("test", "Test", "pwsh.exe", ["-NoLogo"])],
     )
     body = action_spawn_body(step, project_id="project-a", config=config, profile_id="test")
     assert body["cwd"] == str(tmp_path / "project")
