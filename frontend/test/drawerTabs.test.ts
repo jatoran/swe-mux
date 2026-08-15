@@ -33,8 +33,8 @@ test('navigation sidebar commands target the active responsive presentation',()=
 })
 
 test('session surfaces lead, then Project surfaces, then application surfaces', () => {
-  // Order is the argument for the drawer existing: clipboard, session commands, prompts
-  // and the prompt queue are all "text into the focused terminal" and belong together.
+  // Order is the argument for the drawer existing: clipboard, Actions, and the prompt
+  // queue are all "text into the focused terminal" and belong together.
   // Files and Notes are the second group - project-scoped indexes that open a document
   // into a pane instead of typing into one. Notifications is neither, and stays last.
   // Git closes the Project-scoped block: it reports on the repository behind the Project
@@ -43,8 +43,8 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   // reads that session back instead of writing into it. Processes closes the Project block
   // for the same shape of reason as Git: Project-scoped, reports rather than opens, and is
   // the watch half of a surface whose acting half stays modal.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent'])
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'timeline', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'timeline', 'agent'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git', 'processes'])
   // Alerts is the only app-scoped tab. The fleet queue is app-scoped too but is a modal:
   // it has no send button, so it needs no terminal beside it, and a second queue-shaped
@@ -60,7 +60,7 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   const labels = DRAWER_TABS.map(tab => tab.label)
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
   assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
-    'Clipboard History', 'Commands', 'Prompt Library', 'Prompt Queue', 'Transcript', 'Scan Timeline', 'Agent Environment',
+    'Clipboard History', 'Actions', 'Prompt Queue', 'Transcript', 'Scan Timeline', 'Agent Environment',
     'File Explorer', 'Notes', 'Instructions & Memory', 'Git', 'Processes', 'Alerts',
   ])
   for (const tab of DRAWER_TABS) {
@@ -73,7 +73,7 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
 })
 
 test('registry lookup falls back safely for an unknown tab', () => {
-  assert.equal(drawerTab('prompts').label, 'Prompts')
+  assert.equal(drawerTab('actions').label, 'Actions')
   assert.equal(drawerTab('nope' as never).id, 'clipboard')
 })
 

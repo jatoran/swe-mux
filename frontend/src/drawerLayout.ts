@@ -44,8 +44,12 @@ const registeredIds = (): DrawerTabId[] => DRAWER_TABS.map(tab => tab.id)
 const nodeId = (kind: 'stack' | 'split'): string => `drawer-${kind}-${browserUuid().slice(0, 12)}`
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-const isTabId = (value: unknown): value is DrawerTabId =>
-  typeof value === 'string' && DRAWER_TABS.some(tab => tab.id === value)
+const migratedTabId = (value: unknown): DrawerTabId | null => {
+  if (value === 'commands' || value === 'prompts') return 'actions'
+  return typeof value === 'string' && DRAWER_TABS.some(tab => tab.id === value)
+    ? value as DrawerTabId
+    : null
+}
 
 export function clampDrawerRatio(value: number): number {
   if (!Number.isFinite(value)) return 0.5
@@ -68,7 +72,10 @@ function rawTabs(value: unknown, limit = 10000): DrawerTabId[] {
     const current = pending.pop()
     if (!isRecord(current)) continue
     if (current.type === 'stack' && Array.isArray(current.tabs)) {
-      for (const tab of current.tabs) if (isTabId(tab) && !result.includes(tab)) result.push(tab)
+      for (const value of current.tabs) {
+        const tab = migratedTabId(value)
+        if (tab && !result.includes(tab)) result.push(tab)
+      }
     } else if (current.type === 'split') {
       pending.push(current.second, current.first)
     } else if ('root' in current) {
@@ -108,8 +115,9 @@ function normalizeNode(
   if (value.type === 'stack') {
     const tabs: DrawerTabId[] = []
     if (Array.isArray(value.tabs)) {
-      for (const tab of value.tabs) {
-        if (!isTabId(tab) || context.seenTabs.has(tab)) continue
+      for (const rawTab of value.tabs) {
+        const tab = migratedTabId(rawTab)
+        if (!tab || context.seenTabs.has(tab)) continue
         context.seenTabs.add(tab)
         tabs.push(tab)
       }
@@ -227,17 +235,17 @@ export function normalizeDrawerProjectPresentation(
 ): DrawerProjectPresentation {
   const record = isRecord(value) ? value : {}
   const selectedValue = isRecord(record.selected_tabs) ? record.selected_tabs : {}
-  const focusedCandidate = isTabId(record.focused_tab) ? record.focused_tab : fallbackFocused
+  const focusedCandidate = migratedTabId(record.focused_tab) ?? fallbackFocused
   const focused = focusedCandidate && drawerStackForTab(layout, focusedCandidate)
     ? focusedCandidate
     : drawerTabs(layout)[0]
   const focusedStack = drawerStackForTab(layout, focused)
   const selected: Record<string, DrawerTabId> = {}
   for (const stack of drawerStacks(layout)) {
-    const stored = selectedValue[stack.id]
+    const stored = migratedTabId(selectedValue[stack.id])
     selected[stack.id] = stack.id === focusedStack?.id
       ? focused
-      : isTabId(stored) && stack.tabs.includes(stored) ? stored : stack.tabs[0]
+      : stored && stack.tabs.includes(stored) ? stored : stack.tabs[0]
   }
   return {
     selected_tabs: selected,
@@ -301,7 +309,7 @@ export function migrateDrawerProjectPresentations(
   if (isRecord(legacy)) {
     for (const [projectId, state] of Object.entries(legacy)) {
       if (!projectId || !isRecord(state)) continue
-      const tab = isTabId(state.tab) ? state.tab : drawerTabs(layout)[0]
+      const tab = migratedTabId(state.tab) ?? drawerTabs(layout)[0]
       result[projectId] = normalizeDrawerProjectPresentation({
         focused_tab: tab,
         desktop_expanded: state.desktopExpanded === true,
@@ -309,12 +317,13 @@ export function migrateDrawerProjectPresentations(
       }, layout, tab)
     }
   }
-  if (initiallyActiveProject && !result[initiallyActiveProject] && isTabId(legacyGlobalTab)) {
+  const migratedGlobalTab = migratedTabId(legacyGlobalTab)
+  if (initiallyActiveProject && !result[initiallyActiveProject] && migratedGlobalTab) {
     result[initiallyActiveProject] = normalizeDrawerProjectPresentation({
-      focused_tab: legacyGlobalTab,
+      focused_tab: migratedGlobalTab,
       desktop_expanded: false,
       selected_tabs: {},
-    }, layout, legacyGlobalTab)
+    }, layout, migratedGlobalTab)
   }
   return result
 }

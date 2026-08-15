@@ -74,7 +74,7 @@ export async function saveDomain(
   await api('PUT', `/api/settings/${profile}`, { [domain]: value })
 }
 
-// The command rail carries its *own* desktop/mobile split inside one blob
+// Actions carries its *own* desktop/mobile split inside one blob
 // (`RailConfig.layouts`), because the catalog of commands is shared while the
 // arrangements are not. Splitting the layouts across this store's two profile
 // buckets would make a save two writes, with a window where one device's layout
@@ -109,7 +109,7 @@ export async function clearProjectRail(projectId: string): Promise<void> {
 }
 
 // The file-tree expand state is deliberately shared across desktop and mobile —
-// the same projects are browsed from both — so like the command rail it lives in
+// the same projects are browsed from both, so like Actions it lives in
 // one canonical profile bucket rather than duplicated per device class. The blob
 // maps a project id to its expanded folder paths: {projectId: string[]}.
 const FILE_TREE_PROFILE: SettingsProfile = 'desktop'

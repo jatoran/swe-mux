@@ -146,7 +146,7 @@ Nothing compares any copy to `public_harness_registry()`.
 ### D2. The skill invocation prefix disagrees (verified)
 
 `agent_skills.py:263-268` is the measured authority: `/` for claude, pi, and opencode; `/skill:` for omp; `$` for codex.
-It ships that string to the client as `DiscoveredSkill.invocation`, and `CommandsTab.tsx:142` injects it verbatim, which is correct for every harness.
+It ships that string to the client as `DiscoveredSkill.invocation`, and the Skills section in `ActionsTab.tsx` injects it verbatim, which is correct for every harness.
 
 `commandRail.railPayload` (`commandRail.ts:521`) re-derives the prefix in TypeScript as `backend === 'codex' ? '$name' : '/name'`, with no omp case.
 A rail skill item authored as a bare name (which is what `RailEditor.tsx:579` prompts for) therefore types `/name` on an omp pane where the CLI expects `/skill:name`.

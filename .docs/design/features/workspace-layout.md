@@ -178,9 +178,9 @@ PaneLeaf = terminal | note | preview | history | queue
   and the swipe that toggles a panel are the same motion over the same pixels, so only the drag
   knows which one is happening. Claiming at the threshold rather than at pointer-down keeps a
   swipe that merely *starts* on a draggable tab working. See `ui.md` § touch gestures.
-- The command-rail editor (`ui.md` § command rail) reuses this contract with two deliberate departures, both forced by reparenting.
+- The standalone Configure Actions editor (`ui.md` § Action rail) reuses this contract with two deliberate departures, both forced by reparenting.
   It captures the pointer on the **editor root** rather than on the dragged chip, because its live preview moves the chip between rows and a captured element removed from the document loses the pointer mid-drag.
-  It does drive Preact render state on every move, because the preview *is* the config a drop would commit; that is affordable only because the surface is a settings tab with a bounded number of chips, and it is not a licence to do the same on the workspace.
+  It does drive Preact render state on every move, because the preview *is* the config a drop would commit; that is affordable only because the modal has a bounded number of chips, and it is not a licence to do the same on the workspace.
   Everything else holds: 5px for pointers, the 325ms/8px hold for touch, one ghost, pointer-drag claim, and cancel on Escape/pointer-cancel/lost capture.
 - Do not reintroduce `draggable`/native Chromium drag handlers for these surfaces. Responsive
   layout changes can strand that native loop with a permanent grabbing cursor and frozen UI.

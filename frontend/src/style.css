@@ -869,7 +869,7 @@ body {
   .terminal-find { left:5px;right:5px;top:37px }
   .note-find { left:5px;right:5px }
   .terminal-find input,.note-find input { width:auto;min-width:0;flex:1 }
-  /* Reached from the command rail here, not the header, so it spans the pane. */
+  /* Reached from the Action rail here, not the header, so it spans the pane. */
   .note-outline { left:5px;right:5px;width:auto;max-height:min(56vh,380px) }
   .note-outline button { min-height:38px }
   /* Crumbs are the one tap target in a strip that otherwise passes touches through, so they
@@ -1628,6 +1628,7 @@ body {
 @media(hover:hover){.terminal-action-rail button.rail-danger:hover:not(:disabled){border-color:var(--red);color:var(--red)}}
 .terminal-action-rail button.rail-danger.confirming{border-color:var(--red);background:color-mix(in srgb,var(--red) 22%,var(--panel2));color:var(--red)}
 .drawer-grid button.confirming{border-color:var(--red);color:var(--red)}
+.action-editor-layer{z-index:82}.action-editor-modal{width:min(1180px,calc(100vw - 24px));height:min(860px,calc(100dvh - 24px));display:grid;grid-template-rows:auto minmax(0,1fr) auto}.action-editor-body{min-height:0;overflow:auto;padding:14px 18px}.action-editor-body>.commandrail-settings>h3{margin-top:0}
 .terminal-action-rail button:disabled{opacity:.38;cursor:not-allowed}.terminal-action-rail span{min-width:0;max-width:220px;margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 /* Jump-to-latest. Only rendered while the viewport is off the tail, and anchored
    above the action rail so it never covers the newest line it points at. */
@@ -1678,7 +1679,7 @@ body {
   .app-shell{height:var(--app-height,100dvh);min-height:0;overflow:hidden}
   /* The soft keyboard overlays the layout viewport instead of resizing it, so nothing here
      reflows and every terminal keeps its grid and its PTY size. What is left is that the
-     bottom of the terminal — the agent composer and the command rail — sits behind the
+     bottom of the terminal, the agent composer and the Action rail, sits behind the
      keyboard, so the terminal *surface* slides up by exactly what the keyboard covers.
      The surface and nothing above it: the pane's own header row and the tab rail are
      navigation, not content, and sliding the whole workspace took them off the top of the
@@ -1696,7 +1697,7 @@ body {
      the keyboard to slide out from under it: the grid was sized to the space above the
      keyboard in the first place, the strip below is dead space the keyboard covers, and
      the whole conversation stays on screen. Held back at the *surface*, not the host, so
-     the command rail rides up with the terminal and stays next to it rather than being
+     the Action rail rides up with the terminal and stays next to it rather than being
      stranded at the bottom of the pane behind the keyboard.
      `keyboardReserve.ts` owns when this is allowed. In one line: only while everything the
      harness has painted still fits in the smaller grid, so the resize that reaches the PTY
@@ -1721,7 +1722,7 @@ body {
      message and its reply land in the hidden region with no way to reach them — the alternate
      screen has no scrollback, so there is nothing for a scroll gesture to move.
      Pushing the host back down *inside* the already-slid surface reveals the grid's top while
-     the command rail and the chips stay where the slide put them, above the keyboard, so the
+     the Action rail and the chips stay where the slide put them, above the keyboard, so the
      control that got you here is still the control that takes you back. */
   /* A drag moves this continuously rather than flipping between the two ends, so the offset
      is a length the pane writes per pointer move and not a class. The button and the
@@ -2384,7 +2385,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-body{position:relative}
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
-.drawer-body-clipboard>.drawer-status,.drawer-body-commands>.drawer-status,.drawer-body-prompts>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status,.drawer-body-context>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-clipboard>.drawer-status,.drawer-body-actions>.actions-tab>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status,.drawer-body-context>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
 .drawer-body-context .agent-context-header>div>strong{display:none}
@@ -2651,6 +2652,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .skill-flag{padding:0 4px;border:1px solid var(--line);border-radius:2px;color:var(--muted);font-size:7px;font-weight:600;text-transform:uppercase}
 .skill-flag.warn{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));color:var(--amber)}
 .drawer-skill-note{margin:0;padding:8px 9px;color:var(--muted);font-size:8px;line-height:1.45}
+.actions-tab{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}.actions-section{border-bottom:1px solid var(--line)}.actions-section-header{position:sticky;top:24px;z-index:5;display:flex;align-items:stretch;min-height:34px;background:var(--panel2);border-bottom:1px solid transparent}.actions-section.expanded>.actions-section-header{border-bottom-color:var(--line)}.actions-section-toggle{flex:1 1 auto;min-width:0;display:grid;grid-template-columns:12px minmax(0,1fr);grid-template-areas:'caret title' 'caret detail';align-items:center;gap:0 4px;padding:5px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.actions-section-toggle>span{grid-area:caret;color:var(--muted)}.actions-section-toggle>strong{grid-area:title;font-size:9px;text-transform:uppercase;letter-spacing:.06em}.actions-section-toggle>small{grid-area:detail;color:var(--muted);font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions-section-action{flex:none;margin:5px 7px 5px 0;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}.actions-section-action:hover,.actions-section-action:focus-visible{border-color:var(--accent);color:var(--text)}.actions-section-body{min-width:0}.actions-section-body>.drawer-skills{border-top:0}.actions-section-body .drawer-skill-list,.actions-section-body>.clipboard-entries{overflow:visible}.actions-section-prompts .drawer-status{padding-left:9px}.actions-section-prompts .clipboard-entry-body{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:none;gap:2px;padding:8px 9px}.actions-section-prompts .clipboard-entry-body>span,.actions-section-prompts .clipboard-entry-body>small{grid-area:auto}.actions-section-prompts .prompt-template-excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:color-mix(in srgb,var(--text) 68%,var(--muted));line-height:1.35;white-space:normal}
 .agent-environment{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .agent-environment-header{flex:0 0 auto;min-height:28px;padding:4px 7px 4px calc(var(--drawer-panel-title-width) + 13px);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:var(--panel2)}
 .agent-environment-header>div{min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import type { ComponentChildren } from 'preact'
 import { railPayload, resolveRailRows, type RailBackend, type RailItem } from './commandRail'
 import { activatePromptRailItem } from './promptRail'
 import { currentProfile, loadRailConfig } from './deviceSettings'
@@ -9,8 +10,12 @@ import {
 } from './skills'
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
+import { PromptsTab, type PromptsTabProps } from './PromptsTab'
 
-// The command rail's long tail, as a grid, plus the agent's own skills.
+// The Actions drawer combines three catalogs that can act on the focused session:
+// the configured Drawer half of the action layout, the live skill inventory, and
+// reusable prompt templates. They share a destination, not an identity, so each
+// remains an independently collapsible section.
 //
 // The strip under a terminal holds what you hammer (Esc, Enter, arrows, ^C); it is
 // horizontally scarce, which is why several built-ins used to ship switched off.
@@ -33,10 +38,45 @@ import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 // touch xterm directly. Every activation goes over the same `mux:terminal-action`
 // bus the pane already listens on, which keeps one owner for terminal writes.
 
-type Props = {
+type Props = Pick<PromptsTabProps, 'project' | 'backend' | 'onInsert' | 'onManage' | 'sessions' | 'onSend' | 'preselect'> & {
   session: Session | null
   onDone: () => void
-  onOpenSettings: () => void
+  onConfigureActions: () => void
+}
+
+type ActionSectionId = 'quick' | 'skills' | 'prompts'
+const ACTION_SECTION_KEY = 'mux.actions.sections.v1'
+
+function initialSectionState(): Record<ActionSectionId, boolean> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(ACTION_SECTION_KEY) || '{}') as Record<string, unknown>
+    return { quick: stored.quick !== false, skills: stored.skills !== false, prompts: stored.prompts !== false }
+  } catch {
+    return { quick: true, skills: true, prompts: true }
+  }
+}
+
+function ActionSection({ id, title, detail, expanded, onExpanded, action, children }: {
+  id: ActionSectionId
+  title: string
+  detail?: string
+  expanded: boolean
+  onExpanded: (id: ActionSectionId, expanded: boolean) => void
+  action?: { label: string; title: string; run: () => void }
+  children: ComponentChildren
+}) {
+  const bodyId = `actions-section-${id}`
+  return <section class={`actions-section actions-section-${id}${expanded ? ' expanded' : ''}`}>
+    <header class="actions-section-header">
+      <button type="button" class="actions-section-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={() => onExpanded(id, !expanded)}>
+        <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+        <strong>{title}</strong>
+        {detail && <small>{detail}</small>}
+      </button>
+      {action && <button type="button" class="actions-section-action" title={action.title} onClick={action.run}>{action.label}</button>}
+    </header>
+    {expanded && <div id={bodyId} class="actions-section-body">{children}</div>}
+  </section>
 }
 
 function dispatch(sessionId: string, action: string, detail: Record<string, unknown> = {}) {
@@ -56,7 +96,7 @@ const ACTION_LABELS: Record<string, string> = {
   endSession: 'End session',
 }
 
-export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
+export function ActionsTab({ session, onDone, onConfigureActions, project, backend: promptBackend, onInsert, onManage, sessions, onSend, preselect }: Props) {
   const [note, setNote] = useState('')
   // End session is the one item here that arms a confirm rather than acting, so this
   // tab mirrors the workspace's armed id (broadcast by App) to label the second click.
@@ -64,6 +104,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   const [inventory, setInventory] = useState<SkillInventory | null>(null)
   const [skillsError, setSkillsError] = useState('')
   const [query, setQuery] = useState('')
+  const [sections, setSections] = useState<Record<ActionSectionId, boolean>>(initialSectionState)
   const backend = (session?.backend || 'shell') as RailBackend
   const isAgent = isAgentBackend(backend)
   const rows = useMemo(
@@ -103,18 +144,24 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
     setInventory(null); setSkillsError(''); setQuery('')
     if (session && isAgent) void loadSkills(session.id)
   }, [session?.id, isAgent, session?.runtime_cwd, session?.run_cwd])
+  useEffect(() => {
+    if (!preselect?.key) return
+    setSections(current => current.prompts ? current : { ...current, prompts: true })
+  }, [preselect])
 
-  if (!session) {
-    return <>
-      <p class="drawer-status">no terminal focused</p>
-      <p class="drawer-empty">Session commands act on a terminal. Focus one and reopen this tab.</p>
-    </>
+  const setSectionExpanded = (id: ActionSectionId, expanded: boolean) => {
+    setSections(current => {
+      const next = { ...current, [id]: expanded }
+      try { localStorage.setItem(ACTION_SECTION_KEY, JSON.stringify(next)) } catch { /* device preference is best effort */ }
+      return next
+    })
   }
 
   const run = (item: RailItem) => {
     // Prompt templates are fetched from the library at click time, so this one path
     // is asynchronous: it closes the drawer only once the insert (or the hand-off to
-    // the Prompts tab for variable filling) has actually happened.
+    // the Prompt templates section for variable filling) has actually happened.
+    if (!session) return
     if (item.type === 'prompt') {
       void activatePromptRailItem(item, { sessionId: session.id, projectId: session.project_id })
         .then(problem => { if (problem) setNote(problem); else onDone() })
@@ -137,6 +184,7 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   }
 
   const insertSkill = (skill: AgentSkill) => {
+    if (!session) return
     // Inserted, never submitted: a skill invoked bare runs with no context, and the
     // point of typing it into a live composer is to say what it should act on.
     dispatch(session.id, 'insertText', { text: skill.invocation, submit: false })
@@ -145,14 +193,14 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
 
   // `clipboardHistory` opens this drawer, so running it from inside the drawer
   // would be a no-op; it is filtered out of every row entirely.
-  const visibleRows = rows
+  const visibleRows = session ? rows
     .map(row => ({
       ...row,
       entries: row.entries.filter(entry => entry.item.id !== 'clipboardHistory' && (entry.item.action !== 'attach' || isAgent)),
     }))
-    .filter(row => row.entries.length)
+    .filter(row => row.entries.length) : []
   const anyVisible = visibleRows.some(row => row.entries.length)
-  const actionDisabled = (item: RailItem) => item.action === 'attach' && (session.state === 'exited' || session.state === 'crashed')
+  const actionDisabled = (item: RailItem) => item.action === 'attach' && (session?.state === 'exited' || session?.state === 'crashed')
   const label = (item: RailItem) =>
     item.action === 'endSession' && killArmed ? 'Confirm ✓'
       : item.type === 'action' ? ACTION_LABELS[item.action || ''] || item.label : item.label
@@ -160,14 +208,23 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
   const groups = groupSkills(matched)
   const disclosure = inventoryNote(inventory)
 
-  return <>
-    <p class="drawer-status">{session.name || session.id} · {backend}</p>
-    {visibleRows.map(row => {
+  return <div class="actions-tab">
+    <p class="drawer-status">{session ? `${session.name || session.id} · ${backend}` : 'no terminal focused'}</p>
+    <ActionSection
+      id="quick"
+      title="Quick actions"
+      detail="configured Drawer layout"
+      expanded={sections.quick}
+      onExpanded={setSectionExpanded}
+      action={{ label: 'Configure', title: 'Configure Desktop and Mobile Action rail and Drawer layouts', run: onConfigureActions }}
+    >
+    {!session && <p class="drawer-empty">Quick actions target a terminal. Focus one to use this device’s configured Drawer layout.</p>}
+    {session && visibleRows.map(row => {
       const keys = row.entries.filter(entry => entry.item.type === 'key')
       const rest = row.entries.filter(entry => entry.item.type !== 'key')
       return <section class="drawer-command-row" key={row.id}>
         {row.label && <h4 class="drawer-command-row-label">{row.label}</h4>}
-        {rest.length > 0 && <div class="drawer-grid" role="group" aria-label={row.label ? `${row.label} commands` : 'Session commands'}>
+        {rest.length > 0 && <div class="drawer-grid" role="group" aria-label={row.label ? `${row.label} actions` : 'Session actions'}>
           {rest.map(({ item, key }) => <button key={key} class={item.action === 'endSession' && killArmed ? 'confirming' : undefined} disabled={actionDisabled(item)} title={actionDisabled(item)?'Files cannot be attached to an ended session':item.title || (item.type === 'prompt' ? 'Insert this prompt template into the composer' : railPayload(item, backend)) || item.label} onClick={() => run(item)}>
             <span>{label(item)}</span>
             {item.type !== 'action' && <small>{item.type === 'skill' ? 'skill' : item.type === 'slash' ? 'command' : item.type === 'prompt' ? 'prompt' : 'text'}{item.type !== 'prompt' && item.submit ? ' · sends' : ''}</small>}
@@ -178,8 +235,19 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
         </div>}
       </section>
     })}
-    {!anyVisible && <p class="drawer-empty">Nothing is assigned to this device’s panel for this session. Move rail items here from Settings → Command rail.</p>}
-    {isAgent && <section class="drawer-skills">
+    {session && !anyVisible && <p class="drawer-empty">Nothing is assigned to this device’s Drawer layout. Open Configure Actions to add some.</p>}
+    {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
+    </ActionSection>
+    <ActionSection
+      id="skills"
+      title="Skills"
+      detail={session && isAgent && inventory ? `${inventory.skills.length} discovered` : undefined}
+      expanded={sections.skills}
+      onExpanded={setSectionExpanded}
+    >
+    {!session && <p class="drawer-empty">Focus an agent session to read its skill inventory.</p>}
+    {session && !isAgent && <p class="drawer-empty">Shell sessions do not expose agent skills.</p>}
+    {session && isAgent && <section class="drawer-skills">
       <header>
         <h4>{harnessDisplayName(backend)} skills</h4>
         <span>{inventory ? `${matched.length}${query ? ` / ${inventory.skills.length}` : ''}` : ''}</span>
@@ -219,7 +287,26 @@ export function CommandsTab({ session, onDone, onOpenSettings }: Props) {
         {disclosure && <p class="drawer-skill-note">{disclosure}</p>}
       </div>
     </section>}
-    {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
-    <footer class="drawer-actions"><button onClick={onOpenSettings}>Edit command rail</button></footer>
-  </>
+    </ActionSection>
+    <ActionSection
+      id="prompts"
+      title="Prompt templates"
+      detail="saved reusable messages"
+      expanded={sections.prompts}
+      onExpanded={setSectionExpanded}
+      action={{ label: 'Manage', title: 'Open the full prompt template editor', run: onManage }}
+    >
+      <PromptsTab
+        project={project}
+        backend={promptBackend}
+        onInsert={onInsert}
+        onDone={onDone}
+        onManage={onManage}
+        showManage={false}
+        sessions={sessions}
+        onSend={onSend}
+        preselect={preselect}
+      />
+    </ActionSection>
+  </div>
 }

@@ -23,8 +23,9 @@ export function normalizeDrawerTabOrder(raw: unknown): DrawerTabId[] {
   const result: DrawerTabId[] = []
   if (Array.isArray(raw)) {
     for (const value of raw) {
-      if (typeof value !== 'string' || !known.has(value)) continue
-      const id = value as DrawerTabId
+      const migrated = value === 'commands' || value === 'prompts' ? 'actions' : value
+      if (typeof migrated !== 'string' || !known.has(migrated)) continue
+      const id = migrated as DrawerTabId
       if (!result.includes(id)) result.push(id)
     }
   }

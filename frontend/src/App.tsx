@@ -95,6 +95,7 @@ import { watchDevicePresence } from './devicePresence'
 import type { Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
+import { ActionEditorModal } from './ActionEditorModal'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
 import { applyTheme, configureCustomTheme, type CustomTheme, type ThemeName } from './theme'
@@ -512,6 +513,7 @@ export function App() {
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
   // user left off" - Settings remembers its own last tab, so an unqualified open must
   // stay unqualified rather than assert General.
@@ -617,8 +619,8 @@ export function App() {
     :normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayout)
   const drawerTabId=activeDrawerPresentation.focused_tab
   const clipboardOpen=mobileWorkspace?mobileDrawerOpen:(drawerResizeOpen??activeDrawerPresentation.desktop_expanded)
-  // A command-rail prompt button whose template has {{placeholders}} has nothing to
-  // inject yet, so it hands the template to the Prompts tab to be filled in.
+  // An Action rail prompt button whose template has {{placeholders}} has nothing to
+  // inject yet, so it hands the template to the Prompt templates section in Actions.
   const [promptPreselect,setPromptPreselect]=useState<{key:string}|undefined>()
   const [drawerTabDisplay,setDrawerTabDisplay]=useState<'icon'|'title'>('icon')
   const [utilityRailDisplay,setUtilityRailDisplay]=useState<'icon'|'title'>('icon')
@@ -778,7 +780,8 @@ export function App() {
       let updated=current
       if(projectId&&legacyDrawerTab.current&&!current[projectId]){
         const base=drawerProjectPresentationFor(current,projectId,drawerLayoutRef.current)
-        const legacy=DRAWER_TABS.some(tab=>tab.id===legacyDrawerTab.current)?legacyDrawerTab.current as DrawerTabId:null
+        const legacyValue=legacyDrawerTab.current==='commands'||legacyDrawerTab.current==='prompts'?'actions':legacyDrawerTab.current
+        const legacy=DRAWER_TABS.some(tab=>tab.id===legacyValue)?legacyValue as DrawerTabId:null
         if(legacy)updated=setDrawerProjectPresentation(current,projectId,activateDrawerTab(base,drawerLayoutRef.current,legacy),drawerLayoutRef.current)
       }
       try{
@@ -2035,6 +2038,7 @@ export function App() {
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
   const openSettings = (section?:string) => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
+  const openActionEditor = () => { setActionEditorOpen(true); setMainMenuOpen(false); setProjectMenu(null); setContextMenu(null) }
   const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
     ? target.worktree?worktreeFileResourceId(target.worktree,target.resourceId):''
     : noteResourceId(target.kind,target.resourceId)
@@ -2356,7 +2360,7 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [confirmKillId])
 
-  // The command rail's End session button lives inside a memoized pane that
+  // The Action rail's End session button lives inside a memoized pane that
   // deliberately ignores callback props, so it cannot read this state directly.
   // Broadcasting the armed id (arming and disarming alike) keeps its label in step
   // with the confirm window here instead of duplicating the timer over there.
@@ -3819,6 +3823,7 @@ export function App() {
     { id: 'history.openProject', label: 'Browse selected project’s session history', category: 'view', available: !!commandProject, disabledReason: 'No project selected', run: () => void showHistory(commandProject||null) },
     { id: 'project.files', label: 'Browse current project files', category: 'view', available: !!activeProject, disabledReason: 'No project selected', run: () => activeProject&&openProjectFiles(activeProject) },
     { id: 'settings.open', label: 'Open Settings', category: 'view', available: true, run: () => openSettings() },
+    { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => {setNetworkUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
@@ -4183,7 +4188,7 @@ export function App() {
     }
   })
 
-  // A rail prompt button with {{placeholders}} opens the Prompts tab on that template.
+  // An Action rail prompt button with {{placeholders}} opens Prompt templates on that template.
   // This deliberately opens rather than toggling (`showDrawerTab`): the click already
   // said "I want this template", so closing the drawer on it would be perverse.
   useEffect(() => {
@@ -4191,7 +4196,7 @@ export function App() {
       const detail = (event as CustomEvent<{ key?: string }>).detail
       if (!detail?.key) return
       setPromptPreselect({ key: detail.key })
-      openDrawerTab('prompts')
+      openDrawerTab('actions')
     }
     window.addEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
     return () => window.removeEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
@@ -4325,7 +4330,7 @@ export function App() {
     // Only the move listener has to be non-passive (it preventDefaults the gestures we own),
     // and a non-passive touchmove registered on the window makes Chrome route *every* touch
     // through the main thread before it may scroll — on a busy pane that is enough to eat the
-    // first drag on a horizontal scroller like the command rail. So it is attached only once
+    // first drag on a horizontal scroller like the Action rail. So it is attached only once
     // a touchstart claims the gesture (a listener added during touchstart dispatch still gets
     // cancelable moves) and dropped as soon as the sequence ends, which leaves drags inside
     // scrollers on the compositor fast path with no handler to wait for.
@@ -4641,7 +4646,7 @@ export function App() {
     // Read-aloud stays session-scoped in the pane header. The workspace microphone and
     // dictation draft are rendered once at App level, so changing panes only retargets them.
     // The playback strip (seek, clip nav, generate) floats directly beneath the header. It
-    // used to lead the bottom command rail, but that rail is a horizontal scroller the user
+    // used to lead the bottom Action rail, but that rail is a horizontal scroller the user
     // pages through to reach terminal keys, so the voice chips were both in the way there and
     // easy to lose off-screen. Grouped in the header they have a fixed home; the group is its
     // own scroller so a long chip set can never push the pane tools out of the bar.
@@ -4681,7 +4686,7 @@ export function App() {
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceOverlayNode}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={()=>openSettings('Command rail')} onConfigureWidth={()=>openSettings('Terminals')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onConfigureWidth={()=>openSettings('Terminals')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
@@ -5043,6 +5048,7 @@ export function App() {
         unread={notificationUnread}
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
+        onConfigureActions={()=>{if(mobileWorkspace)setClipboardOpen(false);openActionEditor()}}
         onManagePrompts={()=>{if(mobileWorkspace)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
         onOpenFile={path=>{
           // The drag ghost's pointer-up also fires a click on the row it started from.
@@ -5369,6 +5375,7 @@ export function App() {
       {/* Adding a Project lives in the registry and the empty-sidebar menu; this
           menu keeps only the surfaces that act across the whole app. */}
       <button onClick={() => runNamedCommand('project.create')}>Manage projects…</button>
+      <button onClick={() => runNamedCommand('actions.configure')}>Configure Actions…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
       <MenuGroup id="maintenance" label="Maintenance" openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
         <button onClick={() => runNamedCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
@@ -5443,6 +5450,8 @@ export function App() {
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
     {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+
+    {actionEditorOpen && <ActionEditorModal onClose={() => setActionEditorOpen(false)} />}
 
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 

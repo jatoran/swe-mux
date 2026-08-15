@@ -20,29 +20,29 @@ import { fetchPromptTemplates, promptItemSummary } from './promptRail'
 import type { PromptTemplate } from './PromptLibrary'
 import type { Project } from './types'
 
-// The command-rail configuration surface.
+// The Action configuration surface.
 //
 // Two things are being edited here and they are deliberately not the same thing:
 //
-//  * the **catalog** at the bottom — what commands exist, what they inject, which
+//  * the **catalog** at the bottom - what actions exist, what they inject, which
 //    backends they mean anything for;
 //  * the **layouts** above it — one per device class, each with rows for the strip
-//    under the terminal and for the drawer's Commands tab.
+//    under the terminal and for the drawer's Quick actions section.
 //
 // Desktop and mobile have genuinely separate arrangements, so there is no shared
 // row and no "applies to both" switch. What keeps two layouts manageable instead:
-// adding a command places it on *both* devices (a button you must remember to add
+// adding an action places it on *both* devices (a button you must remember to add
 // twice is a button that never reaches the phone), the catalog's placement badges
-// say at a glance where each command actually is, and a per-surface copy seeds one
+// say at a glance where each action actually is, and a per-surface copy seeds one
 // device from the other as a one-shot.
 //
 // Everything commits immediately, like the other device-settings domains, rather
 // than through the config draft's Save button.
 
-const SURFACE_LABEL: Record<RailSurface, string> = { strip: 'Rail', panel: 'Panel' }
+const SURFACE_LABEL: Record<RailSurface, string> = { strip: 'Rail', panel: 'Drawer' }
 const SURFACE_HINT: Record<RailSurface, string> = {
   strip: 'the scrolling strip under the terminal',
-  panel: 'the side panel’s Commands tab',
+  panel: 'Quick actions in the Actions drawer',
 }
 const DEVICE_LABEL: Record<RailDevice, string> = { desktop: 'Desktop', mobile: 'Mobile' }
 const OTHER_DEVICE: Record<RailDevice, RailDevice> = { desktop: 'mobile', mobile: 'desktop' }
@@ -403,18 +403,18 @@ export function RailEditor() {
         </div>
         <div class="rail-chips" data-rail-row={rowKey(device, surface, row.id)} role="group" aria-label={`${DEVICE_LABEL[device]} ${SURFACE_LABEL[surface]} row ${rowIndex + 1}`}>
           {row.items.map((itemId, index) => renderChip(device, surface, row.id, itemId, index))}
-          {!row.items.length && <span class="rail-chips-empty">drag commands here</span>}
+          {!row.items.length && <span class="rail-chips-empty">drag actions here</span>}
         </div>
       </article>)}
     </section>
   }
 
   return <section class="commandrail-settings" ref={rootRef}>
-    <h3>Command rail</h3>
+    <h3>Layouts and catalog</h3>
     <p class="rail-intro">
       Desktop and mobile each get their own arrangement: their own rows, their own order.
-      <b> Rail</b> is the strip under the terminal, <b>Panel</b> is the side panel’s Commands tab.
-      Drag a command between rows, or use the badges in <b>Commands</b> below to place it. A command
+      <b> Rail</b> is the strip under the terminal, <b>Drawer</b> is Quick actions in the Actions tab.
+      Drag an action between rows, or use the badges in <b>Action catalog</b> below to place it. An action
       in no row simply does not appear on that device.
     </p>
     <div class="rail-toolbar">
@@ -426,8 +426,8 @@ export function RailEditor() {
         type="button"
         onClick={resetScope}
         disabled={!!scope && !scopeCustom}
-        title={scope ? (scopeCustom ? 'Drop this project’s copy and inherit the global rail' : 'This project already uses the global rail') : 'Restore the built-in layout and drop custom commands'}
-      >{scope ? 'Reset to global rail' : 'Restore defaults'}</button>
+        title={scope ? (scopeCustom ? 'Drop this project’s copy and inherit the global layout' : 'This project already uses the global layout') : 'Restore the built-in layout and drop custom actions'}
+      >{scope ? 'Use global layout' : 'Restore defaults'}</button>
       {!twoColumn && <div class="rail-device-switch" role="group" aria-label="Layout to edit">
         {RAIL_DEVICES.map(name => <button
           type="button"
@@ -449,11 +449,11 @@ export function RailEditor() {
     </div>
 
     <section class="rail-catalog">
-      <h4>Commands</h4>
+      <h4>Action catalog</h4>
       <p class="rail-add-note">
-        Every command that exists, and where it is placed. The four badges are desktop rail, desktop panel,
-        mobile rail, mobile panel — click one to place the command there or take it off. Drag a row into a
-        layout above to put it somewhere exact. <b>cld</b>/<b>cdx</b>/<b>sh</b> limit a command to Claude,
+        Every available rail or Drawer action, and where it is placed. The four badges are desktop rail, desktop Drawer,
+        mobile rail, and mobile Drawer - click one to place the action there or take it off. Drag a row into a
+        layout to put it somewhere exact. <b>cld</b>/<b>cdx</b>/<b>sh</b> limit an action to Claude,
         Codex, or Shell sessions.
       </p>
       <div class="rail-catalog-list">
@@ -498,7 +498,7 @@ export function RailEditor() {
               {!isBuiltinRailId(item.id) && <button
                 type="button"
                 class="rail-del"
-                title="Delete this command and every button pointing at it"
+                title="Delete this action and every button pointing at it"
                 onPointerDown={event => event.stopPropagation()}
                 onClick={() => commit(deleteRailCatalogItem(config, item.id))}
               >×</button>}
@@ -515,7 +515,7 @@ export function RailEditor() {
 
 type AddDraft = { type: RailItemType; name: string; label: string; submit: boolean; surface: RailSurface }
 
-/** Adding a command places it into *both* device layouts. Divergence is then one
+/** Adding an action places it into *both* device layouts. Divergence is then one
  *  drag away, but it is a deliberate act rather than something you forget. */
 function RailAddForm({ config, prompts, backends, onAdd }: {
   config: RailConfig
@@ -563,7 +563,7 @@ function RailAddForm({ config, prompts, backends, onAdd }: {
   }
 
   return <details class="rail-add" open>
-    <summary>Add command</summary>
+    <summary>Add custom action</summary>
     <div class="rail-add-form">
       <label>Type<select value={draft.type} onChange={event => setDraft({ ...draft, type: event.currentTarget.value as RailItemType })}>
         <option value="skill">Skill</option>
@@ -579,19 +579,19 @@ function RailAddForm({ config, prompts, backends, onAdd }: {
         : <label>{draft.type === 'text' ? 'Text to insert' : 'Name'}<input value={draft.name} placeholder={draft.type === 'skill' ? 'commit' : draft.type === 'slash' ? 'new' : 'literal text'} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} /></label>}
       <label>Button label<input value={draft.label} placeholder="(auto)" onInput={event => setDraft({ ...draft, label: event.currentTarget.value })} /></label>
       <label>Place in<select value={draft.surface} onChange={event => setDraft({ ...draft, surface: event.currentTarget.value as RailSurface })}>
-        <option value="panel">Panel, on both devices</option>
+        <option value="panel">Drawer, on both devices</option>
         <option value="strip">Rail, on both devices</option>
       </select></label>
       {draft.type !== 'prompt' && <label class="check"><span>Submit with Enter</span><input type="checkbox" checked={draft.submit} onChange={event => setDraft({ ...draft, submit: event.currentTarget.checked })} /></label>}
-      <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add command</button>
+      <button class="primary" type="button" disabled={!draft.name.trim()} onClick={add}>Add action</button>
     </div>
     {draft.type === 'prompt' && <p class="rail-add-note">{prompts.length
-      ? 'A prompt button points at the template, so editing the template updates the button. It inserts without sending — templates with {{fields}} open the Prompts panel to be filled in first.'
-      : 'No prompt templates yet. Create one in the prompt library (side panel → Prompts → Manage templates), then it appears here.'}</p>}
+      ? 'A prompt button points at the template, so editing the template updates the button. It inserts without sending - templates with {{fields}} open Prompt templates in Actions to be filled in first.'
+      : 'No prompt templates yet. Create one from Actions → Prompt templates → Manage, then it appears here.'}</p>}
     <p class="rail-add-note">
-      New commands land at the end of the chosen surface on <b>both</b> devices; drag them where you want
+      New actions land at the end of the chosen surface on <b>both</b> devices; drag them where you want
       from there. Skills inject <code>/name</code> in Claude and <code>$name</code> in Codex; slash commands
-      inject <code>/name</code> in both. Built-in commands can be placed and filtered, but not edited.
+      inject <code>/name</code> in both. Built-in actions can be placed and filtered, but not edited.
     </p>
   </details>
 }

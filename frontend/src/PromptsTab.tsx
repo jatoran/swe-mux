@@ -4,7 +4,7 @@ import { api } from './api'
 import { agentTargetName, agentTargets } from './agentTargets'
 import { clampContextMenuLeft, fitScrollingMenuInViewport } from './menuPosition'
 import { subscribeToPromptLibraryChanges } from './promptLibraryEvents'
-import { renderPromptTemplate } from './promptTemplates'
+import { promptTemplateExcerpt, renderPromptTemplate } from './promptTemplates'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
 import type { PromptTemplate } from './PromptLibrary'
@@ -30,7 +30,7 @@ import { harnessDisplayName, promptDeliveryHarnesses } from './harnessRegistry'
 //    picked a recipient, which is the intent an Enter would otherwise ask for), and
 //    the Enter itself stays toggleable in the menu.
 
-type Props = {
+export type PromptsTabProps = {
   project?: Project
   backend?: ProjectBackend
   /** Insert into the focused terminal. 'editor' is never returned here — the caller
@@ -38,6 +38,8 @@ type Props = {
   onInsert: (text: string) => 'terminal' | 'editor' | 'none'
   onDone: () => void
   onManage: () => void
+  /** The Actions section owns the management affordance when embedded there. */
+  showManage?: boolean
   /** Every known session; the target menu filters to this Project's live agents. */
   sessions: Session[]
   /** Deliver to a chosen target. Resolves to '' on success, or to a message to show. */
@@ -55,7 +57,7 @@ type PendingSend = { key: string; target: SendToAgentTarget }
 
 const LONG_PRESS_MS = 550
 
-export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessions, onSend, preselect }: Props) {
+export function PromptsTab({ project, backend, onInsert, onDone, onManage, showManage = true, sessions, onSend, preselect }: PromptsTabProps) {
   const rowConfig = useSessionRowConfig()
   const [items, setItems] = useState<PromptTemplate[] | null>(null)
   const [query, setQuery] = useState('')
@@ -269,6 +271,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
         >
           <span>{item.favorite ? '★ ' : ''}{item.title}</span>
           <small>{item.scope}{item.tags.length ? ` · ${item.tags.join(', ')}` : ''}{item.variables.length ? ` · ${item.variables.length} field${item.variables.length === 1 ? '' : 's'}` : ''}</small>
+          <small class="prompt-template-excerpt">{promptTemplateExcerpt(item.body)}</small>
         </button>
       </div>)}
       {active && active.variables.length > 0 && <div class="drawer-fields">
@@ -285,7 +288,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, sessi
       {items && !filtered.length && <p class="drawer-empty">{items.length ? 'No template matches that filter.' : 'No prompt templates yet.'}</p>}
     </div>
     {note && <p class="clipboard-note" aria-live="polite">{note}</p>}
-    <footer class="drawer-actions"><button onClick={onManage}>Manage templates…</button></footer>
+    {showManage && <footer class="drawer-actions"><button onClick={onManage}>Manage templates…</button></footer>}
     {menu && <div
       class="context-menu prompt-target-menu"
       ref={el => { menuPanel.current = el; fitScrollingMenuInViewport(el) }}

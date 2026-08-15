@@ -24,7 +24,6 @@ import {
 } from './voiceCommandReference'
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
-import { RailEditor } from './RailEditor'
 import { allBackendNames, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import type { InitScript } from './projectCreate'
@@ -157,7 +156,6 @@ const settingsTabs = [
   {id:'agents',label:'Agents'},
   {id:'accounts',label:'Accounts'},
   {id:'input',label:'Input'},
-  {id:'commandrail',label:'Command rail'},
   {id:'usage',label:'Usage'},
   {id:'automation',label:'Automation'},
   {id:'notifications',label:'Alerts'},
@@ -172,7 +170,7 @@ type SettingsTab = typeof settingsTabs[number]['id']
 const liveTabEntries = new Map<SettingsTab,SettingsSearchEntry[]>()
 const tabForSection = (section:string):SettingsTab => ({
   Terminals:'terminals',
-  Agents:'agents',Accounts:'accounts',Input:'input','Command rail':'commandrail','Git and history':'workspace','Usage analytics':'usage',
+  Agents:'agents',Accounts:'accounts',Input:'input','Git and history':'workspace','Usage analytics':'usage',
   Notes:'notes',
   Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Alerts:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
 }[section] as SettingsTab|undefined)||'general'
@@ -846,8 +844,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           </div>
           <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>APPLICATION</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
         </section>}
-
-        {activeTab==='commandrail'&&<RailEditor/>}
 
         {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? Object.entries(usage.states).map(([provider,state])=>`${provider}: ${state.status}${state.error?` (${state.error})`:''}`).join(' · ') : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. Refreshes use the installed unified executable and never download code in the background.</p><details class="settings-advanced"><summary>Advanced command overrides</summary>{Object.entries(draft.usage_commands).map(([name,command])=><label>{harnessDisplayName(name)} command<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section>}
 

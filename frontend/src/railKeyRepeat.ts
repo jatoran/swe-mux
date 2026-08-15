@@ -1,4 +1,4 @@
-// Pointer hold behavior for the command rail's four arrow keys.
+// Pointer hold behavior for the Action rail's four arrow keys.
 //
 // Kept DOM-free so the repeat cadence and cancellation rules can be tested
 // deterministically. TerminalPane owns pointer capture and focus preservation;

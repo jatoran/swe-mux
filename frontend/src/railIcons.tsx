@@ -1,6 +1,6 @@
-// The app's icon-only controls: the command rail and the utility drawer's tabs.
+// The app's icon-only controls: the Action rail and the utility drawer's tabs.
 //
-// On the command rail, only the actions whose meaning survives without a word are drawn: attach,
+// On the Action rail, only the actions whose meaning survives without a word are drawn: attach,
 // copy, paste, and branch. Copy resume deliberately keeps its text label — "copy" alone cannot
 // distinguish it from Copy reply, and the two sit next to each other on the rail.
 //
@@ -73,8 +73,8 @@ export const ClipboardHistoryIcon = () => <svg {...stroke}>
   <path d="M12 11v2.2l1.5.9" />
 </svg>
 
-/** A terminal window. Replaces `⌘`, which is the macOS Command key on a Windows-first app. */
-export const CommandsIcon = () => <svg {...stroke}>
+/** A terminal window: every Action ultimately targets the focused terminal. */
+export const ActionsIcon = () => <svg {...stroke}>
   <rect x="2" y="4" width="20" height="16" rx="2" />
   <path d="m7 10 2.5 2.5L7 15" />
   <line x1="13" y1="15" x2="17" y2="15" />
@@ -197,8 +197,7 @@ export const NavPanelIcon = () => <svg {...stroke}>
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   clipboard: ClipboardHistoryIcon,
-  commands: CommandsIcon,
-  prompts: PromptsIcon,
+  actions: ActionsIcon,
   queue: QueueIcon,
   transcript: TranscriptIcon,
   timeline: TimelineIcon,

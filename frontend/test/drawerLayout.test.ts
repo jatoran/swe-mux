@@ -87,8 +87,22 @@ test('missing shipped tabs join their canonical predecessor without moving exist
   const layout = normalizeDrawerLayout({ type: 'stack', id: 'one', tabs: ['notifications', 'files', 'clipboard'] })
   assert.deepEqual(drawerTabs(layout), [
     'notifications', 'files', 'notes', 'context', 'git', 'processes',
-    'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent',
+    'clipboard', 'actions', 'queue', 'transcript', 'timeline', 'agent',
   ])
+})
+
+test('legacy Commands and Prompts tabs migrate to one Actions singleton', () => {
+  const layout = normalizeDrawerLayout({
+    version: 1,
+    root: {
+      type: 'split', id: 'legacy', direction: 'horizontal', ratio: 0.5,
+      first: { type: 'stack', id: 'left', tabs: ['files', 'prompts'] },
+      second: { type: 'stack', id: 'right', tabs: ['commands', 'clipboard'] },
+    },
+  })
+  assertSingletons(layout)
+  assert.equal(drawerTabs(layout).filter(tab => tab === 'actions').length, 1)
+  assert.equal(drawerStackForTab(layout, 'actions')?.id, 'left')
 })
 
 test('empty branches collapse and excess depth recovers to valid stacks', () => {
@@ -202,14 +216,21 @@ test('different Projects restore selections and expansion without changing the g
 test('v1 Project state migrates to v2 without duplicating the global layout', () => {
   const layout = defaultDrawerLayout()
   const map = migrateDrawerProjectPresentations(null, JSON.stringify({
-    p1: { tab: 'git', desktopExpanded: true }, p2: { tab: 'removed' },
+    p1: { tab: 'git', desktopExpanded: true }, p2: { tab: 'removed' }, p3: { tab: 'prompts' },
   }), layout)
   assert.equal(map.p1.focused_tab, 'git')
   assert.equal(map.p1.desktop_expanded, true)
   assert.equal(map.p2.focused_tab, 'clipboard')
+  assert.equal(map.p3.focused_tab, 'actions')
   const serialized = serializeDrawerProjectPresentations(map, layout)
   assert.deepEqual(parseDrawerProjectPresentations(serialized, layout), map)
   assert.doesNotMatch(serialized, /"root"|"direction"|"ratio"/)
+})
+
+test('the legacy global Commands selection migrates into Actions', () => {
+  const layout = defaultDrawerLayout()
+  const map = migrateDrawerProjectPresentations(null, null, layout, 'commands', 'active')
+  assert.equal(map.active.focused_tab, 'actions')
 })
 
 test('layout changes reconcile every Project deterministically and pruning is presentation-only', () => {
@@ -246,7 +267,7 @@ test('a deterministic mixed sequence preserves every registered tab after every 
   assertStep(moveDrawerTabToSplit(layout, 'notes', first.id, 'right'))
   assertStep(moveDrawerTabToSplit(layout, 'git', drawerStackForTab(layout, 'clipboard')!.id, 'bottom'))
   assertStep(moveDrawerTabToStack(layout, 'files', drawerStackForTab(layout, 'notes')!.id, 0))
-  assertStep(moveDrawerTabDirection(layout, 'commands', 'bottom'))
+  assertStep(moveDrawerTabDirection(layout, 'actions', 'bottom'))
   const stack = drawerStackForTab(layout, 'clipboard')!
   assertStep(reorderDrawerStack(layout, stack.id, [...stack.tabs].reverse()))
   if (layout.root.type === 'split') assertStep(setDrawerSplitRatio(layout, layout.root.id, 0.73))

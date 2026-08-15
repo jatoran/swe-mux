@@ -7,7 +7,7 @@ export type HarnessLevel = 'launchable' | 'identified' | 'observed' | 'hooked' |
  *
  * Every field here is owned by a `HarnessDescriptor` in `src/swe_mux/harness.py`
  * and travels in the registry payload. Nothing in the browser may re-derive one of
- * these from a harness name: that is how the command rail came to type `/name` on
+ * these from a harness name: that is how the Action rail came to type `/name` on
  * oh-my-pi while the daemon knew the CLI wanted `/skill:name`.
  *
  * Optional fields are ones a daemon older than this build may not send. Each

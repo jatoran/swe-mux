@@ -9,8 +9,15 @@ test('the default order is the registry order', () => {
 })
 
 test('a stored arrangement round-trips', () => {
-  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent', 'notifications']
+  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'actions', 'queue', 'transcript', 'timeline', 'agent', 'notifications']
   assert.deepEqual(normalizeDrawerTabOrder(custom), custom)
+})
+
+test('legacy Commands and Prompts positions migrate to one Actions tab', () => {
+  assert.deepEqual(
+    normalizeDrawerTabOrder(['files', 'prompts', 'clipboard', 'commands', 'queue']),
+    ['files', 'notes', 'context', 'git', 'processes', 'notifications', 'actions', 'clipboard', 'queue', 'transcript', 'timeline', 'agent'],
+  )
 })
 
 test('arranging never loses, hides, or duplicates a tab', () => {
@@ -34,22 +41,22 @@ test('arranging never loses, hides, or duplicates a tab', () => {
 test('a tab the stored order predates lands beside its default neighbour, not at the end', () => {
   // The order a user saved today has to survive a tab being added tomorrow. Appending would
   // put every new surface in the one position that reads as an afterthought.
-  const withoutPrompts = DEFAULT_DRAWER_TAB_ORDER.filter(id => id !== 'prompts')
-  assert.deepEqual(normalizeDrawerTabOrder(withoutPrompts), DEFAULT_DRAWER_TAB_ORDER)
+  const withoutActions = DEFAULT_DRAWER_TAB_ORDER.filter(id => id !== 'actions')
+  assert.deepEqual(normalizeDrawerTabOrder(withoutActions), DEFAULT_DRAWER_TAB_ORDER)
 
   // The case this rule was written for, now that it has happened: an order saved before
-  // the prompt queue moved into the drawer gains Queue beside Prompts, in the injection
+  // the prompt queue moved into the drawer gains Queue beside Actions, in the injection
   // block, rather than after Alerts.
   const beforeQueue = DEFAULT_DRAWER_TAB_ORDER.filter(id => id !== 'queue')
   assert.deepEqual(normalizeDrawerTabOrder(beforeQueue), DEFAULT_DRAWER_TAB_ORDER)
 
   // The merge is relative to where the predecessor sits in the *user's* arrangement, not
-  // where it sat in the default one: `notes` rejoins `files` and `commands`/`prompts` rejoin
+  // where it sat in the default one: `notes` rejoins `files` and Actions rejoins
   // `clipboard`, wherever the user moved those to.
   const custom = ['notifications', 'files', 'clipboard']
   assert.deepEqual(
     normalizeDrawerTabOrder(custom),
-    ['notifications', 'files', 'notes', 'context', 'git', 'processes', 'clipboard', 'commands', 'prompts', 'queue', 'transcript', 'timeline', 'agent'],
+    ['notifications', 'files', 'notes', 'context', 'git', 'processes', 'clipboard', 'actions', 'queue', 'transcript', 'timeline', 'agent'],
   )
 
   // A first tab the order predates goes to the front rather than after everything.

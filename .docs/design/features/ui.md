@@ -387,9 +387,8 @@ responsive controls.
 - Git and processes exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
 - Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
-  A caller that names a section still wins - Voice from the read-aloud chip, Accounts from the
-  account switcher, Command rail from a pane - because that caller knows where the user needs
-  to be; only an unqualified open restores the remembered tab.
+  A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.
+  Only an unqualified open restores the remembered tab.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.
@@ -426,9 +425,11 @@ responsive controls.
   config directory, export a sanitized copy, restore defaults — live in a General-tab block,
   because a footer repeats under every tab and so implied a per-tab scope none of them have
   (restoring defaults rewrites the entire saved config immediately, outside the draft/Save
-  cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones. Per-section
-  resets that genuinely are scoped — gesture defaults, shortcut defaults, the command rail —
-  stay with their own section.
+  cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
+  Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
+- Action layout is not a Settings section.
+  **Configure Actions** opens as a standalone modal from the main menu, command palette, Action rail gear, or the Quick actions section in the Actions drawer.
+  This surface owns the shared catalog, custom action creation, and all four Desktop/Mobile Rail/Drawer placements.
 - Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
@@ -835,7 +836,7 @@ responsive controls.
   The total is clamped at zero because the application clamps at its own tail: banking credit
   for scrolls that moved nothing would delay the next chip by exactly that credit.
 - The estimate is reset outright, rather than spent down, by the four events that make it
-  meaningless: taking the jump, the command rail's `^End`, a session switch in a reused pane,
+  meaningless: taking the jump, the Action rail's `^End`, a session switch in a reused pane,
   and an alternate-screen switch (the application that owned the tracked viewport starting or
   exiting, after which `offTail` answers for whatever replaced it).
 - Two things pull the estimate off the truth, in opposite directions, and the pane can observe
@@ -1023,41 +1024,35 @@ responsive controls.
 - Prose of unbounded length belongs on a floating surface of this kind, never in the header
   chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
   placed there can only ever show a truncated tail.
-- Every terminal has an in-flow action rail at the bottom of its pane on desktop and mobile,
-  below the terminal rather than over it. It carries a keyboard toggle plus terminal-key
-  buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+- Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
+  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
   Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout and the settings gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into settings.
-  On narrow/coarse Claude and Codex panes, the configurable Enter item is
-  removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate
-  grid column. The end-cap draws a right-arrow icon rather than the word: it is the one control on
-  the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back
-  to the scrolling keys. It keeps its 44px tap height and its accessible name; only the width fell. The four arrows are non-focusing pointer controls: press sends once, then a 350 ms
-  hold repeats every 75 ms until release or cancellation. Preventing pointer focus keeps an open
-  mobile keyboard open; keyboard and assistive activation remain one-shot. A touch beginning on
-  an arrow steers the terminal rather than horizontally scrolling the rail.
-  The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be
-  reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only. Shell and
-  desktop Enter behavior is unchanged.
-- On touch, an overflowing command rail owns horizontal pointer movement directly instead of
-  depending on native overflow-scroll arbitration inside the keyboard-translated terminal surface.
+  A status readout and the Configure Actions gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into the editor.
+  On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
+  The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
+  It keeps its 44px tap height and its accessible name; only the width fell.
+  The four arrows are non-focusing pointer controls: press sends once, then a 350 ms hold repeats every 75 ms until release or cancellation.
+  Preventing pointer focus keeps an open mobile keyboard open; keyboard and assistive activation remain one-shot.
+  A touch beginning on an arrow steers the terminal rather than horizontally scrolling the rail.
+  The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only.
+  Shell and desktop Enter behavior is unchanged.
+- On touch, an overflowing Action rail owns horizontal pointer movement directly instead of depending on native overflow-scroll arbitration inside the keyboard-translated terminal surface.
   The first drag therefore moves the rail even while the soft keyboard is open.
-  A modest drag gain compensates for the lost native fling without making nearby commands hard to
-  target.
-  The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the
-  resulting click; repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps
-  priority when a gesture starts on an arrow.
-- Activating a command-rail item preserves the mobile soft keyboard state it found.
+  A modest drag gain compensates for the lost native fling without making nearby actions hard to target.
+  The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the resulting click.
+  Repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps priority when a gesture starts on an arrow.
+- Activating an Action rail item preserves the mobile soft keyboard state it found.
   Keys, Send, Paste, prompt templates, skills, slash commands, and literal text execute with the keyboard down when it was down, while an already-open keyboard remains open.
   Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.
   A terminal typing tap, returning explicitly to Live mode, opening Draft, and the manual Paste fallback remain the paths that intentionally request a soft keyboard.
   The fixed Send end-cap carries the same focus-preserving press guard as the scrolling rail.
-- The rail configuration separates **what a command is** from **where it appears**, and the second half is per device.
-  The *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
-  The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` (under the terminal) and the `panel` (the utility drawer's Commands tab).
-  Desktop and mobile therefore have genuinely independent arrangements — their own rows, their own order, their own membership — and there is no shared row and no "applies to both" switch.
+- Action configuration separates **what an action is** from **where it appears**, and the second half is per device.
+  The shared *catalog* (`RailConfig.items`) holds identity and behaviour: label, what it injects, and the backends it means anything for.
+  The *layouts* (`RailConfig.layouts`) hold position: one layout per device class, each with rows for the `strip` under the terminal and the `panel` rendered as Quick actions in the Actions drawer.
+  The `strip` and `panel` property names remain internal storage terms for backward compatibility; user-facing controls call them Rail and Drawer.
+  Desktop and mobile therefore have genuinely independent arrangements: their own rows, order, and membership, with no shared row and no "applies to both" switch.
   A shared row would be the trap the split exists to avoid: the two devices want different rails, so anything that live-links them is something you would immediately disable.
 - Row membership subsumes three older mechanisms and replaces all of them.
   A per-item `platforms` tag, a per-item `strip`/`drawer`/`both` placement, and an `enabled` flag all said "not here" in different vocabularies; a command in no row on a device is now the single way to say it.
@@ -1066,9 +1061,9 @@ responsive controls.
 - The strip renders **one horizontal scroller per configured row**, so a row that overflows pages independently of the others.
   Each row costs the terminal one row of height, which is why the practical ceiling is around three; the editor treats that as a soft guide, not a data constraint.
   Row count comes from configuration and is fixed for the render, never measured and then adjusted, which keeps it clear of the geometry-echo resize loop.
-  The panel renders each row as an optionally captioned section, and within a section terminal keys still split into their own dense grid — a 44px key and a labelled command want different cell sizes.
+  The Drawer layout renders each row as an optionally captioned section, and within a section terminal keys still split into their own dense grid because a 44px key and a labelled action want different cell sizes.
 - An item id may appear in several rows and more than once within a row, so a rendered entry carries a `key` of its own (`rowId:index:itemId`) rather than reusing the item id.
-  Anything keyed by item id — render keys, focus, key-repeat — must key by the entry instead.
+  Anything keyed by item id, including render keys, focus, and key-repeat, must key by the entry instead.
 - Layouts always keep at least one row per surface, so the editor always has a drop target and a newly shipped built-in always has somewhere to land.
   Deleting the last row of a surface empties it instead of removing it.
   A built-in introduced after a config was saved is appended to the first row of its `defaultSurface` on both devices; cataloguing it without placing it would leave it permanently invisible to anyone with an existing layout.
@@ -1076,73 +1071,69 @@ responsive controls.
   The old list is resolved once for each device/surface combination and each result becomes a row, so an upgrade renders identically on both devices and only then diverges by hand.
   Legacy semantics are preserved through that resolution: `enabled: false` on an entry that predates `placement` meant "not on the strip", so it keeps rendering in the panel, while `enabled: false` alongside an explicit placement was a genuine hide and lands in no row.
   Saves predating the editing-helper cluster still receive the four helpers after Down and Attach at the end once.
-- Rail items come in six kinds: terminal `key`, built-in `action`, literal `text`, `slash`
-  command, `skill`, and `prompt`. A `prompt` item is a *pointer* at a prompt-library template
-  (`prompt-library.md`) — it stores the `scope:id` key, never the body, so the button always
-  injects the template's current text and cannot drift into a stale copy. It is the one item type
-  whose activation is asynchronous (the body is fetched on click) and the one that can never
-  submit, which is the library's own contract. Templates carrying `{{variables}}` have nothing to
-  inject yet, so the button opens the drawer's Prompts tab preselected with its fields expanded
-  rather than pasting a half-rendered body. Both hosts route through `promptRail.ts` and insert
-  over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
+- Action items come in six kinds: terminal `key`, built-in `action`, literal `text`, `slash` command, `skill`, and `prompt`.
+  A `prompt` item is a *pointer* at a prompt-library template (`prompt-library.md`).
+  It stores the `scope:id` key, never the body, so the button always injects the template's current text and cannot drift into a stale copy.
+  It is the one item type whose activation is asynchronous because the body is fetched on click, and the one that can never submit, which is the library's own contract.
+  Templates carrying `{{variables}}` have nothing to inject yet, so the button opens the Actions drawer with Prompt templates expanded and the template preselected rather than pasting a half-rendered body.
+  Both hosts route through `promptRail.ts` and insert over the `mux:terminal-action` bus, so the pane stays the single owner of terminal writes.
 - Talk exposes a deliberately smaller rail-derived command set through `railVoice.ts` when a live session is focused.
   Built-in keys and Paste require explicit `voicePhrases`; non-submitting configured agent skills and slash commands derive aliases from their names.
   Submitted custom commands require their own explicit voice phrases.
   Copy is the existing focused-terminal registry command because it is not a rail catalog item.
   Literal text and prompt macros are excluded, as are destructive and UI-only actions such as clear-input, Attach, keyboard mode, relaunch, and End session.
-  Only items placed on the current device's strip or Commands panel participate, and duplicate placements collapse to one spoken command.
+  Only items placed on the current device's Rail or Drawer layout participate, and duplicate placements collapse to one spoken command.
   The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
   Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
-- The command-rail editor (`RailEditor.tsx`) shows the two device layouts as columns above a catalog of every command.
+- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) shows the two device layouts as columns above the complete Action catalog.
+  It opens from the main menu, command palette, Action rail gear, and the Configure control in Quick actions rather than living inside Settings.
   Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
   Each column holds its two surfaces, each surface its rows, each row its draggable chips.
 - Four affordances are what keep two independent layouts manageable, and none of them is a shared row.
-  Adding a command places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone.
-  The catalog's four placement badges (desktop rail, desktop panel, mobile rail, mobile panel) are the index: they say at a glance that a command is on desktop and was never put on mobile, and clicking one places or unplaces it.
+  Adding a custom action places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone.
+  The catalog's four placement badges, Desktop Rail, Desktop Drawer, Mobile Rail, and Mobile Drawer, are the index.
+  They say at a glance that an action is on desktop and was never put on mobile, and clicking one places or unplaces it.
   A per-surface "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
   Dragging a catalog row into a layout places it exactly.
 - Chips drag within a row, between rows, between surfaces, and between device columns, on mouse and on touch.
-  Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers, a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the settings pane instead of dragging.
+  Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the modal instead of dragging.
   The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.
   Pointer capture is taken on the editor root, not on the chip: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
 - The drop index is measured against the row **without** the dragged chip.
-  That exclusion is what makes it a fixed point — re-measuring after the preview moves the chip gives the same answer, so a chip hovering over its own new home does not oscillate.
+  That exclusion is what makes it a fixed point: re-measuring after the preview moves the chip gives the same answer, so a chip hovering over its own new home does not oscillate.
   The hit test is two-dimensional because the editor wraps a row's chips over several visual lines; a horizontal-only comparison would put every drop on the second line into the middle of the first.
 - Keyboard placement is the equivalent path and the only one available without a pointer: arrows move a focused chip along its row and between rows, Delete unplaces it, and focus follows the chip so a run of presses keeps moving the same one.
-- Catalog rows are a name-first grid: the command name owns the elastic column and wraps rather than truncating, with type/payload preview beneath it and the toggles auto-sized on the right.
+- Catalog rows are a name-first grid: the action name owns the elastic column and wraps rather than truncating, with type/payload preview beneath it and the toggles auto-sized on the right.
   Placement badges are blue ("placed here") and the backend filter chips green ("this backend is allowed to see it"), because one accent across the whole set read as a single toggle set.
-  Phones keep two grid rows per command: name + delete, then badges and filters.
-- The Commands tab is session-scoped but renders outside the terminal pane, so it activates items
-  over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`,
-  `branch`, `relaunch`, `endSession`): the pane stays the single owner of terminal writes, so
-  broadcast, replay, and read/select mode keep applying. With no terminal focused the tab says so instead of rendering
-  dead buttons. It renders the `panel` surface of *this device's* layout, so its grouping and order are arranged independently of the desktop's. Keys inject
-  raw bytes on the normal input path. The built-in newline uses `ESC+CR`, the legacy sequence both
-  Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
-  The rail overflows on narrow panes and scrolls horizontally; it never wraps.
+  Phones keep two grid rows per action: name + delete, then badges and filters.
+- The **Actions** tab is session-scoped and contains three independently collapsible sections that start expanded: **Quick actions**, **Skills**, and **Prompt templates**.
+  Disclosure state is device-local and persists independently from the Action layout.
+  Quick actions renders the `panel` surface of *this device's* layout, so its grouping and order are independent of the other device class.
+  It is a configured overflow and favorites surface, not another catalog editor.
+  Skills and prompt templates may intentionally appear both in Quick actions and in their complete sections because one is the chosen shortcut layout and the others are browsable inventories.
+  The Configure control in the Quick actions header opens the standalone Configure Actions modal.
+  The Manage control in the Prompt templates header opens the full prompt-template editor.
+  Prompt rows include a bounded body excerpt so similar titles can be distinguished in the drawer.
+  Actions renders outside the terminal pane, so it activates items over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`, `branch`, `relaunch`, `endSession`).
+  The pane stays the single owner of terminal writes, so broadcast, replay, and read/select mode keep applying.
+  With no terminal focused, Quick actions and Skills explain what target is missing while Prompt templates remain browsable.
+  Keys inject raw bytes on the normal input path.
+  The built-in newline uses `ESC+CR`, the legacy sequence both Claude and Codex bind to composer newline; raw LF works in Claude but not Codex.
+  The Action rail overflows on narrow panes and scrolls horizontally; it never wraps.
   The scrollbar stays hidden: endpoint-aware gradient chevrons overlay the strip without taking layout space, appear only when content remains in their direction, page to a command boundary on click, and keep focused commands clear of the overlays.
   Touch drag, native horizontal trackpad input, and translated vertical mouse-wheel input remain direct scrolling paths.
-  Voice controls are not
-  here — they are in the pane header (`voice.md`), because the rail is a scroller the user pages
-  through and they kept scrolling out of reach.
-- Below the configured rail items, an agent session's Commands tab lists **the skills that
-  session's CLI can actually see** (`GET /sessions/{id}/skills`, `interfaces.md`) — the vendors'
-  own `SKILL.md` directories, not swe-mux prompt templates or rail items. These are *discovered*,
-  never configured here: the list is a window onto the CLI's state, so it groups by where each
-  skill comes from (project / global / plugins / bundled) rather than by anything the user
-  arranged, and a Rescan button refetches instead of a save button writing. Clicking inserts the
-  invocation without submitting, over the same bus — a skill invoked bare runs with no context,
-  and the point of typing it into a live composer is to say what it should act on.
-- Three things about that list are load-bearing, because a skill list that looks complete and is
-  not is worse than none. **Claude's built-in skills are compiled into the CLI binary** and cannot
-  be enumerated from disk (`/skills` is a TUI-only command), so the tab discloses that in place
-  rather than implying `/review` and `/security-review` do not exist. **A skill newer than the
-  running agent process is flagged `new`**: it is on disk, the CLI read its skills at startup, and
-  typing the invocation will not work until the agent is relaunched. **Codex's explicit-only
-  skills** (`policy.allow_implicit_invocation: false` in `agents/openai.yaml`) are flagged
-  `explicit` — real and invocable by name, but the model never reaches for one itself. Disabled
-  plugins, unreadable entries, and truncation are named in the same footer note; nothing is
-  dropped silently.
+  Voice controls are not here.
+  They are in the pane header (`voice.md`) because the rail is a scroller the user pages through and they kept scrolling out of reach.
+- The Skills section lists **the skills that the focused agent session's CLI can actually see** (`GET /sessions/{id}/skills`, `interfaces.md`).
+  These come from the vendors' own `SKILL.md` directories, not swe-mux prompt templates or Action items.
+  They are *discovered*, never configured here.
+  The list is a window onto the CLI's state, so it groups by where each skill comes from (project / global / plugins / bundled) rather than by anything the user arranged, and a Rescan button refetches instead of a save button writing.
+  Clicking inserts the invocation without submitting over the same bus because a skill invoked bare runs with no context, and the point of typing it into a live composer is to say what it should act on.
+- Three things about that list are load-bearing, because a skill list that looks complete and is not is worse than none.
+  **Claude's built-in skills are compiled into the CLI binary** and cannot be enumerated from disk (`/skills` is a TUI-only command), so the tab discloses that in place rather than implying `/review` and `/security-review` do not exist.
+  **A skill newer than the running agent process is flagged `new`**: it is on disk, the CLI read its skills at startup, and typing the invocation will not work until the agent is relaunched.
+  **Codex's explicit-only skills** (`policy.allow_implicit_invocation: false` in `agents/openai.yaml`) are flagged `explicit`: real and invocable by name, but the model never reaches for one itself.
+  Disabled plugins, unreadable entries, and truncation are named in the same footer note; nothing is dropped silently.
 - Skills are scoped per session, not per Project, because the CLI resolves repo skills from its
   **live cwd** — a session sitting in a worktree sees a different set than one in the primary
   checkout of the same repository, and the tab refetches when that cwd moves.
@@ -1211,7 +1202,7 @@ responsive controls.
   meaningful assistant text; provider control acknowledgements such as `No response requested.`
   never replace the last copyable reply.
 - Claude/Codex terminal bodies also accept OS file drops and copied-file paste, while the paperclip rail button supplies the same multi-file picker on desktop and mobile.
-  Attach is a built-in command-rail item, so it can be moved, filtered, placed in the Commands panel, or hidden.
+  Attach is a built-in Action item, so it can be moved, filtered, placed in Quick actions, or hidden.
   Upload status is reported in the rail.
   A general file inserts a quoted workspace-local path into the draft; a recognized image keeps the provider's native image reference.
   Neither path submits.
@@ -1219,42 +1210,37 @@ responsive controls.
 - Terminal copy is success-preserving: keyboard, menu, automatic selection, the action rail, and
   provider OSC 52 requests retain the exact text until a write succeeds. Blocked or insecure
   clipboard contexts open a prepared fallback automatically, leaving one explicit Copy tap.
-- Every successful terminal copy uses the same `Copied to clipboard` HUD on desktop and mobile instead of hiding acknowledgment in the command rail.
+- Every successful terminal copy uses the same `Copied to clipboard` HUD on desktop and mobile instead of hiding acknowledgment in the Action rail.
   The HUD is a polite live region anchored to the bottom-right safe area, carries no copied content, stays above modal layers, and never appears for a rejected clipboard write.
   `InteractionHud.tsx` owns its state and dismissal timer below the composition root, so copy and cut feedback cannot re-render terminals, agent chats, or Continuity editors and disturb an active selection or edit transaction.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Clipboard**, **Commands**, **Prompts**, **Queue**, **Transcript**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
+  The canonical default order is **Clipboard**, **Actions**, **Queue**, **Transcript**, **Timeline**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
-  The first
-  four are the same verb - text into the focused session - and Transcript reads the same session
-  back. Agent closes the session-scoped block with a passive view of the selected CLI environment.
-  Files and Notes are the **navigators**:
-  project-scoped indexes over documents rather than surfaces that type into one. Files opens what
-  you select into a pane; Notes can do that too but opens *into the drawer* by default, because
-  reading or adding to a note without leaving the session on screen is the whole point of it on a
-  phone. Context is the read-only inventory of root agent instructions and provider learned
-  memory; like the drawer's note editor it renders inside the drawer, and unlike it never opens a
-  pane and never writes. Git closes the Project-scoped block without joining the navigators:
-  it reads the repository behind the Project
-  (branches, worktrees, dirty/upstream state) and opens nothing into a pane — see `git.md` for
-  what it shows and the mutations it is allowed. **Processes** closes that block for the same
-  shape of reason: Project-scoped, reports rather than opens, and see below for the split it
-  represents. Notifications is neither, and sits last. Session history, usage, and automation
-  stay modal, as do the process *inspector* and the *fleet queue*: they are wide,
-  table-shaped surfaces that a ~380 px column serves badly, and none of them decides
-  anything that has to be read off a terminal.
-- The injection tabs share the verb but not the routing. Clipboard inserts land in the
-  last-focused surface, editor or terminal. **Prompts** inserts are terminals-only and its rows
-  additionally answer right-click / long-press with a target menu (a live agent session in this
-  Project, or a new Claude/Codex one) — see `prompt-library.md`. Text meant for an agent must not
-  be able to edit whichever note or file the user happened to open last.
-- **Queue** is the odd one of the four: it does not inject, it *stages* - text held for the
-  focused agent until a delivery is explicitly asked for (`features/prompt-queue.md`). It is
-  here rather than in a workspace tab or a modal because the decision it exists for ("is now a
-  safe moment to interrupt this agent") is read off the terminal, and only the docked column
-  leaves the terminal on screen.
+  Clipboard and Actions lead the session-scoped block because both can insert into the focused work surface, while Queue stages text for a focused agent and Transcript reads the same session back.
+  Timeline and Agent close the session-scoped block with passive views of the selected session and CLI environment.
+  Files and Notes are the **navigators**: Project-scoped indexes over documents rather than surfaces that type into one.
+  Files opens what you select into a pane.
+  Notes can do that too but opens *into the drawer* by default, because reading or adding to a note without leaving the session on screen is the whole point of it on a phone.
+  Context is the read-only inventory of root agent instructions and provider learned memory.
+  Like the drawer's note editor, it renders inside the drawer, and unlike it never opens a pane and never writes.
+  Git closes the Project-scoped block without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
+  See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
+  **Processes** closes that block for the same reason: it is Project-scoped and reports rather than opens.
+  Notifications is neither and sits last.
+  Session history, usage, and automation stay modal, as do the process *inspector* and the *fleet queue*.
+  They are wide, table-shaped surfaces that a ~380 px column serves badly, and none decides anything that has to be read off a terminal.
+- Actions replaces the former separate Commands and Prompts tabs.
+  Saved drawer layouts, orders, and selected tabs map either legacy id to one `actions` singleton on read, with the first encountered position winning so migration cannot duplicate a tab.
+  Existing `RailConfig` data is not rewritten; its `panel` layouts become the Quick actions section unchanged.
+- The injection surfaces share verbs but not routing.
+  Clipboard inserts land in the last-focused surface, editor or terminal.
+  Prompt-template inserts inside **Actions** are terminals-only, and their rows additionally answer right-click / long-press with a target menu for a live agent session in the current Project or a new Claude/Codex session.
+  See `prompt-library.md`.
+  Text meant for an agent must not be able to edit whichever note or file the user happened to open last.
+- **Queue** does not inject; it *stages* text held for the focused agent until delivery is explicitly requested (`features/prompt-queue.md`).
+  It is here rather than in a workspace tab or a modal because the decision it exists for, "is now a safe moment to interrupt this agent", is read off the terminal, and only the docked column leaves the terminal on screen.
   Queue remains strictly session-scoped.
   Its header carries a `fleet` control, labelled with the fleet-wide pending count, that opens the fleet queue.
 - The **fleet queue** is an application-scoped provenance and delivery-state view over queued messages from every Project and session, and is a **modal**, not a tab.
@@ -1618,7 +1604,7 @@ responsive controls.
   twitching. A visual viewport *larger* than the layout one (pinch-zoom out) clamps to zero
   rather than sliding the workspace off the bottom of the screen.
 - The composer stays reachable by sliding, not by resizing: `.terminal-surface` is translated up
-  by `--keyboard-inset` so its bottom edge — the agent composer and the command rail — sits
+  by `--keyboard-inset` so its bottom edge, the agent composer and the Action rail, sits
   exactly on top of the keyboard, while its height, and therefore the terminal grid inside it, is
   untouched. What is lost is the top of the terminal, which comes back when the keyboard closes.
   The translate is scoped to `.soft-keyboard-open` rather than applied as an always-present zero,

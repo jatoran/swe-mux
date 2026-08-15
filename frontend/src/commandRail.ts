@@ -1,4 +1,4 @@
-// Data model for the configurable terminal command rail.
+// Data model for configurable Actions across the terminal rail and utility drawer.
 //
 // Two halves, deliberately separate:
 //
@@ -7,7 +7,7 @@
 //    behaviour, nothing about position.
 //  * the **layouts** (`RailConfig.layouts`) say where commands *appear*. One
 //    layout per device class, each holding rows for two surfaces: the `strip`
-//    under the terminal and the `panel` (the utility drawer's Commands tab).
+//    under the terminal and the `panel` (Quick actions in the Actions drawer).
 //
 // Desktop and mobile therefore have genuinely independent arrangements: their
 // own rows, their own order, their own membership. A command in no row on a
@@ -19,7 +19,7 @@
 // a rendered entry therefore carries a `key` of its own rather than reusing the
 // item id.
 //
-// Rendering lives in TerminalPane (strip) and CommandsTab (panel), which own the
+// Rendering lives in TerminalPane (strip) and ActionsTab (panel), which own the
 // terminal handles and clipboard handlers. This module owns only the pure data
 // model, the built-in defaults, the resolve helpers, and the one-way migration
 // from the pre-layout format, so it all stays unit testable under the node
@@ -30,8 +30,8 @@ import { allBackendNames, isAgentBackend, skillInvocationPrefix } from './harnes
 
 /** Device classes with independent layouts. Matches `deviceSettings.currentProfile()`. */
 export type RailDevice = 'desktop' | 'mobile'
-/** The two regions a row can belong to: the strip under a terminal, or the
- *  utility drawer's Commands tab. Nothing is hidden by surface — placement in
+/** The two regions a row can belong to: the rail under a terminal, or Quick actions
+ *  in the utility drawer. Nothing is hidden by surface - placement in
  *  neither is what hides a command on that device. */
 export type RailSurface = 'strip' | 'panel'
 export type RailBackend = string

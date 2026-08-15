@@ -11,10 +11,10 @@
 //    never submits: the library's contract is that a template fills the composer
 //    and the human presses Enter, and a rail button must not weaken that.
 //  * has `{{variables}}` → there is nothing sensible to inject yet, so the button
-//    opens the drawer's Prompts tab with the template preselected and its fields
+//    opens Prompt templates in the Actions drawer with the template preselected and its fields
 //    expanded, which is the surface that already knows how to fill them.
 //
-// Both hosts (the strip in TerminalPane, the grid in CommandsTab) route through
+// Both hosts (the strip in TerminalPane, the Quick actions grid in Actions) route through
 // here, and both insert over the `mux:terminal-action` bus so the pane stays the
 // single owner of terminal writes.
 
@@ -24,7 +24,7 @@ import { api } from './api.ts'
 import type { RailItem } from './commandRail'
 import type { PromptTemplate } from './PromptLibrary'
 
-/** Asks the app to open the Prompts tab on a specific template (variable filling). */
+/** Asks the app to open Prompt templates in Actions (variable filling). */
 export const PROMPT_RAIL_EVENT = 'mux:open-prompt-template'
 
 export type PromptLibraryResponse = { items: PromptTemplate[] }
@@ -62,7 +62,7 @@ export async function activatePromptRailItem(
   ctx: { sessionId: string; projectId?: string },
 ): Promise<string> {
   const key = item.promptKey
-  if (!key) return `“${item.label}” has no prompt template attached. Re-add it from Settings → Command rail.`
+  if (!key) return `“${item.label}” has no prompt template attached. Re-add it from Configure Actions.`
   let templates: PromptTemplate[]
   try {
     templates = await fetchPromptTemplates(ctx.projectId)

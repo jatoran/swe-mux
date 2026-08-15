@@ -3,8 +3,7 @@ import { useEffect, useRef } from 'preact/hooks'
 import { AgentContextTab } from './AgentContextTab'
 import { AgentEnvironmentTab } from './AgentEnvironmentTab'
 import { ClipboardTab } from './ClipboardPanel'
-import { CommandsTab } from './CommandsTab'
-import { PromptsTab } from './PromptsTab'
+import { ActionsTab } from './ActionsTab'
 import { NotesTab } from './NotesTab'
 import { QueuePane } from './QueuePane'
 import { TranscriptTab } from './TranscriptTab'
@@ -74,6 +73,7 @@ type Props = {
   onSendPrompt: (target: SendToAgentTarget, text: string) => Promise<SendToAgentResult>
   onOpenSession: (sessionId: string) => void
   onOpenSettings: (section: string) => void
+  onConfigureActions: () => void
   onManagePrompts: () => void
   /** Files: open a Project-relative path as a pane tab. */
   onOpenFile: (path: string) => void
@@ -116,7 +116,7 @@ type Props = {
   onTabDisplayMenu: (x: number, y: number) => void
   /** True while a tab is being dragged, so the strip can suppress its own click. */
   draggingTab: DrawerTabId | null
-  /** Template handed off by a command-rail prompt button that needs its fields filled. */
+  /** Template handed off by an Action rail button that needs its fields filled. */
   promptPreselect?: { key: string }
   /** Queue: deliberate-open counter used to focus the composer. */
   queueOpenToken?: number
@@ -273,10 +273,8 @@ export function UtilityDrawer(props: Props) {
     switch (tab) {
       case 'clipboard':
         return <ClipboardTab onInsert={insertText} onDone={onInsertDone} onOpenSettings={() => props.onOpenSettings('Input')} />
-      case 'commands':
-        return <CommandsTab session={session} onDone={onDone} onOpenSettings={() => props.onOpenSettings('Command rail')} />
-      case 'prompts':
-        return <PromptsTab project={project} backend={props.backend} onInsert={props.onInsertPrompt} onDone={onDone} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
+      case 'actions':
+        return <ActionsTab session={session} project={project} backend={props.backend} onDone={onDone} onConfigureActions={props.onConfigureActions} onInsert={props.onInsertPrompt} onManage={props.onManagePrompts} preselect={props.promptPreselect} sessions={props.sessions} onSend={props.onSendPrompt} />
       case 'queue':
         // Follows the focused session, like every other session-scoped tab.
         return <QueuePane

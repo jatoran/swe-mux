@@ -310,8 +310,8 @@ executed action — so that number is measured rather than estimated.
   Session launch accepts the Project name, the stable visible `Project N` address, or no Project qualifier for the selected Project, and the ordinary spawn path focuses the optimistic new tab immediately.
   The bridge selects a numbered ambiguity candidate or calls `runCommand(id)`; it never owns a second action table.
   A focus command changes the Phase 3 sink immediately, so later dictation follows the navigated session or Project.
-- **Safe command-rail actions join that same registry only while a session is focused.**
-  `railVoice.ts` resolves the focused Project's rail configuration for the current device and backend, deduplicates entries placed on the strip or Commands panel, and adapts only an explicit safe subset to registry commands.
+- **Safe Action rail items join that same registry only while a session is focused.**
+  `railVoice.ts` resolves the focused Project's Action configuration for the current device and backend, deduplicates entries placed on the Rail or Drawer layout, and adapts only an explicit safe subset to registry commands.
   The shipped subset is terminal copy/paste plus non-destructive terminal keys: Escape, Enter, Tab, Ctrl+C, arrows, cursor navigation, restore input, newline, and the Markdown insertion helpers.
   Non-submitting configured agent `skill` and `slash` entries derive deterministic aliases from their command name and preserve the rail item's backend-specific payload, so `Mux, learn` inserts `$learn` in Codex and `/learn` in Claude when that item is configured.
   A configured entry that submits requires an explicit `voicePhrases` opt-in instead of becoming executable from its label alone.

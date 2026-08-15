@@ -1,5 +1,5 @@
 // Discovered agent skills: the shapes the daemon returns and the pure helpers the
-// Commands tab renders them with.
+// Actions tab renders them with.
 //
 // These are the CLI's *own* skills — the `SKILL.md` directories Claude and Codex
 // read at startup — not swe-mux prompt templates or rail items. They are

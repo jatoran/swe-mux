@@ -6,7 +6,7 @@
 // workspace.
 //
 // Tab order groups by what a tab acts on. First the surfaces that *inject into the
-// focused session* (clipboard, session commands, prompt templates, the prompt queue),
+// focused session* (clipboard, Actions, and the prompt queue),
 // then the passive session surfaces: Transcript reads the focused conversation and Agent
 // inventories the selected CLI environment. Agent closes the session-scoped block.
 // Then the *navigators* (files, notes): project-scoped indexes over documents rather than
@@ -30,7 +30,7 @@
 // and the app menu, the same watch-here/act-there split Processes has with the process
 // fleet. Two queue-shaped tabs in one rail also read as a duplicate of each other.
 
-export type DrawerTabId = 'clipboard' | 'commands' | 'prompts' | 'queue' | 'transcript' | 'timeline' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'actions' | 'queue' | 'transcript' | 'timeline' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -51,8 +51,7 @@ export type DrawerTab = {
 // same identity. The longer heading is drawn once inside the active content surface.
 export const DRAWER_TABS: DrawerTab[] = [
   { id: 'clipboard', label: 'Clipboard', heading: 'Clipboard History', title: 'Clipboard history - insert a recent copy', scope: 'session' },
-  { id: 'commands', label: 'Commands', heading: 'Commands', title: 'Commands - keys, skills, and slash commands not on the rail', scope: 'session' },
-  { id: 'prompts', label: 'Prompts', heading: 'Prompt Library', title: 'Prompts - insert a saved template into the focused terminal', scope: 'session' },
+  { id: 'actions', label: 'Actions', heading: 'Actions', title: 'Actions - quick shortcuts, skills, and prompt templates', scope: 'session' },
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
   { id: 'timeline', label: 'Timeline', heading: 'Scan Timeline', title: 'Timeline - read this conversation’s compact behavioral history', scope: 'session' },

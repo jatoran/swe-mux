@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import test from 'node:test'
 import { notifyPromptLibraryChanged, subscribeToPromptLibraryChanges } from '../src/promptLibraryEvents.ts'
-import { renderPromptTemplate } from '../src/promptTemplates.ts'
+import { promptTemplateExcerpt, renderPromptTemplate } from '../src/promptTemplates.ts'
 import { itemsInOrder, reorderForHover, reorderTargetForPoint } from '../src/dragReorder.ts'
 import { classifySoundEvent, isQuietTime, normalizeSoundPreferences, satisfyingSounds, type SoundPreferences } from '../src/sessionSounds.ts'
 import { isAlertQuietTime, normalizeAlertPreferences } from '../src/alertPrefs.ts'
@@ -10,6 +10,12 @@ import { isAlertQuietTime, normalizeAlertPreferences } from '../src/alertPrefs.t
 test('prompt variables render as text without adding a submit action',()=>{
   assert.equal(renderPromptTemplate('Review {{target}} then {{ target }}.',{target:'src/app.ts'}),'Review src/app.ts then src/app.ts.')
   assert.equal(renderPromptTemplate('Keep {{missing}}.',{}),'Keep {{missing}}.')
+})
+
+test('prompt drawer excerpts collapse whitespace and truncate without changing templates',()=>{
+  assert.equal(promptTemplateExcerpt('  Review\n\n  {{ target }} carefully.  '),'Review {{ target }} carefully.')
+  assert.equal(promptTemplateExcerpt('abcdefghij',6),'abcde…')
+  assert.equal(promptTemplateExcerpt('abc',1),'…')
 })
 
 test('prompt-library mutations invalidate an open prompt picker',()=>{

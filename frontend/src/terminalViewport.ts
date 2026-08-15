@@ -190,7 +190,7 @@ type TerminalTail = {
 // exists so a terminal that somehow never settles costs a few calls instead of spinning.
 const TAIL_SCROLL_ATTEMPTS = 4
 
-// Ctrl+End, the same bytes the command rail's `^End` key sends.
+// Ctrl+End, the same bytes the Action rail's `^End` key sends.
 export const APP_TAIL_KEY = '\x1b[1;5F'
 
 /**

@@ -47,7 +47,7 @@ function itemRequest(item: RailItem, backend: RailBackend): RailVoiceRequest | n
 }
 
 /**
- * Resolve the voice-safe subset of the command rail currently visible to a session.
+ * Resolve the voice-safe subset of Actions currently visible to a session.
  *
  * Placement remains authoritative: removing an item from both surfaces removes its
  * spoken alias too. Duplicate placements collapse to one command. UI-only,
