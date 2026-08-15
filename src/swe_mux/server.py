@@ -9,6 +9,8 @@ instances will fight over the same mux.db.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import difflib
 import hashlib
 import ipaddress
 import json
@@ -114,7 +116,7 @@ from .logsetup import current_log_level, set_log_level
 from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
-from .models import MuxEvent, StandingActivityKind
+from .models import MuxEvent, ProjectRecord, StandingActivityKind
 from .network_usage import (
     MeteredWebSocketResponse,
     NetworkUsage,
@@ -143,8 +145,13 @@ from .preview_capture import (
     capture_loopback,
 )
 from .processes import PreviewRegistry, ProcessInspector
-from .profiles import profile_payload, resolve_profile
-from .project_actions import ProjectActionService, action_spawn_body
+from .profiles import find_profile, profile_payload, resolve_agent_profile, resolve_profile
+from .project_actions import (
+    ActionStep,
+    ProjectActionService,
+    action_spawn_body,
+    substituted_action,
+)
 from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
@@ -304,6 +311,14 @@ RETENTION_LOOP = "store-retention"
 # budget is the shape of an incident, and it left no trace of its own until a
 # 36s start expired the tray's wait and looked like a daemon that never started.
 SLOW_STARTUP_SECONDS = 20.0
+# What one task file's approval diff may occupy in a response. Generous enough for
+# a rewritten `tasks.json` and bounded so a generated `package.json` cannot make the
+# approval dialog unrenderable.
+MAX_ACTION_DIFF = 64 * 1024
+# The `SessionState` members that mean the process is gone. An ended session is
+# retained in the live table (its scrollback and exit code are what a task result
+# is read from), so "is it still running" is this test rather than a lookup miss.
+TERMINAL_SESSION_STATES = frozenset({"exited", "crashed"})
 # Browser reconnects use a small recovery window. Wider gaps fall back to one
 # authoritative REST refresh instead of replaying a large, stale event history.
 EVENTS_CATCHUP_LIMIT = 64
@@ -679,6 +694,7 @@ def create_app(
             web.patch("/api/projects/{project_id}", patch_project),
             web.delete("/api/projects/{project_id}", delete_project),
             web.get("/api/projects/{project_id}/actions", list_project_actions),
+            web.get("/api/projects/{project_id}/actions/diff", diff_project_actions),
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
@@ -1360,6 +1376,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             automation_store,
             agent_context,
             projects,
+            project_actions,
+            # A closure over the same app, so an agent-started action goes through the
+            # identical trust check, substitution, spawn path, and timeout arming as
+            # the Run menu. A second implementation would be a second authority path.
+            lambda project, action_id, inputs: _start_project_action(
+                app, project, action_id, inputs, origin="agent"
+            ),
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -1398,6 +1421,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         project_actions=project_actions,
         project_watcher=project_watcher,
         automation_tasks=set(),
+        # One entry per running Project Action step that declared `timeout_seconds`.
+        # Kept beside the automation set and cancelled the same way, so a daemon
+        # shutdown does not leave a timer holding a reference to a dead session.
+        action_timeout_tasks=set(),
     )
     # The startup duration nobody could see. A daemon takes this long to become
     # reachable, and the desktop shell budgets its health wait against it, so a
@@ -1432,6 +1459,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     for task in tuple(app["automation_tasks"]):
         task.cancel()
     await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
+    for task in tuple(app["action_timeout_tasks"]):
+        task.cancel()
+    await asyncio.gather(*app["action_timeout_tasks"], return_exceptions=True)
     for loop_name in (
         CONFIG_WATCH_LOOP,
         MEDIA_CLEANUP_LOOP,
@@ -4198,6 +4228,56 @@ def _decorate_conversation_holders(app: web.Application, items: list[dict[str, A
         }
 
 
+async def _project_agent_profile(
+    backend: str,
+    project: ProjectRecord,
+    project_values: dict[str, Any],
+    config: Config,
+    *,
+    app: web.Application,
+    project_id: str,
+) -> str | None:
+    """This Project's default launch profile for one harness, if it has a usable one.
+
+    Two sources, machine-local first: the Project record (chosen in the UI) and then
+    the committed `.swe-mux/config.toml`. The committed one names a profile the user
+    defined locally; it never carries argv of its own.
+
+    An unusable default degrades to a diagnostic rather than to a failed spawn. It is
+    a *default*, so refusing would make one stale id in a shared repository file stop
+    every agent session in the Project from starting, which is a worse outcome than
+    starting without the arguments and saying so. An explicitly requested
+    `profile_id` is the opposite case and still raises.
+    """
+    selected = project.default_agent_profiles.get(backend) or (
+        project_values.get("default_agent_profiles") or {}
+    ).get(backend)
+    if not selected:
+        return None
+    try:
+        resolve_agent_profile(config, str(selected), backend)
+    except ValueError as exc:
+        detail = exc.args[0] if exc.args else str(exc)
+        message = detail.get("profile_id", str(detail)) if isinstance(detail, dict) else str(detail)
+        log.warning(
+            "project_launch_profile_unavailable project_id=%s backend=%s profile_id=%s reason=%s",
+            project_id,
+            backend,
+            selected,
+            message,
+        )
+        await app["events"].emit(
+            "project_launch_profile_unavailable",
+            source="projects",
+            project_id=project_id,
+            backend=backend,
+            profile_id=str(selected),
+            error=message,
+        )
+        return None
+    return str(selected)
+
+
 async def _spawn_from_body(
     app: web.Application, body: dict[str, Any], *, initial_output: bytes | None = None
 ) -> Session:
@@ -4238,8 +4318,6 @@ async def _spawn_from_body(
     )
     if spec.completion_mode == "one_shot" and backend != "shell":
         raise ValueError("one-shot completion is available only for shell sessions")
-    if spec.profile_id and is_agent_harness(backend):
-        raise ValueError({"profile_id": "shell profiles cannot be used with agent backends"})
     # A spawn may target a subdirectory of its own project (a task that runs in
     # ./frontend); the containment check is here because this is the only layer
     # that knows which project owns the request.
@@ -4274,6 +4352,36 @@ async def _spawn_from_body(
         executable = profile.executable
         argv = [*profile.argv, *argv]
         profile_env = profile.env
+    elif is_agent_harness(backend) and not executable:
+        # Three argument slots, least specific first: the harness's global
+        # `harness_args`, then this profile's, then whatever the request itself asked
+        # for. The adapters already concatenate `default_args` before `opts.args`, so
+        # prepending here is the whole of the composition and no adapter changes.
+        selected = spec.profile_id or await _project_agent_profile(
+            backend,
+            owning_project,
+            project_values,
+            config,
+            app=app,
+            project_id=project_id,
+        )
+        if selected:
+            profile_started_at = time.perf_counter()
+            agent_profile = resolve_agent_profile(config, selected, backend)
+            startup_timing_ms["profile_resolution"] = round(
+                (time.perf_counter() - profile_started_at) * 1000, 1
+            )
+            profile_id = agent_profile.profile_id
+            executable = agent_profile.executable or executable
+            argv = [*agent_profile.argv, *argv]
+            profile_env = agent_profile.env or None
+            log.info(
+                "launch_profile_applied project_id=%s backend=%s profile_id=%s args=%d",
+                project_id,
+                backend,
+                profile_id,
+                len(agent_profile.argv),
+            )
     if spec.seed_text:
         if not is_agent_harness(backend):
             raise ValueError({"seed_text": "seed prompts require an agent backend"})
@@ -6086,6 +6194,17 @@ async def _project_snapshot(  # type: ignore[no-untyped-def]
         or config.default_shell_profile,
         "prompt_library_scope": values.get("prompt_library_scope") or "both",
         "notification_sounds_enabled": values.get("notification_sounds_enabled", True),
+        # Which launch profile each harness starts with here, after the Project
+        # record and the committed file have both had their say. Empty for a harness
+        # with no default, which the Run menu renders as the plain harness entry.
+        "agent_profile_ids": {
+            harness: selection
+            for harness in agent_harnesses()
+            if (
+                selection := project.default_agent_profiles.get(harness)
+                or (values.get("default_agent_profiles") or {}).get(harness)
+            )
+        },
     }
     sources = {
         "backend": "project_record"
@@ -6147,11 +6266,33 @@ async def patch_project(request: web.Request) -> web.Response:
     backend = body.get("default_backend")
     if backend is not None and backend != "shell" and not is_agent_harness(backend):
         raise ValueError({"default_backend": "must be shell, a registered agent, or null"})
+    config: Config = request.app["config"]
     profile_id = body.get("default_profile_id")
     if profile_id is not None and profile_id not in {
-        profile.id for profile in request.app["config"].shell_profiles
+        profile.id for profile in config.shell_profiles if profile.backend == "shell"
     }:
-        raise ValueError({"default_profile_id": "unknown shell profile"})
+        raise ValueError({"default_profile_id": "unknown shell launch profile"})
+    if "default_agent_profiles" in body:
+        selections = body["default_agent_profiles"]
+        if not isinstance(selections, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in selections.items()
+        ):
+            raise ValueError(
+                {"default_agent_profiles": "must be a map of backend to launch profile id"}
+            )
+        for harness, selection in selections.items():
+            profile = find_profile(config, selection)
+            if profile is None or profile.backend != harness or not profile.enabled:
+                # Named individually rather than as one message, because a caller
+                # sending several selections needs to know which one is wrong.
+                raise ValueError(
+                    {
+                        f"default_agent_profiles.{harness}": (
+                            f"unknown or mismatched launch profile: {selection}"
+                        )
+                    }
+                )
     project = await request.app["projects"].update(request.match_info["project_id"], **body)
     activity = await request.app["history"].project_last_activity()
     return json_response(await _project_snapshot(request, project, activity))
@@ -6210,20 +6351,87 @@ async def trust_project_actions(request: web.Request) -> web.Response:
     fingerprint = str(body.get("fingerprint") or "")
     if not fingerprint:
         raise ValueError({"fingerprint": "is required"})
+    # With `source`, the fingerprint is that one file's digest and only it is
+    # approved. Without, the fingerprint is the whole-catalog digest, which is what
+    # the Run menu's single prompt sends and what every existing client sends.
+    source = str(body.get("source")) if body.get("source") else None
     service: ProjectActionService = request.app["project_actions"]
-    catalog = service.trust(project.root, fingerprint)
+    catalog = service.trust(project.root, fingerprint, source=source)
+    log.info(
+        "project_actions_trusted project_id=%s source=%s files=%d",
+        project.id,
+        source or "*",
+        len(catalog.sources),
+    )
     await request.app["events"].emit(
         "project_actions_trusted",
         source="user",
         project_id=project.id,
         fingerprint=catalog.fingerprint,
+        approved_source=source,
         files=list(catalog.sources),
     )
     return json_response(catalog.snapshot())
 
 
-async def _project_profile_id(request: web.Request, project) -> str:  # type: ignore[no-untyped-def]
-    """The shell profile a Project-owned command should be launched through."""
+async def diff_project_actions(request: web.Request) -> web.Response:
+    """What changed in each task file since it was last approved.
+
+    "These files changed" is not enough information to approve safely: it cannot
+    separate a renamed label from a new `curl | sh`. Every source is reported, with
+    an explicit reason when no diff can be produced, so a caller never has to read
+    an empty diff as "nothing changed".
+    """
+    project = _action_project(request)
+    service: ProjectActionService = request.app["project_actions"]
+    catalog = service.catalog(project.root)
+    root = Path(catalog.root)
+    entries: list[dict[str, Any]] = []
+    for item in catalog.files:
+        if not item.present:
+            entries.append({**item.snapshot(), "status": "absent", "diff": ""})
+            continue
+        if item.trusted:
+            entries.append({**item.snapshot(), "status": "unchanged", "diff": ""})
+            continue
+        approved = service.approved_source(catalog.root, item.path)
+        if approved is None:
+            # Two different situations, and a reader needs to know which: a file
+            # swe-mux has never seen, versus one whose approved bytes were too large
+            # to retain (or predate the retained-snapshot store). The second still
+            # means "this changed", it just cannot show how.
+            entries.append(
+                {
+                    **item.snapshot(),
+                    "status": "changed, approved bytes not retained"
+                    if service.was_approved(catalog.root, item.path)
+                    else "never approved",
+                    "diff": "",
+                }
+            )
+            continue
+        try:
+            current = (root / item.path).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            entries.append({**item.snapshot(), "status": f"unreadable: {exc}", "diff": ""})
+            continue
+        diff = "".join(
+            difflib.unified_diff(
+                approved.splitlines(keepends=True),
+                current.splitlines(keepends=True),
+                fromfile=f"approved/{item.path}",
+                tofile=f"current/{item.path}",
+                n=3,
+            )
+        )
+        entries.append({**item.snapshot(), "status": "changed", "diff": diff[:MAX_ACTION_DIFF]})
+    return json_response({"project_root": catalog.root, "sources": entries})
+
+
+async def _project_profile_id_for(  # type: ignore[no-untyped-def]
+    app: web.Application, project
+) -> str:
+    """The shell launch profile a Project-owned command should run through."""
     portable = await read_project_config(
         project.root, project=ProjectIdentity(project.id, project.name, project.root, "registered")
     )
@@ -6231,42 +6439,43 @@ async def _project_profile_id(request: web.Request, project) -> str:  # type: ig
     return str(
         project.default_profile_id
         or values.get("default_shell_profile")
-        or request.app["config"].default_shell_profile
+        or app["config"].default_shell_profile
     )
 
 
-async def run_project_action(request: web.Request) -> web.Response:
-    project = _action_project(request)
-    body = await request.json()
-    action_id = str(body.get("action_id") or "")
-    if not action_id:
-        raise ValueError({"action_id": "is required"})
-    service: ProjectActionService = request.app["project_actions"]
-    try:
-        catalog, action = service.action(project.root, action_id)
-    except PermissionError as exc:
-        return json_response(
-            {
-                "error": str(exc),
-                "code": "project_actions_trust_required",
-                "catalog": service.catalog(project.root).snapshot(),
-            },
-            409,
-        )
-    except KeyError as exc:
-        raise ValueError(f"unknown Project Action: {action_id}") from exc
-    profile_id = await _project_profile_id(request, project)
+async def _project_profile_id(request: web.Request, project) -> str:  # type: ignore[no-untyped-def]
+    return await _project_profile_id_for(request.app, project)
+
+
+async def _start_project_action(
+    app: web.Application,
+    project: ProjectRecord,
+    action_id: str,
+    inputs: dict[str, str],
+    *,
+    origin: str,
+) -> tuple[dict[str, Any], int]:
+    """Run one approved action and return its response body and status.
+
+    Shared by the HTTP route and the MCP tool so both go through the same trust
+    check, the same substitution, and the same timeout arming. An agent-facing
+    caller that reimplemented any of those would be a second authority path.
+    """
+    service: ProjectActionService = app["project_actions"]
+    catalog, action = service.action(project.root, action_id)
+    action = substituted_action(action, inputs, Path(catalog.root))
+    profile_id = await _project_profile_id_for(app, project)
     sessions: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for batch in action.batches:
         results = await asyncio.gather(
             *(
                 _spawn_from_body(
-                    request.app,
+                    app,
                     action_spawn_body(
                         step,
                         project_id=project.id,
-                        config=request.app["config"],
+                        config=app["config"],
                         profile_id=str(profile_id),
                     ),
                 )
@@ -6277,16 +6486,26 @@ async def run_project_action(request: web.Request) -> web.Response:
         for step, result in zip(batch, results, strict=True):
             if isinstance(result, BaseException):
                 errors.append({"step": step.name, "error": str(result)})
-            else:
-                # Task shells retain their exact spawn argv, so their rail offers an
-                # in-place Relaunch. The flag is set post-spawn and republished so
-                # every attached client sees it, not only this action's caller.
-                result.record.relaunchable = True
-                result.publish_update()
-                sessions.append(result.record.snapshot())
-    await request.app["events"].emit(
+                continue
+            # Task shells retain their exact spawn argv, so their rail offers an
+            # in-place Relaunch. The flag is set post-spawn and republished so
+            # every attached client sees it, not only this action's caller.
+            result.record.relaunchable = True
+            result.publish_update()
+            sessions.append(result.record.snapshot())
+            if step.timeout_seconds is not None:
+                _arm_action_timeout(app, result.record.id, step, project.id, action.id)
+    log.info(
+        "project_action_started project_id=%s action_id=%s origin=%s sessions=%d failures=%d",
+        project.id,
+        action.id,
+        origin,
+        len(sessions),
+        len(errors),
+    )
+    await app["events"].emit(
         "project_action_started",
-        source="user",
+        source=origin,
         project_id=project.id,
         action_id=action.id,
         action_label=action.label,
@@ -6294,10 +6513,111 @@ async def run_project_action(request: web.Request) -> web.Response:
         session_ids=[item["id"] for item in sessions],
         failures=len(errors),
     )
-    return json_response(
-        {"action": action.snapshot(), "sessions": sessions, "errors": errors},
-        201 if not errors else 207,
-    )
+    body = {
+        "action": action.snapshot(trusted=True),
+        "sessions": sessions,
+        "errors": errors,
+        "inputs": inputs,
+    }
+    return body, 201 if not errors else 207
+
+
+def _arm_action_timeout(
+    app: web.Application, session_id: str, step: ActionStep, project_id: str, action_id: str
+) -> None:
+    """Stop this step's session if it is still running when its timeout elapses.
+
+    A timer rather than a supervised loop: it fires once and is done, so restarting
+    it on failure (which is what the background-task supervisor does) would be
+    wrong. It resolves the session by id at fire time and does nothing if the
+    session already ended, so a completed step leaves no trace beyond the timer's
+    own wakeup.
+
+    Not restored across a daemon restart. The alternative is persisting a deadline
+    per session and reconciling it at adoption, which is real machinery for a bound
+    whose purpose is stopping a runaway task on the machine the user is sitting at.
+    Stated here rather than left to be discovered.
+    """
+    seconds = float(step.timeout_seconds or 0)
+
+    async def expire() -> None:
+        await asyncio.sleep(seconds)
+        sessions = app["sessions"]
+        session = sessions.sessions.get(session_id)
+        # The terminal states by name, not a word that reads like one: `SessionState`
+        # has no "ended" member, and a finished one-shot step stays in the table as
+        # `exited`. Guarding on the wrong name meant the timer fired an hour after a
+        # 20-second step succeeded, reporting a timeout for a task that had already
+        # completed and calling stop() on a dead session.
+        if session is None or session.record.state in TERMINAL_SESSION_STATES:
+            return
+        log.warning(
+            "project_action_step_timeout project_id=%s action_id=%s step=%s "
+            "session_id=%s seconds=%.1f",
+            project_id,
+            action_id,
+            step.name,
+            session_id,
+            seconds,
+        )
+        await app["events"].emit(
+            "project_action_step_timeout",
+            source="project_actions",
+            session_id=session_id,
+            project_id=project_id,
+            action_id=action_id,
+            step=step.name,
+            timeout_seconds=seconds,
+        )
+        with contextlib.suppress(KeyError, OSError, RuntimeError):
+            await sessions.stop(session_id)
+
+    task = asyncio.create_task(expire(), name=f"action-timeout-{session_id}")
+    app["action_timeout_tasks"].add(task)
+    task.add_done_callback(app["action_timeout_tasks"].discard)
+
+
+def _action_inputs(body: dict[str, Any]) -> dict[str, str]:
+    raw = body.get("inputs")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in raw.items()
+    ):
+        raise ValueError({"inputs": "must be a map of input id to string value"})
+    return dict(raw)
+
+
+async def run_project_action(request: web.Request) -> web.Response:
+    project = _action_project(request)
+    body = await request.json()
+    action_id = str(body.get("action_id") or "")
+    if not action_id:
+        raise ValueError({"action_id": "is required"})
+    service: ProjectActionService = request.app["project_actions"]
+    # The lookup is what can raise KeyError for an id nobody declares. Wrapping the
+    # whole run in that `except` turned any incidental KeyError inside the spawn path
+    # into "unknown Project Action", which is a wrong answer rather than a slow one.
+    try:
+        service.action(project.root, action_id)
+    except PermissionError:
+        pass  # Reported below, with the catalog, after the same call inside the run.
+    except KeyError as exc:
+        raise ValueError(f"unknown Project Action: {action_id}") from exc
+    try:
+        payload, status = await _start_project_action(
+            request.app, project, action_id, _action_inputs(body), origin="user"
+        )
+    except PermissionError as exc:
+        return json_response(
+            {
+                "error": str(exc),
+                "code": "project_actions_trust_required",
+                "catalog": service.catalog(project.root).snapshot(),
+            },
+            409,
+        )
+    return json_response(payload, status)
 
 
 async def run_project_init_scripts(request: web.Request) -> web.Response:

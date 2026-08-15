@@ -291,7 +291,7 @@ They do not justify a rewrite and they do not disappear when native platform cod
 
 - Windows proving, diagnostics, native platform work, and public release: `ROADMAP.md` Phase 7, Phase 10, Phase 11
 - Runtime/process boundaries: `../design/architecture.md`
-- Shell profile contract: `../design/features/shell-profiles.md`
+- Shell profile contract: `../design/features/launch-profiles.md`
 - Agent launch, shims, hooks, and transcripts: `../design/features/backends.md`
 - Project Action shell/process semantics: `../design/features/project-actions.md`
 - Windows desktop packaging: `../design/features/desktop-shell.md`

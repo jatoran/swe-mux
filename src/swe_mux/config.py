@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .harness import HARNESSES, is_agent_harness
+from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
 from .keybindings import is_command
 
 SCHEMA_VERSION = 21
@@ -307,10 +307,32 @@ def contrast_ratio(first: str, second: str) -> float:
 
 
 @dataclass(slots=True)
-class ShellProfile:
+class LaunchProfile:
+    """A named executable/argv/environment definition for one backend.
+
+    Shells have had these since the beginning; an agent harness gets the same thing,
+    which is what lets one Project offer "Claude" and "Claude (plan)" side by side
+    instead of one global argument list per harness. `backend` is what separates the
+    two, and it is the only field an existing shell profile does not already carry -
+    which is why it defaults to `shell` and sits last, so a profile written by an
+    older build loads unchanged.
+
+    The stored configuration keys stay `shell_profiles` / `default_shell_profile` /
+    `SessionRecord.shell_profile_id`. Renaming them would rewrite a user's
+    `~/.mux/config.toml`, a committed `.swe-mux/config.toml` key, and a history
+    column, none of which buys a capability. The *concept* is a launch profile
+    everywhere it is spoken about; those three names are storage history.
+
+    An agent profile may leave `executable` empty, which inherits `harness_exe` for
+    its backend. `cwd_strategy`, `cwd_integration`, and `marker` describe an
+    interactive shell and are refused on an agent profile rather than silently
+    ignored: `resolve_profile`'s PowerShell bootstrap and WSL path translation both
+    assume a shell, and an agent launch never reaches them.
+    """
+
     id: str
     label: str
-    executable: str
+    executable: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     platforms: list[str] = field(default_factory=lambda: ["windows"])
@@ -319,6 +341,7 @@ class ShellProfile:
     capabilities: list[str] = field(default_factory=lambda: ["interactive", "agent-aware"])
     cwd_integration: bool = False
     enabled: bool = True
+    backend: str = "shell"
 
 
 @dataclass(slots=True)
@@ -470,7 +493,7 @@ class Config:
     ccusage_refresh_minutes: int = 0
     usage_commands: dict[str, list[str]] = field(default_factory=default_usage_commands)
     default_shell_profile: str = "default"
-    shell_profiles: list[ShellProfile] = field(default_factory=list)
+    shell_profiles: list[LaunchProfile] = field(default_factory=list)
     pinned_directories: list[str] = field(default_factory=list)
     project_ignore_patterns: list[str] = field(
         default_factory=lambda: list(DEFAULT_PROJECT_IGNORE_PATTERNS)
@@ -1028,12 +1051,24 @@ def _validate(config: Config) -> None:
     ids = [profile.id for profile in config.shell_profiles]
     if len(ids) != len(set(ids)) or any(not value.strip() for value in ids):
         errors["shell_profiles"] = "profile ids must be non-empty and unique"
-    if config.shell_profiles and config.default_shell_profile not in ids:
-        errors["default_shell_profile"] = "must reference an existing shell profile"
+    shell_ids = [
+        profile.id for profile in config.shell_profiles if profile.backend == "shell"
+    ]
+    if config.shell_profiles and config.default_shell_profile not in shell_ids:
+        # Scoped to shell profiles because this is the default for `New terminal`.
+        # An agent profile named here would make every plain terminal unspawnable.
+        errors["default_shell_profile"] = "must reference an existing shell launch profile"
     _validate_project_init_scripts(config, errors)
     for index, profile in enumerate(config.shell_profiles):
         prefix = f"shell_profiles.{index}"
-        if not profile.label.strip() or not profile.executable.strip():
+        agent = is_agent_harness(profile.backend)
+        if profile.backend != "shell" and not agent:
+            errors[f"{prefix}.backend"] = "must be shell or a registered agent harness"
+        if not profile.label.strip():
+            errors[prefix] = "label is required"
+        elif not agent and not profile.executable.strip():
+            # An agent profile may inherit `harness_exe`; a shell profile has nothing
+            # to inherit, so its executable is still required.
             errors[prefix] = "label and executable are required"
         if profile.cwd_strategy not in {"native", "home", "wsl"}:
             errors[f"{prefix}.cwd_strategy"] = "must be native, home, or wsl"
@@ -1043,6 +1078,16 @@ def _validate(config: Config) -> None:
             isinstance(key, str) and isinstance(value, str) for key, value in profile.env.items()
         ):
             errors[f"{prefix}.env"] = "must be a string map"
+        if agent:
+            if profile.cwd_strategy != "native":
+                errors[f"{prefix}.cwd_strategy"] = "an agent launch profile must use native"
+            if profile.cwd_integration:
+                errors[f"{prefix}.cwd_integration"] = "is available only for a shell profile"
+            conflict = reserved_launch_arg_conflict(profile.backend, profile.args)
+            if conflict:
+                errors[f"{prefix}.args"] = (
+                    f"{conflict} is built by swe-mux for {profile.backend} and cannot be set here"
+                )
     if errors:
         raise ValueError(errors)
 
@@ -1106,7 +1151,7 @@ def _migrate_legacy_ccusage_commands(config: Config) -> bool:
     return changed
 
 
-def _default_shell_profile(executable: str) -> ShellProfile:
+def _default_shell_profile(executable: str) -> LaunchProfile:
     executable_name = Path(executable).name.casefold()
     args = (
         ["-NoLogo"]
@@ -1114,10 +1159,10 @@ def _default_shell_profile(executable: str) -> ShellProfile:
         else []
     )
     if executable_name in {"pwsh", "pwsh.exe"}:
-        return ShellProfile("default", "PowerShell 7", executable, args, marker="ps7")
+        return LaunchProfile("default", "PowerShell 7", executable, args, marker="ps7")
     if executable_name in {"powershell", "powershell.exe"}:
-        return ShellProfile("default", "Windows PowerShell", executable, args, marker="ps")
-    return ShellProfile("default", "Default shell", executable, args)
+        return LaunchProfile("default", "Windows PowerShell", executable, args, marker="ps")
+    return LaunchProfile("default", "Default shell", executable, args)
 
 
 def _is_auto_managed_windows_powershell_default(config: Config) -> bool:
@@ -1133,10 +1178,14 @@ def _is_auto_managed_windows_powershell_default(config: Config) -> bool:
         and profile.env == {}
         and profile.platforms == ["windows"]
         and profile.cwd_strategy == "native"
-        and profile.marker == "ps"
-        and profile.capabilities == ["interactive", "agent-aware"]
+        # `marker` and `capabilities` are deliberately absent. Both are display-only
+        # (a scannable tag and a derived summary), and comparing them here made
+        # editing a cosmetic field silently opt the profile out of the PowerShell 7
+        # auto-upgrade, with nothing saying so. Everything that distinguishes "the
+        # default we created" from "a profile the user shaped" is already above.
         and not profile.cwd_integration
         and profile.enabled
+        and profile.backend == "shell"
     )
 
 
@@ -1184,9 +1233,9 @@ def load_config(path: Path | None = None) -> Config:
         # added by a newer build, which the redeploy rollback path makes real —
         # kills startup with a raw TypeError instead of the clean invalid-config
         # message, and an older daemon cannot start at all.
-        profile_fields = set(ShellProfile.__dataclass_fields__)
+        profile_fields = set(LaunchProfile.__dataclass_fields__)
         cfg.shell_profiles = [
-            ShellProfile(**{key: value for key, value in item.items() if key in profile_fields})
+            LaunchProfile(**{key: value for key, value in item.items() if key in profile_fields})
             for item in raw.get("shell_profiles", [])
             if isinstance(item, dict)
         ]
@@ -1290,7 +1339,15 @@ def update_config(config: Config, changes: dict[str, Any]) -> tuple[set[str], se
         if key == "shell_profiles":
             if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
                 raise ValueError({"shell_profiles": "must be an array of profile objects"})
-            value = [ShellProfile(**item) for item in value]
+            # Unknown keys are dropped rather than raised, matching `load_config`.
+            # The browser round-trips whatever `/api/profiles` handed it, including
+            # the `configured` marker the detected list carries, and a raw TypeError
+            # here would surface as a failed save with no field named.
+            profile_fields = set(LaunchProfile.__dataclass_fields__)
+            value = [
+                LaunchProfile(**{key: item for key, item in entry.items() if key in profile_fields})
+                for entry in value
+            ]
         if getattr(candidate, key) != value:
             setattr(candidate, key, value)
             changed.add(key)

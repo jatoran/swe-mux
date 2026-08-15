@@ -10,7 +10,11 @@ def test_default_and_custom_terminal_creation_keep_split_semantics_explicit() ->
 
     assert "void spawnTerminal()" in source
     assert "New terminal custom…" in source
-    assert "profile_id: backend==='shell' ? profileId || undefined : undefined" in source
+    # A launch profile now exists for agent harnesses too, so the browser no longer
+    # gates `profile_id` on `shell`. The daemon refuses a profile whose own backend
+    # does not match, which is the check the gate used to stand in for.
+    assert "profile_id: profileId || undefined" in source
+    assert "profile_id: backend==='shell'" not in source
     # The split-launching variant is palette-only now (no context menu reshapes the
     # pane tree), so the registry entry is the whole surface — its label and its
     # explicit 'horizontal' split argument are what keep the semantics distinct from

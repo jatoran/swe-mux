@@ -1550,7 +1550,7 @@ The matching `mux doctor` SSH check in Phase 7 is deferred with it.
   same document rejects, and state that an SSH-forwarded peer inherits the same terminal and
   code-execution authority an admitted tailnet peer has.
 - [ ] Document SSH profiles and their compatibility limits in
-  `design/features/shell-profiles.md` beside the existing WSL and CMD entries, if and when the
+  `design/features/launch-profiles.md` beside the existing WSL and CMD entries, if and when the
   deferred profile half ships.
 - [x] Document the prompt classes and the remote-boundary unavailability vocabulary in
   `design/features/status-detection.md`.

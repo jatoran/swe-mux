@@ -183,7 +183,6 @@ def test_contained_cwd_resolves_inside_and_refuses_outside(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     "body,field",
     [
-        ({"backend": "claude", "profile_id": "pwsh"}, "profile_id"),
         ({"profile_id": "pwsh", "executable": "pwsh"}, "executable"),
         ({"argv": "--bad"}, "argv"),
         ({"backend": "shell"}, "project_id"),
@@ -206,3 +205,17 @@ def test_spawn_contract_rejects_ambiguous_or_untyped_requests(
     with pytest.raises(ValueError) as error:
         SpawnRequest.parse(body)
     assert field in error.value.args[0]
+
+
+def test_an_agent_backend_may_now_carry_a_launch_profile() -> None:
+    """The contract stopped refusing this when launch profiles gained a backend.
+
+    The refusal moved rather than disappearing: `resolve_agent_profile` is what
+    rejects a profile whose backend does not match, because only it can see the
+    profile. Parsing cannot, so parsing must not pretend to.
+    """
+    request = SpawnRequest.parse(
+        {"backend": "claude", "project_id": "dev", "profile_id": "claude-plan"}
+    )
+    assert request.profile_id == "claude-plan"
+    assert request.backend == "claude"

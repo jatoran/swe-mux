@@ -11,6 +11,7 @@ READ_TOOL_NAMES = (
     "read_memory",
     "project_notes",
     "read_project_note",
+    "project_actions",
     "message_status",
     "spawn_requests",
 )
@@ -18,6 +19,12 @@ READ_TOOL_NAMES = (
 WRITE_TOOL_NAMES = (
     "notify",
     "request_spawn",
+    # `run_action` is a write in the sense that matters here: it starts a process.
+    # Its authority comes from the exact-bytes approval a human already gave the
+    # task file that defines the action, so it can only run commands the user has
+    # seen and approved. An agent authoring a new action changes that file's
+    # fingerprint, which un-trusts it, so an agent cannot approve its own command.
+    "run_action",
 )
 
 

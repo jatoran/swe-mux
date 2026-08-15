@@ -92,7 +92,7 @@ import {
 import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
-import type { Project, ProjectGroup, Session, ShellProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
+import type { Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
@@ -911,7 +911,7 @@ export function App() {
     window.addEventListener('pointercancel',stop,{once:true})
   }
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null)
-  const [profiles, setProfiles] = useState<ShellProfile[]>([])
+  const [profiles, setProfiles] = useState<LaunchProfile[]>([])
   const [defaultProfile, setDefaultProfile] = useState('default')
   const [launcherProfile, setLauncherProfile] = useState(localStorage.getItem('mux.lastProfile') || '')
   const [clientStartupTimings,setClientStartupTimings]=useState<Record<string,ClientStartupTiming>>({})
@@ -1175,7 +1175,10 @@ export function App() {
     longPressTimer.current=window.setTimeout(()=>{navigator.vibrate?.(20);open(clientX,clientY);longPressTimer.current=null},550)
   }
 
-  const loadProfiles = () => api<{default_profile_id:string;profiles:ShellProfile[];detected:ShellProfile[]}>('GET','/api/profiles').then(result => { const combined=[...result.profiles,...result.detected.filter(profile=>!result.profiles.some(item=>item.id===profile.id))];setProfiles(combined.filter(profile=>profile.enabled));setDefaultProfile(result.default_profile_id);setLauncherProfile(current=>current||result.default_profile_id) })
+  // Every enabled launch profile, shells and agents together. Surfaces that mean
+  // "a terminal" filter on `backend` themselves rather than being handed a
+  // pre-filtered list, because the Run menu needs the agent ones from the same load.
+  const loadProfiles = () => api<{default_profile_id:string;profiles:LaunchProfile[];detected:LaunchProfile[]}>('GET','/api/profiles').then(result => { const combined=[...result.profiles,...result.detected.filter(profile=>!result.profiles.some(item=>item.id===profile.id))];setProfiles(combined.filter(profile=>profile.enabled));setDefaultProfile(result.default_profile_id);setLauncherProfile(current=>current||result.default_profile_id) })
 
   const loadNotifications = async (announce=false) => {
     const next=await api<NotificationData>('GET','/api/notifications')
@@ -2412,7 +2415,10 @@ export function App() {
     try {
       const next = await api<Session>('POST', '/api/sessions', {
         backend, project_id: targetProject,
-        profile_id: backend==='shell' ? profileId || undefined : undefined,
+        // A launch profile now exists for agent harnesses too, so this is no longer
+        // gated on `shell`. The daemon refuses a profile whose own backend does not
+        // match the requested one, which is the check the gate used to stand in for.
+        profile_id: profileId || undefined,
         ...(options?.argv?.length ? { argv: options.argv } : {}),
         // A first prompt as text: the daemon inlines short bodies into argv and stages long
         // ones into the workspace with a reader prompt, so there is no client-side ceiling.
@@ -5167,13 +5173,13 @@ export function App() {
     {launcherOpen && <div class="quick-launcher" role="dialog" aria-modal="true" aria-label="New terminal custom">
       <div class="quick-heading"><span>NEW TERMINAL CUSTOM::{projects.find(project => project.id === launcherProject)?.name?.toUpperCase()}{launcherSplit?'::SPLIT':''}</span><button onClick={() => setLauncherOpen(false)}>×</button></div>
       <form onSubmit={event => { event.preventDefault(); void spawnTerminal(launcherProject, launcherSplit, launcherProfile) }}>
-        <label>Shell profile<select value={launcherProfile} onChange={event=>setLauncherProfile(event.currentTarget.value)}>{profiles.map(profile=><option value={profile.id}>{profile.marker} · {profile.label}</option>)}</select><small>{profiles.find(profile=>profile.id===launcherProfile)?.capabilities.join(' · ')}</small></label>
+        <label>Shell profile<select value={launcherProfile} onChange={event=>setLauncherProfile(event.currentTarget.value)}>{profiles.filter(profile=>profile.backend==='shell').map(profile=><option value={profile.id}>{profile.marker} · {profile.label}</option>)}</select><small>{profiles.find(profile=>profile.id===launcherProfile)?.capabilities.join(' · ')}</small></label>
         <label>Project root<input value={projects.find(project=>project.id===launcherProject)?.root||''} readOnly /></label>
         <button class="primary" type="submit">Open {profiles.find(item=>item.id===launcherProfile)?.label || 'terminal'}</button>
       </form>
     </div>}
 
-    {runMenu&&<ProjectRunMenu project={runMenu.project} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={backend=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,undefined,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onError={setError}/>}
+    {runMenu&&<ProjectRunMenu project={runMenu.project} profiles={profiles} anchor={{x:runMenu.x,y:runMenu.y}} onClose={()=>{runMenuClosedAt.current=Date.now();setRunMenu(null)}} onLaunch={(backend,profileId)=>{const target=runMenu.project.id;setRunMenu(null);void spawnTerminal(target,false,profileId,undefined,'after',backend)}} onCustom={()=>{const target=runMenu.project.id;setRunMenu(null);openLauncher(target)}} onSessions={items=>void attachActionSessions(runMenu.project.id,items)} onWorktreeCreated={(path,backend)=>void startWorktreeSession(runMenu.project.id,path,backend)} onError={setError}/>}
 
     {paletteOpen && <div class="palette-layer" onMouseDown={event => event.target === event.currentTarget && setPaletteOpen(false)}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette"><input ref={paletteInput} role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={shownCommands[paletteIndex]?`command-${shownCommands[paletteIndex].id.replaceAll(/[^a-zA-Z0-9_-]/g,'-')}`:undefined} value={paletteQuery} onInput={event => setPaletteQuery(event.currentTarget.value)} onKeyDown={event => {

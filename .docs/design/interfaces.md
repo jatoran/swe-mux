@@ -142,14 +142,21 @@ machine-local and user-authored, so no trust fingerprint is involved.
 
 ```text
 GET  /projects/{project_id}/actions
-POST /projects/{project_id}/actions/trust   {fingerprint}
-POST /projects/{project_id}/actions/run     {action_id}
+GET  /projects/{project_id}/actions/diff
+POST /projects/{project_id}/actions/trust   {fingerprint}            # every present file
+POST /projects/{project_id}/actions/trust   {source, fingerprint}    # one file
+POST /projects/{project_id}/actions/run     {action_id, inputs}
 ```
 
 Action discovery is inert. The catalog returns `fingerprint`, `trusted`, contributing `sources`,
-normalized actions/steps, and import diagnostics. Trust succeeds only for the current exact
-fingerprint. Run returns the spawned ordinary session snapshots plus per-step errors and returns
-`409 project_actions_trust_required` when files are untrusted or changed.
+per-file approval state in `files`, normalized actions/steps with `description`, `source_path`,
+`trusted`, and declared `inputs`, and import diagnostics. `trusted` on the catalog is true only
+when every present file is approved; `trusted` on an action reflects its own source file, which is
+what governs whether it can run. Trust succeeds only for the current exact fingerprint, of the
+whole catalog or of the one named `source`. The diff route reports, per source, its status and a
+unified diff against the retained approved bytes, bounded at 64 KiB. Run substitutes `inputs` into
+the approved template, returns the spawned ordinary session snapshots plus per-step errors, and
+returns `409 project_actions_trust_required` when the action's file is untrusted or changed.
 
 ```ts
 interface Project {
@@ -162,7 +169,8 @@ interface Project {
   layout_revision: number
   git_compare_ref: string | null
   default_backend?: 'shell' | 'claude' | 'codex'
-  default_profile_id?: string
+  default_profile_id?: string                       // shell launch profile
+  default_agent_profiles?: Record<string, string>   // backend -> launch profile id
   portable_options: ProjectPortableOptions
   effective_options: ProjectEffectiveOptions
   option_sources: Record<string, 'global' | 'project_record' | 'project_file'>
@@ -530,7 +538,7 @@ interface SpawnRequest {
   project_id: string
   backend?: 'shell' | 'claude' | 'codex'
   name?: string
-  profile_id?: string
+  profile_id?: string               // a launch profile whose own backend must match
   executable?: string
   argv?: string[]
   resume_native_id?: string
@@ -553,9 +561,15 @@ Project's own repository is admitted even though it sits outside the root, becau
 parallel agent checkout is the same codebase on another branch. Git is the authority, so no
 arbitrary absolute path qualifies; only worktree roots do; and the query runs only after
 plain containment has already failed. Project Actions do not get this exception
-(`features/git.md`). `env` merges over the shell profile's
+(`features/git.md`). `env` merges over the launch profile's
 environment and under mux's own identity variables, so a spawned shell can never present
-another session's hook credentials. Both exist because a Project Action step declares its own
+another session's hook credentials.
+
+`profile_id` is accepted for every backend, not only `shell`. The named profile must declare
+the backend the request asked for, and it may not set argv the adapter builds for itself; both
+refusals live in `resolve_agent_profile` rather than in this contract, because parsing cannot
+see the profile (`features/launch-profiles.md`). With no `profile_id`, an agent spawn applies
+the Project's default for that harness when it has a usable one. Both exist because a Project Action step declares its own
 directory and environment; encoding them into `argv` instead is what previously forced a
 swe-mux executable into every task's process tree.
 

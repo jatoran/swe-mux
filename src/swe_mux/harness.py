@@ -213,6 +213,22 @@ class HarnessDescriptor:
     # into an `else` that quietly did nothing.
     spawn_id_argv: tuple[str, ...]
     resume_argv: tuple[str, ...]
+    # Argv this harness's adapter builds for itself, which a user-authored launch
+    # profile may not set. Every entry is something mux depends on: the conversation
+    # id it dictated, the per-session settings file carrying hook credentials, the
+    # MCP registration, and the resume selector.
+    #
+    # Declared rather than inferred because the consequence of missing one is silent
+    # and total. A profile that passes its own `--settings` replaces the file holding
+    # this pane's hook identity, so the CLI runs, the pane looks healthy, and nothing
+    # ever reports a turn: the session is unobserved for the rest of its life with no
+    # error anywhere. Refusing the profile is the only point at which that is visible.
+    #
+    # An entry ending in `=` or `.` matches by prefix, which is how a value-carrying
+    # config override is named without reserving the flag that introduces it. Codex
+    # takes arbitrary `-c key=value` pairs and mux injects two of them, so `-c` itself
+    # stays available and only `notify=` and `mcp_servers.mux.` are reserved.
+    reserved_launch_args: tuple[str, ...]
     # How a live conversation is forked, or `None` when mux implements no strategy.
     branch_strategy: BranchStrategy | None
     # The root instruction file this CLI reads from a project, and the directory
@@ -652,6 +668,17 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         resolves_transcript_by_cwd=True,
         spawn_id_argv=("--session-id",),
         resume_argv=("--resume",),
+        # `-c`/`-r` are Claude's own short forms of `--continue`/`--resume`.
+        reserved_launch_args=(
+            "--session-id",
+            "--settings",
+            "--mcp-config",
+            "--resume",
+            "-r",
+            "--continue",
+            "-c",
+            "--fork-session",
+        ),
         branch_strategy="native_slash_command",
         instruction_file_name="CLAUDE.md",
         global_instruction_parts=_CLAUDE_GLOBAL_INSTRUCTIONS,
@@ -717,6 +744,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         resolves_transcript_by_cwd=False,
         spawn_id_argv=(),
         resume_argv=("resume",),
+        # `-c` stays open: Codex takes arbitrary config overrides and mux injects two
+        # of them, so only those two keys are reserved. `--config` is its long form.
+        reserved_launch_args=("resume", "notify=", "mcp_servers.mux."),
         branch_strategy="resume_child_thread",
         instruction_file_name="AGENTS.md",
         global_instruction_parts=_CODEX_GLOBAL_INSTRUCTIONS,
@@ -785,6 +815,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         resolves_transcript_by_cwd=True,
         spawn_id_argv=(),
         resume_argv=("--resume",),
+        # `--extension` is deliberately absent: the hook extension is injected only
+        # when its own path is not already present, and a second extension of the
+        # user's own is a legitimate thing to want.
+        reserved_launch_args=("--resume",),
         # No strategy: `--resume` reopens the same session file, so forking a live
         # OMP conversation would put two writers on one file.
         branch_strategy=None,
@@ -864,6 +898,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # that sits waiting for a keystroke, while `--session <id-or-path>` reopens
         # the named conversation directly.
         resume_argv=("--session",),
+        # `--resume` is reserved as well as `--session`, and for a second reason: it
+        # is pi's interactive picker, so a profile carrying it opens every pane on a
+        # menu waiting for a keystroke rather than on a conversation.
+        reserved_launch_args=("--session", "--resume"),
         # `--session` appends to the same file wherever pi stands, so a fork would
         # put two writers on one conversation.
         branch_strategy=None,
@@ -958,6 +996,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         resolves_transcript_by_cwd=False,
         spawn_id_argv=(),
         resume_argv=("--session",),
+        reserved_launch_args=("--session",),
         # `--session` reopens the same row, so a fork would put two writers on one
         # conversation.
         branch_strategy=None,
@@ -1169,6 +1208,39 @@ def native_id_from_args(name: object, args: Sequence[str]) -> str | None:
         index = list(args).index(token) + 1
         if index < len(args):
             return str(args[index])
+    return None
+
+
+def reserved_launch_args(name: object) -> tuple[str, ...]:
+    """Argv a launch profile for this backend may not set.
+
+    Empty for `shell` and for anything unrecognized: a shell profile's argv is the
+    whole point of a shell profile, and mux adds only a wrapper the resolver builds
+    around it rather than flags the user could collide with.
+    """
+    if not isinstance(name, str) or name not in HARNESSES:
+        return ()
+    return HARNESSES[name].reserved_launch_args
+
+
+def reserved_launch_arg_conflict(name: object, args: Sequence[str]) -> str | None:
+    """The first reserved token these launch-profile arguments set, if any.
+
+    An entry ending in `=` or `.` matches by prefix so a value-carrying config
+    override (`notify={...}`, `mcp_servers.mux.url=...`) is recognized without
+    reserving the flag that introduces it.
+    """
+    reserved = reserved_launch_args(name)
+    if not reserved:
+        return None
+    for argument in args:
+        text = str(argument)
+        for token in reserved:
+            if token.endswith(("=", ".")):
+                if text.startswith(token):
+                    return token
+            elif text == token or text.startswith(f"{token}="):
+                return token
     return None
 
 
@@ -1385,6 +1457,10 @@ def public_harness_registry() -> dict[str, object]:
                 # id, so the browser composes a resume command instead of knowing one.
                 "cli_name": harness.script_base_name,
                 "resume_argv": list(harness.resume_argv),
+                # So the launch-profile editor can refuse an argument as it is typed
+                # rather than only on save. The daemon still validates: this copy is a
+                # hint, and a browser older than the daemon simply shows no hint.
+                "reserved_launch_args": list(harness.reserved_launch_args),
                 "skill_invocation_prefix": harness.skill_invocation_prefix,
                 "capabilities": {
                     "observed": harness.level >= HarnessLevel.observed,

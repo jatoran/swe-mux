@@ -5,6 +5,10 @@
 - `ProjectRecord`: stable ID, name, canonical root, optional Group, position, layout,
   layout revision, registration time, shared explicit-use time, nullable Project-local `git_compare_ref`, and default backend/profile. A deprecated resource-presentation field may
   still be loaded from older records but has no browser behavior.
+  `default_profile_id` is the shell launch profile; `default_agent_profiles` is one launch
+  profile id per harness, stored as the JSON column `default_agent_profiles_json`. One column
+  rather than one per harness, because the harness set is a registry and a per-harness schema
+  would make adding a harness a database migration (`features/launch-profiles.md`).
 - `ProjectGroupRecord`: stable ID, name, and position. It has no behavioral ownership.
 - `SessionRecord.project_id`: immutable canonical Project ownership. `cwd`/`spawn_cwd` default
   to the Project root and may be a containment-checked subdirectory of it; validated runtime cwd

@@ -25,13 +25,15 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - The Projects manager lists every configured Project and is the only catalog-management UI.
   It can add, rename, group, open, show/hide, configure, and delete registrations.
 - It is also the **only per-Project editor**. Its detail pane has two tabs: `Details` (name,
-  folder, group, sidebar visibility, delete) and `Settings` (default backend, shell profile,
+  folder, group, sidebar visibility, delete) and `Settings` (default backend, shell launch
+  profile, one agent launch profile per harness that has one,
   prompt-library scope, notification sounds, additive ignore patterns). Settings holds global
   options exclusively and has no per-Project section; `Project settings…` on a Project's context
   menu opens this registry preselected to that Project's Settings tab (`project.settings`).
   Splitting these across two modals meant three doors to two overlapping surfaces, one of which
   bounced the user back out to the other.
-- Both storage layers are edited in one form. A dual-layer field (backend, shell profile) shows
+- Both storage layers are edited in one form. A dual-layer field (backend, shell launch
+  profile, each agent launch profile) shows
   one control plus a `this device` / `repo` selector saying where the value is stored; writing a
   value always clears the other layer, since a stale database override would silently outrank
   the value just chosen. Repo-only fields carry a static `repo` chip. Users pick a value and a
@@ -127,10 +129,16 @@ Action spawn contract, and nothing here reads repository content.
 ## Configuration boundary
 
 Project-owned `.swe-mux/config.toml` is versioned and permits typed portable options:
-`default_shell_profile`, `preferred_backend`, `prompt_library_scope`,
+`default_shell_profile`, `default_agent_profiles`, `preferred_backend`, `prompt_library_scope`,
 `notification_sounds_enabled`, additive `ignore_patterns`, and the narrow `[worktree].setup_command` launch hook.
 Effective precedence is explicit
 request where supported, database Project override, portable Project value, then global default.
+
+`default_agent_profiles` is a **selection, not a definition**: it names a launch profile the
+user authored on this machine and carries no argv of its own.
+Argv for an agent CLI is an authority field, so repository-supplied argv would be an
+escalation, while naming a locally-authored profile is the same kind of statement
+`preferred_backend` already makes (`launch-profiles.md`).
 
 Repository-owned `.swe-mux/config.toml` cannot authorize general commands, executables, hooks, network bindings, automatic actions, credentials, or secrets.
 The sole command exception is `[worktree].setup_command`, which runs only after an explicit user create-and-spawn worktree request and before that worktree's session starts.
@@ -159,7 +167,8 @@ GET|PUT /api/project/config?cwd=<root>
 ```
 
 The registry reads and writes both layers directly: `PATCH /api/projects/{id}` for database
-overrides (`default_backend`, `default_profile_id`, `git_compare_ref`, sent as `null` to clear) and revision-checked
+overrides (`default_backend`, `default_profile_id`, `default_agent_profiles`,
+`git_compare_ref`, sent as `null` to clear) and revision-checked
 `PUT /api/project/config` for the portable file.
 
 Project layout writes are revision checked. Whole-order reorder writes are validated as a

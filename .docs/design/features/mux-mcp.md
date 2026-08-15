@@ -16,7 +16,13 @@ mux shell session via the agent shims.
 
 **No tool delivers anything.** `notify` stages a message in another session's Phase 4
 queue, where head-of-line order, receiver readiness, and (by default) human arming still
-apply; `request_spawn` writes an inert Fleet Queue approval draft and starts nothing. The v1
+apply; `request_spawn` writes an inert Fleet Queue approval draft and starts nothing.
+
+`run_action` is the one tool that starts a process, and its authority is borrowed rather than
+granted: it can run only a command whose exact bytes a human already approved through the Project
+Run menu, and an agent that edits a task file un-approves it. An agent therefore cannot approve
+its own command. This grants strictly less than the caller already has, since an agent in a mux
+session holds a shell; what it adds is that the command is one a human has seen. The v1
 memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plane step 8.
 
 ## Key concepts
@@ -119,17 +125,19 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | Tool | Returns |
 |---|---|
 | `list_sessions` | a compact, queryable, pageable list of live and optionally recent ended sessions; the 25-row and 32 KiB caps apply to the combined result; ordered caller first, then own Project, then anything the widening added, so a fleet call never pushes a sibling off the first page |
-| `get_session` | status + metadata and a run brief by id, exact name, or `self`; the caller's own row also lists superseded run ids; `self` and the caller's own runs resolve whatever `project` asked for |
+| `get_session` | status + metadata and a run brief by id, exact name, or `self`; the caller's own row also lists superseded run ids; `self` and the caller's own runs resolve whatever `project` asked for. Every result carries `completion_mode` and `exit_code`, and `output_bytes` returns a bounded redacted tail of a shell or task session's terminal output |
 | `read_transcript` | a small indexed window around a `search_history` hit, or a bounded pageable head/tail of exactly one run; `self` is the default and `agent_run_id` unambiguously selects the caller's retired run |
 | `search_history` | globally ranked compact hits across indexed Claude/Codex conversations, with role, title, backend, state, run, session-date, message-date, matching-mode, diversity, detail, output-budget, and cursor controls; each hit names the Project it came from |
 | `memory_sources` | a descriptor-driven instruction and provider-memory inventory, including source attribution, capability, revision, modification time, and entrypoint kind; every source names its Project |
 | `read_memory` | one bounded inventoried Agent Context source by opaque `source_id`, never by a caller-supplied filesystem path |
 | `project_notes` | read-only inventory of Project notes, excluding the global Scratchpad; every note names its Project |
 | `read_project_note` | one bounded Project note by opaque note id, with paths omitted and credential-shaped content withheld |
+| `project_actions` | what a Project declares as runnable: native actions, imported VS Code tasks, and package scripts, each with its source file, steps, declared inputs, and whether a human has approved that file's exact current bytes; `include_schema` returns the `.swe-mux/actions.toml` authoring reference in the same result |
 | `message_status` | current outcome of one `notify`, visible only to its attributed sending session, wherever it was sent |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
 | `notify` | stages a message with a visible sender/message/correlation envelope, and a `from_project` header when it crossed a Project; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
+| `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is
@@ -140,7 +148,7 @@ indistinguishable from a broken server.
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. Generated per-session settings allow the closed ten-tool read set without a prompt and do not allow `notify` or `request_spawn`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed eleven-tool read set without a prompt and do not allow `notify`, `request_spawn`, or `run_action`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.

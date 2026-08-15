@@ -22,6 +22,16 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "resume_argv": [
         "--resume"
       ],
+      "reserved_launch_args": [
+        "--session-id",
+        "--settings",
+        "--mcp-config",
+        "--resume",
+        "-r",
+        "--continue",
+        "-c",
+        "--fork-session"
+      ],
       "skill_invocation_prefix": "/",
       "capabilities": {
         "observed": true,
@@ -57,6 +67,11 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "resume_argv": [
         "resume"
       ],
+      "reserved_launch_args": [
+        "resume",
+        "notify=",
+        "mcp_servers.mux."
+      ],
       "skill_invocation_prefix": "$",
       "capabilities": {
         "observed": true,
@@ -90,6 +105,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "measurement_source": "transcript",
       "cli_name": "omp",
       "resume_argv": [
+        "--resume"
+      ],
+      "reserved_launch_args": [
         "--resume"
       ],
       "skill_invocation_prefix": "/skill:",
@@ -127,6 +145,10 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "resume_argv": [
         "--session"
       ],
+      "reserved_launch_args": [
+        "--session",
+        "--resume"
+      ],
       "skill_invocation_prefix": "/",
       "capabilities": {
         "observed": true,
@@ -158,6 +180,9 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
       "measurement_source": "database",
       "cli_name": "opencode",
       "resume_argv": [
+        "--session"
+      ],
+      "reserved_launch_args": [
         "--session"
       ],
       "skill_invocation_prefix": "/",

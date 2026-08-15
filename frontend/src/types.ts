@@ -174,20 +174,43 @@ export interface Project {
    *  epoch seconds, 0 if it has never run one. */
   last_activity?:number
   default_backend?:ProjectBackend;default_profile_id?:string
+  /** Backend name to launch profile id, for agent sessions started here. */
+  default_agent_profiles?:Record<string,string>
   /** Machine-local comparison override. Null/absent means automatic Git ref inference. */
   git_compare_ref?:string|null
   portable_options?:{default_shell_profile?:string;preferred_backend?:ProjectBackend;prompt_library_scope?:PromptLibraryScope;notification_sounds_enabled?:boolean;ignore_patterns?:string[]}
-  effective_options?:{backend:ProjectBackend;profile_id:string;prompt_library_scope:PromptLibraryScope;notification_sounds_enabled:boolean}
+  effective_options?:{backend:ProjectBackend;profile_id:string;prompt_library_scope:PromptLibraryScope;notification_sounds_enabled:boolean;agent_profile_ids?:Record<string,string>}
   option_sources?:Record<string,'global'|'project_record'|'project_file'>;project_config_status?:string
 }
 
 export interface ProjectGroup { id:string;name:string;position:number }
 
 export type ProjectActionSource='vscode'|'package'|'native'
-export interface ProjectActionStep { name:string;kind:'shell'|'process';command:string }
-export interface ProjectAction { id:string;label:string;source:ProjectActionSource;steps:ProjectActionStep[] }
+export interface ProjectActionStep {
+  name:string;kind:'shell'|'process';command:string
+  cwd?:string;platforms?:string[];timeout_seconds?:number|null
+}
+export interface ProjectActionInput {
+  id:string;label:string;default:string;kind:'string'|'choice';options:string[]
+}
+export interface ProjectAction {
+  id:string;label:string;description?:string;source:ProjectActionSource
+  /** Which task file declares this action. Trust is per file, so this is what a
+   *  human approves before the action can run. */
+  source_path?:string
+  /** Whether this action's own source file is currently approved. */
+  trusted?:boolean
+  inputs?:ProjectActionInput[]
+  steps:ProjectActionStep[]
+}
+export interface ProjectActionFile {
+  path:string;present:boolean;fingerprint:string;trusted:boolean
+}
+export interface ProjectActionDiff extends ProjectActionFile { status:string;diff:string }
 export interface ProjectActionCatalog {
   project_root:string;fingerprint:string;trusted:boolean;sources:string[]
+  /** Per-file approval. `trusted` above is true only when every present file is. */
+  files?:ProjectActionFile[]
   actions:ProjectAction[];diagnostics:string[]
 }
 
@@ -201,8 +224,10 @@ export interface ProjectScope {
   detached_artifacts?:Array<{id:string;kind:string;owner_type:string;owner_id:string;owner_label?:string;relative_path:string}>
 }
 
-export interface ShellProfile {
+export interface LaunchProfile {
   id:string; label:string; executable:string; args:string[]; env:Record<string,string>
   platforms:string[]; cwd_strategy:'native'|'home'|'wsl'; marker:string
   capabilities:string[]; cwd_integration:boolean; enabled:boolean; configured?:boolean
+  /** Which backend this profile launches. `shell` for a terminal, otherwise a harness name. */
+  backend:ProjectBackend
 }

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from swe_mux.config import Config, ShellProfile
+from swe_mux.config import Config, LaunchProfile
 from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.meta_hooks import HookRule, MetaHookEngine
@@ -145,8 +145,8 @@ def test_osc_signal_parser_handles_split_title_and_progress_channels() -> None:
 def test_shell_profile_cwd_integration_is_explicit_and_process_local(tmp_path: Path) -> None:
     executable = tmp_path / "pwsh.exe"
     executable.write_bytes(b"fixture")
-    plain = ShellProfile("plain", "Plain", str(executable), ["-NoLogo"])
-    integrated = ShellProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
+    plain = LaunchProfile("plain", "Plain", str(executable), ["-NoLogo"])
+    integrated = LaunchProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
     config = Config(shell_profiles=[plain, integrated], default_shell_profile=plain.id)
     bare = resolve_profile(config, plain.id, tmp_path)
     assert "cwd-osc7" not in bare.capabilities
@@ -164,9 +164,9 @@ def test_powershell_shim_path_guard_applies_without_cwd_integration(tmp_path: Pa
     unconditional — a profile with cwd telemetry off is exactly where it was missing."""
     executable = tmp_path / "pwsh.exe"
     executable.write_bytes(b"fixture")
-    plain = ShellProfile("plain", "Plain", str(executable), ["-NoLogo"])
-    integrated = ShellProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
-    other = ShellProfile("cmd", "Cmd", str(tmp_path / "cmd.exe"), ["/Q"])
+    plain = LaunchProfile("plain", "Plain", str(executable), ["-NoLogo"])
+    integrated = LaunchProfile("live", "Live", str(executable), ["-NoLogo"], cwd_integration=True)
+    other = LaunchProfile("cmd", "Cmd", str(tmp_path / "cmd.exe"), ["/Q"])
     (tmp_path / "cmd.exe").write_bytes(b"fixture")
     config = Config(shell_profiles=[plain, integrated, other], default_shell_profile=plain.id)
     for profile_id in (plain.id, integrated.id):
@@ -192,8 +192,8 @@ def test_shell_profile_with_own_command_keeps_working_without_cwd_integration(
     """
     executable = tmp_path / "pwsh.exe"
     executable.write_bytes(b"fixture")
-    scripted = ShellProfile("scripted", "Scripted", str(executable), ["-Command", "Get-Date"])
-    demanding = ShellProfile(
+    scripted = LaunchProfile("scripted", "Scripted", str(executable), ["-Command", "Get-Date"])
+    demanding = LaunchProfile(
         "demanding", "Demanding", str(executable), ["-File", "run.ps1"], cwd_integration=True
     )
     config = Config(shell_profiles=[scripted, demanding], default_shell_profile=scripted.id)
