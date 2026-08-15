@@ -173,6 +173,12 @@ export interface Project {
   /** Derived server-side from history: the latest session activity in this Project,
    *  epoch seconds, 0 if it has never run one. */
   last_activity?:number
+  /** Searchable conversations retained when this registration is removed. */
+  history_count?:number
+  /** False when the registered root is missing or no longer a directory. */
+  root_available?:boolean
+  /** Present on create responses when an earlier registration was restored. */
+  restored?:boolean
   default_backend?:ProjectBackend;default_profile_id?:string
   /** Backend name to launch profile id, for agent sessions started here. */
   default_agent_profiles?:Record<string,string>

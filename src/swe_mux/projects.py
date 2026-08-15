@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import time
@@ -12,6 +13,14 @@ from .history import HistoryIndex
 from .layouts import normalize_layout
 from .models import ProjectGroupRecord, ProjectRecord
 from .project_files import DEFAULT_NOTE_STORAGE_ID, note_header
+
+log = logging.getLogger(__name__)
+
+
+class ProjectRegistrationResult:
+    def __init__(self, project: ProjectRecord, *, restored: bool) -> None:
+        self.project = project
+        self.restored = restored
 
 
 def canonical_project_root(value: str | Path, *, create: bool = False) -> Path:
@@ -107,6 +116,23 @@ class ProjectManager:
         group_id: str | None = None,
         create_missing: bool = False,
     ) -> ProjectRecord:
+        return (
+            await self.register(
+                name,
+                root,
+                group_id=group_id,
+                create_missing=create_missing,
+            )
+        ).project
+
+    async def register(
+        self,
+        name: str,
+        root: str,
+        *,
+        group_id: str | None = None,
+        create_missing: bool = False,
+    ) -> ProjectRegistrationResult:
         label = name.strip()
         if not label:
             raise ValueError("project name is required")
@@ -123,6 +149,22 @@ class ProjectManager:
             raise ValueError("unknown project group")
         canonical = canonical_project_root(resolved, create=create_missing)
         initialize_project_files(canonical, label)
+        removed = await self.history.removed_project_for_root(str(canonical))
+        if removed is not None:
+            removed.name = label
+            removed.position = max(
+                (item.position for item in self.projects.values()), default=-1
+            ) + 1
+            removed.group_id = group_id
+            removed.sidebar_visible = True
+            self.projects[removed.id] = removed
+            await self.history.upsert_project(removed)
+            log.info(
+                "Project registration restored project_id=%s root=%s",
+                removed.id,
+                removed.root,
+            )
+            return ProjectRegistrationResult(removed, restored=True)
         project = ProjectRecord(
             id=str(uuid.uuid4()),
             name=label,
@@ -134,7 +176,8 @@ class ProjectManager:
         )
         self.projects[project.id] = project
         await self.history.upsert_project(project)
-        return project
+        log.info("Project registered project_id=%s root=%s", project.id, project.root)
+        return ProjectRegistrationResult(project, restored=False)
 
     async def _apply_order(self, ordered_ids: list[str]) -> None:
         await self.history.reorder_projects(ordered_ids)
@@ -256,13 +299,19 @@ class ProjectManager:
         await self.history.upsert_project(project)
         return project
 
-    async def delete(self, project_id: str) -> None:
-        if any(True for _ in await self.history.project_session_ids(project_id)):
-            raise ValueError("remove this project's sessions before deleting it")
+    async def remove(self, project_id: str) -> None:
+        project = self.projects[project_id]
+        history_count = len(await self.history.project_session_ids(project_id))
+        await self.history.remove_project(project_id, removed_at=time.time())
         del self.projects[project_id]
-        await self.history.delete_project(project_id)
         if self.projects:
             await self._apply_order([item.id for item in self.ordered_projects()])
+        log.info(
+            "Project registration removed project_id=%s root=%s history_rows=%d",
+            project.id,
+            project.root,
+            history_count,
+        )
 
     async def create_group(self, name: str) -> ProjectGroupRecord:
         label = name.strip()

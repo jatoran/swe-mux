@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
@@ -13,7 +14,7 @@ from swe_mux.layouts import MAX_LAYOUT_LEAVES, layout_terminal_ids, normalize_la
 from swe_mux.models import SessionRecord
 from swe_mux.project_files import read_note
 from swe_mux.projects import ProjectManager
-from swe_mux.server import error_middleware, record_project_use
+from swe_mux.server import delete_project, error_middleware, record_project_use
 
 
 async def test_project_creation_initializes_resources_and_persists_layout(
@@ -339,6 +340,51 @@ async def test_project_use_api_persists_and_broadcasts_shared_recency(tmp_path: 
     history.close()
 
 
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_project_removal_api_reports_live_session_conflict(tmp_path: Path) -> None:
+    history = HistoryIndex(tmp_path / "mux.db")
+    projects = ProjectManager(history)
+    await projects.start()
+    root = tmp_path / "repo"
+    root.mkdir()
+    project = await projects.create("Main", str(root))
+    record = SessionRecord(
+        "live-session",
+        "Working",
+        project.id,
+        "claude",
+        "native",
+        project.root,
+        "claude",
+        [],
+        state="working",
+    )
+    events = EventBus(sink=history.append_event)
+    app = web.Application(middlewares=[error_middleware])
+    app["projects"] = projects
+    app["history"] = history
+    app["sessions"] = SimpleNamespace(
+        sessions={record.id: SimpleNamespace(record=record)}
+    )
+    app["events"] = events
+    app.router.add_delete("/projects/{project_id}", delete_project)
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.delete(f"/projects/{project.id}")
+        payload = await response.json()
+
+    assert response.status == 409
+    assert payload == {
+        "error": "1 live session must be closed before removal",
+        "code": "project_has_live_sessions",
+        "live_sessions": [
+            {"id": record.id, "name": record.name, "state": record.state}
+        ],
+    }
+    assert project.id in projects.projects
+    history.close()
+
+
 async def test_created_at_migration_dates_older_projects_from_their_first_session(
     tmp_path: Path,
 ) -> None:
@@ -424,7 +470,9 @@ async def test_project_last_activity_takes_the_latest_stamp_a_session_carries(
     history.close()
 
 
-async def test_project_with_history_cannot_be_deleted(tmp_path: Path) -> None:
+async def test_project_removal_preserves_history_and_restore_reuses_identity(
+    tmp_path: Path,
+) -> None:
     history = HistoryIndex(tmp_path / "mux.db")
     projects = ProjectManager(history)
     await projects.start()
@@ -435,9 +483,21 @@ async def test_project_with_history_cannot_be_deleted(tmp_path: Path) -> None:
         "ended", "agent", project.id, "claude", "native", project.root, "claude", []
     )
     await history.session_started(session, str(tmp_path / "transcript.jsonl"))
+    await projects.update(project.id, default_backend="claude", sidebar_visible=False)
 
-    with pytest.raises(ValueError, match="remove this project's sessions"):
-        await projects.delete(project.id)
+    await projects.remove(project.id)
+    assert project.id not in projects.projects
+    assert await history.project_session_ids(project.id) == [session.id]
+    assert await history.list_projects() == []
+
+    registration = await projects.register("Main restored", str(root))
+    restored = registration.project
+    assert registration.restored is True
+    assert restored.id == project.id
+    assert restored.name == "Main restored"
+    assert restored.default_backend == "claude"
+    assert restored.sidebar_visible is True
+    assert await history.project_session_ids(restored.id) == [session.id]
     history.close()
 
 

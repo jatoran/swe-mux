@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS projects (
   git_compare_ref TEXT, default_agent_profiles_json TEXT,
   sidebar_visible INTEGER NOT NULL DEFAULT 1,
   created_at REAL NOT NULL DEFAULT 0,
-  last_used_at REAL NOT NULL DEFAULT 0
+  last_used_at REAL NOT NULL DEFAULT 0,
+  deleted_at REAL
 );
 CREATE TABLE IF NOT EXISTS history (
   id TEXT PRIMARY KEY, native_id TEXT NOT NULL, backend TEXT NOT NULL,
@@ -583,6 +584,8 @@ class HistoryIndex:
                 "(SELECT MAX(h.spawned_at) FROM history h WHERE h.project_id=projects.id "
                 "AND h.external=0),0)"
             )
+        if "deleted_at" not in project_columns:
+            self._db.execute("ALTER TABLE projects ADD COLUMN deleted_at REAL")
 
         if "git_compare_ref" not in project_columns:
             self._db.execute("ALTER TABLE projects ADD COLUMN git_compare_ref TEXT")
@@ -845,7 +848,9 @@ class HistoryIndex:
 
     async def list_projects(self) -> list[ProjectRecord]:
         def op() -> list[ProjectRecord]:
-            rows = self._db.execute("SELECT * FROM projects ORDER BY position,name").fetchall()
+            rows = self._db.execute(
+                "SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY position,name"
+            ).fetchall()
             return [
                 ProjectRecord(
                     id=row["id"],
@@ -866,6 +871,37 @@ class HistoryIndex:
                 )
                 for row in rows
             ]
+
+        return await self._run(op)
+
+    async def removed_project_for_root(self, root: str) -> ProjectRecord | None:
+        """Return the most recently removed Project registered at ``root``."""
+
+        def op() -> ProjectRecord | None:
+            row = self._db.execute(
+                "SELECT * FROM projects WHERE deleted_at IS NOT NULL AND root=? COLLATE NOCASE "
+                "ORDER BY deleted_at DESC LIMIT 1",
+                (root,),
+            ).fetchone()
+            if row is None:
+                return None
+            return ProjectRecord(
+                id=row["id"],
+                name=row["name"],
+                root=row["root"],
+                position=row["position"],
+                group_id=row["group_id"],
+                layout=json.loads(row["layout_json"]) if row["layout_json"] else None,
+                default_backend=row["default_backend"],
+                layout_revision=row["layout_revision"],
+                default_profile_id=row["default_profile_id"],
+                default_agent_profiles=_string_map(row["default_agent_profiles_json"]),
+                git_compare_ref=row["git_compare_ref"],
+                resource_open_mode=row["resource_open_mode"],
+                sidebar_visible=bool(row["sidebar_visible"]),
+                created_at=float(row["created_at"] or 0.0),
+                last_used_at=float(row["last_used_at"] or 0.0),
+            )
 
         return await self._run(op)
 
@@ -895,8 +931,8 @@ class HistoryIndex:
             self._db.execute(
                 "INSERT INTO projects(id,name,root,position,group_id,layout_json,default_backend,"
                 "layout_revision,default_profile_id,resource_open_mode,sidebar_visible,"
-                "created_at,last_used_at,git_compare_ref,default_agent_profiles_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "created_at,last_used_at,git_compare_ref,default_agent_profiles_json,deleted_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,root=excluded.root,"
                 "position=excluded.position,group_id=excluded.group_id,"
                 "layout_json=excluded.layout_json,default_backend=excluded.default_backend,"
@@ -906,7 +942,7 @@ class HistoryIndex:
                 "sidebar_visible=excluded.sidebar_visible,created_at=excluded.created_at,"
                 "last_used_at=excluded.last_used_at,"
                 "git_compare_ref=excluded.git_compare_ref,"
-                "default_agent_profiles_json=excluded.default_agent_profiles_json",
+                "default_agent_profiles_json=excluded.default_agent_profiles_json,deleted_at=NULL",
                 (
                     project.id,
                     project.name,
@@ -954,7 +990,9 @@ class HistoryIndex:
         """
 
         def op() -> None:
-            rows = self._db.execute("SELECT id FROM projects").fetchall()
+            rows = self._db.execute(
+                "SELECT id FROM projects WHERE deleted_at IS NULL"
+            ).fetchall()
             current_ids = {str(row["id"]) for row in rows}
             if len(ordered_ids) != len(current_ids) or set(ordered_ids) != current_ids:
                 raise ValueError("project order must contain every registered project once")
@@ -966,11 +1004,17 @@ class HistoryIndex:
 
         await self._run(op)
 
-    async def delete_project(self, project_id: str) -> None:
+    async def remove_project(self, project_id: str, *, removed_at: float) -> None:
+        """Remove an active registration while retaining its historical identity."""
+
         def op() -> None:
             with self._db:
-                self._db.execute("DELETE FROM git_provenance WHERE project_id=?", (project_id,))
-                self._db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+                cursor = self._db.execute(
+                    "UPDATE projects SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                    (removed_at, project_id),
+                )
+                if cursor.rowcount != 1:
+                    raise KeyError(project_id)
 
         await self._run(op)
 
@@ -982,6 +1026,19 @@ class HistoryIndex:
                     "SELECT id FROM history WHERE project_id=?", (project_id,)
                 ).fetchall()
             ]
+
+        return await self._run(op)
+
+    async def project_history_counts(self) -> dict[str, int]:
+        """Visible conversation count per Project, including removed Projects."""
+
+        def op() -> dict[str, int]:
+            rows = self._db.execute(
+                "SELECT project_id,COUNT(*) AS count FROM history WHERE project_id IS NOT NULL "
+                f"AND agent_visible=1 AND backend IN ({_AGENT_BACKEND_SQL}) GROUP BY project_id",
+                _AGENT_BACKEND_ARGS,
+            ).fetchall()
+            return {str(row["project_id"]): int(row["count"]) for row in rows}
 
         return await self._run(op)
 
@@ -2756,7 +2813,8 @@ class HistoryIndex:
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(
                 "SELECT h.project_id,COALESCE(MAX(p.name),'Unassigned') AS label,"
-                "MAX(p.root) AS root,COUNT(*) AS sessions,MAX(h.spawned_at) AS last_activity "
+                "MAX(p.root) AS root,MAX(p.deleted_at) AS removed_at,"
+                "COUNT(*) AS sessions,MAX(h.spawned_at) AS last_activity "
                 "FROM history h LEFT JOIN projects p ON p.id=h.project_id "
                 f"WHERE h.agent_visible=1 AND h.backend IN ({_AGENT_BACKEND_SQL}) "
                 "GROUP BY h.project_id ORDER BY last_activity DESC",

@@ -135,6 +135,9 @@
   Both transcript views can additionally disclose native tool names and input arguments behind a default-off toggle.
   Tool results, operational telemetry, and extra transcript persistence are excluded from that disclosure.
 - Index deletion never deletes or edits the native transcript.
+- Removing a Project registration never deletes its History rows.
+  The tombstoned Project row retains the stable name and canonical root used by History grouping, and the History UI marks that group as removed.
+  Re-registering the same canonical root restores the original Project identity, so its existing conversations require no reassignment or reimport.
 - When session adoption proves that a lifecycle bug indexed another live session's transcript,
   the false run is quarantined (`agent_visible=0`), its rebuildable message/index cursor is
   removed, and the native transcript remains untouched. The direct root run is reopened under

@@ -26,6 +26,9 @@ class HistoryStub:
     async def project_last_activity(self) -> dict[str, float]:
         return {}
 
+    async def project_history_counts(self) -> dict[str, int]:
+        return {}
+
 
 class SecretStoreStub:
     def status(self, name: str) -> dict[str, Any]:

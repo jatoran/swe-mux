@@ -173,12 +173,12 @@ type Props = {
   onNotes:(project:Project)=>void
   onFiles:(project:Project)=>void
   onPatch:(project:Project,changes:ProjectPatch)=>Promise<Project>
-  onDelete:(project:Project)=>Promise<void>
+  onRemove:(project:Project,closeLive:boolean)=>Promise<void>
 }
 
 const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
 
-export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNotes,onFiles,onPatch,onDelete}:Props){
+export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNotes,onFiles,onPatch,onRemove}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
   const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
@@ -196,7 +196,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const [savedValues,setSavedValues]=useState<PortableValues>({})
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
-  const [confirmDelete,setConfirmDelete]=useState(false)
+  const [confirmRemove,setConfirmRemove]=useState(false)
   const selected=projects.find(project=>project.id===selectedId)||ordered[0]||null
   const shown=ordered.filter(project=>{
     if(filter==='visible'&&!isVisible(project))return false
@@ -208,13 +208,13 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   useEffect(()=>{
     setName(selected?.name||'');setGroupId(selected?.group_id||'')
     setOverrides({default_backend:selected?.default_backend,default_profile_id:selected?.default_profile_id,default_agent_profiles:{...(selected?.default_agent_profiles||{})}})
-    setConfirmDelete(false);setError('')
+    setConfirmRemove(false);setError('')
   },[selected?.id,selected?.name,selected?.group_id,selected?.default_backend,selected?.default_profile_id,JSON.stringify(selected?.default_agent_profiles||{})])
 
   // The portable layer lives in the checkout, so it is read per Project rather than
   // taken from the registry payload — its revision is what guards the write.
   useEffect(()=>{
-    if(!selected){setConfig(null);setValues({});setSavedValues({});return}
+    if(!selected||selected.root_available===false){setConfig(null);setValues({});setSavedValues({});return}
     let stale=false
     setConfig(null);setValues({});setSavedValues({})
     // project_id names the registered Project explicitly: without it the daemon
@@ -314,12 +314,11 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
-  const remove=async()=>{
+  const remove=async(closeLive:boolean)=>{
     if(!selected)return
-    if(!confirmDelete){setConfirmDelete(true);return}
     setBusy(true);setError('')
-    try{await onDelete(selected);setSelectedId(ordered.find(project=>project.id!==selected.id)?.id||'')}
-    catch(cause){setError(cause instanceof Error?cause.message:String(cause));setConfirmDelete(false)}
+    try{await onRemove(selected,closeLive);setSelectedId(ordered.find(project=>project.id!==selected.id)?.id||'')}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause));setConfirmRemove(false)}
     finally{setBusy(false)}
   }
   const liveCount=selected?sessions.filter(session=>session.project_id===selected.id&&!['exited','crashed'].includes(session.state)).length:0
@@ -338,14 +337,14 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
           <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>setSelectedId(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project)?'sidebar':'hidden'}</em></button>)}{!shown.length&&<p>No Projects match this view.</p>}</div>
         </aside>
         <main>{selected?<>
-          <div class="projects-manager-title"><div><span>PROJECT::{selected.id.slice(0,8)}</span><h3>{selected.name}</h3><small>{liveCount} live session{liveCount===1?'':'s'} · {isVisible(selected)?'shown in sidebar':'configured, hidden from sidebar'}</small></div><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div>
-          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" onClick={()=>onOpen(selected)}>Open workspace</button><button onClick={()=>onNotes(selected)}>Notes</button><button onClick={()=>onFiles(selected)}>Files</button></div>
+          <div class="projects-manager-title"><div><span>PROJECT::{selected.id.slice(0,8)}</span><h3>{selected.name}</h3><small>{liveCount} live session{liveCount===1?'':'s'} · {selected.history_count||0} conversation{selected.history_count===1?'':'s'} · {selected.root_available===false?'folder missing':isVisible(selected)?'shown in sidebar':'configured, hidden from sidebar'}</small></div><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div>
+          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" disabled={selected.root_available===false} onClick={()=>onOpen(selected)}>Open workspace</button><button disabled={selected.root_available===false} onClick={()=>onNotes(selected)}>Notes</button><button disabled={selected.root_available===false} onClick={()=>onFiles(selected)}>Files</button></div>
           <div class="projects-manager-tabs" role="tablist" aria-label="Project record and settings">
             <button role="tab" aria-selected={tab==='details'} class={tab==='details'?'active':''} onClick={()=>setTab('details')}>Details</button>
             <button role="tab" aria-selected={tab==='settings'} class={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>Settings</button>
           </div>
           <div class="projects-manager-panel">
-            {tab==='details'&&<div class="projects-manager-form"><label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label><label>Folder<input value={selected.root} readOnly/></label><label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label></div>}
+            {tab==='details'&&<div class="projects-manager-form"><label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label><label>Folder<input class={selected.root_available===false?'missing':''} value={selected.root} readOnly/>{selected.root_available===false&&<span class="project-folder-missing">Folder missing. swe-mux will not recreate it.</span>}</label><label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label></div>}
             {tab==='settings'&&<div class="projects-manager-form">
               <p>Blank inherits the global default. Each value is stored either on this device or in the Project's <code>.swe-mux/config.toml</code>; device wins where both are set.{config?` · .swe-mux/config.toml: ${config.status}${config.error?` · ${config.error}`:''}`:' · reading .swe-mux/config.toml…'}</p>
               <div class="project-setting">
@@ -385,8 +384,14 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               <AutomationOptIns project={selected} busy={busy} onError={setError} />
             </div>}
           </div>
+          {confirmRemove&&<section class="project-removal-summary" aria-label="Remove Project confirmation">
+            <h4>Remove {selected.name} from swe-mux?</h4>
+            <dl><div><dt>Folder</dt><dd>{selected.root_available===false?'Missing':'Available'} · {selected.root}</dd></div><div><dt>Live sessions</dt><dd>{liveCount}</dd></div><div><dt>Conversation history</dt><dd>{selected.history_count||0} preserved</dd></div></dl>
+            <p>The Project leaves the sidebar and registry. Its folder and <code>.swe-mux</code> contents are not changed. Re-adding this folder restores the same Project identity, history, settings, and layout.</p>
+            <div><button onClick={()=>setConfirmRemove(false)}>Cancel</button><button class="danger" disabled={busy} onClick={()=>void remove(liveCount>0)}>{liveCount>0?`Close ${liveCount} session${liveCount===1?'':'s'} and remove`:'Remove from swe-mux'}</button></div>
+          </section>}
           {error&&<p class="projects-manager-error" role="alert">{error}</p>}
-          <footer><button class={confirmDelete?'danger confirming':'danger'} disabled={busy||liveCount>0} title={liveCount>0?'Stop this Project’s live sessions before deleting it.':undefined} onClick={()=>void remove()}>{confirmDelete?'Confirm delete':'Delete project'}</button><span>{liveCount>0?'Deletion is locked while sessions are live.':'Hiding is non-destructive; deletion may also be blocked by history.'}</span><button class="primary" disabled={!dirty||busy||!name.trim()} onClick={()=>void save()}>{busy?'Saving…':'Save changes'}</button></footer>
+          <footer><button class="danger" disabled={busy} onClick={()=>setConfirmRemove(true)}>Remove from swe-mux…</button><span>History is preserved. The folder is never deleted.</span><button class="primary" disabled={!dirty||busy||!name.trim()} onClick={()=>void save()}>{busy?'Saving…':'Save changes'}</button></footer>
         </>:<div class="projects-manager-empty"><strong>No Projects configured</strong><p>Add a folder-backed Project to begin.</p><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button></div>}</main>
       </div>
     </section>

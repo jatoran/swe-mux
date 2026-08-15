@@ -6173,8 +6173,12 @@ async def demote_session(request: web.Request) -> web.Response:
 async def _projects_payload(request: web.Request) -> list[dict[str, Any]]:
     manager: ProjectManager = request.app["projects"]
     activity = await request.app["history"].project_last_activity()
+    history_counts = await request.app["history"].project_history_counts()
     return await asyncio.gather(
-        *(_project_snapshot(request, item, activity) for item in manager.ordered_projects())
+        *(
+            _project_snapshot(request, item, activity, history_counts)
+            for item in manager.ordered_projects()
+        )
     )
 
 
@@ -6204,7 +6208,10 @@ async def record_project_use(request: web.Request) -> web.Response:
 
 
 async def _project_snapshot(  # type: ignore[no-untyped-def]
-    request: web.Request, project, activity: dict[str, float]
+    request: web.Request,
+    project,
+    activity: dict[str, float],
+    history_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     identity = ProjectIdentity(project.id, project.name, project.root, "registered")
     portable = await read_project_config(project.root, project=identity)
@@ -6259,6 +6266,8 @@ async def _project_snapshot(  # type: ignore[no-untyped-def]
         # so a second write path that could drift from it would buy nothing. 0 means a
         # Project that has never run one, which the sidebar orders last.
         "last_activity": activity.get(project.id, 0.0),
+        "history_count": (history_counts or {}).get(project.id, 0),
+        "root_available": Path(project.root).is_dir(),
         "portable_options": public_values,
         "effective_options": effective,
         "option_sources": sources,
@@ -6270,17 +6279,26 @@ async def create_project(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body.get("create_missing", False), bool):
         raise ValueError({"create_missing": "must be a boolean"})
-    project = await request.app["projects"].create(
+    registration = await request.app["projects"].register(
         str(body.get("name") or Path(str(body.get("root") or "")).name or "New project"),
         str(body.get("root") or ""),
         group_id=str(body["group_id"]) if body.get("group_id") else None,
         create_missing=bool(body.get("create_missing", False)),
     )
+    project = registration.project
     await request.app["events"].emit(
-        "project_created", source="user", project_id=project.id, root=project.root
+        "project_restored" if registration.restored else "project_created",
+        source="user",
+        project_id=project.id,
+        root=project.root,
     )
     activity = await request.app["history"].project_last_activity()
-    return json_response(await _project_snapshot(request, project, activity), 201)
+    history_counts = await request.app["history"].project_history_counts()
+    snapshot = await _project_snapshot(request, project, activity, history_counts)
+    return json_response(
+        {**snapshot, "restored": registration.restored},
+        200 if registration.restored else 201,
+    )
 
 
 async def patch_project(request: web.Request) -> web.Response:
@@ -6321,7 +6339,8 @@ async def patch_project(request: web.Request) -> web.Response:
                 )
     project = await request.app["projects"].update(request.match_info["project_id"], **body)
     activity = await request.app["history"].project_last_activity()
-    return json_response(await _project_snapshot(request, project, activity))
+    history_counts = await request.app["history"].project_history_counts()
+    return json_response(await _project_snapshot(request, project, activity, history_counts))
 
 
 async def reorder_projects(request: web.Request) -> web.Response:
@@ -6342,19 +6361,47 @@ async def reorder_projects(request: web.Request) -> web.Response:
         raise
     await request.app["events"].emit("projects_reordered", source="user", project_ids=ordered_ids)
     activity = await request.app["history"].project_last_activity()
+    history_counts = await request.app["history"].project_history_counts()
     return json_response(
-        await asyncio.gather(*(_project_snapshot(request, item, activity) for item in projects))
+        await asyncio.gather(
+            *(_project_snapshot(request, item, activity, history_counts) for item in projects)
+        )
     )
 
 
 async def delete_project(request: web.Request) -> web.Response:
     project_id = request.match_info["project_id"]
-    if any(
-        item.record.project_id == project_id for item in request.app["sessions"].sessions.values()
-    ):
-        raise ValueError("remove this project's sessions before deleting it")
-    await request.app["projects"].delete(project_id)
-    return json_response({"ok": True})
+    live = [
+        item.record
+        for item in request.app["sessions"].sessions.values()
+        if item.record.project_id == project_id
+        and item.record.state not in {"exited", "crashed"}
+    ]
+    if live:
+        return json_response(
+            {
+                "error": (
+                    f"{len(live)} live session{'s' if len(live) != 1 else ''} "
+                    "must be closed before removal"
+                ),
+                "code": "project_has_live_sessions",
+                "live_sessions": [
+                    {"id": item.id, "name": item.name, "state": item.state} for item in live
+                ],
+            },
+            409,
+        )
+    project = request.app["projects"].projects[project_id]
+    history_count = len(await request.app["history"].project_session_ids(project_id))
+    await request.app["projects"].remove(project_id)
+    await request.app["events"].emit(
+        "project_removed",
+        source="user",
+        project_id=project_id,
+        root=project.root,
+        history_rows=history_count,
+    )
+    return json_response({"ok": True, "history_preserved": history_count})
 
 
 def _action_project(request: web.Request):  # type: ignore[no-untyped-def]
