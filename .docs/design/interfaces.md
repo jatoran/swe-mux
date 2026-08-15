@@ -1167,6 +1167,8 @@ It performs no fetch and returns no comparison ref when none resolves.
 The comparison object names the exact effective ref, source, candidates, and any unavailable reason.
 Each non-bare worktree separates `conflicted`, `unstaged`, `staged`, and merge-base `branch_delta` summaries, with comparison ahead and behind counts omitted when unavailable.
 Each summary reports totals, additions, deletions, binary and submodule counts, the first 200 files, and a truncation flag.
+Content-derived counts for untracked files inspect only those first 200 rows and stop after 16 MiB across the summary.
+Concurrent requests with the same Project root and comparison ref await one shared overview task rather than launching duplicate Git subprocess sets.
 
 `GET /git/graph?project_id=ID&limit=N` returns `{lines, limit, has_more}` for all local refs.
 `limit` is 1 to 200 with a default of 80.
@@ -1208,6 +1210,10 @@ The public configuration returns `worktree_root` as an absolute path, resolving 
 Create and remove responses carry an `operation_id` that correlates daemon mutation logs.
 Worktree mutations are daemon-owned, survive requesting-client cancellation, and have a 30-minute deadline distinct from four-second Git reads.
 An exact prunable path with an existing directory and missing `.git` link is repaired and revalidated before removal; success and post-repair failures report `repaired`.
+Revalidation checks the exact registration, `.git` link, and reported top-level even when `git worktree repair` returns nonzero, because Git may already have restored the requested path before reporting a different repair error.
+After a nonzero remove, the daemon re-lists before declaring failure.
+An absent exact registration is success; a surviving directory is atomically renamed below the same parent as `.swe-mux-orphans/<name>-<operation_id>` and returned as `cleanup: {status:"quarantined", path}`.
+Failure to quarantine returns `409 worktree_cleanup_failed` with `removed:true` and the original remaining path.
 Non-repairable prune states return `409 prunable_worktree`; repair failure returns `409 worktree_repair_failed`; mutation timeout returns `504 git_timeout`.
 No removal path invokes repository-wide `git worktree prune`.
 

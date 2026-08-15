@@ -9408,7 +9408,9 @@ async def list_worktrees(request: web.Request) -> web.Response:
     if project is None:
         raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
     return json_response(
-        await git_review.worktree_overview(project.id, project.root, project.git_compare_ref)
+        await git_review.shared_worktree_overview(
+            project.id, project.root, project.git_compare_ref
+        )
     )
 
 
@@ -9540,6 +9542,27 @@ async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
         key: str(item["worktree"])
         for key, item in (await _listed_worktree_entries(cwd)).items()
     }
+
+
+async def _worktree_root_matches(path: str, expected: str) -> bool:
+    code, reported = await _git(path, "rev-parse", "--show-toplevel")
+    if code or not reported.strip():
+        return False
+    try:
+        return str(Path(reported.strip()).resolve()).casefold() == str(
+            Path(expected).resolve()
+        ).casefold()
+    except OSError:
+        return False
+
+
+def _quarantine_orphaned_worktree(path: str, operation_id: str) -> str:
+    source = Path(path)
+    quarantine_root = source.parent / ".swe-mux-orphans"
+    quarantine_root.mkdir(parents=False, exist_ok=True)
+    target = quarantine_root / f"{source.name}-{operation_id}"
+    source.replace(target)
+    return str(target)
 
 
 async def _spawn_into_worktree(
@@ -9842,10 +9865,12 @@ async def remove_worktree(request: web.Request) -> web.Response:
             operation="worktree_repair",
             operation_id=operation_id,
         )
-        if repair.code:
+        try:
+            repaired_entries = await _listed_worktree_entries(cwd)
+        except ValueError as exc:
             log.warning(
                 "worktree_remove_repair_failed operation_id=%s cwd=%s path=%s "
-                "git_code=%s duration_ms=%.1f",
+                "reason=relist_failed git_code=%s duration_ms=%.1f",
                 operation_id,
                 cwd,
                 registered,
@@ -9854,38 +9879,51 @@ async def remove_worktree(request: web.Request) -> web.Response:
             )
             return json_response(
                 {
-                    "error": repair.output or "git worktree repair failed",
-                    "code": "git_timeout" if repair.timed_out else "worktree_repair_failed",
+                    "error": repair.output or str(exc),
+                    "code": "git_timeout"
+                    if repair.timed_out
+                    else "worktree_repair_failed",
                     "operation_id": operation_id,
                 },
                 504 if repair.timed_out else 409,
             )
-        repaired_entries = await _listed_worktree_entries(cwd)
         repaired_entry = repaired_entries.get(requested.casefold())
-        if not repaired_entry or "prunable" in repaired_entry:
+        repair_is_usable = bool(
+            repaired_entry
+            and "prunable" not in repaired_entry
+            and (Path(str(repaired_entry["worktree"])) / ".git").exists()
+            and await _worktree_root_matches(str(repaired_entry["worktree"]), requested)
+        )
+        if not repair_is_usable:
             log.warning(
                 "worktree_remove_repair_failed operation_id=%s cwd=%s path=%s "
-                "reason=still_prunable duration_ms=%.1f",
+                "reason=unusable_post_state git_code=%s duration_ms=%.1f",
                 operation_id,
                 cwd,
                 registered,
+                repair.code,
                 (time.perf_counter() - started_at) * 1000,
             )
             return json_response(
                 {
-                    "error": "Git did not restore the worktree registration",
-                    "code": "worktree_repair_failed",
+                    "error": repair.output or "Git did not restore the worktree registration",
+                    "code": "git_timeout"
+                    if repair.timed_out
+                    else "worktree_repair_failed",
                     "operation_id": operation_id,
                 },
-                409,
+                504 if repair.timed_out else 409,
             )
+        assert repaired_entry is not None
         registered = str(repaired_entry["worktree"])
         repaired = True
-        log.info(
-            "worktree_remove_repair_completed operation_id=%s cwd=%s path=%s",
+        log.log(
+            logging.WARNING if repair.code else logging.INFO,
+            "worktree_remove_repair_completed operation_id=%s cwd=%s path=%s git_code=%s",
             operation_id,
             cwd,
             registered,
+            repair.code,
         )
     args = ["worktree", "remove"]
     if force:
@@ -9895,6 +9933,67 @@ async def remove_worktree(request: web.Request) -> web.Response:
         cwd, *args, operation="worktree_remove", operation_id=operation_id
     )
     if mutation.code:
+        try:
+            post_remove_entries = await _listed_worktree_entries(cwd)
+        except ValueError:
+            post_remove_entries = {requested.casefold(): entry}
+        if requested.casefold() not in post_remove_entries:
+            cleanup_status = "removed"
+            orphaned_path: str | None = None
+            if Path(registered).exists():
+                try:
+                    orphaned_path = await asyncio.to_thread(
+                        _quarantine_orphaned_worktree, registered, operation_id
+                    )
+                    cleanup_status = "quarantined"
+                except OSError as exc:
+                    log.warning(
+                        "worktree_remove_cleanup_failed operation_id=%s cwd=%s path=%s "
+                        "git_code=%s error_type=%s duration_ms=%.1f",
+                        operation_id,
+                        cwd,
+                        registered,
+                        mutation.code,
+                        type(exc).__name__,
+                        (time.perf_counter() - started_at) * 1000,
+                    )
+                    return json_response(
+                        {
+                            "error": "Git removed the worktree registration but its directory "
+                            "could not be quarantined",
+                            "code": "worktree_cleanup_failed",
+                            "operation_id": operation_id,
+                            "repaired": repaired,
+                            "removed": True,
+                            "path": registered,
+                        },
+                        409,
+                    )
+            await request.app["events"].emit(
+                "worktree_removed", source="user", cwd=cwd, path=registered
+            )
+            log.warning(
+                "worktree_remove_completed operation_id=%s cwd=%s path=%s force=%s "
+                "repaired=%s git_code=%s cleanup_status=%s orphaned_path=%s "
+                "duration_ms=%.1f",
+                operation_id,
+                cwd,
+                registered,
+                force,
+                repaired,
+                mutation.code,
+                cleanup_status,
+                orphaned_path or "",
+                (time.perf_counter() - started_at) * 1000,
+            )
+            return json_response(
+                {
+                    "ok": True,
+                    "operation_id": operation_id,
+                    "repaired": repaired,
+                    "cleanup": {"status": cleanup_status, "path": orphaned_path},
+                }
+            )
         log.warning(
             "worktree_remove_failed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
             "git_code=%s duration_ms=%.1f",

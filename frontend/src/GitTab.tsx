@@ -38,11 +38,12 @@ type GitView = 'map' | 'log' | 'provenance'
 const GRAPH_STEP = 80
 const GRAPH_MAX = 200
 
-function describeGitError(cause: unknown, action: string): string {
+function describeGitError(cause: unknown, action: string, mayHaveMutated=false): string {
   const error = cause as ApiError
   const message = cause instanceof Error ? cause.message : String(cause)
   if (error?.detail?.code !== 'git_timeout' && !error?.timeout) return message
-  return `Git did not answer in time. ${action} may still have completed - refresh to see.`
+  if(mayHaveMutated)return `Git did not answer in time. ${action} may still have completed - refresh to see.`
+  return `Git did not answer in time while ${action.charAt(0).toLowerCase()}${action.slice(1)}. Refresh to retry.`
 }
 
 function committedLabel(timestamp: number): string {
@@ -200,13 +201,13 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     if(!isAbsolutePath(addForm.path)){setError('Worktree path must be absolute.');return}
     setBusy(true)
     try{await api('POST','/api/git/worktrees',{cwd:project.root,path:addForm.path,branch:addForm.branch||undefined,start_point:addForm.start||undefined});setAdding(false);setAddForm({path:'',branch:'',start:''});await refresh()}
-    catch(cause){setError(describeGitError(cause,'Creating the worktree'))}finally{setBusy(false)}
+    catch(cause){setError(describeGitError(cause,'Creating the worktree',true))}finally{setBusy(false)}
   }
   const removeWorktree=async()=>{
     if(!remove)return
     setBusy(true)
     try{await api('DELETE','/api/git/worktrees',{cwd:project.root,path:remove.path,force:remove.force});setRemove(null);setExpandedTree('');await refresh()}
-    catch(cause){const message=describeGitError(cause,'Removing the worktree');await refresh();setError(message)}finally{setBusy(false)}
+    catch(cause){const message=describeGitError(cause,'Removing the worktree',true);await refresh();setError(message)}finally{setBusy(false)}
   }
 
   return <div class="git-tab git-review-tab">

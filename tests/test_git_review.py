@@ -161,6 +161,82 @@ async def test_prunable_nested_worktree_never_inherits_parent_status(repository:
 
 
 @pytest.mark.asyncio
+async def test_local_summary_bounds_untracked_content_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = b"".join(
+        f"? generated/file-{index}.txt\0".encode() for index in range(500)
+    )
+
+    async def run_git(
+        cwd: str | Path, *args: str, timeout_seconds: float = 4.0
+    ) -> git_review.GitResult:
+        del cwd, timeout_seconds
+        return git_review.GitResult(0, records if args[0] == "status" else b"", b"")
+
+    inspected: list[str] = []
+
+    def measure(worktree: str, item: git_review.GitFileChange, remaining: int) -> int:
+        del worktree, remaining
+        inspected.append(item["path"])
+        item["additions"] = 1
+        item["deletions"] = 0
+        return 1
+
+    monkeypatch.setattr(git_review, "_run_git_bytes", run_git)
+    monkeypatch.setattr(git_review, "_measure_untracked", measure)
+    unstaged, staged, conflicted = await git_review._local_summaries("C:/repo")
+    assert unstaged is not None
+    assert unstaged["total"] == 500
+    assert unstaged["truncated"] is True
+    assert len(unstaged["files"]) == git_review.GIT_CHANGE_FILE_LIMIT
+    assert len(inspected) == git_review.GIT_CHANGE_FILE_LIMIT
+    assert staged == git_review.change_summary([])
+    assert conflicted == git_review.change_summary([])
+
+
+@pytest.mark.asyncio
+async def test_overview_requests_share_work_after_caller_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def overview(
+        project_id: str, project_root: str, compare_override: str | None
+    ) -> dict[str, object]:
+        nonlocal calls
+        assert (project_id, project_root, compare_override) == (
+            "project",
+            "C:/repo",
+            None,
+        )
+        calls += 1
+        started.set()
+        await release.wait()
+        return {"worktrees": []}
+
+    monkeypatch.setattr(git_review, "worktree_overview", overview)
+    first = asyncio.create_task(
+        git_review.shared_worktree_overview("project", "C:/repo", None)
+    )
+    await started.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    second = asyncio.create_task(
+        git_review.shared_worktree_overview("project", "C:/repo", None)
+    )
+    await asyncio.sleep(0)
+    assert calls == 1
+    release.set()
+    assert await second == {"worktrees": []}
+    await asyncio.sleep(0)
+    assert not git_review._inflight_worktree_overviews
+
+
+@pytest.mark.asyncio
 async def test_branch_counts_can_be_ahead_and_behind(repository: Path) -> None:
     git(repository, "checkout", "-b", "feature")
     (repository / "feature.txt").write_text("feature\n", encoding="utf-8")

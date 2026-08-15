@@ -157,6 +157,8 @@ uncommitted work together.
 - Branch changes compare the worktree `HEAD` with the merge base of the effective comparison ref.
 - Comparison ahead and behind counts are distinct from the session monitor's upstream ahead and behind values.
 - Every group reports exact file count, text additions, text deletions, binary count, and at most 200 typed file rows.
+- Untracked content inspection is limited to the 200 returned rows and a 16 MiB aggregate read budget.
+  A deleted ignore file therefore cannot make Map open every file in a surviving dependency tree before applying the response limit.
 - Unmeasured values remain `null`; a failed or unavailable comparison never becomes a zero or a clean claim.
 
 ### Comparison ref
@@ -209,6 +211,8 @@ uncommitted work together.
 ### Refresh and mutation boundary
 
 - Overview measurement is explicit drawer work with concurrency four and does not expand the five-second session monitor.
+- Concurrent overview requests for the same Project root and comparison ref share one daemon computation.
+  A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again.
 - Map refreshes on Git and worktree events; an open Log refreshes its graph while retaining immutable commit caches.
 - Explicit Refresh covers Git changes created outside swe-mux event paths.
 - The Git surface mutates only through the existing worktree create and remove operations.
@@ -216,8 +220,12 @@ uncommitted work together.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 - Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
   Client cancellation cannot interrupt a mutation after Git starts changing repository state.
-- Removing an exact prunable root whose directory still exists but whose `.git` link is missing first runs path-specific `git worktree repair`, re-lists the repository, and removes only after the same root is no longer prunable.
+- Removing an exact prunable root whose directory still exists but whose `.git` link is missing first runs path-specific `git worktree repair`, then validates the resulting exact registration, `.git` link, and reported top-level before removal.
+  Post-state validation always runs because Git repair can restore the requested root while returning nonzero for another repair problem; a usable exact root continues to removal and an unusable root returns the repair failure.
   Missing directories and other non-repairable prune states return a typed conflict instead of globally pruning unrelated worktrees.
+- A nonzero remove result is also re-listed.
+  If Git already removed the exact registration but could not delete a filesystem object, the daemon atomically moves the orphaned directory into the worktree parent's `.swe-mux-orphans` directory and reports successful removal with cleanup metadata.
+  If quarantine fails, the typed error states that registration is already gone and identifies the remaining exact path.
 - A failed removal refreshes Map because repair or an interrupted Git command may have changed the row even though the request failed.
 - Mutation logs carry one operation id across start, repair, completion, failure, timeout, Git result, force intent, exact path, and duration.
 

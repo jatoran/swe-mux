@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 GIT_TIMEOUT_SECONDS = 4.0
 GIT_CONCURRENCY = 4
 GIT_CHANGE_FILE_LIMIT = 200
+GIT_UNTRACKED_MEASURE_MAX_BYTES = 16 * 1024 * 1024
 GIT_DIFF_MAX_BYTES = 1024 * 1024
 GIT_DIFF_MAX_LINES = 10_000
 GIT_COMPARE_REF_MAX_CHARS = 200
@@ -655,27 +656,33 @@ def parse_porcelain_v2(
     return staged, unstaged, conflicted
 
 
-def _measure_untracked(worktree: str, item: GitFileChange) -> None:
+def _measure_untracked(
+    worktree: str, item: GitFileChange, remaining_bytes: int
+) -> int:
+    if remaining_bytes <= 0:
+        return 0
     root = Path(worktree).resolve()
     target = root.joinpath(*PurePosixPath(item["path"]).parts)
     try:
         target_stat = target.lstat()
         resolved = target.resolve()
         if stat.S_ISLNK(target_stat.st_mode) or not resolved.is_relative_to(root):
-            return
-        if not stat.S_ISREG(target_stat.st_mode) or target_stat.st_size > GIT_DIFF_MAX_BYTES:
-            return
+            return 0
+        read_limit = min(GIT_DIFF_MAX_BYTES, remaining_bytes)
+        if not stat.S_ISREG(target_stat.st_mode) or target_stat.st_size > read_limit:
+            return 0
         with resolved.open("rb") as handle:
-            data = handle.read(GIT_DIFF_MAX_BYTES + 1)
-        if len(data) > GIT_DIFF_MAX_BYTES:
-            return
+            data = handle.read(read_limit + 1)
+        if len(data) > read_limit:
+            return 0
         if b"\0" in data:
             item["binary"] = True
-            return
+            return len(data)
         item["additions"] = data.count(b"\n") + int(bool(data) and not data.endswith(b"\n"))
         item["deletions"] = 0
+        return len(data)
     except OSError:
-        return
+        return 0
 
 
 async def _diff_summary(worktree: str, revision_args: list[str]) -> GitChangeSummary | None:
@@ -760,9 +767,18 @@ async def _local_summaries(
         _apply_numstat(staged, parse_numstat(staged_stats.stdout))
     if not unstaged_stats.code:
         _apply_numstat(unstaged, parse_numstat(unstaged_stats.stdout))
-    for item in unstaged:
+    remaining_untracked_bytes = GIT_UNTRACKED_MEASURE_MAX_BYTES
+    # Only returned files need content-derived line counts. Inspecting every path before
+    # applying the response limit turns a damaged ignore file into an unbounded filesystem
+    # crawl, exactly when the Map needs to remain available for recovery.
+    for item in unstaged[:GIT_CHANGE_FILE_LIMIT]:
         if item["status"] == "??":
-            await asyncio.to_thread(_measure_untracked, worktree, item)
+            measured = await asyncio.to_thread(
+                _measure_untracked, worktree, item, remaining_untracked_bytes
+            )
+            remaining_untracked_bytes -= measured
+            if remaining_untracked_bytes <= 0:
+                break
     return change_summary(unstaged), change_summary(staged), change_summary(conflicted)
 
 
@@ -867,6 +883,41 @@ async def worktree_overview(
         "comparison": comparison,
         "worktrees": worktrees,
     }
+
+
+_inflight_worktree_overviews: dict[
+    tuple[str, str, str | None], asyncio.Task[dict[str, Any]]
+] = {}
+
+
+async def shared_worktree_overview(
+    project_id: str, project_root: str, compare_override: str | None
+) -> dict[str, Any]:
+    """Share one in-flight Map computation across clients and refreshes."""
+
+    key = (project_id, project_root, compare_override)
+    task = _inflight_worktree_overviews.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(
+            worktree_overview(project_id, project_root, compare_override),
+            name=f"git-overview:{project_id}",
+        )
+        _inflight_worktree_overviews[key] = task
+
+        def forget(finished: asyncio.Task[dict[str, Any]]) -> None:
+            if _inflight_worktree_overviews.get(key) is finished:
+                _inflight_worktree_overviews.pop(key, None)
+            if not finished.cancelled():
+                finished.exception()
+
+        task.add_done_callback(forget)
+    else:
+        log.info(
+            "git_review overview_joined project_id=%s repository=%s",
+            project_id,
+            project_root,
+        )
+    return await asyncio.shield(task)
 
 
 async def validate_commit(repository: str, oid: str) -> tuple[str, list[str]]:

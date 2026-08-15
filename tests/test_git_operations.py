@@ -133,10 +133,17 @@ async def test_prunable_remove_repairs_exact_path_then_forces_removal(
     ) -> GitMutationResult:
         assert cwd == str(tmp_path)
         mutations.append((args, operation, operation_id))
+        if operation == "worktree_repair":
+            (worktree / ".git").write_text("gitdir: fake\n", encoding="utf-8")
         return GitMutationResult(0, "")
+
+    async def root_matches(path: str, expected: str) -> bool:
+        assert path == expected == str(worktree)
+        return True
 
     monkeypatch.setattr(server, "_listed_worktree_entries", listed)
     monkeypatch.setattr(server, "run_git_mutation", mutate)
+    monkeypatch.setattr(server, "_worktree_root_matches", root_matches)
     events = FakeEvents()
     response = await server.remove_worktree(
         request(
@@ -180,11 +187,17 @@ async def test_repaired_dirty_worktree_requires_explicit_force(
     ) -> GitMutationResult:
         del cwd, args, operation_id
         if operation == "worktree_repair":
+            (worktree / ".git").write_text("gitdir: fake\n", encoding="utf-8")
             return GitMutationResult(0, "")
         return GitMutationResult(1, "working tree contains modified or untracked files")
 
+    async def root_matches(path: str, expected: str) -> bool:
+        assert path == expected == str(worktree)
+        return True
+
     monkeypatch.setattr(server, "_listed_worktree_entries", listed)
     monkeypatch.setattr(server, "run_git_mutation", mutate)
+    monkeypatch.setattr(server, "_worktree_root_matches", root_matches)
     response = await server.remove_worktree(
         request({"cwd": str(tmp_path), "path": str(worktree)}, FakeEvents())
     )
@@ -192,3 +205,103 @@ async def test_repaired_dirty_worktree_requires_explicit_force(
     assert response.status == 400
     assert payload["code"] == "git_error"
     assert payload["repaired"] is True
+
+
+@pytest.mark.asyncio
+async def test_nonzero_repair_continues_when_post_state_is_exact_and_usable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    worktree = tmp_path / "broken"
+    worktree.mkdir()
+    calls = 0
+
+    async def listed(cwd: str) -> dict[str, dict[str, Any]]:
+        nonlocal calls
+        assert cwd == str(tmp_path)
+        calls += 1
+        entry: dict[str, Any] = {"worktree": str(worktree)}
+        if calls == 1:
+            entry["prunable"] = "missing gitdir"
+        return {str(worktree.resolve()).casefold(): entry}
+
+    mutations: list[str] = []
+
+    async def mutate(
+        cwd: str, *args: str, operation: str, operation_id: str
+    ) -> GitMutationResult:
+        del cwd, args, operation_id
+        mutations.append(operation)
+        if operation == "worktree_repair":
+            (worktree / ".git").write_text("gitdir: fake\n", encoding="utf-8")
+            return GitMutationResult(1, "repair reported another broken worktree")
+        return GitMutationResult(0, "")
+
+    async def root_matches(path: str, expected: str) -> bool:
+        assert path == expected == str(worktree)
+        return True
+
+    monkeypatch.setattr(server, "_listed_worktree_entries", listed)
+    monkeypatch.setattr(server, "run_git_mutation", mutate)
+    monkeypatch.setattr(server, "_worktree_root_matches", root_matches)
+    response = await server.remove_worktree(
+        request(
+            {"cwd": str(tmp_path), "path": str(worktree), "force": True},
+            FakeEvents(),
+        )
+    )
+    payload = json.loads(response.text)
+    assert response.status == 200
+    assert payload["repaired"] is True
+    assert mutations == ["worktree_repair", "worktree_remove"]
+
+
+@pytest.mark.asyncio
+async def test_remove_quarantines_orphan_after_git_drops_registration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    worktree = tmp_path / "unsupported-reparse-tree"
+    worktree.mkdir()
+    (worktree / "leftover.txt").write_text("survived Git cleanup\n", encoding="utf-8")
+    calls = 0
+
+    async def listed(cwd: str) -> dict[str, dict[str, Any]]:
+        nonlocal calls
+        assert cwd == str(tmp_path)
+        calls += 1
+        if calls == 1:
+            return {
+                str(worktree.resolve()).casefold(): {"worktree": str(worktree)}
+            }
+        return {}
+
+    async def mutate(
+        cwd: str, *args: str, operation: str, operation_id: str
+    ) -> GitMutationResult:
+        del args, operation_id
+        assert cwd == str(tmp_path)
+        assert operation == "worktree_remove"
+        return GitMutationResult(
+            255,
+            f"error: failed to delete '{worktree}': Function not implemented",
+        )
+
+    monkeypatch.setattr(server, "_listed_worktree_entries", listed)
+    monkeypatch.setattr(server, "run_git_mutation", mutate)
+    events = FakeEvents()
+    response = await server.remove_worktree(
+        request({"cwd": str(tmp_path), "path": str(worktree)}, events)
+    )
+    payload = json.loads(response.text)
+    assert response.status == 200
+    assert payload["cleanup"]["status"] == "quarantined"
+    quarantined = Path(payload["cleanup"]["path"])
+    assert not worktree.exists()
+    assert (quarantined / "leftover.txt").read_text(encoding="utf-8") == (
+        "survived Git cleanup\n"
+    )
+    assert events.emitted == [
+        (
+            "worktree_removed",
+            {"source": "user", "cwd": str(tmp_path), "path": str(worktree)},
+        )
+    ]
