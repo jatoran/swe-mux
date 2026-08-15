@@ -374,8 +374,13 @@ responsive controls.
   a blocking overlay through the multi-minute build/swap/relaunch: while the old daemon still
   serves it polls `GET /api/daemon/redeploy` so an early build failure surfaces as an error
   toast with the log tail (the running app is untouched); after the daemon drops it polls
-  health for up to 8 minutes and reloads when the new (or rolled-back) app answers. "Reload
-  UI" is a plain page reload for picking up freshly built frontend assets.
+  health for up to 8 minutes and reloads when the new (or rolled-back) app answers.
+  Every production build carries a deterministic `ui-build` identity derived from its content-addressed asset filenames.
+  Every `/events` connection starts with that served identity, so clients that reconnect after a successful redeploy compare it with the identity in their loaded document.
+  A hidden client reloads immediately, while a visible client keeps its current work and shows a persistent "UI update ready" banner with an explicit Reload now action.
+  A rollback republishes the old identity and therefore does not reload other clients.
+  The first release of this protocol cannot update clients still running the preceding UI because those clients do not yet perform the comparison; each such client needs one manual reload.
+  "Reload UI" is a plain page reload for picking up freshly built frontend assets.
 
 ## Settings contract
 

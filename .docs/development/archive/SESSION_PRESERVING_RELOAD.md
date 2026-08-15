@@ -309,7 +309,7 @@ user/agent-facing triggers:
   a frozen/remote/phone client — push frontend-only changes to the frozen app via the redeploy
   below. Verify what's actually served by comparing the `index-*.css` hash from
   `curl -s http://127.0.0.1:<port>/` against `src/swe_mux/static/index.html`.
-- **Frozen redeploy** (`uv run python packaging/redeploy_desktop.py [--hidden|--no-launch|
+- **Frozen redeploy** (`uv run python packaging/redeploy_desktop.py [--hidden|--restore-visibility|--no-launch|
   --skip-build|--force]`) builds exactly the current checkout.
   Worktree branches remain intentionally absent until they are integrated into `master`.
   The command first preflights that a supervisor is running *outside*
@@ -323,6 +323,7 @@ user/agent-facing triggers:
   up to five minutes because Windows can spend several minutes scanning a newly written
   PyInstaller tree on its first launch; it still fails immediately if the launched shell
   exits. This prevents a healthy-but-slow bundle from being killed and falsely rolled back.
+  UI-triggered redeploys use `--restore-visibility`, which samples the shell immediately before the stop and applies the same visible or tray-hidden presentation to successful, swap-failure, and rollback relaunches.
 
   **The stop is pid-targeted, not image-wide.** `swe-mux.exe -m swe_mux.<module>` is a helper
   an agent session spawns inside its *own* process tree — `hook_client` runs on every
@@ -359,6 +360,11 @@ user/agent-facing triggers:
   so the UI detects an early build failure (lock cleared, daemon never dropped) and shows the
   log instead of waiting out the reconnect window; once the daemon drops it polls health and
   reloads when the successor (or rolled-back predecessor) answers.
+  Every production index embeds a deterministic SHA-256 identity derived from Vite's content-addressed emitted filenames.
+  The returning daemon sends that identity first on every `/events` connection and exposes it through health.
+  Other clients reload automatically only while hidden; visible clients keep their work and show a persistent manual reload banner.
+  A rollback returns the previous identity, so it does not trigger those clients.
+  Clients running the release immediately before this protocol still require one manual reload because they have no comparison logic.
 
 ## 7.6 Addendum: Job breakaway for relaunches + death forensics (implemented)
 

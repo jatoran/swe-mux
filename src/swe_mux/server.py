@@ -252,6 +252,7 @@ from .transcript_view import (
     final_reply_text,
     parse_transcript_with_watermark,
 )
+from .ui_build import read_ui_build_id
 from .usage import UsageManager
 from .voice import (
     DICTATION_PROFILE,
@@ -520,6 +521,15 @@ def _apply_security_headers(response: web.StreamResponse, request: web.Request) 
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
 
 
+def _apply_static_cache_headers(response: web.StreamResponse, request: web.Request) -> None:
+    if request.path == "/":
+        # The document names content-addressed assets and carries the UI build identity.
+        # Revalidate it on every open/reload so a post-redeploy browser cannot boot stale HTML.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif request.path.startswith("/assets/"):
+        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+
+
 @web.middleware
 async def security_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
     host = request_host(request)
@@ -538,6 +548,7 @@ async def security_middleware(request: web.Request, handler: Handler) -> web.Str
     if websocket:
         return response
     _apply_security_headers(response, request)
+    _apply_static_cache_headers(response, request)
     return response
 
 
@@ -1651,6 +1662,7 @@ async def health(request: web.Request) -> web.Response:
             "ok": True,
             "live_sessions": live,
             "version": "0.1.0",
+            "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
             "supervisor": connected,
             "supervisor_state": "connected" if connected else ("lost" if lost else "absent"),
             # Supervised sessions this daemon could not rebuild (snapshot drift,
@@ -1919,7 +1931,7 @@ async def daemon_redeploy(request: web.Request) -> web.Response:
         str(root),
         "python",
         str(root / "packaging" / "redeploy_desktop.py"),
-        "--hidden",
+        "--restore-visibility",
     ]
     # Without this the script targets ~/.mux, so a daemon on an alternate config
     # reads the wrong supervisor discovery file and aborts — or worse,
@@ -10292,6 +10304,13 @@ async def events_ws(request: web.Request) -> web.WebSocketResponse:
         last_sequence = int(raw_cursor) if raw_cursor else 0
     except ValueError:
         raise web.HTTPBadRequest(text="after_seq must be an integer") from None
+    await ws.send_json(
+        {
+            "type": "events_hello",
+            "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
+            "daemon_generation": str(request.app.get("daemon_generation") or "legacy"),
+        }
+    )
     queue = bus.subscribe(name="events-ws")
     try:
         if last_sequence > 0:

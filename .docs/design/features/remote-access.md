@@ -68,6 +68,8 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Dynamic JSON and text responses of at least 1 KiB negotiate compression.
   Production frontend builds also create gzip siblings for eligible static assets, which
   aiohttp serves according to `Accept-Encoding`.
+- The root document uses `Cache-Control: no-cache, must-revalidate` because it names content-addressed assets and carries the production UI identity.
+  Hashed `/assets/` responses use a one-year immutable cache because a changed payload receives a changed filename.
 - A cold `/events` socket receives only the current durable sequence watermark, because the
   initial REST snapshot already supplies authoritative state.
   Reconnect replay is capped at 64 records; a wider gap sends one watermark and triggers one
