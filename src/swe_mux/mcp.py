@@ -1328,6 +1328,22 @@ class McpService:
             **_history_summary(row, display_name=display_name),
             **self._scope_envelope(scope),
         }
+        if args.get("output_bytes") is not None:
+            # A removed session (or one from before a daemon restart) has no
+            # scrollback: the ring lives with the Session object, not in history.
+            # Said explicitly, because silently dropping the field leaves the caller
+            # unable to tell "the task printed nothing" from "I did not read it".
+            result.update(
+                {
+                    "output": "",
+                    "output_available": False,
+                    "output_note": (
+                        "This session is no longer live, and terminal output is not "
+                        "retained after removal. Read output while the task session "
+                        "is still open."
+                    ),
+                }
+            )
         raw = row.get("transcript_path")
         result["run_brief"] = await self._run_brief(
             run_id=self._row_run_id(row),

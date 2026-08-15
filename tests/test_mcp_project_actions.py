@@ -359,6 +359,51 @@ async def test_credential_shaped_output_is_redacted(tmp_path: Path) -> None:
     assert "deploying" in result["output"]
 
 
+async def test_a_removed_session_says_output_is_gone_rather_than_omitting_it(
+    tmp_path: Path,
+) -> None:
+    """The scrollback ring lives with the Session object, not in history.
+
+    Silently dropping the field leaves the caller unable to tell "the task printed
+    nothing" from "I did not read it", which is the reading that makes an agent
+    stop asking.
+    """
+    project = project_with_actions(tmp_path, VERIFY)
+    caller = session("s1", token="tok")
+
+    ended_row = {
+        "id": "task-1",
+        "name": "Verify",
+        "backend": "shell",
+        "project_id": "p1",
+        "project_scope_id": "scope-1",
+        "cwd": "D:/work",
+        "spawned_at": 1.0,
+        "exited_at": 2.0,
+        "final_state": "exited",
+    }
+
+    class HistoryWithRow(HistoryStub):
+        async def history_entry(self, sid: str) -> dict[str, Any] | None:
+            return ended_row if sid == "task-1" else None
+
+        async def history_page(self, **_kw: Any) -> dict[str, Any]:
+            return {"items": [ended_row], "next_cursor": None}
+
+    service = McpService(
+        manager_for(caller),
+        HistoryWithRow(),
+        automation_store=AutomationStoreStub(),
+        projects=SimpleNamespace(projects={project.id: project}),
+        project_actions=ProjectActionService(tmp_path / "data"),
+    )
+
+    result = await service.get_session(caller, {"session_id": "task-1", "output_bytes": 4096})
+
+    assert result["output_available"] is False
+    assert "no longer live" in result["output_note"]
+
+
 async def test_an_agent_session_is_sent_to_read_transcript_instead(tmp_path: Path) -> None:
     """Its PTY bytes are a differential frame stream, not a transcript."""
     project = project_with_actions(tmp_path, VERIFY)

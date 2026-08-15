@@ -174,6 +174,11 @@ def resolve_agent_profile(config: Config, profile_id: str, backend: str) -> Reso
         )
     if not profile.enabled:
         raise ValueError({"profile_id": f"launch profile is disabled: {profile_id}"})
+    if profile.platforms and "windows" not in profile.platforms and os.name == "nt":
+        # The same check `resolve_profile` applies to a shell, kept identical rather
+        # than generalized: broadening it would refuse an existing `["windows"]`
+        # profile on Linux, which works today.
+        raise ValueError({"profile_id": "launch profile is unavailable on Windows"})
     conflict = reserved_launch_arg_conflict(backend, profile.args)
     if conflict:
         log.warning(

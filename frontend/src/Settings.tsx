@@ -547,7 +547,13 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
   const updateProfile = (index:number, changes:Partial<LaunchProfile>) => {
     const previous=draft!.shell_profiles[index]
-    change('shell_profiles',draft!.shell_profiles.map((profile,itemIndex)=>itemIndex===index?{...profile,...changes}:profile))
+    // Switching to an agent backend hides the shell-only controls, so their values
+    // have to be normalized here. Leaving them would save a profile the daemon
+    // refuses on a field with no control left on screen to fix it.
+    const normalized:Partial<LaunchProfile>=changes.backend&&changes.backend!=='shell'
+      ?{...changes,cwd_strategy:'native',cwd_integration:false}
+      :changes
+    change('shell_profiles',draft!.shell_profiles.map((profile,itemIndex)=>itemIndex===index?{...profile,...normalized}:profile))
     if(changes.id&&selectedProfileId===previous.id)setSelectedProfileId(changes.id)
   }
   const addProfile = (source?:LaunchProfile, backend:ProjectBackend='shell') => {
@@ -555,7 +561,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       ? {id:'shell',label:'New shell',executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'sh',capabilities:['interactive'],cwd_integration:false,enabled:true,backend:'shell'}
       // An agent profile leaves `executable` empty so it inherits `harness_exe`, and
       // carries no shell capabilities: it contributes arguments, not a command line.
-      : {id:backend,label:`New ${harnessDescriptor(backend)?.display_name||backend} profile`,executable:'',args:[],env:{},platforms:['windows'],cwd_strategy:'native',marker:'ag',capabilities:[],cwd_integration:false,enabled:true,backend})
+      // `platforms` is empty rather than ['windows'] because nothing about an
+      // argument list is platform-specific, and a stray default would make the
+      // profile unavailable on a host it would have worked on.
+      : {id:backend,label:`New ${harnessDescriptor(backend)?.display_name||backend} profile`,executable:'',args:[],env:{},platforms:[],cwd_strategy:'native',marker:'ag',capabilities:[],cwd_integration:false,enabled:true,backend})
     let id=base.id, suffix=2
     while(draft!.shell_profiles.some(profile=>profile.id===id)) id=`${base.id}-${suffix++}`
     change('shell_profiles',[...draft!.shell_profiles,{...base,id,args:[...base.args],env:{...base.env},capabilities:[...base.capabilities]}])
@@ -717,7 +726,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               {selectedProfile.backend==='shell'&&<><label>Cwd strategy<select value={selectedProfile.cwd_strategy} onChange={e=>updateProfile(selectedProfileIndex,{cwd_strategy:e.currentTarget.value as LaunchProfile['cwd_strategy']})}><option value="native">native</option><option value="home">home</option><option value="wsl">wsl</option></select></label>
               <label class="check"><span>Live cwd telemetry</span><input type="checkbox" checked={selectedProfile.cwd_integration} onChange={e=>updateProfile(selectedProfileIndex,{cwd_integration:e.currentTarget.checked})}/></label></>}
               <label>Capabilities<input value={selectedProfile.capabilities.join(', ')} onInput={e=>updateProfile(selectedProfileIndex,{capabilities:e.currentTarget.value.split(',').map(item=>item.trim()).filter(Boolean)})}/></label>
-              <div class="profile-editor-actions"><button onClick={()=>moveProfile(selectedProfileIndex,-1)}>move up</button><button onClick={()=>moveProfile(selectedProfileIndex,1)}>move down</button><button onClick={()=>addProfile(selectedProfile)}>duplicate</button><button onClick={()=>updateProfile(selectedProfileIndex,{enabled:!selectedProfile.enabled})}>{selectedProfile.enabled?'disable':'enable'}</button><button class="danger" disabled={draft.shell_profiles.length===1} onClick={()=>{change('shell_profiles',draft.shell_profiles.filter((_,index)=>index!==selectedProfileIndex));setSelectedProfileId(null)}}>remove</button></div>
+              <div class="profile-editor-actions"><button onClick={()=>moveProfile(selectedProfileIndex,-1)}>move up</button><button onClick={()=>moveProfile(selectedProfileIndex,1)}>move down</button><button onClick={()=>addProfile(selectedProfile)}>duplicate</button><button onClick={()=>updateProfile(selectedProfileIndex,{enabled:!selectedProfile.enabled})}>{selectedProfile.enabled?'disable':'enable'}</button>{/* The last *shell* profile is what cannot go: `default_shell_profile` must name
+    one, and with none left the select above has no options, so the save would fail
+    on a field the user could no longer set. Agent profiles are freely removable. */}
+<button class="danger" disabled={selectedProfile.backend==='shell'&&draft.shell_profiles.filter(profile=>profile.backend==='shell').length===1} onClick={()=>{change('shell_profiles',draft.shell_profiles.filter((_,index)=>index!==selectedProfileIndex));setSelectedProfileId(null)}}>remove</button></div>
               <small>{selectedProfile.backend==='shell'?'swe-mux wraps this shell process only and never edits your shell profile files.':`These arguments follow the ${harnessDisplayName(selectedProfile.backend)} default args and precede anything the launch itself asks for. Reserved: ${reservedArgs(selectedProfile.backend).join(' ')||'none'}.`}</small>
             </article>}
             {!selectedProfile&&<div class="profile-placeholder"><span>TERMINAL::PROFILES</span><strong>Select a profile to inspect or edit it.</strong><p>Nothing is expanded until you choose one.</p></div>}

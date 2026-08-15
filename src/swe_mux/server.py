@@ -314,6 +314,10 @@ SLOW_STARTUP_SECONDS = 20.0
 # a rewritten `tasks.json` and bounded so a generated `package.json` cannot make the
 # approval dialog unrenderable.
 MAX_ACTION_DIFF = 64 * 1024
+# The `SessionState` members that mean the process is gone. An ended session is
+# retained in the live table (its scrollback and exit code are what a task result
+# is read from), so "is it still running" is this test rather than a lookup miss.
+TERMINAL_SESSION_STATES = frozenset({"exited", "crashed"})
 # Browser reconnects use a small recovery window. Wider gaps fall back to one
 # authoritative REST refresh instead of replaying a large, stale event history.
 EVENTS_CATCHUP_LIMIT = 64
@@ -6528,7 +6532,12 @@ def _arm_action_timeout(
         await asyncio.sleep(seconds)
         sessions = app["sessions"]
         session = sessions.sessions.get(session_id)
-        if session is None or session.record.state == "ended":
+        # The terminal states by name, not a word that reads like one: `SessionState`
+        # has no "ended" member, and a finished one-shot step stays in the table as
+        # `exited`. Guarding on the wrong name meant the timer fired an hour after a
+        # 20-second step succeeded, reporting a timeout for a task that had already
+        # completed and calling stop() on a dead session.
+        if session is None or session.record.state in TERMINAL_SESSION_STATES:
             return
         log.warning(
             "project_action_step_timeout project_id=%s action_id=%s step=%s "
@@ -6574,6 +6583,15 @@ async def run_project_action(request: web.Request) -> web.Response:
     if not action_id:
         raise ValueError({"action_id": "is required"})
     service: ProjectActionService = request.app["project_actions"]
+    # The lookup is what can raise KeyError for an id nobody declares. Wrapping the
+    # whole run in that `except` turned any incidental KeyError inside the spawn path
+    # into "unknown Project Action", which is a wrong answer rather than a slow one.
+    try:
+        service.action(project.root, action_id)
+    except PermissionError:
+        pass  # Reported below, with the catalog, after the same call inside the run.
+    except KeyError as exc:
+        raise ValueError(f"unknown Project Action: {action_id}") from exc
     try:
         payload, status = await _start_project_action(
             request.app, project, action_id, _action_inputs(body), origin="user"
@@ -6587,8 +6605,6 @@ async def run_project_action(request: web.Request) -> web.Response:
             },
             409,
         )
-    except KeyError as exc:
-        raise ValueError(f"unknown Project Action: {action_id}") from exc
     return json_response(payload, status)
 
 

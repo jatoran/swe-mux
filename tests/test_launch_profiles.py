@@ -10,6 +10,7 @@ not be applied to a backend it was not written for.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -73,6 +74,21 @@ def test_a_profile_is_refused_for_a_backend_it_was_not_written_for() -> None:
     # applied to an agent CLI starts neither one.
     with pytest.raises(ValueError, match="starts claude, not a shell"):
         resolve_profile(config, "claude-plan", Path.cwd())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the platform gate only fires on Windows")
+def test_a_profile_excluded_from_this_host_is_refused_like_a_shell_profile() -> None:
+    """The same gate `resolve_profile` applies, applied to the same field.
+
+    Kept identical rather than generalized: broadening it would refuse an existing
+    `["windows"]` shell profile on Linux, which works today.
+    """
+    profile = agent_profile()
+    profile.platforms = ["linux"]
+    config = Config(shell_profiles=[profile])
+
+    with pytest.raises(ValueError, match="unavailable on Windows"):
+        resolve_agent_profile(config, "claude-plan", "claude")
 
 
 def test_a_disabled_profile_is_refused_rather_than_silently_ignored() -> None:
