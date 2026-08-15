@@ -1090,7 +1090,7 @@ responsive controls.
   Only items placed on the current device's Rail or Drawer layout participate, and duplicate placements collapse to one spoken command.
   The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
   Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
-- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) shows the two device layouts as columns above the complete Action catalog.
+- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) places custom action creation directly after the active global or Project scope controls, followed by the two device layouts and the complete Action catalog.
   It opens from the main menu, command palette, Action rail gear, and the Configure control in Quick actions rather than living inside Settings.
   Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
   Each column holds its two surfaces, each surface its rows, each row its draggable chips.

@@ -1569,15 +1569,15 @@ body {
 .commandrail-settings .rail-tags button:disabled,.commandrail-settings .rail-order button:disabled{opacity:.35;cursor:not-allowed}
 .commandrail-settings .rail-order{display:flex;gap:3px}
 .commandrail-settings .rail-del{color:var(--red,#f07178)}
-.commandrail-settings .rail-add{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.commandrail-settings .rail-add{margin:10px 0 12px;padding:8px 0 10px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .commandrail-settings .rail-add>summary{cursor:pointer;color:var(--text)}
 .commandrail-settings .rail-add-form{display:flex;flex-wrap:wrap;align-items:end;gap:8px;margin-top:8px}
 /* The settings-form label grid (165px label column) is wrong for this inline row: each field
    stacks its own caption over its control and sizes to content. */
 .commandrail-settings .rail-add-form label{display:flex;flex-direction:column;gap:3px;margin:0;padding:0;grid-template-columns:none}
 .commandrail-settings .rail-add-form label.check{flex-direction:row;align-items:center;gap:6px;height:calc(26px*var(--ui-scale))}
-.commandrail-settings .rail-add-form label.check>input{margin:0}
-.commandrail-settings .rail-add-form input,.commandrail-settings .rail-add-form select{min-width:calc(130px*var(--ui-scale))}
+.commandrail-settings .rail-add-form label.check>input{flex:none;width:14px;height:14px;margin:0;accent-color:var(--green)}
+.commandrail-settings .rail-add-form input:not([type="checkbox"]),.commandrail-settings .rail-add-form select{min-width:calc(130px*var(--ui-scale))}
 .commandrail-settings .rail-add-note{margin:8px 0 0;color:var(--muted);font-size:9px}
 .commandrail-settings .rail-add-note b{color:var(--text);font-weight:600}
 /* Phone: one device column at a time (the switch in the toolbar picks it), and
@@ -1600,7 +1600,7 @@ body {
   .commandrail-settings .rail-chip{line-height:calc(32px*var(--ui-scale))}
   .commandrail-settings .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
   .commandrail-settings .rail-row-head button,.commandrail-settings .rail-surface-head button{height:calc(30px*var(--ui-scale))}
-  .commandrail-settings .rail-add-form input,.commandrail-settings .rail-add-form select{min-width:0;width:100%}
+  .commandrail-settings .rail-add-form input:not([type="checkbox"]),.commandrail-settings .rail-add-form select{min-width:0;width:100%}
   .commandrail-settings .rail-add-form label{flex:1 1 140px}
 }
 .terminal-action-rail button{min-width:calc(74px*var(--ui-scale));height:calc(27px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}

@@ -441,6 +441,8 @@ export function RailEditor() {
       ? 'This project has its own rail. Editing changes only this project.'
       : 'This project inherits the global rail. Any change here creates a project-specific copy.'}</p>}
 
+    <RailAddForm config={config} prompts={prompts} backends={backends} onAdd={commit} />
+
     <div class={`rail-devices${twoColumn ? ' two-up' : ''}`}>
       {devices.map(name => <div class="rail-device" key={name}>
         <h4 class="rail-device-name">{DEVICE_LABEL[name]}</h4>
@@ -508,7 +510,6 @@ export function RailEditor() {
       </div>
     </section>
 
-    <RailAddForm config={config} prompts={prompts} backends={backends} onAdd={commit} />
     {note && <p class="rail-scope-note" aria-live="polite">{note}</p>}
   </section>
 }

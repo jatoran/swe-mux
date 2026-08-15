@@ -35,6 +35,18 @@ test('Configure Actions is a standalone modal reachable from every intended entr
   assert.doesNotMatch(settings, /RailEditor|commandrail:/)
 })
 
+test('custom action creation leads the editor and keeps its checkbox compact', () => {
+  const editor = source('RailEditor.tsx')
+  const styles = source('style.css')
+  const addForm = editor.indexOf('<RailAddForm')
+  const layouts = editor.indexOf('<div class={`rail-devices')
+  const catalog = editor.indexOf('<section class="rail-catalog"')
+
+  assert.ok(addForm >= 0 && addForm < layouts && layouts < catalog)
+  assert.ok(styles.includes('.rail-add-form input:not([type="checkbox"])'))
+  assert.ok(styles.includes('width:14px;height:14px'))
+})
+
 test('prompt templates render excerpts inside Actions while the full editor stays modal', () => {
   const prompts = source('PromptsTab.tsx')
   const actions = source('ActionsTab.tsx')
