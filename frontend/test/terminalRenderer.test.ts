@@ -82,6 +82,20 @@ test('attach readiness carries fitted dimensions, renderer, and visibility', () 
   })
 })
 
+test('a reconnect offers its parsed ring position; a doubtful cursor offers nothing', () => {
+  // `since` is what turns a reconnect into a delta instead of a reset + bounded
+  // replay, so it must be present exactly when the cursor is trustworthy.
+  assert.equal((terminalAttachReadyFrame(80, 24, 'dom', false, 4096) as { since?: number }).since, 4096)
+  assert.equal((terminalAttachReadyFrame(80, 24, 'dom', false, 0) as { since?: number }).since, 0)
+  // A cold attach has no cursor; a broken count (gap frame) nulls it; nothing
+  // non-integral may reach the daemon as a stream position.
+  assert.ok(!('since' in terminalAttachReadyFrame(80, 24, 'dom')))
+  assert.ok(!('since' in terminalAttachReadyFrame(80, 24, 'dom', false, null)))
+  assert.ok(!('since' in terminalAttachReadyFrame(80, 24, 'dom', false, -1)))
+  assert.ok(!('since' in terminalAttachReadyFrame(80, 24, 'dom', false, 1.5)))
+  assert.ok(!('since' in terminalAttachReadyFrame(80, 24, 'dom', false, Number.NaN)))
+})
+
 test('a ConPTY descriptor becomes xterm windowsPty options', () => {
   assert.deepEqual(windowsPtyCompatibility({ backend: 'conpty', build_number: 19045 }), {
     backend: 'conpty',

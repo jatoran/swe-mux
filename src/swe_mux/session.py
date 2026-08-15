@@ -25,7 +25,7 @@ from typing import Any, Literal, cast
 from .adapters import BackendAdapter, SpawnOptions
 from .adapters.claude import claude_data_home
 from .background_tasks import background
-from .cli_state import CliStateMonitor, ParkedMove
+from .cli_state import CliStateMonitor, ConversationHolder, ParkedMove
 from .composer_input import ComposerState, clear_composer
 from .event_bus import EventBus
 from .git_projects import ProjectIdentity, resolve_project
@@ -56,6 +56,7 @@ from .screen_mode import (
     SCREEN_TOGGLE,
     BracketedPasteParser,
     ScreenModeParser,
+    StickyModeParser,
 )
 from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
 from .spawn_contract import (
@@ -1998,6 +1999,10 @@ class Session:
         # source of record (`delivery-readiness.md`).
         self.screen = ScreenModeParser()
         self.bracketed_paste = BracketedPasteParser()
+        # The reporting modes an attach has to hand back, for the same reason bracketed
+        # paste is handed back: set once at startup, never restated, and cleared by the
+        # terminal reset a reconnecting pane performs. See `STICKY_PRIVATE_MODES`.
+        self.sticky_modes = StickyModeParser()
         self.terminal_mode: str | None = None
         self.terminal_mode_updated_at = 0.0
         self.observation_state: dict[str, Any] = {
@@ -2064,8 +2069,56 @@ class Session:
         (`ScrollbackBuffer.tail`); retention is untouched and later output is
         unaffected.
         """
+        snapshot, revision, _kind, payload, _position, subscriber = self.attach_and_subscribe(None)
+        return snapshot, revision, payload, subscriber
+
+    def attach_and_subscribe(
+        self, since: int | None
+    ) -> tuple[dict[str, Any], int, str, bytes, int, PtySubscriber]:
+        """One atomic attach decision: what this client gets, and from where.
+
+        ``since`` is the ring position the client has already parsed up to — the
+        position a previous attach's ``replay_end`` reported plus every live byte
+        it received since. When the ring still holds everything after it, the
+        attach is a **delta** (kind ``"delta"``): exactly the missed bytes, into a
+        terminal the client did *not* reset. That is what makes a reconnect
+        lossless — the scrollback the client spent a session parsing survives a
+        tab switch, a minimize, or a phone freeze, instead of being discarded and
+        rebuilt from a bounded window that reconstructs roughly one screen.
+
+        Everything else — no ``since``, a gap the ring no longer covers, a gap
+        larger than the attach budget (continuity would cost more parse than a
+        fresh window), or a position from some other stream entirely — falls back
+        to the full bounded replay (kind ``"attach"``), which is exactly the
+        previous behaviour. The validation is what makes offering ``since``
+        always safe for the client: a wrong answer here corrupts a terminal
+        silently, so nothing but a provably-covered gap is served as a delta.
+
+        Like ``replay_and_subscribe`` this has no await points, so the payload,
+        the returned ring ``position`` and the subscription describe one instant.
+        """
         subscriber = self.subscribe()
-        return self.record.snapshot(), self.revision, self.replay_bytes(), subscriber
+        position = self.scrollback.position
+        snapshot = self.record.snapshot()
+        if since is not None and self._delta_covers(since, position):
+            payload = self.scrollback.bytes_since(since)
+            return snapshot, self.revision, "delta", payload, position, subscriber
+        return snapshot, self.revision, "attach", self.replay_bytes(), position, subscriber
+
+    def _delta_covers(self, since: int | None, position: int) -> bool:
+        """Whether the ring provably holds every byte after ``since``.
+
+        The strict-retention check matters because ``bytes_since`` answers an
+        uncovered position with the whole buffer — correct for detection cursors,
+        catastrophic for a client that would append it after a hole.
+        """
+        if since is None or not 0 <= since <= position:
+            return False
+        gap = position - since
+        if gap > self.scrollback.size:
+            return False
+        budget = self.attach_replay_bytes
+        return budget is None or budget <= 0 or gap <= budget
 
     def replay_bytes(self) -> bytes:
         """Retained output for a fresh attach, bounded and self-contained.
@@ -2110,6 +2163,12 @@ class Session:
             preamble += b"\x1b[?2004h"
         if self.screen.mode == "alternate" and not SCREEN_TOGGLE.search(replay):
             preamble += b"\x1b[?1049h"
+        # The rest of the same family, and for the same reason. Losing the mouse group
+        # here is what made a phone swipe do nothing on any session deep enough to
+        # outgrow this window: with no mouse modes the browser reports no mouse, so the
+        # drag has nothing to forward and falls back to scrolling an alternate screen
+        # that has no scrollback to scroll.
+        preamble += self.sticky_modes.preamble(replay)
         return preamble + replay + suffix
 
     def replay_window_truncated(self) -> bool:
@@ -2387,18 +2446,24 @@ class Session:
 
     def take_resync(
         self, subscriber: PtySubscriber
-    ) -> tuple[int, int, bytes, dict[str, Any], int, dict[str, Any] | None]:
+    ) -> tuple[int, int, bytes, dict[str, Any], int, int, dict[str, Any] | None]:
         """Capture a deterministic recovery boundary without yielding the event loop.
 
         Bounded by the same budget as a fresh attach, and for the same reason: the
         client resets its terminal on a resync, so what it receives is a complete
         replay into an empty buffer rather than a patch. A resync is also triggered
         by a client that could not keep up, which is the worst moment to hand one
-        the largest possible payload.
+        the largest possible payload. Deliberately never a delta even though the
+        ring may still cover the drop, for that same reason.
+
+        The returned ring position re-anchors the client's byte cursor: the drop
+        broke its count, and without a fresh anchor every later reconnect would
+        offer a stale ``since`` and pay a full replay it did not need.
         """
         dropped_bytes = subscriber.dropped_bytes
         dropped_chunks = subscriber.dropped_chunks
         replay = self.replay_bytes()
+        position = self.scrollback.position
         snapshot = self.record.snapshot()
         revision = self.revision
         exit_frame = subscriber.exit_pending
@@ -2406,7 +2471,7 @@ class Session:
         subscriber.dropped_bytes = 0
         subscriber.dropped_chunks = 0
         subscriber.exit_pending = None
-        return dropped_bytes, dropped_chunks, replay, snapshot, revision, exit_frame
+        return dropped_bytes, dropped_chunks, replay, snapshot, revision, position, exit_frame
 
     def unsubscribe(self, subscriber: PtySubscriber) -> None:
         self.subscribers.discard(subscriber)
@@ -2458,6 +2523,26 @@ class SessionManager:
         # Claude's own per-process side state, polled on the watchdog cadence.
         # Corroboration only in this phase — it never drives SessionState.
         self.cli_state_monitor = CliStateMonitor(claude_data_home() / "sessions")
+
+    def conversation_holder(self, backend: str, native_id: str) -> ConversationHolder | None:
+        """The live CLI process already holding ``native_id``, if there is one.
+
+        A conversation opens once. Anything that would resume one has to ask this
+        first, because the CLI answers a second opener by exiting rather than by
+        failing to start, which arrives *after* the caller has announced success.
+        The mux-side check ("is one of my own panes on it") is a different and
+        narrower question: it cannot see a background agent, another terminal, or
+        anything else that outlives the pane that started it.
+        """
+        return self.cli_state_monitor.conversation_holder(require_backend(backend), native_id)
+
+    def conversation_holders(self) -> dict[str, ConversationHolder]:
+        """Every conversation a live CLI process holds, by conversation id.
+
+        One directory read for a whole page of history rows, so a listing can mark
+        what cannot be resumed instead of offering an action that would fail.
+        """
+        return self.cli_state_monitor.conversation_holders()
 
     async def spawn(
         self,
@@ -3635,6 +3720,7 @@ class SessionManager:
             # it the fact would be lost for the whole remaining life of the PTY.
             session.screen.feed(replay)
             session.bracketed_paste.feed(replay)
+            session.sticky_modes.feed(replay)
             session.osc_signals.feed(replay)
             session.transcript_path = transcript_path
             lifecycle = meta.get("agent_lifecycle_id")
@@ -5934,6 +6020,7 @@ class SessionManager:
                 session.output_window.popleft()
             session.screen.feed(chunk)
             session.bracketed_paste.feed(chunk)
+            session.sticky_modes.feed(chunk)
             session.osc_signals.feed(chunk)
             self._note_shell_breakpoints(session, chunk)
             prompt_uris = session.osc7.feed(chunk)

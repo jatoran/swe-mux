@@ -749,6 +749,7 @@ body {
 .transcript-heading h3,.transcript-heading span { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }
 .transcript-actions { flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel2) }
 .transcript-actions>button,.transcript-match-nav button { min-height:31px;border:1px solid var(--line);background:var(--panel);color:var(--text);padding:0 10px;font:inherit;cursor:pointer }
+.transcript-held { min-height:31px;display:flex;align-items:center;padding:0 10px;border:1px dashed var(--line);color:var(--muted);font-size:9px }
 .transcript-tool-toggle { min-height:31px;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:9px;cursor:pointer }
 .transcript-tool-toggle:has(input:checked) { border-color:var(--accent);color:var(--text) }
 .transcript-tool-toggle:has(input:disabled) { opacity:.45;cursor:not-allowed }

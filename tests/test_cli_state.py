@@ -33,6 +33,8 @@ def write_state(
     status_updated_at_ms: float = 0.0,
     kind: str = "interactive",
     parked_job_id: str | None = None,
+    started_at_ms: float = 0.0,
+    job_id: str | None = None,
 ) -> Path:
     path = root / f"{pid}.json"
     payload: dict[str, Any] = {
@@ -40,6 +42,7 @@ def write_state(
         "cwd": cwd,
         "pid": pid,
         "procStart": "639211298070889210",
+        "startedAt": started_at_ms,
         "kind": kind,
         "name": "test",
         "status": status,
@@ -47,6 +50,8 @@ def write_state(
         "updatedAt": status_updated_at_ms,
         "version": "2.1.220",
     }
+    if job_id is not None:
+        payload["jobId"] = job_id
     if parked_job_id is not None:
         payload["parkedJobId"] = parked_job_id
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -219,6 +224,89 @@ def test_a_leftover_file_from_before_this_run_is_not_this_runs_child(tmp_path: P
     )
     monitor.observe(monitor.poll(), [session], now)
     assert "nested_children_observed" not in session.status_health_counters
+
+
+# --- who holds a conversation right now ---------------------------------------
+#
+# A conversation opens once. The set of conversations a live CLI process already
+# holds is therefore exactly the set of resumes that would exit instead of
+# starting, and mux reads it to refuse such a resume rather than hand back a pane
+# that is already gone.
+
+
+def holder_monitor(
+    tmp_path: Path, live: dict[int, float] | None = None
+) -> tuple[CliStateMonitor, Path]:
+    """A monitor whose only running processes are the pids in ``live``."""
+    root = tmp_path / "sessions"
+    root.mkdir(exist_ok=True)
+    starts = dict(live or {})
+    return CliStateMonitor(root, process_start=lambda pid: starts.get(pid)), root
+
+
+def test_a_live_background_cli_holds_its_conversation(tmp_path: Path) -> None:
+    monitor, root = holder_monitor(tmp_path, {100: 1000.0})
+    write_state(
+        root, 100, OWN, cwd=str(tmp_path), kind="bg", started_at_ms=1000_000, job_id="job1"
+    )
+
+    held = monitor.conversation_holder("claude", OWN)
+
+    assert held is not None
+    assert (held.pid, held.kind, held.job_id) == (100, "bg", "job1")
+    assert held.is_background_agent
+    # The refusal has to name the way back to the conversation, not just decline.
+    assert "claude agents" in held.describe()
+
+
+def test_a_state_file_whose_process_is_gone_holds_nothing(tmp_path: Path) -> None:
+    # A CLI killed hard leaves its file behind. Treating that as a holder would
+    # make a free conversation permanently unresumable, which is the one failure
+    # this check must never cause.
+    monitor, root = holder_monitor(tmp_path)
+    write_state(root, 100, OWN, cwd=str(tmp_path), kind="bg", started_at_ms=1000_000)
+
+    assert monitor.conversation_holder("claude", OWN) is None
+
+
+def test_a_reused_pid_holds_nothing(tmp_path: Path) -> None:
+    # The pid is alive, but it started long after the file was written, so it is
+    # not the process the file describes.
+    monitor, root = holder_monitor(tmp_path, {100: 9000.0})
+    write_state(root, 100, OWN, cwd=str(tmp_path), kind="bg", started_at_ms=1000_000)
+
+    assert monitor.conversation_holder("claude", OWN) is None
+
+
+def test_the_cli_stamping_its_file_after_it_starts_still_holds(tmp_path: Path) -> None:
+    # The file is always written after the process it describes exists (measured
+    # 0.42-1.31 s behind live). Reading that lag as a mismatch would silently
+    # disable the guard on every real session.
+    monitor, root = holder_monitor(tmp_path, {100: 1000.0})
+    write_state(root, 100, OWN, cwd=str(tmp_path), kind="bg", started_at_ms=1001_310)
+
+    assert monitor.conversation_holder("claude", OWN) is not None
+
+
+def test_a_harness_that_publishes_no_side_state_is_never_asked(tmp_path: Path) -> None:
+    # The directory belongs to Claude. A Codex thread id that happened to collide
+    # with a conversation id in it must not answer for Codex.
+    monitor, root = holder_monitor(tmp_path, {100: 1000.0})
+    write_state(root, 100, OWN, cwd=str(tmp_path), kind="bg", started_at_ms=1000_000)
+
+    assert monitor.conversation_holder("codex", OWN) is None
+    assert monitor.conversation_holder("claude", FOREIGN) is None
+
+
+def test_holders_are_read_fresh_rather_than_from_the_poll_cache(tmp_path: Path) -> None:
+    # Ownership is asked at the moment an operator resumes something, where a
+    # five-second-old answer is a wrong answer.
+    monitor, root = holder_monitor(tmp_path, {100: 1000.0})
+    path = write_state(root, 100, OWN, cwd=str(tmp_path), kind="bg", started_at_ms=1000_000)
+    monitor.poll()
+    path.unlink()
+
+    assert monitor.conversation_holders() == {}
 
 
 # --- backgrounded conversations (Claude 2.1.227 `parkedJobId`) ----------------

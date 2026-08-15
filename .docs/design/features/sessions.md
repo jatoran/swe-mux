@@ -61,6 +61,21 @@ and reattachable browser viewports.
   columns and rows. The daemon resizes ConPTY before sending replay bytes; older clients may use
   their first `resize` frame or the bounded compatibility timeout. Messages received while
   readiness is pending are processed only after the replay boundary.
+- **A reconnect is a delta, not a do-over, whenever the ring can prove coverage.**
+  The client tracks the ring position it has parsed up to (each `replay_end` carries the anchor;
+  live binary bytes advance it; a `gap` frame invalidates it until the resync re-anchors) and
+  offers it as `since` in `attach_ready`.
+  A covered gap is answered with exactly the missed bytes into a terminal the client did not
+  reset, so the scrollback a pane spent its whole session parsing survives a tab switch, a
+  minimize, a phone freeze, and a session-preserving daemon restart.
+  Before this, returning to a tab hidden ≥5 s always forced a reconnect (`liveness.ts`), and
+  every reconnect reset the terminal and rebuilt it from a 512 KiB window that parses to roughly
+  one screen — the "pane only shows a screen's worth after switching tabs" defect.
+  The liveness policy is deliberately unchanged: a forced reconnect now usually costs an empty
+  delta, and it still verifies a socket a sleeping device silently killed.
+  Any doubt about coverage falls back to the full windowed replay, because a wrong delta corrupts
+  a terminal silently; the fallback also caps the delta at `attach_replay_bytes`, so continuity
+  never reintroduces the unbounded attach parse the budget exists to prevent.
 - A flow-control-capable browser acknowledges terminal bytes only after xterm parses them.
   The daemon limits unparsed output per connection to 128 KiB, preventing old repaint traffic from placing typed echo seconds behind the parser queue.
   Attach and resync replay are included, while older browser bundles remain compatible because the capability is negotiated in `attach_ready`.
@@ -147,6 +162,28 @@ and reattachable browser viewports.
   Notes are created and managed through the owning Project's flat Notes collection.
 - Resume requires a target Project and a valid native identity/transcript. The new process
   starts at the selected Project root and receives a new mux identity.
+- **A conversation opens once, and not every holder is a mux session.** Resume refuses a
+  conversation held by any live CLI process (`409 conversation_held`), not only one a live pane
+  claims. Claude parks a conversation into a background agent that outlives the pane, runs under
+  the CLI's own daemon, and keeps the conversation checked out; `--resume` on it prints a refusal
+  and exits 1 about 1.5 s later, so the pane the operator would get is dead on arrival. The
+  holder is read live from the CLI's own per-process state files
+  (`cli_state.conversation_holders`) at the moment of the resume, and only a pid proven to still
+  be running counts — a phantom holder would make a resumable conversation permanently
+  unresumable, which is worse than the failure it prevents.
+- An attach replay restates the DEC private modes the child set once and never repeated
+  (`STICKY_PRIVATE_MODES` in `screen_mode.py`, alongside the existing bracketed-paste and
+  alternate-screen restatements). Measured from a real Claude start: `?1004`, `?9001`,
+  `?2004`, `?2031`, `?1049`, `?1000`, `?1002`, `?1003`, and `?1006` all appear exactly once,
+  inside the first 130 bytes. A reconnecting pane resets its terminal, so any of these that
+  fell outside the bounded replay window was lost for the rest of the PTY's life. Losing the
+  mouse group is what made a phone swipe do nothing: with no mouse modes the browser reports
+  no mouse, the drag has nothing to forward, and it falls through to scrolling an alternate
+  screen that has no scrollback — silently, and only on sessions deep enough to outgrow the
+  window, which is why it read as intermittent. Modes the replay window mentions itself are
+  left alone; the child's own most recent word outranks a restatement. `?9001` (win32 input
+  mode) is deliberately excluded: it changes how keys are *encoded* rather than what the
+  terminal reports back, and nothing observed points at its loss causing harm.
 - **Branch** forks a live agent conversation and leaves both halves open, and is the only flow
   that types a command into a pane the operator is holding. It therefore runs a readiness gate
   first (`_branch_block_reason`): a pane that is mid-turn, waiting on an approval, ended, or
@@ -163,11 +200,23 @@ and reattachable browser viewports.
   guess: two transcripts appearing at once.
 - The release wait makes the first spawn succeed; it is not what makes the branch correct. The
   sibling is spawned and then **watched**, and one that exits inside the settle window is
-  discarded and retried rather than attached. A pane that will not stay up is removed and
-  reported, because handing the operator a session that spawned dead is the defect this exists
-  to prevent. A fork that cannot be identified at all is refused outright rather than resumed:
-  without the identity roll the source pane still claims the original, and the sibling would show
-  one conversation as two rows over one file.
+  discarded and retried rather than attached. A fork that cannot be identified at all is refused
+  outright rather than resumed: without the identity roll the source pane still claims the
+  original, and the sibling would show one conversation as two rows over one file.
+- **Handing back a pane that spawned dead is the defect, not a degraded success**
+  (`spawn_probe.py`, shared by Branch and Resume). A CLI that refuses the conversation it was
+  given does not fail its spawn: it starts, prints one line, and exits *after* the response that
+  announced success, so the operator gets a grey pane, no message and no log line. Every flow
+  that opens a conversation on the operator's behalf therefore proves the pane survived a short
+  window, discards one that did not, and reports the harness's own dying output — cleaned of
+  terminal control bytes and otherwise unedited, which is what keeps it working when a CLI
+  changes its wording or a harness mux has never seen refuses something.
+  The window ends early on positive proof that the pane took what it was given (its own pid
+  against the conversation in the CLI's state file); without such proof it is paid in full.
+  Whether to retry belongs to the caller: Branch retries because it is racing a release that the
+  next attempt is further from, while a refusal that will repeat forever is reported instead.
+  This is a spawn check, not a health check — a pane that dies later is ordinary lifecycle and
+  belongs to the watchdog.
 - Terminal environments are built from a scrubbed base (`spawn_contract.base_session_env`):
   parent-Claude session markers (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, session
   id/entrypoint/pid/effort) are dropped at spawn for every session because a daemon relaunched

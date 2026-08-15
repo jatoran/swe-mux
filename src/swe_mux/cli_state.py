@@ -32,6 +32,12 @@ Three measured caveats shape what this module does *not* do:
   minutes while its background job ran a full task. Following the move is
   therefore a rollover on the CLI's own authority, not the transcript-switch
   heuristic a Claude pane forbids (``adapters/base.py``).
+
+The same directory answers one question that is not a detection question at all:
+which conversations a live CLI process already holds (``conversation_holders``).
+The CLI opens a conversation once, so that set is exactly the set of resumes that
+would exit instead of starting rather than fail to start, and it is read at the
+moment of the resume rather than sampled on the poll.
 """
 
 from __future__ import annotations
@@ -39,13 +45,18 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .harness import Backend, publishes_cli_state
 from .status_timeline import note_layer_reading
+
+try:
+    import psutil
+except ImportError:  # pragma: no cover - diagnostics cover an unsynchronized dev venv
+    psutil = None
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +112,80 @@ class ParkedMove:
     job_state: str
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationHolder:
+    """A live CLI process that already holds a conversation.
+
+    The CLI refuses to open one conversation twice, so a holder is the reason a
+    resume of that conversation would exit instead of starting: measured
+    2026-08-14 on 2.1.232, ``--resume`` of a conversation running as a background
+    agent printed "Session <id> is currently running as a background agent (bg).
+    Use `claude agents` to find and attach to it, or add --fork-session to branch
+    off a copy" and exited 1 about 1.5 s later.
+
+    A holder is only ever reported for a *proven* process: the state file names a
+    pid, and that pid must still be running with the start time the file records.
+    An unverifiable pid yields no holder, because the cost of the two errors is
+    not symmetric — a missed holder degrades to the ordinary spawn failure the
+    settle check reports, while a phantom one makes a resumable conversation
+    permanently unresumable.
+    """
+
+    conversation_id: str
+    # The CLI's own vocabulary: `bg` for a background agent, `interactive` for a
+    # pane. Kept verbatim rather than translated, because the remedy differs and
+    # the message quotes it back to the operator.
+    kind: str
+    pid: int
+    job_id: str
+    name: str
+    cwd: str
+
+    @property
+    def is_background_agent(self) -> bool:
+        return self.kind == "bg"
+
+    def describe(self) -> str:
+        """One sentence naming the holder and the way to reach it."""
+        label = f'"{self.name}"' if self.name else self.conversation_id
+        if self.is_background_agent:
+            return (
+                f"conversation {self.conversation_id} is running as a Claude background "
+                f"agent ({label}, pid {self.pid}); attach to it with `claude agents` in "
+                f"{self.cwd or 'its working directory'}, or branch a copy instead of "
+                f"resuming it"
+            )
+        return (
+            f"conversation {self.conversation_id} is open in another Claude process "
+            f"({label}, pid {self.pid}); close that one or branch a copy"
+        )
+
+
+# Resolves a pid to the epoch second it started, or None when no such process is
+# running. Injected so the liveness rule can be tested without real processes.
+ProcessStart = Callable[[int], float | None]
+
+
+def _psutil_process_start(pid: int) -> float | None:
+    if psutil is None or pid <= 0:
+        return None
+    try:
+        return float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 - any failure to prove liveness means "unknown"
+        return None
+
+
+# The CLI stamps `startedAt` when it writes the file, which is *after* the process
+# it describes began: measured 2026-08-14 across 13 live CLIs, the file ran 0.42 s
+# to 1.31 s behind the OS's creation time, and a cold start can be slower still. So
+# the window is asymmetric — generous in the direction the lag actually goes, tight
+# in the direction that would mean the pid names something else. It is a pid-reuse
+# guard, not a clock comparison: reuse requires the first process to have exited,
+# which puts the replacement's creation time far outside either bound.
+_PROCESS_START_MAX_LAG_SECONDS = 120.0
+_PROCESS_START_MAX_LEAD_SECONDS = 5.0
+
+
 @dataclass(slots=True)
 class CliSessionState:
     path: str
@@ -114,6 +199,12 @@ class CliSessionState:
     updated_at: float
     version: str
     mtime: float
+    # The CLI's own title for the process, its background-job id when it has one,
+    # and when the process started. Read for ownership answers rather than for
+    # status: `started_at` is what proves the recorded pid is still that process.
+    name: str = ""
+    job_id: str = ""
+    started_at: float = 0.0
     parked_job_id: str = ""
     parked: ParkedConversation | None = None
 
@@ -169,6 +260,9 @@ def _parse_state(path: Path, mtime: float) -> CliSessionState | None:
         updated_at=_millis("updatedAt"),
         version=str(data.get("version") or ""),
         mtime=mtime,
+        name=str(data.get("name") or ""),
+        job_id=str(data.get("jobId") or ""),
+        started_at=_millis("startedAt"),
         parked_job_id=str(data.get("parkedJobId") or ""),
     )
 
@@ -197,13 +291,21 @@ class CliStateMonitor:
 
     ``poll`` does the file I/O (call it off the event loop); ``observe`` applies
     the results to live sessions (call it on the loop — it mutates session
-    counters and ledgers).
+    counters and ledgers). ``conversation_holders`` answers a different question
+    from the same directory — who currently owns a conversation — and shares
+    neither the cache nor the cadence, so it is safe to call from either side.
     """
 
-    def __init__(self, root: Path, jobs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        jobs_root: Path | None = None,
+        process_start: ProcessStart | None = None,
+    ) -> None:
         self.root = root
         # Sibling of the per-process state directory in the CLI's data home.
         self.jobs_root = jobs_root if jobs_root is not None else root.parent / "jobs"
+        self._process_start = process_start or _psutil_process_start
         self._cache: dict[str, tuple[float, int, CliSessionState | None]] = {}
         # One count per standing fact, not per 5 s poll: the key that was last
         # counted per session, for disagreements and for nested children.
@@ -250,6 +352,63 @@ class CliStateMonitor:
             if key not in seen:
                 del self._cache[key]
         return states
+
+    def _holds(self, state: CliSessionState) -> bool:
+        """Whether a live process stands behind this state file.
+
+        The CLI removes its file on a clean exit, so an unmatched file is either a
+        crash leftover or a pid the OS has since reused. Both would name a holder
+        that is not there, and a phantom holder is the one failure this check
+        exists to prevent, so nothing short of the recorded process still running
+        counts.
+        """
+        started = self._process_start(state.pid)
+        if started is None:
+            return False
+        if not state.started_at:
+            # An older CLI that publishes no start time: the pid is alive and the
+            # file is its own, which is as much as that version can prove.
+            return True
+        lag = state.started_at - started
+        return -_PROCESS_START_MAX_LEAD_SECONDS <= lag <= _PROCESS_START_MAX_LAG_SECONDS
+
+    def conversation_holders(self) -> dict[str, ConversationHolder]:
+        """Every conversation a live CLI process holds right now, by conversation id.
+
+        Read fresh on every call rather than from ``poll``'s cache: this answers a
+        question asked at the moment an operator resumes something, where a five
+        second old answer is a wrong answer, and the directory is a dozen small
+        files.
+        """
+        holders: dict[str, ConversationHolder] = {}
+        try:
+            paths = sorted(self.root.glob("*.json"))
+        except OSError:
+            return holders
+        for path in paths:
+            try:
+                state = _parse_state(path, path.stat().st_mtime)
+            except OSError:
+                continue
+            if state is None or state.session_id in holders:
+                continue
+            if not self._holds(state):
+                continue
+            holders[state.session_id] = ConversationHolder(
+                conversation_id=state.session_id,
+                kind=state.kind,
+                pid=state.pid,
+                job_id=state.job_id,
+                name=state.name,
+                cwd=state.cwd,
+            )
+        return holders
+
+    def conversation_holder(self, backend: Backend, native_id: str) -> ConversationHolder | None:
+        """The live process holding ``native_id``, or None if it is free to open."""
+        if not native_id or not _publishes_cli_state(backend):
+            return None
+        return self.conversation_holders().get(native_id)
 
     def observe(
         self, states: list[CliSessionState], sessions: Iterable[Any], now: float | None = None

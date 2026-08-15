@@ -59,12 +59,21 @@ export function windowsPtyCompatibility(value: unknown): WindowsPtyCompatibility
 }
 
 /** `hidden` reports that this client is not on screen, which deregisters its viewport
- *  from the daemon's geometry arbitration instead of registering these dimensions. */
+ *  from the daemon's geometry arbitration instead of registering these dimensions.
+ *
+ *  `since` is the daemon ring position this client has already parsed up to (the last
+ *  `replay_end` anchor plus every live byte received after it). Offering it lets the
+ *  daemon answer a reconnect with a **delta** — only the missed bytes, into a terminal
+ *  that keeps its buffer — instead of a reset plus a bounded window that discards the
+ *  scrollback this pane spent its whole session parsing. Always safe to offer: the
+ *  daemon validates coverage and falls back to the full replay, and a daemon that
+ *  predates the field ignores it. */
 export function terminalAttachReadyFrame(
   cols: number,
   rows: number,
   renderer: ActiveTerminalRenderer,
   hidden = false,
+  since: number | null = null,
 ) {
   return {
     type: 'attach_ready' as const,
@@ -75,5 +84,6 @@ export function terminalAttachReadyFrame(
     // The daemon enables output credit only after the client advertises parser
     // acknowledgements. Older clients therefore keep the pre-credit protocol.
     output_flow_control: true,
+    ...(since !== null && Number.isSafeInteger(since) && since >= 0 ? { since } : {}),
   }
 }

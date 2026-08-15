@@ -86,8 +86,10 @@ from .harness import (
     is_agent_harness,
     needs_resize_repaint,
     public_harness_registry,
+    publishes_cli_state,
     repaints_scrollback,
     replay_needs_repaint,
+    require_backend,
     suppresses_late_color_response,
 )
 from .history import HistoryIndex
@@ -204,6 +206,7 @@ from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
     STATE_WATCHDOG_LOOP,
+    PtySubscriber,
     Session,
     SessionManager,
     acknowledge_turns,
@@ -229,6 +232,7 @@ from .spawn_contract import (
     resolve_listed_cwd,
     scrub_claude_session_markers,
 )
+from .spawn_probe import SpawnFailure, spawn_settled
 from .status_timeline import StatusTimelineStore
 from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor_client import SupervisorClient
@@ -4065,6 +4069,52 @@ async def _decorate_generated_titles(app: web.Application, items: list[dict[str,
             item["generated_title_annotation"] = annotation
 
 
+def _decorate_conversation_holders(app: web.Application, items: list[dict[str, Any]]) -> None:
+    """Mark history rows whose conversation a live CLI process already holds.
+
+    A row is offered with a Resume action, and a conversation checked out by a
+    background agent (or by any other live CLI) cannot take one: the resume would
+    spawn a process that refuses and exits. The listing states that rather than
+    letting the operator discover it by pressing the button, and it is read live
+    rather than stored, because ownership ends when that process does and a stored
+    flag would outlive the fact.
+
+    One directory read for the whole page; rows of a harness that publishes no such
+    state are left untouched. So is a conversation one of mux's own live panes is
+    on: that is a different fact with its own refusal (`conversation_live`, which
+    names the pane), and describing a pane the operator can see as "another CLI"
+    would be worse than saying nothing.
+    """
+    manager = app.get("sessions")
+    if manager is None or not items:
+        return
+    holders = manager.conversation_holders()
+    if not holders:
+        return
+    mux_owned = {
+        session.record.native_session_id
+        for session in manager.sessions.values()
+        if session.record.state not in {"exited", "crashed"}
+    }
+    for item in items:
+        backend = str(item.get("backend") or "")
+        if backend not in HARNESSES or not publishes_cli_state(require_backend(backend)):
+            continue
+        native_id = str(item.get("native_id") or "")
+        if native_id in mux_owned:
+            continue
+        holder = holders.get(native_id)
+        if holder is None:
+            continue
+        item["held_by"] = {
+            "kind": holder.kind,
+            "pid": holder.pid,
+            "job_id": holder.job_id,
+            "name": holder.name,
+            "detail": holder.describe(),
+        }
+
+
 async def _spawn_from_body(
     app: web.Application, body: dict[str, Any], *, initial_output: bytes | None = None
 ) -> Session:
@@ -4985,71 +5035,26 @@ async def _await_source_release(
             return "reported", stem
 
 
-async def _settle_branch_sibling(session: Any, settle_seconds: float) -> str | None:
-    """How the sibling died inside the settle window, or None if it is still up.
-
-    A sibling that failed to take the conversation does not merely fail to appear —
-    it reaches ``idle`` first and dies a beat later, so "it left the starting state"
-    is not evidence of health and the whole window has to be waited out.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + settle_seconds
-    while loop.time() < deadline:
-        await asyncio.sleep(0.2)
-        state = getattr(session.record, "state", "")
-        if state in {"exited", "crashed"}:
-            return f"{state} (exit code {getattr(session.record, 'exit_code', None)})"
-    return None
-
-
-async def _discard_branch_sibling(manager: Any, session: Any) -> None:
-    """Take a sibling that did not come up back out of the world."""
-    with suppress(Exception):
-        await manager.stop(session.record.id)
-    with suppress(Exception):
-        manager.sessions.pop(session.record.id, None)
-
-
 async def _spawn_branch_sibling(
     manager: Any, source_id: str, **spawn_kwargs: Any
-) -> tuple[Any, int, str | None]:
+) -> tuple[Any, int, SpawnFailure | None]:
     """Spawn the sibling pane and prove it survived, retrying an immediate exit.
 
-    Verification rather than prediction. However confident the release wait above is,
-    the only fact that settles whether the original conversation is free is a resumed
-    process still running a moment later, and the failure this exists for is precisely
-    an exit inside the first second. Retrying is the right response because the cause
-    is a race that the next attempt is further from.
+    Retrying is right *here* specifically: the failure this exists for is the
+    source CLI not yet having let go of the original conversation, which is a race
+    the next attempt is further from. `spawn_probe` deliberately leaves that
+    decision to the caller — a flow whose refusal is permanent must not retry it.
 
-    A sibling that will not stay up is removed rather than left attached: handing the
-    operator a dead pane is the bug, not a degraded success.
-
-    Returns ``(session, attempts_used, failure_detail)``.
+    Returns ``(session, attempts_used, failure)``.
     """
-    detail: str | None = None
-    for attempt in range(1, BRANCH_SIBLING_ATTEMPTS + 1):
-        session = await manager.spawn(**spawn_kwargs)
-        detail = await _settle_branch_sibling(session, BRANCH_SIBLING_SETTLE_SECONDS)
-        if detail is None:
-            if attempt > 1:
-                log.info(
-                    "branch sibling for %s came up on attempt %d/%d",
-                    source_id,
-                    attempt,
-                    BRANCH_SIBLING_ATTEMPTS,
-                )
-            return session, attempt, None
-        log.warning(
-            "branch sibling for %s died on attempt %d/%d: %s",
-            source_id,
-            attempt,
-            BRANCH_SIBLING_ATTEMPTS,
-            detail,
-        )
-        await _discard_branch_sibling(manager, session)
-        if attempt < BRANCH_SIBLING_ATTEMPTS:
-            await asyncio.sleep(BRANCH_SIBLING_RETRY_BACKOFF_SECONDS)
-    return None, BRANCH_SIBLING_ATTEMPTS, detail
+    return await spawn_settled(
+        manager,
+        flow=f"branch sibling for {source_id}",
+        settle_seconds=BRANCH_SIBLING_SETTLE_SECONDS,
+        attempts=BRANCH_SIBLING_ATTEMPTS,
+        retry_backoff_seconds=BRANCH_SIBLING_RETRY_BACKOFF_SECONDS,
+        **spawn_kwargs,
+    )
 
 
 async def branch_session(request: web.Request) -> web.Response:
@@ -5234,16 +5239,17 @@ async def branch_session(request: web.Request) -> web.Response:
         project_label=project.name,
     )
     if session is None:
+        detail = failure.describe() if failure is not None else "no failure recorded"
         log.error(
             "branch of %s could not reopen the original after %d attempts: %s",
             original,
             attempts,
-            failure,
+            detail,
         )
         return json_response(
             {
                 "error": "branched, but the original conversation would not reopen "
-                f"({failure}); reopen it from History",
+                f"({detail}); reopen it from History",
                 "code": "branch_sibling_failed",
                 "attempts": attempts,
             },
@@ -6659,6 +6665,7 @@ async def list_history(request: web.Request) -> web.Response:
     )
     await request.app["history"].refresh_time_summaries(page["items"])
     await _decorate_generated_titles(request.app, page["items"])
+    _decorate_conversation_holders(request.app, page["items"])
     return json_response(page)
 
 
@@ -6734,9 +6741,21 @@ async def history_transcript(request: web.Request) -> web.Response:
         agent_run_id=str(row["id"]), limit=200
     )
     await _decorate_generated_titles(request.app, [row])
+    _decorate_conversation_holders(request.app, [row])
     return json_response(
         {"entry": row, "messages": messages, "annotations": annotations, "matches": matches}
     )
+
+
+# How long a resumed pane must stay up before the resume counts as done. The
+# refusal this measures killed a pane 1.65 s after spawn (measured 2026-08-14), so
+# the window has to clear that with margin. It is paid by every successful resume
+# too, which is the deliberate trade: a resume already spends seconds replaying a
+# conversation, and the alternative is answering 201 for a pane that is gone.
+RESUME_SETTLE_SECONDS = 2.5
+# One retry, for the narrow race of resuming the instant the previous pane closed.
+RESUME_ATTEMPTS = 2
+RESUME_RETRY_BACKOFF_SECONDS = 1.0
 
 
 async def resume_history(request: web.Request) -> web.Response:
@@ -6795,6 +6814,39 @@ async def resume_history(request: web.Request) -> web.Response:
             },
             409,
         )
+    # The same conversation can also be held by a process mux does not own, and the
+    # check above cannot see one: a conversation parked into a Claude background
+    # agent outlives the pane that parked it, keeps running under the CLI's own
+    # daemon, and stays checked out for as long as it lives. Resuming it spawns a
+    # CLI that prints its refusal and exits 1 about a second later, so without this
+    # the operator gets a grey pane and no reason. Refused rather than forked,
+    # because forking silently produces a *second* conversation where the operator
+    # asked to return to one.
+    holder = request.app["sessions"].conversation_holder(
+        str(row["backend"]), str(row["native_id"])
+    )
+    if holder is not None:
+        log.info(
+            "resume of run %s refused: %s held by pid %s (kind %s, job %s)",
+            row["id"],
+            row["native_id"],
+            holder.pid,
+            holder.kind or "unknown",
+            holder.job_id or "-",
+        )
+        return json_response(
+            {
+                "error": holder.describe(),
+                "code": "conversation_held",
+                "holder": {
+                    "kind": holder.kind,
+                    "pid": holder.pid,
+                    "job_id": holder.job_id,
+                    "name": holder.name,
+                },
+            },
+            409,
+        )
     owning_project = request.app["projects"].projects[target_project]
     # A resume that reopens the same conversation, in the same file, under the same
     # id continues an agent run that already has a row: the pane inherits it rather
@@ -6813,7 +6865,33 @@ async def resume_history(request: web.Request) -> web.Response:
         if bool(row.get("auto_named")) and row.get("generated_title")
         else str(row["name"])
     )
-    session = await request.app["sessions"].spawn(
+
+    def _took_the_conversation(pane: Any) -> bool:
+        """The resumed CLI publishing our own pid against the conversation.
+
+        The same file that proves somebody else holds a conversation proves *we*
+        do once the resume lands, which ends the settle window as soon as the
+        answer is known instead of paying it in full on every success. Matched on
+        pid: a state file naming the conversation but another process is the
+        failure this whole path exists to catch, not evidence of it working.
+        """
+        holder = request.app["sessions"].conversation_holder(
+            str(row["backend"]), str(row["native_id"])
+        )
+        return holder is not None and holder.pid == getattr(pane.record, "pid", 0)
+
+    # Spawned and then *proved*: the preflight above rules out the one refusal mux
+    # can predict, and this reports every other one in the CLI's own words rather
+    # than returning 201 for a pane that is already gone. Two attempts, because a
+    # resume issued the moment the previous pane closed can lose one race with the
+    # exiting process, and one retry is the whole cost of surviving it.
+    session, attempts, failure = await spawn_settled(
+        request.app["sessions"],
+        alive=_took_the_conversation,
+        flow=f"resume of run {row['id']}",
+        settle_seconds=RESUME_SETTLE_SECONDS,
+        attempts=RESUME_ATTEMPTS,
+        retry_backoff_seconds=RESUME_RETRY_BACKOFF_SECONDS,
         backend=str(row["backend"]),
         # The conversation keeps its name. A suffix here compounded on every
         # resume ("… resumed resumed") and, for Claude, retitled an entry the
@@ -6826,6 +6904,24 @@ async def resume_history(request: web.Request) -> web.Response:
         auto_named=None if requested_name else bool(row.get("auto_named")),
         project_label=owning_project.name,
     )
+    if session is None:
+        detail = failure.describe() if failure is not None else "no failure recorded"
+        log.error(
+            "resume of run %s (conversation %s) died on spawn after %d attempts: %s",
+            row["id"],
+            row["native_id"],
+            attempts,
+            detail,
+        )
+        return json_response(
+            {
+                "error": f"the resumed session exited immediately: {detail}",
+                "code": "resume_failed",
+                "attempts": attempts,
+                "detail": failure.text if failure is not None else "",
+            },
+            503,
+        )
     next_layout = attach_terminal(
         owning_project.layout,
         session.record.id,
@@ -9293,7 +9389,6 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         and time.time() - session.record.created_at <= 5
     )
     session.attachments_seen += 1
-    snapshot, revision, replay, subscriber = session.replay_and_subscribe()
     output_flow = PtyOutputFlow()
     # Everything after the subscribe runs inside the try, so no path can exit
     # without unsubscribing. A mid-replay disconnect (a slow mobile link is the
@@ -9301,23 +9396,19 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
     # session "attended" — which suppresses unattended-attention automation and
     # fleet absence reporting for that session's whole lifetime.
     sender_task: asyncio.Task[None] | None = None
+    subscriber: PtySubscriber | None = None
     try:
-        request.app["events"].emit_background(
-            "terminal_attached",
-            session_id=session.record.id,
-            source="daemon",
-            connections=len(session.subscribers),
-        )
-        await ws.send_json(
-            _versioned_pty_frame(
-                {"type": "state", "snapshot": snapshot, "revision": revision},
-                snapshot_generation,
-            )
-        )
         pending_messages: list[Any] = []
         attach_deadline = asyncio.get_running_loop().time() + PTY_ATTACH_READY_TIMEOUT_SECONDS
         attach_closed = False
         geometry_queued = False
+        # The ring position this client claims to have parsed up to, from its
+        # `attach_ready` frame. The handshake therefore runs *before* the replay
+        # snapshot — the frame decides whether this attach is a delta or a window —
+        # which is also why the snapshot/subscribe moved after this loop: taken
+        # before it, output arriving during the handshake would be neither in the
+        # replay nor in the subscription.
+        attach_since: int | None = None
         # unsupervised-loop-ok: bounded attach handshake for one websocket.
         while True:
             remaining = attach_deadline - asyncio.get_running_loop().time()
@@ -9332,6 +9423,9 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
                 if initial_frame.get("type") in {"attach_ready", "resize"}:
                     if initial_frame.get("output_flow_control") is True:
                         output_flow.enable()
+                    since_value = initial_frame.get("since")
+                    if isinstance(since_value, int) and not isinstance(since_value, bool):
+                        attach_since = since_value
                     geometry_queued = _apply_client_viewport(session, connection_id, initial_frame)
                     # A repaint-heavy TUI can wrap the retained ring until this
                     # attach's replay holds no transcript at all. The recovery is
@@ -9353,11 +9447,30 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         if attach_closed:
             return ws
 
+        snapshot, revision, replay_kind, replay, ring_position, subscriber = (
+            session.attach_and_subscribe(attach_since)
+        )
+        request.app["events"].emit_background(
+            "terminal_attached",
+            session_id=session.record.id,
+            source="daemon",
+            connections=len(session.subscribers),
+        )
+        await ws.send_json(
+            _versioned_pty_frame(
+                {"type": "state", "snapshot": snapshot, "revision": revision},
+                snapshot_generation,
+            )
+        )
         await ws.send_json(
             {
                 "type": "replay_start",
-                "reason": "attach",
-                "allow_terminal_responses": allow_terminal_responses,
+                "reason": replay_kind,
+                # A delta lands in a terminal that already answered (or missed) any
+                # query in it once; replaying the answer would be stale.
+                "allow_terminal_responses": (
+                    allow_terminal_responses if replay_kind == "attach" else False
+                ),
             }
         )
         if replay:
@@ -9365,8 +9478,14 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
             # live sending starts; leaving it uncounted would let that acknowledgement
             # erase credit belonging to newer live output.
             output_flow.sent(len(replay))
-            await ws.send_bytes_classified(replay, "attach_replay")
-        await ws.send_json({"type": "replay_end", "reason": "attach"})
+            await ws.send_bytes_classified(
+                replay, "attach_replay" if replay_kind == "attach" else "delta_replay"
+            )
+        # `position` anchors the client's byte cursor: this position plus every live
+        # byte it receives afterwards is what it may offer as `since` next time.
+        await ws.send_json(
+            {"type": "replay_end", "reason": replay_kind, "position": ring_position}
+        )
         # The arbitrated size can differ from this client's own fit (another device owns
         # input), so tell it up front rather than letting it render at the wrong width
         # until something happens to change the geometry. Skipped when this attach
@@ -9391,8 +9510,12 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         )
         # The replay just sent may have been a window over a differential frame stream,
         # which reconstructs to whichever cells happened to change inside it. One pulse
-        # makes the child restate the whole screen.
-        _schedule_attach_repaint(request, session)
+        # makes the child restate the whole screen. A delta needs none: the client's
+        # terminal kept its state and the delta is the stream itself, so after the
+        # append its screen is exact — pulsing here would make every tab switch cost
+        # the child a repaint.
+        if replay_kind == "attach":
+            _schedule_attach_repaint(request, session)
         for pending_message in pending_messages:
             await _handle_pty_client_message(
                 request, ws, session, connection_id, pending_message, output_flow
@@ -9410,7 +9533,8 @@ async def pty_ws(request: web.Request) -> web.WebSocketResponse:
         released = session.release_input_owner(connection_id)
         session.drop_viewport(connection_id)
         session.claim_refusals.pop(connection_id, None)
-        session.unsubscribe(subscriber)
+        if subscriber is not None:
+            session.unsubscribe(subscriber)
         # A detach can hand geometry back to whoever is left: the phone closing its tab
         # returns the PTY to the desktop's width — a width change like any other, and
         # one nobody is dragging, so the screen it lands on has to be repaired too.
@@ -9500,6 +9624,7 @@ async def _pty_sender(
                 replay_bytes,
                 current,
                 current_revision,
+                ring_position,
                 exit_frame,
             ) = session.take_resync(subscriber)
             await ws.send_json(
@@ -9514,7 +9639,11 @@ async def _pty_sender(
                 await output_flow.wait_for_credit()
                 output_flow.sent(len(replay_bytes))
                 await ws.send_bytes_classified(replay_bytes, "resync_replay")
-            await ws.send_json({"type": "replay_end", "reason": "resync"})
+            # Re-anchor the client's byte cursor: the drop broke its count, and a
+            # stale cursor would cost every later reconnect a full replay.
+            await ws.send_json(
+                {"type": "replay_end", "reason": "resync", "position": ring_position}
+            )
             await ws.send_json(
                 _versioned_pty_frame(
                     {"type": "update", "snapshot": current, "revision": current_revision},
@@ -9824,6 +9953,11 @@ CLIENT_INPUT_DIAGNOSTIC_PHASES = frozenset(
         "input_event_delay",
         "input_main_thread_stall",
         "input_socket_backlog",
+        # A deliberate mobile vertical drag that moved nothing. The symptom ("swiping does
+        # nothing") names no layer, and the drag's four destinations — peek pan, xterm
+        # scrollback, a forwarded wheel, or `disabled` — are indistinguishable from outside
+        # when they fail. The report carries which one it took and what the pane believed.
+        "mobile_drag_inert",
     }
 )
 CLIENT_DIAGNOSTIC_MIN_INTERVAL_SECONDS = 1.0

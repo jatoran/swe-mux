@@ -129,18 +129,20 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/mux-id")
-        state = await ws.receive_json()
-        assert state["type"] == "state"
-        assert state["revision"] == 0
-        assert state["snapshot"]["_snapshot_generation"] == "legacy"
-        assert state["snapshot"]["_snapshot_revision"] == 0
-        assert state["snapshot"]["_snapshot_enriched"] is False
+        # The real client sends `attach_ready` in `onopen`, before any frame arrives;
+        # the daemon answers the completed handshake with state, then the replay.
         # Messages that race readiness are held until replay finishes, while the
         # fitted dimensions reach the PTY before any replay bytes are sent.
         await ws.send_json({"type": "claim_input"})
         await ws.send_json(
             {"type": "attach_ready", "cols": 132, "rows": 41, "renderer": "webgl"}
         )
+        state = await ws.receive_json()
+        assert state["type"] == "state"
+        assert state["revision"] == 0
+        assert state["snapshot"]["_snapshot_generation"] == "legacy"
+        assert state["snapshot"]["_snapshot_revision"] == 0
+        assert state["snapshot"]["_snapshot_enriched"] is False
         assert await ws.receive_json() == {
             "type": "replay_start",
             "reason": "attach",
@@ -149,7 +151,12 @@ async def test_pty_ws_orders_replay_then_live_updates_and_exit() -> None:
         replay = await ws.receive()
         assert replay.type == WSMsgType.BINARY
         assert replay.data == b"past"
-        assert await ws.receive_json() == {"type": "replay_end", "reason": "attach"}
+        replay_end = await ws.receive_json()
+        assert replay_end["type"] == "replay_end"
+        assert replay_end["reason"] == "attach"
+        # The client's byte-cursor anchor: this plus every live byte it receives is
+        # what it may offer as `since` on its next attach.
+        assert replay_end["position"] == session.scrollback.position
         assert resizes == [(132, 41)]
         assert await next_json(ws) == {
             "type": "input_owner",
@@ -276,6 +283,77 @@ def _outgrow_replay_budget(session: Session, budget: int = 8) -> None:
 
 
 @pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_reconnect_offering_its_position_gets_a_delta_and_no_repaint_pulse() -> None:
+    """The tab-switch fix: a reattach that appends instead of starting over.
+
+    A client that survived its disconnect offers the ring position it parsed up to;
+    the daemon answers with exactly the missed bytes into an un-reset terminal. No
+    repaint pulse fires — the client's screen is exact after the append — where the
+    windowed fallback pulses the child on every reattach.
+    """
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    _outgrow_replay_budget(session)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        # First attach: full windowed replay, anchored by its replay_end position.
+        ws = await client.ws_connect("/pty/claude-id")
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
+        assert (await ws.receive_json())["reason"] == "attach"
+        assert await next_bytes(ws) == b"xxxxxxxx"
+        first_end = await ws.receive_json()
+        assert first_end["position"] == session.scrollback.position
+        await ws.close()
+        # Let the first attach's own truncated-replay pulse finish before asserting
+        # that the delta adds none of its own.
+        await asyncio.sleep(0.1)
+        resizes.clear()
+
+        # Output the client misses while its socket is down.
+        session.scrollback.append(b"missed")
+        session.publish_output(b"missed")
+
+        second = await client.ws_connect("/pty/claude-id")
+        await second.send_json(
+            {"type": "attach_ready", "cols": 80, "rows": 24, "since": first_end["position"]}
+        )
+        assert (await second.receive_json())["type"] == "state"
+        start = await second.receive_json()
+        assert start["reason"] == "delta"
+        # Never replay-with-responses: any query in the delta was answered (or
+        # missed) once already.
+        assert start["allow_terminal_responses"] is False
+        assert await next_bytes(second) == b"missed"
+        second_end = await second.receive_json()
+        assert second_end["reason"] == "delta"
+        assert second_end["position"] == session.scrollback.position
+        await asyncio.sleep(0.1)
+        # No truncated-replay repaint pulse for a delta.
+        assert resizes == []
+        await second.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
+async def test_a_stale_position_falls_back_to_the_windowed_replay() -> None:
+    """A gap the ring no longer covers is answered exactly as before deltas existed."""
+    resizes: list[tuple[int, int]] = []
+    session = _repaint_test_session("claude", resizes)
+    _outgrow_replay_budget(session)
+    app = _repaint_test_app(session)
+
+    async with TestClient(TestServer(app)) as client:
+        ws = await client.ws_connect("/pty/claude-id")
+        await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "since": 1})
+        assert (await ws.receive_json())["type"] == "state"
+        assert (await ws.receive_json())["reason"] == "attach"
+        assert await next_bytes(ws) == b"xxxxxxxx"
+        assert (await ws.receive_json())["reason"] == "attach"
+        await ws.close()
+
+
+@pytest.mark.filterwarnings("ignore:It is recommended to use web.AppKey instances for keys")
 async def test_windowed_replay_pulses_an_alternate_screen_child_once_per_session() -> None:
     """The fix for a Claude pane whose statusline is missing until the window is resized.
 
@@ -293,8 +371,8 @@ async def test_windowed_replay_pulses_an_alternate_screen_child_once_per_session
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"xxxxxxxx"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -309,8 +387,8 @@ async def test_windowed_replay_pulses_an_alternate_screen_child_once_per_session
         # A second device arriving on the same session inside the rate window rides the
         # restatement the first one already paid for.
         second = await client.ws_connect("/pty/claude-id")
-        assert (await second.receive_json())["type"] == "state"
         await second.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await second.receive_json())["type"] == "state"
         await asyncio.sleep(0.1)
         assert resizes == [(79, 24), (80, 24)]
         await second.close()
@@ -333,8 +411,8 @@ async def test_windowed_replay_pulses_a_hidden_warm_mounted_pane() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"xxxxxxxx"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -356,8 +434,8 @@ async def test_complete_replay_never_pulses() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -383,8 +461,8 @@ async def test_windowed_replay_never_pulses_a_normal_screen_harness() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"xxxxxxxx"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -403,10 +481,10 @@ async def test_client_repaint_request_pulses_one_rate_limited_restatement() -> N
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
-        assert (await ws.receive_json())["type"] == "state"
         # A hidden warm-mount attach: no viewport registered, and — unlike the
         # retired attach-time pulse — no unconditional restatement either.
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -434,8 +512,8 @@ async def test_client_repaint_request_ignored_for_alternate_screen_harness() -> 
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -464,8 +542,8 @@ async def test_a_settled_drag_pulses_an_alternate_screen_child_exactly_once(
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/claude-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 78, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -508,8 +586,8 @@ async def test_a_settled_drag_never_pulses_a_normal_screen_harness(
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/codex-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 78, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -530,8 +608,8 @@ async def test_client_diagnostic_persists_allowlisted_repairs_rate_limited() -> 
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/omp-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24, "hidden": True})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert await next_bytes(ws) == b"bounded replay"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -681,8 +759,8 @@ async def test_codex_drops_late_default_color_responses_from_current_and_stale_c
     background = "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\"
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/mux-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert (await ws.receive_json())["type"] == "replay_end"
         await ws.send_json({"type": "claim_input"})
@@ -734,11 +812,11 @@ async def test_pty_replay_does_not_wait_for_event_persistence() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/mux-id")
-        state = await asyncio.wait_for(ws.receive_json(), timeout=0.25)
-        assert state["type"] == "state"
         # The legacy resize frame also releases replay for older browser builds.
         await ws.send_json({"type": "resize", "cols": 80, "rows": 24})
         await asyncio.wait_for(sink_started.wait(), timeout=0.25)
+        state = await asyncio.wait_for(ws.receive_json(), timeout=0.25)
+        assert state["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert (await ws.receive()).data == b"ready"
         assert (await ws.receive_json())["type"] == "replay_end"
@@ -949,8 +1027,8 @@ async def test_pty_ws_unsubscribes_when_the_replay_send_fails() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/mux-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         await asyncio.sleep(0.05)
         await ws.close()
 
@@ -980,8 +1058,8 @@ async def test_pty_ws_unsubscribes_for_an_already_ended_session() -> None:
 
     async with TestClient(TestServer(app)) as client:
         ws = await client.ws_connect("/pty/mux-id")
-        assert (await ws.receive_json())["type"] == "state"
         await ws.send_json({"type": "attach_ready", "cols": 80, "rows": 24})
+        assert (await ws.receive_json())["type"] == "state"
         assert (await ws.receive_json())["type"] == "replay_start"
         assert (await ws.receive_json())["type"] == "replay_end"
         assert (await ws.receive_json())["reason"] == "already_ended"
@@ -1027,8 +1105,8 @@ def _in_use(app: web.Application, profile: str, interaction_age: float = 1.0) ->
 
 async def _attach(client: TestClient, cols: int, rows: int, *, hidden: bool = False) -> Any:
     ws = await client.ws_connect("/pty/mux-id")
-    assert (await ws.receive_json())["type"] == "state"
     await ws.send_json({"type": "attach_ready", "cols": cols, "rows": rows, "hidden": hidden})
+    assert (await ws.receive_json())["type"] == "state"
     assert (await next_json(ws))["type"] == "replay_start"
     assert (await next_json(ws))["type"] == "replay_end"
     return ws

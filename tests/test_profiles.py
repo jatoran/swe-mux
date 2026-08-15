@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from swe_mux import server
 from swe_mux.adapters import CodexAdapter
 from swe_mux.config import Config, ShellProfile, load_config, update_config
 from swe_mux.models import ProjectRecord
@@ -160,7 +161,13 @@ async def test_spawn_api_keeps_agent_and_profile_paths_distinct(tmp_path: Path) 
     assert captured[2]["args"] == ["--exact"]
 
 
-async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Path) -> None:
+async def test_native_agent_history_resume_bypasses_shell_profiles(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # Codex publishes no per-process state, so nothing can prove the resumed pane
+    # took the conversation early and it waits the settle window out. Shortened
+    # here rather than skipped: the wait is part of what this path now does.
+    monkeypatch.setattr(server, "RESUME_SETTLE_SECONDS", 0.3)
     captured: list[dict[str, Any]] = []
     lineage: list[tuple[str, str, str, dict[str, Any]]] = []
     transcript = tmp_path / "rollout.jsonl"
@@ -172,6 +179,8 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
         return SimpleNamespace(
             record=SimpleNamespace(
                 id="resumed",
+                pid=4242,
+                state="idle",
                 agent_run_id=kwargs.get("adopt_run_id") or "resumed-run",
                 snapshot=lambda: kwargs,
             )
@@ -197,7 +206,13 @@ async def test_native_agent_history_resume_bypasses_shell_profiles(tmp_path: Pat
             }
         )
     )
-    manager = SimpleNamespace(spawn=spawn, adapters={"codex": CodexAdapter()}, sessions={})
+    manager = SimpleNamespace(
+        spawn=spawn,
+        # The daemon's answer for a harness that publishes no side state.
+        conversation_holder=lambda backend, native_id: None,
+        adapters={"codex": CodexAdapter()},
+        sessions={},
+    )
     projects = SimpleNamespace(
         projects={
             "default": SimpleNamespace(

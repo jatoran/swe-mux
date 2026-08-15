@@ -628,8 +628,15 @@ are recognized as device replies but are not delivered to Codex: its bounded nat
 startup probe can expire during the browser/WebSocket round trip and would then treat the late
 reply as composer text. Codex falls back to the console palette. The daemon also rejects exact
 Codex OSC 10/11 reply payloads from older cached browser builds that labeled them as user input.
-On initial attach, the daemon sends `state` and waits up to 250 ms for
-`{type:"attach_ready", cols, rows, renderer, hidden, output_flow_control}`. It applies those dimensions before
+On initial attach, the daemon waits up to 250 ms for
+`{type:"attach_ready", cols, rows, renderer, hidden, output_flow_control, since?}`, then sends `state` followed by the replay.
+The handshake precedes the replay snapshot because the frame decides what the replay is: `since` is the ring position the client has already parsed up to, and when the ring provably still holds everything after it the attach is answered as a **delta** (`replay_start` with `reason:"delta"`, exactly the missed bytes, into a terminal the client does not reset) instead of a reset plus the bounded window.
+That is what keeps a pane's parsed scrollback across a reconnect — a tab switch, a minimize, a phone freeze, or a session-preserving daemon restart (ring positions survive supervisor adoption).
+Every doubt — no `since`, a gap the ring no longer covers, a gap larger than `attach_replay_bytes`, a position outside the stream — falls back to the full windowed replay, because a wrong delta corrupts a terminal silently while a wasted replay only costs a parse.
+`replay_end` carries `position`, the ring position at the snapshot: that anchor plus every live binary byte the client receives afterwards is what it may offer as `since` next time.
+A `gap` frame (dropped chunks) invalidates the client's count until the resync's `replay_end` re-anchors it.
+A delta never allows terminal responses and never triggers the truncated-replay repaint pulse — the client's screen is exact after the append.
+It applies the frame's dimensions before
 `replay_start`; an old-style `resize` frame also releases replay, and timeout preserves
 compatibility with clients that send neither. Other frames arriving during this window are
 buffered and handled after `replay_end`. Later `attach_ready` frames are equivalent to `resize`.
@@ -1030,7 +1037,7 @@ The response carries `since`, `until`, `hours`, record and candidate totals, gro
 Rows are content-free and include no notification body, terminal content, endpoint, preference payload, or credential.
 
 `diagnostics/network` reports a daemon-local measurement window with totals, per-peer HTTP and WebSocket counters, normalized HTTP route templates, named WebSocket channels, and `websocket_sent_payloads[]` rows keyed by `peer`, `channel`, and `kind`.
-Each classified row contains `frames` and `bytes`; PTY kinds are `attach_replay`, `resync_replay`, and `live_output`.
+Each classified row contains `frames` and `bytes`; PTY kinds are `attach_replay`, `delta_replay`, `resync_replay`, and `live_output`.
 These rows are a non-additive breakdown of already-counted sent WebSocket binary frames.
 HTTP byte counts are encoded response and request bodies, excluding headers and transport
 overhead.
@@ -1059,6 +1066,9 @@ GET    /history/{id}/handoff
 
 Resume/review confirmation must target an existing Project and starts at its root.
 Resume returns `409 conversation_live` (with the owning `session_id`) when a live session currently claims the row's native conversation; Branch, not resume, is the flow for forking a live conversation.
+It returns `409 conversation_held` (with `holder: {kind, pid, job_id, name}`) when a CLI process mux does not own holds the conversation — a Claude background agent is the case that occurs — because that CLI answers a second opener by exiting rather than by refusing to start.
+It returns `503 resume_failed` (with `attempts` and the pane's own cleaned last output in `detail`) when the resumed pane died inside its settle window; the pane is discarded rather than returned.
+History rows and transcript entries carry `held_by: {kind, pid, job_id, name, detail}` while a live process holds their conversation, read fresh per request and never stored.
 The resumed pane keeps the conversation's effective visible name (manual name, or generated title while auto-named) with no suffix, and it keeps the conversation's `agent_run_id` too: the resume continues one transcript, so it continues one history entry rather than opening a second over the same file.
 A resume inherits that effective name before any new run is minted, so a generated title does not disappear with the old annotation key. A row the user renamed resumes under that name, never under its generated title.
 Whether a resume continues the conversation is the adapter's rule: `codex resume` always does, `claude --resume` only at the conversation's recorded root. A Claude resume into a different root is a new conversation and gets its own entry plus a `resume` lineage edge.

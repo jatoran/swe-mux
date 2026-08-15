@@ -24,6 +24,7 @@ must never quarantine a row the pane merely continued.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 from swe_mux.adapters import ClaudeAdapter, CodexAdapter
+from swe_mux.cli_state import ConversationHolder
 from swe_mux.history import HistoryIndex
 from swe_mux.models import SessionRecord
 from swe_mux.server import resume_history
@@ -48,6 +50,20 @@ async def _async_value(value: Any) -> Any:
 # --------------------------------------------------------------- the endpoint
 
 
+PANE_PID = 4242
+
+
+def holder(pid: int = PANE_PID, kind: str = "bg") -> ConversationHolder:
+    return ConversationHolder(
+        conversation_id=CONVERSATION,
+        kind=kind,
+        pid=pid,
+        job_id="job1",
+        name="parked work",
+        cwd="D:\\PROJECTS\\swe-mux",
+    )
+
+
 def resume_call(
     tmp_path: Path,
     *,
@@ -56,6 +72,8 @@ def resume_call(
     name: str = "device ownership",
     auto_named: int = 1,
     generated_title: str | None = None,
+    held: ConversationHolder | None = None,
+    pane_state: str = "idle",
 ) -> tuple[Any, list[dict[str, Any]], list[tuple[str, str, str, dict[str, Any]]]]:
     """A `/api/history/{id}/resume` request over stubbed collaborators."""
     transcript = tmp_path / "transcript.jsonl"
@@ -63,18 +81,40 @@ def resume_call(
     root = project_root or tmp_path
     captured: list[dict[str, Any]] = []
     lineage: list[tuple[str, str, str, dict[str, Any]]] = []
+    # Who holds the conversation, as the daemon reads it from the CLI's own state
+    # files: nobody before the spawn (or `held`, for a refusal), and the resumed
+    # pane itself afterwards — which is the proof that ends the settle window.
+    holders: dict[str, ConversationHolder] = {}
+    if held is not None:
+        holders[CONVERSATION] = held
+    panes: dict[str, Any] = {}
 
     async def spawn(**kwargs: Any) -> Any:
         captured.append(kwargs)
         # Mirrors SessionManager.spawn: an inherited run id is the record's.
-        return SimpleNamespace(
+        pane = SimpleNamespace(
             record=SimpleNamespace(
                 id=PANE,
+                pid=PANE_PID,
+                state=pane_state,
+                exit_code=1 if pane_state in {"exited", "crashed"} else None,
                 agent_run_id=kwargs.get("adopt_run_id") or PANE,
                 project_id=kwargs["project_id"],
                 snapshot=lambda: {},
-            )
+            ),
+            scrollback=SimpleNamespace(tail_bytes=lambda count: b"\x1b[31mrefused\x1b[0m\r\n"),
         )
+        if pane_state not in {"exited", "crashed"}:
+            holders[CONVERSATION] = holder(PANE_PID, kind="interactive")
+        panes[PANE] = pane
+        return pane
+
+    async def stop(sid: str) -> None:
+        panes.pop(sid, None)
+
+    def conversation_holder(backend_name: str, native_id: str) -> ConversationHolder | None:
+        del backend_name
+        return holders.get(native_id)
 
     async def add_lineage(
         parent: str, child: str, relation: str, metadata: dict[str, Any]
@@ -111,8 +151,10 @@ def resume_call(
             # answer, and stubbing it would only pin the stub.
             "sessions": SimpleNamespace(
                 spawn=spawn,
+                stop=stop,
+                conversation_holder=conversation_holder,
                 adapters={"claude": ClaudeAdapter("claude.exe"), "codex": CodexAdapter()},
-                sessions={},
+                sessions=panes,
             ),
             "projects": SimpleNamespace(
                 projects={
@@ -184,6 +226,42 @@ async def test_a_renamed_conversation_resumes_under_the_name_the_user_pinned(
 
     assert captured[0]["name"] == "device ownership"
     assert captured[0]["auto_named"] is False
+
+
+async def test_a_conversation_a_background_agent_holds_is_refused(tmp_path: Path) -> None:
+    # Claude parks a conversation into a background agent that outlives the pane
+    # and keeps the conversation checked out. `--resume` on it prints a refusal and
+    # exits 1, so the pane the operator gets is dead on arrival. mux answers the
+    # request instead of spawning that pane.
+    request, captured, _ = resume_call(tmp_path, held=holder())
+
+    response = await resume_history(cast(Any, request))
+
+    assert response.status == 409
+    body = json.loads(response.text or "{}")
+    assert body["code"] == "conversation_held"
+    assert body["holder"]["pid"] == PANE_PID
+    assert "claude agents" in body["error"]
+    # Nothing was started: a refusal that still spawns is the failure it prevents.
+    assert captured == []
+
+
+async def test_a_pane_that_dies_on_spawn_is_reported_not_returned(tmp_path: Path) -> None:
+    # Every other refusal — a CLI version that changes its wording, a conversation
+    # a process outside mux opened a moment ago — surfaces the same way: the pane
+    # is discarded and the CLI's own dying output is the reason.
+    request, captured, _ = resume_call(tmp_path, pane_state="crashed")
+
+    response = await resume_history(cast(Any, request))
+
+    assert response.status == 503
+    body = json.loads(response.text or "{}")
+    assert body["code"] == "resume_failed"
+    assert body["attempts"] == 2
+    # The pane's own words, cleaned of the colour codes it printed them in.
+    assert body["detail"] == "refused"
+    assert "exit code 1" in body["error"]
+    assert len(captured) == 2
 
 
 async def test_a_codex_resume_inherits_the_conversations_run(tmp_path: Path) -> None:

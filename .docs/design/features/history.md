@@ -54,6 +54,26 @@
   the owning session): resuming it would put two live sessions on one conversation — the
   cross-attribution the identity invariant forbids. Branch is the flow for forking a live
   conversation; rows whose pane has since rolled onward resume fine.
+- **A conversation held by a process mux does not own is refused too**
+  (`409 conversation_held`, naming the holder's kind, pid and job).
+  A CLI opens a conversation once and answers a second opener by exiting, so such a resume
+  produces a pane that dies about 1.5 s after the request returned 201.
+  The holder is read live from the CLI's own per-process state files
+  (`cli_state.conversation_holders`), never stored, because ownership ends when that process
+  does.
+  The case that produced this: Claude parks a conversation into a background agent, which
+  outlives the pane that parked it and keeps the conversation checked out under the CLI's own
+  daemon.
+  History rows carry `held_by` while it lasts, so the listing states the fact instead of
+  offering a Resume action that cannot work.
+- **A resumed pane is proved to have survived before it is handed back**
+  (`spawn_probe.py`, 2.5 s, two attempts, `503 resume_failed`).
+  A refusal mux cannot predict — a changed CLI message, a conversation another terminal opened a
+  moment ago — still reaches the operator as the pane's own dying output rather than as a grey
+  pane with no reason.
+  The window ends early on positive proof that the pane took the conversation (its own pid
+  against the conversation in the CLI's state file), so only harnesses that publish no such
+  state pay it in full.
 - **Resuming a conversation continues its entry; it does not fork one.** A resumed pane is a
   new process and a new session record, but it inherits the conversation's `agent_run_id`
   (`spawn_agent_run_id`) and reopens that row rather than opening a second. Both CLIs append to

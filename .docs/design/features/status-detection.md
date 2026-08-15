@@ -74,6 +74,19 @@ What it feeds:
   conversation is excluded from the nested-child count: the interactive CLI's file still
   names it, and it is the pane's past rather than a child of it.
 - The session's own file snapshot is surfaced as `cli_state` on the state-log endpoint.
+- **Conversation ownership** (`conversation_holders`, not a detection input): the same
+  directory answers who currently holds a conversation, which is what makes a resume of it
+  impossible — a CLI opens a conversation once and answers a second opener by exiting.
+  Read fresh at the moment of the resume rather than sampled on the poll, and shares neither
+  the cache nor the cadence.
+  A holder is reported only for a *proven* process: the pid must still be running, with a
+  creation time consistent with the file's `startedAt`.
+  The window is asymmetric because the CLI stamps its file after the process exists —
+  measured 2026-08-14 across 13 live CLIs, 0.42 s to 1.31 s behind — so it tolerates lag and
+  rejects a lead, which is what pid reuse looks like.
+  An unprovable pid yields no holder: a missed holder degrades to the ordinary spawn failure
+  `spawn_probe` reports, while a phantom one would make a resumable conversation permanently
+  unresumable.
 - **Deliberately absent**: a staleness alarm. `updatedAt` is a status-change timestamp,
   not a heartbeat — measured live: a legitimately busy session's file sat 51 minutes
   stale mid-turn.
@@ -949,7 +962,8 @@ consumer looking as solid as a hook-proven turn end.
 - `src/swe_mux/observation.py` — evidence extraction, `tail_turn_state`, hook/transcript
   handlers, `closed_by_transcript` latch, trailing-completion guard, standing-activity
   extractors
-- `src/swe_mux/cli_state.py` — the `cli-state` corroboration poller
+- `src/swe_mux/cli_state.py` — the `cli-state` corroboration poller, and the conversation
+  ownership oracle (`ConversationHolder`, `conversation_holders`) that resume preflights read
 - `src/swe_mux/status_timeline.py` — `LedgerRing`, `note_layer_reading`, and the durable
   `StatusTimelineStore` (write-behind sink, time-ranged queries, retention)
 - `src/swe_mux/processes.py` — background-task process fast-clear

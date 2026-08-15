@@ -92,10 +92,10 @@ import {
   type TerminalInputSource,
 } from './terminalInputDiagnostics'
 import { reportPromptSubmitted } from './projectRecency'
-import { SOFT_KEYBOARD_EVENT, clampPeekOffset, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, type PeekTrigger } from './mobileKeyboard'
+import { SOFT_KEYBOARD_EVENT, clampPeekOffset, hiddenOutputDeservesPeek, holdSoftKeyboard, lastSoftKeyboardInset, nextPeekOffset, peekToggleVisible, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder, softKeyboardInputMode, type PeekTrigger } from './mobileKeyboard'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
-import { nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
+import { RESERVE_INTENT_WINDOW_MS, nextReserveState, paintedRowCount, reservedKeyboardPx } from './keyboardReserve'
 import { MobileTerminalDraft } from './TerminalDraftComposer'
 import {
   insertMobileTerminalDraft,
@@ -149,6 +149,13 @@ const KEYBOARD_LAYOUT_SETTLE_MS = 250
  * that jumps to the top mid-sentence is worse than one that never moves.
  */
 const HIDDEN_OUTPUT_INPUT_GRACE_MS = 1500
+/**
+ * Vertical travel below which a drag that moved nothing is not worth reporting.
+ *
+ * A finger resting on the glass delivers a few pixels of jitter per touch event, and a
+ * tap that wobbles is not a reader complaining that scrolling is broken.
+ */
+const MOBILE_DRAG_INERT_MIN_TRAVEL_PX = 40
 /**
  * Whether a soft keyboard is what this device types with. `MOBILE_QUERY` is a width, and a
  * desktop window dragged narrow matches it — reserving 40% of that pane for a keyboard that
@@ -538,6 +545,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // previous answer is an input to the next one.
   const reservePxRef=useRef(0)
   const reserveChangedAtRef=useRef(0)
+  // When the reader last moved to type. A reservation is only held while a keyboard is up
+  // or one is on its way, and this is the "on its way" half.
+  const typingIntentAtRef=useRef(0)
   // Set inside the mount effect. The keyboard opening or closing changes both keyboard-layout
   // answers without producing a single byte of output, so the event has to ask for the pass
   // that output would otherwise have scheduled.
@@ -590,6 +600,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const bridge=mobileLiveInputRef.current
       if(inset<=0){
         mobileTypingIntentRef.current=false
+        // A keyboard that has gone outranks a stale intent to raise one, so the pane gives
+        // its reserved strip back now rather than at the end of the intent window.
+        typingIntentAtRef.current=0
         if(bridge&&typesWithSoftKeyboard())bridge.inputMode='none'
       }else if(bridge&&!keyboardOffRef.current&&!mobileDraftOpenRef.current){
         mobileTypingIntentRef.current=true
@@ -889,6 +902,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       if(keyboardOffRef.current||mobileDraftOpenRef.current)return
       if(mobileLiveInput){
         mobileTypingIntentRef.current=typingIntent
+        // The earliest honest signal that a keyboard is coming. The reservation has to be
+        // in place before it finishes animating in, or the grid it was meant to pre-size
+        // is already full and the shrink is refused.
+        if(typingIntent){
+          typingIntentAtRef.current=Date.now()
+          scheduleKeyboardSettleRef.current()
+        }
         mobileLiveInput.inputMode=softKeyboardInputMode(typesWithSoftKeyboard(),keyboardInsetRef.current,typingIntent)
         // xterm does not render any cursor until its own textarea has received focus
         // once. Claude normally initializes it by entering the alternate screen, but
@@ -978,6 +998,14 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     let replayEndReceived = false
     let replayAllowsTerminalResponses = false
     let pendingReplayWrites = 0
+    // The daemon ring position this pane has parsed up to: the anchor from the last
+    // `replay_end` plus every live byte since. Offered as `since` on the next attach so
+    // a reconnect appends only what was missed instead of resetting the terminal —
+    // which is what used to truncate a pane to one replay window's worth of scrollback
+    // on every tab switch or minimize. Exact because live binary frames are the ring's
+    // own bytes in order; a `gap` frame (dropped chunks) breaks the count, so it nulls
+    // the cursor until the resync's `replay_end` re-anchors it.
+    let serverPosition: number | null = null
     // One transcript restatement per parsed buffer: set when this pane asks the daemon
     // for a repaint pulse, cleared only where `term.reset()` discards what was parsed
     // (a reconnect or resync replay), so a short transcript cannot re-request forever.
@@ -1260,6 +1288,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           && !letterboxed
           && !paneIsHidden()
           && reservePx > 0,
+        // Up, or on its way. Without this the strip was held for the life of the pane —
+        // the only release was the session's own content filling the smaller grid, which
+        // an agent TUI with whitespace in its layout never reaches.
+        keyboardWanted: keyboardInsetRef.current > 0
+          || Date.now() - typingIntentAtRef.current < RESERVE_INTENT_WINDOW_MS,
         // A replaying buffer reads emptier than the session is, and reserving on that
         // reading would shrink a PTY whose content simply has not arrived yet.
         measurable: !replaying && socket?.readyState === WebSocket.OPEN,
@@ -1288,11 +1321,18 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const changed = comparable && text !== hiddenRegionText
       hiddenRegionText = text
       hiddenRegionInset = inset
-      if (!changed || text.trim() === '') return
-      // The reader is at the top already, or they are typing rather than waiting — either
-      // way the pane moving under them is an interruption, not a service.
-      if (peekOffsetRef.current > 0) return
-      if (lastHumanInputAt !== null && performance.now() - lastHumanInputAt < HIDDEN_OUTPUT_INPUT_GRACE_MS) return
+      let visiblePainted = 0
+      for (let index = hiddenRows; index < term.rows; index += 1) {
+        if (gridRowText(index).trim() !== '') visiblePainted += 1
+      }
+      if (!hiddenOutputDeservesPeek({
+        hiddenChanged: changed,
+        hiddenHasText: text.trim() !== '',
+        visiblePainted,
+        peekOffset: peekOffsetRef.current,
+        sinceInputMs: lastHumanInputAt === null ? null : performance.now() - lastHumanInputAt,
+        inputGraceMs: HIDDEN_OUTPUT_INPUT_GRACE_MS,
+      })) return
       applyPeekRef.current('hiddenOutput')
     }
     const scheduleKeyboardSettle = () => {
@@ -1983,6 +2023,9 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
             if (replayEndReceived && pendingReplayWrites === 0) finishReplay()
           })
         } else {
+          // Live bytes advance the ring cursor; replay bytes never do (their end
+          // position arrives on `replay_end`, and a full replay is not ring bytes).
+          if (serverPosition !== null) serverPosition += byteCount
           // Output arriving is the ack the wheel pacer's clock runs on: the repaint
           // answering the last scroll report means the CLI is ready for the next one.
           wheelPacer.noteOutput()
@@ -2013,7 +2056,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       else {
         const frame = JSON.parse(event.data)
-        if (frame.type === 'gap') replaying = true
+        // Dropped chunks broke the byte count; the resync's `replay_end` re-anchors it.
+        if (frame.type === 'gap') { replaying = true; serverPosition = null }
         const frameGeneration=String(frame.snapshot?._snapshot_generation||'')
         if(frameGeneration&&frameGeneration!==currentGeneration){currentGeneration=frameGeneration;currentRevision=-1}
         if ((frame.type === 'state' || frame.type === 'update') && Number(frame.revision ?? 0) > currentRevision) {
@@ -2027,8 +2071,15 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           attachmentReadyRef.current=false
           setAttachmentReady(false)
           cancelCaretPlacement()
-          if (frame.reason === 'resync' || reconnectReplay) {
+          // A delta continues this terminal's own byte stream, so the buffer —
+          // scrollback, modes, scroll position — is kept and the missed bytes are
+          // appended. Reset only what a delta cannot describe: a resync (this client
+          // provably missed bytes the replay does not patch over), or a reconnect the
+          // daemon answered with a full window (`attach`, including every daemon that
+          // predates deltas).
+          if (frame.reason === 'resync' || (reconnectReplay && frame.reason !== 'delta')) {
             term.reset()
+            serverPosition = null
             // The buffer this flag described no longer exists; the fresh replay
             // earns its own missing-scrollback judgement.
             scrollbackRepaintRequested = false
@@ -2039,6 +2090,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           replayAllowsTerminalResponses = frame.reason === 'attach' && frame.allow_terminal_responses === true
         }
         if (frame.type === 'replay_end') {
+          // The daemon's anchor for this pane's byte cursor. Its absence (a daemon
+          // predating deltas) leaves the cursor null, which simply never offers
+          // `since` — the old full-replay behaviour.
+          const anchor = Number(frame.position)
+          serverPosition = Number.isSafeInteger(anchor) && anchor >= 0 ? anchor : null
           reportStartup('replay_ready')
           replayEndReceived = true
           if (pendingReplayWrites === 0) finishReplay()
@@ -2161,7 +2217,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         // Seeded here so a pane that later goes hidden can withdraw the size it actually
         // registered, rather than waiting on a fit pass it will never be visible to run.
         if (registers) localFit = { cols: term.cols, rows: term.rows }
-        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, !registers)))
+        next.send(JSON.stringify(terminalAttachReadyFrame(term.cols, term.rows, activeRenderer, !registers, serverPosition)))
         // attach_ready is itself a viewport registration; recording it keeps the fit
         // pass that follows from sending the same dimensions again.
         sentViewport={cols:term.cols,rows:term.rows,hidden:!registers}
@@ -2515,6 +2571,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       pixels:number
       applicationInputPixels:number
       applicationReports:number
+      /** Everything this gesture actually moved, so one that moved nothing can say so. */
+      panPixels:number
+      terminalSteps:number
+      terminalMoved:boolean
       selecting:{start:TerminalCell;length:number}|null
     }|null=null
     // Focus (and the soft keyboard) is deferred to release: only a still tap sets this,
@@ -2625,7 +2685,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         touch={
           pointerId:event.pointerId,lastY:event.clientY,startX:event.clientX,startY:event.clientY,
           px:event.clientX,py:event.clientY,moved:false,pixels:0,
-          applicationInputPixels:0,applicationReports:0,selecting:null,
+          applicationInputPixels:0,applicationReports:0,
+          panPixels:0,terminalSteps:0,terminalMoved:false,selecting:null,
         }
         cancelLongPress()
         if(mobileInput.longPress==='context_menu')longPress = window.setTimeout(() => {
@@ -2680,9 +2741,11 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       const rawDy=event.clientY-touch.lastY
       const panInset=effectiveKeyboardInsetRef.current
       const panned=panInset>0?clampPeekOffset(peekOffsetRef.current+rawDy,panInset):peekOffsetRef.current
-      const panShare=rawDy===0?0:(panned-peekOffsetRef.current)/rawDy
-      if(panned!==peekOffsetRef.current){
+      const panMoved=panned-peekOffsetRef.current
+      const panShare=rawDy===0?0:panMoved/rawDy
+      if(panMoved!==0){
         event.preventDefault()
+        touch.panPixels+=Math.abs(panMoved)
         setPeekOffsetValueRef.current(panned,false)
       }
       const delta=touchWheelDelta(touch.lastY,event.clientY,mobileInput)*(1-panShare)
@@ -2696,7 +2759,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
         const budget=terminalScrollSteps(touch.pixels+delta,rowHeight)
         touch.pixels=budget.remainder
         if(!budget.steps)return
+        // Counted before the call, not after: `scrollLines` on a buffer with no scrollback
+        // is a no-op, and the point of the tally is to tell "the pane asked for a scroll"
+        // apart from "the pane got one".
+        touch.terminalSteps+=Math.abs(budget.steps)
+        const before=term.buffer.active.viewportY
         term.scrollLines(budget.steps)
+        touch.terminalMoved=touch.terminalMoved||term.buffer.active.viewportY!==before
         return
       }
       const budget=applicationTouchScroll(
@@ -2772,6 +2841,33 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
           inputPixels:Math.round(touch.applicationInputPixels),
           reports:touch.applicationReports,
         })
+      }
+      // A deliberate vertical drag that moved nothing at all. Reported durably because the
+      // symptom is unfalsifiable from the outside — "swiping does nothing" names no layer,
+      // and the drag has four possible destinations (peek pan, xterm scrollback, a
+      // forwarded wheel, or `disabled`) that all look identical when they fail. This says
+      // which one it took and what the pane believed at the time, so the next occurrence
+      // arrives as evidence rather than as another round of theories. Rate-limited to one
+      // per second per session by the daemon.
+      if(touch&&!touch.selecting){
+        const travel=Math.abs(touch.py-touch.startY)
+        const moved=touch.panPixels>0||touch.terminalMoved||touch.applicationReports>0
+        if(travel>=MOBILE_DRAG_INERT_MIN_TRAVEL_PX&&!moved){
+          const buffer=term.buffer.active
+          reportInputDiagnostic('mobile_drag_inert',{
+            backend:backendRef.current,
+            target:mobileDragTarget(mobileInput.verticalDrag,term.modes.mouseTrackingMode!=='none'),
+            mouseTracking:term.modes.mouseTrackingMode,
+            bufferType:term.buffer.active.type,
+            scrollback:buffer.length-term.rows,
+            travelPx:Math.round(travel),
+            terminalStepsAsked:touch.terminalSteps,
+            keyboardInset:keyboardInsetRef.current,
+            reserved:keyboardReservedRef.current,
+            peekOffset:Math.round(peekOffsetRef.current),
+            rowHeight:Math.round(paneRowHeight()),
+          })
+        }
       }
       stopSelectionScroll();cancelLongPress();touch=null;commitPeekOffsetRef.current()
       // A gesture that was not a typing tap gives the keyboard back exactly as it found

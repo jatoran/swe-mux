@@ -13,7 +13,7 @@ from swe_mux.adapters import ShellAdapter
 from swe_mux.git_projects import ProjectIdentity
 from swe_mux.models import SessionRecord
 from swe_mux.runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser
-from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser
+from swe_mux.screen_mode import BracketedPasteParser, ScreenModeParser, StickyModeParser
 from swe_mux.server import session_startup_metrics
 from swe_mux.session import ScrollbackBuffer, Session, SessionManager
 
@@ -29,6 +29,7 @@ def _fake_session(max_bytes: int = 32) -> Any:
     fake.attach_replay_bytes = None
     fake.screen = ScreenModeParser()
     fake.bracketed_paste = BracketedPasteParser()
+    fake.sticky_modes = StickyModeParser()
     return fake
 
 
@@ -165,6 +166,52 @@ def test_a_bounded_replay_restates_the_bracketed_paste_mode_it_cut_off() -> None
     fake.scrollback.append(b"\x1b[?2004h" + b"output\n" * 40)
     replay = Session.replay_bytes(fake)
     assert replay.startswith(b"\x1b[?2004h")
+
+
+def test_a_deep_session_replay_preserves_the_mouse_modes_a_phone_drag_needs() -> None:
+    """Measured from a real Claude start: `?1000h ?1002h ?1003h ?1006h`, once, at byte 101.
+
+    Losing them is what made a mobile swipe do nothing. With no mouse modes the browser's
+    terminal reports no mouse, so `mobileDragTarget` has nothing to forward and falls back
+    to scrolling xterm's own buffer — which on the alternate screen has no scrollback, so
+    the gesture moves nothing. Only sessions deep enough to outgrow the replay window were
+    affected, which is why it presented as intermittent.
+    """
+    fake = _fake_session(8192)
+    fake.attach_replay_bytes = 64
+    startup = b"\x1b[?2004h\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h"
+    fake.bracketed_paste.feed(startup)
+    fake.screen.feed(startup)
+    fake.sticky_modes.feed(startup)
+    fake.scrollback.append(startup + b"conversation\n" * 200)
+    replay = Session.replay_bytes(fake)
+    for mode in (b"\x1b[?1000h", b"\x1b[?1002h", b"\x1b[?1003h", b"\x1b[?1006h"):
+        assert mode in replay, mode
+    # The modes have to arrive before the output they apply to, not after it.
+    assert replay.index(b"\x1b[?1006h") < replay.index(b"conversation")
+
+
+def test_a_replay_that_carries_a_mode_itself_is_not_contradicted() -> None:
+    # The window's own toggle is the child's most recent word on that mode. Restating a
+    # stale value over it would be the daemon overruling the child.
+    fake = _fake_session(8192)
+    fake.attach_replay_bytes = 4096
+    fake.sticky_modes.feed(b"\x1b[?1000h")
+    fake.scrollback.append(b"\x1b[?1000h" + b"x" * 100 + b"\x1b[?1000l")
+    replay = Session.replay_bytes(fake)
+    assert not replay.startswith(b"\x1b[?1000h\x1b[?1000h")
+
+
+def test_a_mode_the_child_never_enabled_is_not_invented() -> None:
+    # Restating a mode the child did not ask for leaves it reporting events it has no
+    # handler for. Codex enables no mouse modes at all.
+    fake = _fake_session(8192)
+    fake.attach_replay_bytes = 32
+    fake.sticky_modes.feed(b"\x1b[?2004h")
+    fake.scrollback.append(b"codex output\n" * 200)
+    replay = Session.replay_bytes(fake)
+    assert b"\x1b[?1000h" not in replay
+    assert b"\x1b[?1006h" not in replay
 
 
 def test_an_omp_deep_session_replay_preserves_its_startup_bracketed_paste() -> None:
@@ -318,6 +365,79 @@ def test_replay_subscription_boundary_is_atomic() -> None:
     assert queue in fake.subscribers
 
 
+# --- delta attach: a reconnect that keeps the client's parsed buffer ------------
+#
+# The client offers the ring position it has parsed up to; when the ring provably
+# holds everything after it, the attach is the missed bytes into an un-reset
+# terminal. Every doubt falls back to the full bounded replay, because a wrong
+# delta corrupts a terminal silently while a wasted replay only costs a parse.
+
+
+def test_a_covered_gap_is_answered_with_exactly_the_missed_bytes() -> None:
+    fake = _fake_session(64)
+    fake.scrollback.append(b"earlier output ")
+    since = fake.scrollback.position
+    fake.scrollback.append(b"missed while away")
+
+    snapshot, revision, kind, payload, position, queue = Session.attach_and_subscribe(fake, since)
+
+    assert (kind, payload) == ("delta", b"missed while away")
+    assert position == fake.scrollback.position
+    assert snapshot == {"state": "running"}
+    assert revision == 0
+    assert queue in fake.subscribers
+
+
+def test_a_current_client_gets_an_empty_delta_not_a_replay() -> None:
+    # The common tab switch: nothing happened while hidden. The reconnect costs
+    # nothing and the client's scrollback survives untouched.
+    fake = _fake_session(64)
+    fake.scrollback.append(b"all parsed already")
+
+    _, _, kind, payload, position, _ = Session.attach_and_subscribe(
+        fake, fake.scrollback.position
+    )
+
+    assert (kind, payload) == ("delta", b"")
+    assert position == fake.scrollback.position
+
+
+def test_an_uncovered_or_nonsense_position_falls_back_to_the_full_replay() -> None:
+    fake = _fake_session(8)
+    fake.scrollback.append(b"0123456789abcdef")  # ring retains only the last 8
+
+    # Trimmed away: the ring cannot prove coverage.
+    assert Session.attach_and_subscribe(fake, 2)[2] == "attach"
+    # Ahead of the stream: not a position of this stream at all.
+    assert Session.attach_and_subscribe(fake, 999)[2] == "attach"
+    # Negative: same.
+    assert Session.attach_and_subscribe(fake, -1)[2] == "attach"
+    # No offer: the plain cold attach.
+    assert Session.attach_and_subscribe(fake, None)[2] == "attach"
+
+
+def test_a_gap_at_the_exact_retention_boundary_is_still_covered() -> None:
+    fake = _fake_session(8)
+    fake.scrollback.append(b"0123456789abcdef")
+    since = fake.scrollback.position - fake.scrollback.size
+
+    _, _, kind, payload, _, _ = Session.attach_and_subscribe(fake, since)
+
+    assert (kind, payload) == ("delta", b"89abcdef")
+
+
+def test_a_gap_larger_than_the_attach_budget_falls_back() -> None:
+    # Continuity that costs more parse than a fresh window is not worth keeping:
+    # the bounded replay exists to cap attach latency, and a delta must not
+    # reintroduce the unbounded parse through the back door.
+    fake = _fake_session(64)
+    fake.attach_replay_bytes = 4
+    fake.scrollback.append(b"0123456789")
+
+    assert Session.attach_and_subscribe(fake, 2)[2] == "attach"
+    assert Session.attach_and_subscribe(fake, 8)[2] == "delta"
+
+
 def test_subscriber_overflow_coalesces_into_one_resync() -> None:
     fake = _fake_session(6)
     subscriber = Session.subscribe(fake, maxsize=2)
@@ -333,11 +453,13 @@ def test_subscriber_overflow_coalesces_into_one_resync() -> None:
     fake.scrollback.append(b"78")
     Session.publish_output(fake, b"78")
     result = Session.take_resync(fake, subscriber)
-    dropped_bytes, dropped_chunks, replay, snapshot, revision, exit_frame = result
+    dropped_bytes, dropped_chunks, replay, snapshot, revision, position, exit_frame = result
     assert (dropped_bytes, dropped_chunks) == (8, 4)
     assert replay == b"345678"
     assert snapshot == {"state": "running"}
     assert revision == 0
+    # The drop broke the client's byte count; this position is its new anchor.
+    assert position == fake.scrollback.position
     assert exit_frame is None
 
 
@@ -390,6 +512,7 @@ async def test_fanout_records_first_output_and_prompt_startup_milestones() -> No
         osc133=Osc133Parser(),
         screen=ScreenModeParser(),
         bracketed_paste=BracketedPasteParser(),
+        sticky_modes=StickyModeParser(),
         scrollback=ScrollbackBuffer(1024),
         publish_output=output.append,
         publish_update=lambda: updates.append(dict(record.startup_timing_ms)),
