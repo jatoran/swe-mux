@@ -42,7 +42,7 @@ from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
 from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
-from .attention_narration import AttentionNarrator
+from .attention_narration import NARRATION_RULE_ID, AttentionNarrator
 from .attention_ranking import AttentionRankingService
 from .auto_delivery import AutoDeliveryController
 from .automation import (
@@ -145,6 +145,7 @@ from .preview_capture import (
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import profile_payload, resolve_profile
 from .project_actions import ProjectActionService, action_spawn_body
+from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
     GLOBAL_SCRATCHPAD_ID,
@@ -201,7 +202,7 @@ from .provider_accounts import (
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
-from .scan_timeline import ScanContext, ScanTimelineService
+from .scan_timeline import SCAN_RULE_ID, ScanContext, ScanTimelineService
 from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
@@ -254,6 +255,7 @@ from .transcript_view import (
 from .usage import UsageManager
 from .voice import (
     DICTATION_PROFILE,
+    VOICE_RULE_ID,
     VoiceError,
     VoiceService,
     VoiceStore,
@@ -2400,8 +2402,74 @@ async def automation_dry_run(request: web.Request) -> web.Response:
     return json_response({"event": normalized.snapshot(), "reports": reports})
 
 
+# Four features bill the same observer budget without being automation rules, so a spend
+# breakdown grouped by `rule_id` alone would print raw ids for them and leave the reader
+# unable to tell an expensive feature from an expensive rule.
+FEATURE_SPENDERS: dict[str, tuple[str, str]] = {
+    SCAN_RULE_ID: ("Scan timeline", "Per-run scans that extract timeline records"),
+    VOICE_RULE_ID: ("Read aloud", "Spoken summaries of agent replies"),
+    PROJECT_CARD_RULE_ID: ("Project card", "Generated Project context cards"),
+    NARRATION_RULE_ID: ("Attention narration", "Model narration of ranked attention"),
+}
+
+
+def _label_spend_rows(rows: list[dict[str, Any]], engine: dict[str, Any]) -> list[dict[str, Any]]:
+    """Name every spending rule, and say what kind of thing it is.
+
+    Cost is only actionable next to the control that turns it off, so each row also carries
+    the setting that governs it and whether that setting is currently on: a rule at the top
+    of the list that is already disabled is spent history, not a live bill.
+    """
+    known: dict[str, dict[str, Any]] = {}
+    for rule in engine.get("built_in_rules") or []:
+        known[str(rule["id"])] = {
+            "label": str(rule.get("name") or rule["id"]),
+            "detail": str(rule.get("description") or ""),
+            "kind": "observer",
+            "enabled": bool(rule.get("enabled")),
+            "setting_label": str(rule.get("setting_label") or ""),
+        }
+    for rule in engine.get("rules") or []:
+        known[str(rule["id"])] = {
+            "label": str(rule.get("name") or rule["id"]),
+            "detail": "",
+            "kind": "custom",
+            "enabled": bool(rule.get("enabled")),
+            "setting_label": "",
+        }
+    for rule_id, (label, detail) in FEATURE_SPENDERS.items():
+        known.setdefault(
+            rule_id,
+            {
+                "label": label,
+                "detail": detail,
+                "kind": "feature",
+                "enabled": True,
+                "setting_label": "",
+            },
+        )
+    labelled = []
+    for row in rows:
+        meta = known.get(
+            row["rule_id"],
+            {
+                "label": row["rule_id"],
+                "detail": "",
+                # Retired or renamed: it billed, and nothing on this page can turn it off.
+                "kind": "retired",
+                "enabled": False,
+                "setting_label": "",
+            },
+        )
+        labelled.append({**row, **meta})
+    return labelled
+
+
 async def automation_dashboard(request: web.Request) -> web.Response:
     store: AutomationStore = request.app["automation_store"]
+    engine = request.app["automation"].status()
+    breakdown = await store.spend_breakdown(days=7)
+    breakdown["rules"] = _label_spend_rows(breakdown["rules"], engine)
     return json_response(
         {
             **await store.dashboard(),
@@ -2411,12 +2479,15 @@ async def automation_dashboard(request: web.Request) -> web.Response:
                     request.app["config"].scan_timeline_enabled
                 ),
             },
-            "engine": request.app["automation"].status(),
+            "engine": engine,
             "provider": await _provider_status(request),
             "recent_firings": await store.firings(limit=25),
             "recent_action_results": await store.action_results(limit=50),
             "recent_observer_calls": await store.observer_calls(limit=50),
             "recent_annotations": await store.annotations(limit=25),
+            # Per-rule, so the cost view can answer which automation to turn off rather
+            # than only what automation cost in total.
+            "spend_breakdown": breakdown,
         }
     )
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { insertEditorTab } from '../src/editorText.ts'
+import { createNoteRailIcon, type NoteRailIcon } from '../src/noteRailIcons.ts'
 import {
   NoteSaveQueue,
   fileSaveTarget,
@@ -27,6 +28,47 @@ function makeTransport() {
 const noteTarget = noteSaveTarget('p1', 'note-a')
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
+
+type FakeSvgElement = {
+  tag: string
+  attributes: Record<string, string>
+  children: FakeSvgElement[]
+  setAttribute: (name: string, value: string) => void
+  append: (child: FakeSvgElement) => void
+}
+
+function fakeSvgDocument(): Document {
+  return {
+    createElementNS: (_namespace: string, tag: string): FakeSvgElement => {
+      const element: FakeSvgElement = {
+        tag,
+        attributes: {},
+        children: [],
+        setAttribute(name, value) { this.attributes[name] = value },
+        append(child) { this.children.push(child) },
+      }
+      return element
+    },
+  } as unknown as Document
+}
+
+test('note rail copy and paste actions use accessible standard SVG marks', () => {
+  const expected: Record<NoteRailIcon, { tags: string[]; distinctiveAttribute: [string, string] }> = {
+    copy: { tags: ['rect', 'path'], distinctiveAttribute: ['d', 'M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2'] },
+    paste: { tags: ['rect', 'path'], distinctiveAttribute: ['d', 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2'] },
+  }
+  for (const kind of Object.keys(expected) as NoteRailIcon[]) {
+    const icon = createNoteRailIcon(kind, fakeSvgDocument()) as unknown as FakeSvgElement
+    assert.equal(icon.tag, 'svg')
+    assert.equal(icon.attributes.viewBox, '0 0 24 24')
+    assert.equal(icon.attributes['aria-hidden'], 'true')
+    assert.equal(icon.attributes.focusable, 'false')
+    assert.deepEqual(icon.children.map(child => child.tag), expected[kind].tags)
+    assert.ok(icon.children.every(child => child.attributes.fill === 'none'))
+    const [attribute, value] = expected[kind].distinctiveAttribute
+    assert.equal(icon.children[1].attributes[attribute], value)
+  }
+})
 
 test('global notes use their own project-agnostic endpoint', () => {
   const target = globalNoteSaveTarget('scratchpad')

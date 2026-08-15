@@ -13,6 +13,7 @@ import { claimEditorInsertTarget, forgetEditorFocus, noteEditorFocus } from './i
 import type { TextSurfaceIdentity } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { hasSelection, selectionText } from './noteSelection'
+import { createNoteRailIcon } from './noteRailIcons'
 import {
   currentNoteEditorSettings,
   ensureNoteRailArrangement,
@@ -166,7 +167,7 @@ const NOTE_CLIPBOARD_RAIL_ACTIONS: readonly RailAction[] = [
   {
     id: 'mux:copy',
     label: 'Copy selected text',
-    glyph: '⧉',
+    icon: () => createNoteRailIcon('copy'),
     isEnabled: snapshot => hasSelection(snapshot),
     run: editor => {
       const text = selectionText(editor.snapshot())
@@ -178,7 +179,7 @@ const NOTE_CLIPBOARD_RAIL_ACTIONS: readonly RailAction[] = [
   {
     id: 'mux:paste',
     label: 'Paste text',
-    glyph: '▤',
+    icon: () => createNoteRailIcon('paste'),
     run: editor => { void handlePasteRequest(editor, noteRailClipboard) },
   },
 ]

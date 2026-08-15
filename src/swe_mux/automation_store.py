@@ -1429,6 +1429,78 @@ class AutomationStore:
 
         return await self._run(op)
 
+    async def spend_breakdown(self, *, days: int = 7) -> dict[str, Any]:
+        """Observer spend split by the automation that caused it.
+
+        The dashboard could only ever answer "what did automation cost today" in total, which
+        is the one number that cannot be acted on: turning something off requires knowing
+        which something. This groups the same ledger `spend()` reads, so the per-rule figures
+        add up to the headline exactly rather than approximating it from a truncated sample of
+        recent calls.
+
+        The ledger is the source rather than the call log because a call that failed after the
+        provider billed for its input still writes a ledger row, and a breakdown that omitted
+        those would under-report precisely the automation worth turning off.
+        """
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        window = max(1, min(int(days), 365))
+        start = time.strftime("%Y-%m-%d", time.gmtime(time.time() - (window - 1) * 86400))
+
+        def op() -> dict[str, Any]:
+            rows = self._db.execute(
+                "SELECT rule_id,"
+                "COUNT(*) calls,"
+                "COALESCE(SUM(input_tokens+output_tokens),0) tokens,"
+                "COALESCE(SUM(cost_usd),0) cost,"
+                "COALESCE(SUM(CASE WHEN day=? THEN 1 ELSE 0 END),0) today_calls,"
+                "COALESCE(SUM(CASE WHEN day=? THEN input_tokens+output_tokens ELSE 0 END),0)"
+                " today_tokens,"
+                "COALESCE(SUM(CASE WHEN day=? THEN cost_usd ELSE 0 END),0) today_cost,"
+                "MAX(created_at) last_at "
+                "FROM automation_budget_ledger WHERE day>=? "
+                "GROUP BY rule_id ORDER BY cost DESC,calls DESC",
+                (today, today, today, start),
+            ).fetchall()
+            models = self._db.execute(
+                "SELECT rule_id,requested_model,COUNT(*) calls "
+                "FROM automation_budget_ledger WHERE day>=? AND requested_model IS NOT NULL "
+                "GROUP BY rule_id,requested_model ORDER BY calls DESC",
+                (start,),
+            ).fetchall()
+            by_rule: dict[str, list[str]] = {}
+            for row in models:
+                by_rule.setdefault(str(row["rule_id"]), []).append(str(row["requested_model"]))
+            return {
+                "rules": [
+                    {
+                        "rule_id": str(row["rule_id"]),
+                        "calls": int(row["calls"]),
+                        "tokens": int(row["tokens"]),
+                        "cost_usd": float(row["cost"]),
+                        "today_calls": int(row["today_calls"]),
+                        "today_tokens": int(row["today_tokens"]),
+                        "today_cost_usd": float(row["today_cost"]),
+                        "models": by_rule.get(str(row["rule_id"]), []),
+                        "last_at": float(row["last_at"] or 0),
+                    }
+                    for row in rows
+                ]
+            }
+
+        result = await self._run(op)
+        rules: list[dict[str, Any]] = result["rules"]
+        result["days"] = window
+        result["start_day"] = start
+        result["today"] = today
+        result["totals"] = {
+            key: sum(rule[key] for rule in rules)
+            for key in ("calls", "tokens", "today_calls", "today_tokens")
+        } | {
+            key: round(sum(rule[key] for rule in rules), 6)
+            for key in ("cost_usd", "today_cost_usd")
+        }
+        return result
+
     async def dashboard(self) -> dict[str, Any]:
         def op() -> dict[str, Any]:
             calls = self._db.execute(

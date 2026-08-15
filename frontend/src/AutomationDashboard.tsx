@@ -1,5 +1,9 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import {
+  buildSpendRows, callHealth, exactMoney, formatCount, formatDuration, formatMoney, formatPercent,
+  type SpendBreakdown,
+} from './automationCost'
 import { displayModelName } from './modelDisplay'
 import { ModelName } from './ModelName'
 import { useModalFocus } from './modalFocus'
@@ -17,20 +21,24 @@ type AutomationData={
   provider:{secret:{configured:boolean;source:string};models:{models:unknown[];stale:boolean;error?:string};cheap_model:string;standard_model:string}
   spend_today:{tokens:number;cost_usd:number};observer_calls:Record<string,number>;annotations:Record<string,number>;unread_notifications:number
   recent_firings:Firing[];recent_action_results:ActionResult[];recent_observer_calls:ObserverCall[];recent_annotations:Annotation[]
+  spend_breakdown?:SpendBreakdown
 }
 type Telemetry={since:number;dimensions:Array<{backend:string;model:string;runs:number;ended_runs:number;average_duration_s?:number;tokens_in:number;tokens_out:number;average_final_context_pct?:number;average_peak_context_pct?:number;turns_per_run:number;stalls_per_run:number;approvals_per_run:number;completion_evidence_count:number;completion_evidence_runs:number}>;event_counts:Record<string,number>;interpretation:string;observer_spend:{tokens:number;cost_usd:number};provider_cost_dimensions:Array<{backend:string;model:string;tokens:number;cost_usd:number;cost_is_estimate:boolean;attribution:string}>;cost_note:string}
 type Experience={id:string;backend:string;error_summary:string;resolution_summary:string;source_run_id:string;confidence?:number;created_at:number}
 type InjectionSafety={version:number;research_only:boolean;authorizes_actuation:boolean;shadow_metrics:{evaluations:Record<string,number>;reasons:Record<string,number>;tracked_sessions:number;unknown_duration_s:number;transitions:number};parser_coverage:Array<{session_id:string;backend:string;schema_version?:string;status:string;recognized:number;unknown:number;unknown_rate?:number;unknown_signatures:Record<string,number>;diagnostic?:string}>;sessions:Array<{session_id:string;backend:string;state:string;delivery_state:'safe'|'blocked'|'unknown';reason:string;reasons:string[];candidate_safe:boolean;authorized:boolean;diagnostic:string;checks:Record<string,boolean|null>;evidence:Record<string,unknown>}>}
 type EndedRun={id:string;backend:string;name:string;generated_title?:string;auto_named?:number;cwd:string;spawned_at:number;exited_at?:number;transcript_path?:string;project_label?:string}
 type ObserverBatch={id:string;kind:string;status:string;run_ids:string[];preview:unknown[];calls:number;tokens:number;cost_usd:number;error?:string;created_at:number;completed_at?:number}
-type View='automations'|'attention'|'notes'|'health'|'knowledge'|'diagnostics'
+type View='automations'|'attention'|'notes'|'health'|'knowledge'|'cost'|'diagnostics'
 
 const groups:Array<{id:string;label:string;views:View[]}>=[
   {id:'configure',label:'configure',views:['automations']},
   {id:'attend',label:'attend',views:['attention','health']},
+  // Spend is its own destination rather than a section of health: what a thing costs and
+  // whether it is behaving are different questions asked at different times.
+  {id:'spend',label:'spend',views:['cost']},
   {id:'review',label:'review',views:['notes','knowledge']},
 ]
-const viewLabels:Record<View,string>={automations:'rules & observers',attention:'attention',health:'all-session health',notes:'run notes',knowledge:'learned fixes',diagnostics:'diagnostics'}
+const viewLabels:Record<View,string>={automations:'rules & observers',attention:'attention',health:'all-session health',notes:'run notes',knowledge:'learned fixes',cost:'cost breakdown',diagnostics:'diagnostics'}
 const healthSignals=[
   ['Needs you','Unattended approvals and requests waiting for user input.'],
   ['Possibly stuck','Stalls, repeated tool failures, and output without meaningful progress.'],
@@ -99,6 +107,16 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
   const attentionObserversEnabled=(data?.engine.built_in_rules||[]).some(item=>item.setting_key==='phase7_observers_enabled'&&item.enabled)
   const activeGroup=groups.find(group=>group.views.includes(view))
   const unread=data?.unread_notifications||0
+  const breakdown=data?.spend_breakdown
+  const spendRows=useMemo(()=>buildSpendRows(breakdown),[breakdown])
+  const spendDays=breakdown?.days||7
+  const spendTotals=breakdown?.totals
+  // Two different pots of money, never added together: observers bill an OpenRouter key by
+  // the call, agents bill a subscription plan and are only ever estimated.
+  const agentSpend=(telemetry?.provider_cost_dimensions||[]).reduce((total,row)=>total+(row.cost_usd||0),0)
+  const agentTokens=(telemetry?.provider_cost_dimensions||[]).reduce((total,row)=>total+(row.tokens||0),0)
+  const calls=callHealth(data?.observer_calls)
+  const costShareTotal=spendRows.reduce((total,row)=>total+(row.cost_usd||0),0)
 
   return <div class="usage-layer automation-layer" role="dialog" aria-modal="true" aria-label="Automation" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="usage-panel automation-panel" ref={panel}>
@@ -108,16 +126,68 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
       <div class={`usage-progress ${!data&&!error?'running':''}`} role="status" aria-live="polite"><span>{error?'!':data?'·':'◌'}</span><strong>{error||message}</strong></div>
       <main>
         {view==='automations'&&<div class="usage-tables">
-          <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{integer.format(Object.values(data?.observer_calls||{}).reduce((a,b)=>a+b,0))}</strong></article><article><span>tokens today</span><strong>{integer.format(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong>{money.format(data?.spend_today.cost_usd||0)}</strong></article></div>
-          <section class="usage-table"><h3>Global controls</h3><p>Enable and disable automation here. Provider, model, budget, and execution configuration remains in Settings.</p><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('automation_enabled',!data?.controls.automation_enabled)}>{data?.controls.automation_enabled?'disable':'enable'}</button></div></article><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('scan_timeline_enabled',!data?.controls.scan_timeline_enabled)}>{data?.controls.scan_timeline_enabled?'disable':'enable'}</button></div></article></section>
+          {/* `calls today` used to sum the lifetime status counts, which is neither today's
+              figure nor a count of anything the reader asked for. Today's calls come from the
+              same ledger as today's cost, so the three spend tiles agree with each other. */}
+          <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{formatCount(spendTotals?.today_calls||0)}</strong></article><article><span>tokens today</span><strong title={integer.format(data?.spend_today.tokens||0)}>{formatCount(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article></div>
+          <section class="usage-table automation-controls"><h3>Global controls</h3><p>Enable and disable automation here. Provider, model, budget, and execution configuration remains in Settings.</p><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('automation_enabled',!data?.controls.automation_enabled)}>{data?.controls.automation_enabled?'disable':'enable'}</button></div></article><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('scan_timeline_enabled',!data?.controls.scan_timeline_enabled)}>{data?.controls.scan_timeline_enabled?'disable':'enable'}</button></div></article></section>
           <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules. The three attention observers share one setting, so enabling or disabling one changes the whole attention group.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='phase7_observers_enabled'?' group':''}</button></div></article>)}</section>
           <section class="usage-table"><h3>Custom rules</h3><p>Canonical rules saved in the daemon rules file. Configure edits the full TOML definition.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={onConfigure}>edit custom rules</button></div>}</section>
         </div>}
         {view==='attention'&&<section class="usage-table"><h3>Attention inbox</h3><p>Alerts that may require you to return to a session. Deterministic health checks and observer triage can both create these items.</p>{inbox.length?inbox.map(item=><article class={`automation-row ${item.read_at?'read':''}`}><span class={`state-dot ${item.severity==='warning'?'awaiting':'idle'}`}/><div><strong>{item.title}</strong><span>{item.message}</span><small>{new Date(item.created_at*1000).toLocaleString()} · {item.kind} · {item.severity}</small>{item.evidence.length>0&&<details><summary>why this was raised</summary><pre>{JSON.stringify(item.evidence,null,2)}</pre></details>}</div>{item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>open session</button>}<button onClick={()=>void markRead(item)}>{item.read_at?'mark unread':'mark read'}</button></article>):<div class="automation-empty"><strong>Nothing needs your attention</strong><span>New approval, stall, pressure, and conflict notices will appear here.</span></div>}</section>}
         {view==='notes'&&<section class="usage-table"><h3>Run notes</h3><p>Previously called annotations. These are durable findings attached to a run; they never alter the transcript or send text to the agent.</p>{data?.recent_annotations.length?data.recent_annotations.map(item=><article class="automation-row"><span class="state-dot idle"/><div><strong>{item.tag} · {item.content}</strong><small>{new Date(item.created_at*1000).toLocaleString()} · run::{item.agent_run_id}</small><em>created by::{item.provenance} · model::<ModelName model={item.resolved_model} fallback="deterministic"/> · confidence::{item.confidence??'—'} · cost::{money.format(item.cost_usd||0)}</em></div>{item.session_id&&<button onClick={()=>onOpenSession(item.session_id!)}>open session</button>}</article>):<div class="automation-empty"><strong>No run notes yet</strong><span>Generated titles, summaries, handoff suggestions, and prior-resolution hints appear here.</span></div>}</section>}
+        {view==='cost'&&<div class="automation-cost">
+          {/* The two pots are never summed. Observers bill a metered OpenRouter key by the
+              call; agents bill a subscription and their figures are estimates. Adding them
+              would produce a number that is true of nothing. */}
+          <div class="usage-summary cost-summary">
+            <article><span>observers today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong><small>{formatCount(spendTotals?.today_calls||0)} calls · {formatCount(spendTotals?.today_tokens||0)} tokens</small></article>
+            <article><span>observers · {spendDays}d</span><strong title={exactMoney(spendTotals?.cost_usd||0)}>{formatMoney(spendTotals?.cost_usd||0)}</strong><small>{formatCount(spendTotals?.calls||0)} calls · {formatCount(spendTotals?.tokens||0)} tokens</small></article>
+            <article><span>call outcomes</span><strong>{formatCount(calls.total)}</strong><small class={calls.failed?'warn':''}>{formatCount(calls.failed)} failed or cancelled · {formatPercent(calls.failureRate)}</small></article>
+            <article><span>agent models</span><strong title={exactMoney(agentSpend)}>{formatMoney(agentSpend)}</strong><small>estimated · {formatCount(agentTokens)} tokens</small></article>
+          </div>
+          <section class="usage-table">
+            <h3>What automation is costing</h3>
+            <p>Every billed observer call of the last {spendDays} days, grouped by what asked for it and ranked by the window rather than by today. Same ledger as the headline, so the rows add up to it exactly.</p>
+            {spendRows.length?<div class="usage-table-scroll"><table class="data-table cost-table">
+              <thead><tr><th>automation</th><th>today</th><th>{spendDays} days</th><th>calls</th><th>tokens</th><th>model</th></tr></thead>
+              <tbody>{spendRows.map(row=><tr class={row.enabled?'':'disabled'} key={row.rule_id}>
+                <td data-label="automation">
+                  <div class="cost-name"><strong>{row.label}</strong><span class={`automation-pill ${row.kind}`}>{row.kind}</span>{row.enabled?null:<span class="automation-pill off">off</span>}</div>
+                  <div class="cost-bar" style={`--share:${Math.max(0.015,costShareTotal>0?row.share:row.callShare)}`}/>
+                  <small title={row.rule_id}>{row.detail||row.rule_id}</small>
+                </td>
+                <td data-label="today" title={exactMoney(row.today_cost_usd)}>{formatMoney(row.today_cost_usd)}</td>
+                <td data-label={`${spendDays} days`} title={exactMoney(row.cost_usd)}><strong>{formatMoney(row.cost_usd)}</strong>{costShareTotal>0?<em>{formatPercent(row.share)}</em>:null}</td>
+                <td data-label="calls" title={integer.format(row.calls)}>{formatCount(row.calls)}</td>
+                <td data-label="tokens" title={integer.format(row.tokens)}>{formatCount(row.tokens)}</td>
+                <td data-label="model" class="cost-model">{row.models?.length?row.models.map(model=><ModelName model={model}/>):'—'}</td>
+              </tr>)}</tbody>
+              <tfoot><tr><td data-label="automation">all automation</td><td data-label="today" title={exactMoney(spendTotals?.today_cost_usd||0)}>{formatMoney(spendTotals?.today_cost_usd||0)}</td><td data-label={`${spendDays} days`} title={exactMoney(spendTotals?.cost_usd||0)}>{formatMoney(spendTotals?.cost_usd||0)}</td><td data-label="calls">{formatCount(spendTotals?.calls||0)}</td><td data-label="tokens">{formatCount(spendTotals?.tokens||0)}</td><td/></tr></tfoot>
+            </table></div>:<div class="automation-empty"><strong>No observer spend in the last {spendDays} days</strong><span>Enabled observers that never fired, and deterministic health checks, cost nothing and do not appear here.</span></div>}
+          </section>
+          <section class="usage-table">
+            <h3>Agent model spend</h3>
+            <p>Your agent subscription usage, which is a different pot of money from the observer spend above and is never added to it. {telemetry?.cost_note?`${telemetry.cost_note}.`:'Backend/model aggregates from the harness, not attributed to individual runs.'}</p>
+            {telemetry?.provider_cost_dimensions.length?<div class="usage-table-scroll"><table class="data-table">
+              <thead><tr><th>backend / model</th><th>cost</th><th>tokens</th><th>source</th></tr></thead>
+              <tbody>{telemetry.provider_cost_dimensions.map(row=><tr key={`${row.backend}:${row.model}`}>
+                <td data-label="backend / model"><strong>{row.backend}</strong> · <ModelName model={row.model}/></td>
+                <td data-label="cost" title={exactMoney(row.cost_usd)}>{formatMoney(row.cost_usd)}{row.cost_is_estimate?<em>est</em>:null}</td>
+                <td data-label="tokens" title={integer.format(row.tokens)}>{formatCount(row.tokens)}</td>
+                <td data-label="source" class="cost-source">{row.attribution}</td>
+              </tr>)}</tbody>
+              <tfoot><tr><td data-label="backend / model">all backends</td><td data-label="cost" title={exactMoney(agentSpend)}>{formatMoney(agentSpend)}</td><td data-label="tokens">{formatCount(agentTokens)}</td><td/></tr></tfoot>
+            </table></div>:<div class="automation-empty"><strong>No agent cost aggregates</strong><span>Harness usage reporting has not produced per-model figures yet.</span></div>}
+          </section>
+        </div>}
         {view==='health'&&<>
           <section class="usage-table"><h3>What all-session health watches</h3><p>“Fleet” means every live and recent session considered together. These passive checks do not use an LLM and cannot control an agent.</p><div class="automation-health-grid">{healthSignals.map(([title,description])=><article><strong>{title}</strong><span>{description}</span></article>)}<article><strong>Periodic attention digest · {attentionObserversEnabled?'on':'off'}</strong><span>The optional attention-observer setting also summarizes unread attention records every 30 minutes.</span></article></div></section>
-          <section class="usage-table"><h3>Observed workload telemetry</h3><p>Descriptive correlation only; it does not rank agents or claim that one model caused an outcome.</p><div class="usage-table-scroll"><table><thead><tr><th>backend/model</th><th>runs</th><th>ended</th><th>avg duration</th><th>turns/run</th><th>stalls/run</th><th>approvals/run</th><th>context final/peak</th><th>completion evidence</th><th>tokens</th></tr></thead><tbody>{telemetry?.dimensions.map(row=><tr><td>{row.backend} / <ModelName model={row.model}/></td><td>{row.runs}</td><td>{row.ended_runs}</td><td>{Math.round(row.average_duration_s||0)}s</td><td>{row.turns_per_run.toFixed(1)}</td><td>{row.stalls_per_run.toFixed(2)}</td><td>{row.approvals_per_run.toFixed(2)}</td><td>{Math.round((row.average_final_context_pct||0)*100)}% / {Math.round((row.average_peak_context_pct||0)*100)}%</td><td>{row.completion_evidence_runs}/{row.runs} runs · {row.completion_evidence_count} signals</td><td>{integer.format((row.tokens_in||0)+(row.tokens_out||0))}</td></tr>)}</tbody></table></div>{telemetry?.provider_cost_dimensions.length?<><h3>Provider/model cost aggregates</h3><p>{telemetry.cost_note}</p><div class="usage-table-scroll"><table><thead><tr><th>backend/model</th><th>tokens</th><th>cost</th><th>source</th></tr></thead><tbody>{telemetry.provider_cost_dimensions.map(row=><tr><td>{row.backend} / <ModelName model={row.model}/></td><td>{integer.format(row.tokens)}</td><td>{money.format(row.cost_usd)}{row.cost_is_estimate?' est.':''}</td><td>{row.attribution}</td></tr>)}</tbody></table></div></>:null}</section>
+          {/* Ten nowrap columns of raw seconds and ten-figure token counts did not fit any
+              window, so the one table nobody could read was the one meant to be scanned.
+              Rates collapse into one cell, durations and counts are formatted at human scale,
+              and cost moved out to the spend tab where it is asked about. */}
+          <section class="usage-table"><h3>Observed workload telemetry</h3><p>Descriptive correlation only; it does not rank agents or claim that one model caused an outcome. Costs live under <strong>spend</strong>.</p>{telemetry?.dimensions.length?<div class="usage-table-scroll"><table class="data-table"><thead><tr><th>backend / model</th><th>runs</th><th>avg duration</th><th>context final → peak</th><th>per run</th><th>completion evidence</th><th>tokens</th></tr></thead><tbody>{telemetry.dimensions.map(row=><tr key={`${row.backend}:${row.model}`}><td data-label="backend / model"><strong>{row.backend}</strong> · <ModelName model={row.model}/></td><td data-label="runs">{formatCount(row.ended_runs)}<em>/{formatCount(row.runs)} ended</em></td><td data-label="avg duration">{formatDuration(row.average_duration_s)}</td><td data-label="context final → peak">{formatPercent(row.average_final_context_pct)} → {formatPercent(row.average_peak_context_pct)}</td><td data-label="per run" class="telemetry-rates"><span>{row.turns_per_run.toFixed(1)}<em>turns</em></span><span>{row.stalls_per_run.toFixed(2)}<em>stalls</em></span><span>{row.approvals_per_run.toFixed(2)}<em>approvals</em></span></td><td data-label="completion evidence">{formatCount(row.completion_evidence_runs)}<em>/{formatCount(row.runs)} runs · {formatCount(row.completion_evidence_count)} signals</em></td><td data-label="tokens" title={integer.format((row.tokens_in||0)+(row.tokens_out||0))}>{formatCount((row.tokens_in||0)+(row.tokens_out||0))}</td></tr>)}</tbody></table></div>:<div class="automation-empty"><strong>No workload telemetry yet</strong><span>Figures appear once runs have started and ended under an observed harness.</span></div>}</section>
           <section class="usage-table"><h3>What happened while I was away?</h3><p>Summarizes attention items and run notes since your last terminal attach or input.</p><button onClick={async()=>{const report=await api('GET','/api/attention/absence');setAbsenceReport(report);setMessage('Away report refreshed.')}}>generate away report</button>{absenceReport&&<pre>{JSON.stringify(absenceReport,null,2)}</pre>}</section>
         </>}
         {view==='knowledge'&&<>

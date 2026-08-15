@@ -56,11 +56,42 @@ and the declared minimum observation capability.
 
 ## Control-plane presentation
 
-- The modal groups its views into three top-level tabs — **Configure** (rules & observers),
-  **Attend** (attention · all-session health), **Review** (run notes · learned fixes) — with a
+- The modal groups its views into four top-level tabs — **Configure** (rules & observers),
+  **Attend** (attention · all-session health), **Spend** (cost breakdown), **Review** (run notes ·
+  learned fixes) — with a
   secondary sub-tab row shown only when a group has more than one view. A `?` in the header
   opens a nested help modal (the how-it-works pipeline + glossary); Escape/focus-trap transfer
   to it while open.
+  Because that sub-tab row exists for some views and not others, the panel's own frame is a
+  column flex rather than a fixed grid template: hard-coded row numbers fitted exactly one of
+  those cases and drew the status line over the first heading in the other.
+- **Spend answers which automation costs what, not only what automation cost.** A single daily
+  total cannot be acted on, because turning something off requires knowing which something.
+  `GET /api/automation/dashboard` carries `spend_breakdown`, grouped from the same
+  `automation_budget_ledger` that produces `spend_today`, so the rows add up to the headline
+  exactly rather than approximating it from the truncated sample of recent calls. Rows rank by
+  the 7-day window rather than by today, because the decision is about a habit rather than a
+  day, and each carries its share of the window as a bar.
+  Four features bill that budget without being rules — Scan timeline, Read aloud, Project card,
+  and attention narration — so the daemon labels every row and tags it `observer`, `custom`,
+  `feature`, or `retired` (billed under an id the page has no control for). Before this they
+  were visible only inside the aggregate.
+- Observer spend and agent-model spend are drawn as two tables and are never summed: the first
+  is a metered OpenRouter key billed per call, the second is subscription usage the harness only
+  ever estimates. Adding them would produce a number that is true of nothing.
+- Figures are formatted by magnitude rather than at one fixed precision. These tables mix
+  `$0.0006` with `$8,600.75` and `2,269` tokens with `9.7B`, and a fixed four-decimal currency
+  format was most of why every one of them truncated. Exact values move to the cell's `title`
+  rather than being discarded, and a cost below `$0.0001` prints as `<$0.0001` rather than
+  `$0.0000`, which reads as free.
+- Every figures table uses one responsive pattern (`.data-table`): a real table while there is
+  width for one, and one labelled card per row below 760 px, with each cell naming itself from
+  `data-label`. The alternative — a `white-space:nowrap` table inside a horizontal scroller —
+  is unreadable on a phone, because the column being read and the header naming it can never be
+  on screen together.
+- The status strip's `calls today` reads the ledger, like the two spend tiles beside it. It
+  previously summed the lifetime observer-call status counts, which was neither today's figure
+  nor a count of anything the reader had asked for.
 - Configure is the complete effective inventory: global controls, built-in system observers, and canonical `rules.toml` rules, with an at-a-glance status strip for automation state, observer counts, and daily spend.
   Disabled controls and built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and

@@ -925,9 +925,16 @@ body {
 /* Usage is an inspectable dashboard; Settings only owns its configuration. */
 .usage-layer{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:76;display:grid;place-items:center;padding:12px;background:#030407cc}
 .automation-help-layer{z-index:78;background:#02030699}
-.automation-help-layer .usage-panel{width:min(680px,100%);height:min(560px,100%);grid-template-rows:auto minmax(0,1fr)}
+.automation-help-layer .usage-panel{width:min(680px,100%);height:min(560px,100%)}
 .automation-help-btn{width:29px;padding:0!important;border-radius:50%!important;font-weight:700;line-height:1}
-.automation-layer>.usage-panel>main{grid-row:6}.automation-layer>.usage-panel>footer{grid-row:7}
+/* This panel's child count changes with the view: the sub-tab strip exists under `attend` and
+   `review` and not under the others. A fixed row template plus hard-coded `grid-row` numbers
+   therefore fitted exactly one of those cases, and in the other the scrolling region landed in
+   an implicit row while the status line was drawn over the first heading. A column flex holds
+   whatever children are actually present, in order, with the body taking what is left. */
+.automation-panel{display:flex;flex-direction:column}
+.automation-panel>header,.automation-panel>.usage-actions,.automation-panel>.usage-progress,.automation-panel>footer{flex:none}
+.automation-panel>main{flex:1 1 auto;min-height:0}
 .automation-subtabs{padding:5px 9px;background:var(--panel2)}.automation-subtabs [role=tab]{color:var(--muted)}
 .usage-header-actions button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 .observations-layer>.usage-panel>main{grid-row:6}.observations-layer>.usage-panel>footer{grid-row:7}
@@ -1250,18 +1257,70 @@ body {
 .quota-controls label:first-child{flex:1 1 260px}.quota-controls label:first-child select{min-width:180px;max-width:100%}.quota-chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.quota-chart{min-width:0;border:1px solid var(--line);padding:8px;background:var(--bg)}.quota-chart h3{margin:0 0 7px;color:var(--accent);font:inherit;text-transform:uppercase}.quota-chart svg{display:block;width:100%;min-width:0;overflow:visible}.quota-chart svg text{fill:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}.quota-chart svg polyline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}.quota-grid-line{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}.quota-reset-marker{stroke:#94a3b8;stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}.quota-reset-marker.unexpected{stroke:#f472b6;stroke-width:2}.quota-reset-marker.scheduled{stroke:#a3e635}.quota-chart>p{margin:8px 0;color:var(--muted)}
 @media(max-width:760px){.usage-view-tabs{overflow-x:auto}.usage-view-tabs button{flex:none}.usage-view-controls{gap:6px}.usage-series-row{grid-template-columns:76px minmax(32px,1fr) 76px}.usage-series-row>strong{overflow:hidden;text-overflow:ellipsis}.model-stack-row{grid-template-columns:72px minmax(40px,1fr) 76px}.model-stack-row>strong{overflow:hidden;text-overflow:ellipsis}.quota-chart-grid{grid-template-columns:1fr}.quota-controls label:first-child{flex-basis:100%}.quota-controls label:first-child select{min-width:0}}
 
-.automation-panel{grid-template-rows:auto auto auto minmax(0,1fr) auto}
 .automation-tabs{overflow-x:auto}.automation-tabs button{flex:none}
 .automation-panel .usage-table{margin-top:10px}.automation-panel .usage-tables .usage-table{margin-top:0}
+/* The summary strip is a header for the two columns beneath it, not a cell in them. Left as
+   an ordinary grid item it took one half-width column, which truncated four of its six labels
+   and then stretched the whole strip to the height of the section beside it. */
+.automation-panel .usage-tables{align-items:start}.automation-panel .usage-tables>.usage-summary,.automation-panel .usage-tables>.automation-controls{grid-column:1/-1}
 .automation-panel pre{max-height:260px;overflow:auto;margin:8px;padding:8px;border:1px solid var(--line);background:var(--bg);color:var(--muted);font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
 .automation-row{display:flex;align-items:flex-start;gap:8px;padding:8px;border-bottom:1px solid var(--line)}.automation-row.read{opacity:.58}.automation-row>div{min-width:0;flex:1;display:grid;gap:4px}.automation-row strong,.automation-row span,.automation-row small,.automation-row em{overflow-wrap:anywhere}.automation-row small,.automation-row em{color:var(--muted);font-style:normal}.automation-row>button{flex:none}.automation-row>.automation-row-actions{display:flex;flex:0 0 auto;grid-template-columns:none;gap:5px}.automation-row-actions button{white-space:nowrap}
 .automation-inline{display:flex;align-items:center;gap:7px;padding:8px}.automation-inline input{min-width:0;flex:1;min-height:31px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:5px 7px}
 .automation-panel label{display:grid;grid-template-columns:minmax(140px,28%) minmax(0,1fr);align-items:start;gap:8px;padding:6px 8px;color:var(--muted)}.automation-panel label>input,.automation-panel label>select,.automation-panel label>textarea{min-width:0;width:100%;min-height:31px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;padding:5px 7px}.automation-panel label>textarea{min-height:90px;resize:vertical}
 .automation-flow,.automation-term-grid,.automation-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}.automation-flow article,.automation-term-grid article,.automation-health-grid article{min-width:0;display:grid;gap:5px;padding:10px;background:var(--panel)}.automation-flow span,.automation-term-grid span,.automation-health-grid span{color:var(--muted)}
 .automation-rule-row{align-items:center}.automation-rule-heading{display:flex!important;align-items:center;gap:7px}.automation-pill{flex:none;padding:1px 5px;border:1px solid var(--line);color:var(--muted);font-size:8px;text-transform:uppercase}.automation-empty{display:grid;justify-items:start;gap:5px;padding:14px;color:var(--muted)}.automation-empty strong{color:var(--text)}.automation-empty button{margin-top:3px}.automation-panel h4{margin:12px 8px 4px;color:var(--accent);font:inherit;font-weight:700}.automation-advanced{padding:10px}.automation-advanced>summary{cursor:pointer;color:var(--accent);font-weight:700}.automation-advanced[open]>summary{margin-bottom:8px}
+/* One table pattern for every figures table in these panels: a real table while there is
+   width for one, and a stacked card per row once there is not. The alternative — a nowrap
+   table in a horizontal scroller — is what made these unreadable on a phone, because the
+   column you were reading and the label naming it could never be on screen together. Each
+   cell carries its own header in `data-label`, so the two markups stay one markup. */
+.data-table{width:100%;border-collapse:collapse}
+.data-table th,.data-table td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right;font:inherit;vertical-align:top;white-space:nowrap;font-variant-numeric:tabular-nums}
+.data-table th:first-child,.data-table td:first-child{min-width:0;text-align:left;white-space:normal}
+.data-table th{position:sticky;top:0;z-index:1;background:var(--panel);color:var(--muted);font-weight:inherit;white-space:nowrap}
+.data-table tbody tr:hover{background:var(--panel2)}
+.data-table td em{display:block;color:var(--muted);font-style:normal;font-size:8px}
+.data-table tfoot td{border-bottom:0;border-top:1px solid var(--line);color:var(--muted);background:var(--panel2)}
+.data-table tr.disabled td{opacity:.55}
+.data-table td small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+/* The rate cluster: three numbers that only mean anything beside their own names. */
+.telemetry-rates{display:flex;gap:12px;justify-content:flex-end}.telemetry-rates>span{display:grid;justify-items:end}
+.cost-summary{grid-template-columns:repeat(4,minmax(0,1fr))}.cost-summary article{gap:3px}.cost-summary strong{font-size:15px}.cost-summary small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}.cost-summary small.warn{color:var(--amber)}
+.automation-cost>.usage-table{margin-top:10px}
+.cost-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+/* Rank is the point of this table, and a column of near-identical small numbers does not
+   convey it; the bar does, at a glance, before any of them are read. */
+.cost-bar{height:3px;margin:5px 0 4px;background:linear-gradient(to right,var(--accent) calc(var(--share,0)*100%),var(--line) 0)}
+.cost-model{white-space:normal}.cost-model>*{display:block}
+.cost-source{color:var(--muted);font-size:8px;white-space:normal;overflow-wrap:anywhere}
+.automation-pill.observer{border-color:var(--accent);color:var(--accent)}
+.automation-pill.feature{border-color:var(--green);color:var(--green)}
+.automation-pill.retired,.automation-pill.off{border-color:var(--amber);color:var(--amber)}
 .settings-warning{border-left:2px solid var(--accent);padding:7px 9px;background:var(--bg)}
 .transcript-annotations{flex:none;max-height:180px;overflow:auto;border-bottom:1px solid var(--line);padding:7px 16px}.transcript-annotations h4{margin:0 0 5px;color:var(--muted);font:inherit}.transcript-annotations details{padding:4px 0;border-top:1px solid var(--line)}.transcript-annotations summary{cursor:pointer}.transcript-annotations small{display:block;margin-top:4px;color:var(--muted)}
-@media(max-width:760px){.automation-panel label{grid-template-columns:1fr}.automation-panel label>input,.automation-panel label>select,.automation-panel label>textarea{grid-column:1}.automation-row{flex-wrap:wrap}.automation-row>button{min-height:34px}.automation-flow,.automation-term-grid,.automation-health-grid{grid-template-columns:1fr}.automation-row>.automation-row-actions{width:100%;padding-left:18px}.automation-row-actions button{min-height:34px}}
+@media(max-width:760px){.automation-panel label{grid-template-columns:1fr}.automation-panel label>input,.automation-panel label>select,.automation-panel label>textarea{grid-column:1}.automation-row{flex-wrap:wrap}.automation-row>button{min-height:34px}.automation-flow,.automation-term-grid,.automation-health-grid{grid-template-columns:1fr}.automation-row>.automation-row-actions{width:100%;padding-left:18px}.automation-row-actions button{min-height:34px}
+/* Each row becomes its own card, with every cell labelled from `data-label`. The header row
+   goes away because it has nowhere to align to, and the horizontal scroller goes with it. */
+.data-table,.data-table tbody,.data-table tfoot,.data-table tr,.data-table td{display:block;width:auto}
+.data-table thead{display:none}
+.data-table tr{padding:8px 9px;border-bottom:1px solid var(--line)}
+.data-table tfoot tr{border-bottom:0;border-top:1px solid var(--line);background:var(--panel2)}
+.data-table td{display:grid;grid-template-columns:minmax(0,42%) minmax(0,1fr);align-items:baseline;gap:9px;padding:2px 0;border:0;text-align:left;white-space:normal}
+.data-table td:before{content:attr(data-label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.data-table td:first-child{display:block;margin-bottom:5px}
+.data-table td:first-child:before{content:none}
+.data-table td:empty{display:none}
+/* Everything after the generated label belongs in the value column. Without this a cell
+   holding a figure and its qualifier splits them across both columns, so the qualifier
+   lands under the label it does not belong to. */
+.data-table td>*{grid-column:2}
+.telemetry-rates{justify-content:flex-start}.telemetry-rates>span{display:flex;gap:5px}
+.cost-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+.cost-name{gap:5px}
+/* The panel subtitle is context, not content, and three wrapped lines of it at the top of a
+   phone screen costs a row of the table underneath. */
+.automation-panel>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.usage-table-scroll{overflow:visible}}
 
 /* Desktop app identity occupies only the cell above the sidebar. Each pane owns the
    adjacent tab strip at the top of its own stack, including both branches of a split. */

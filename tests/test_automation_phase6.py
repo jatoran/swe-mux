@@ -1946,3 +1946,88 @@ async def test_legacy_observer_calls_gain_safe_response_diagnostics(tmp_path: Pa
         assert read_schema_version(store._db, "automation") == AUTOMATION_SCHEMA_VERSION
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_spend_breakdown_attributes_every_ledger_dollar_to_one_rule(tmp_path: Path) -> None:
+    """The headline "cost today" cannot be acted on; the per-rule split is what can.
+
+    So the split has to reconcile with the headline exactly. It is grouped from the same
+    ledger `spend()` reads, including the rows a billed failure writes, because a breakdown
+    that quietly omitted those would under-report the automation most worth turning off.
+    """
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="titler",
+            model="cheap",
+            input_tokens=100,
+            output_tokens=20,
+            cost_usd=0.02,
+            call_id="call-1",
+        )
+        await store.add_spend(
+            rule_id="titler",
+            model="cheap",
+            input_tokens=50,
+            output_tokens=10,
+            cost_usd=0.01,
+            call_id="call-2",
+        )
+        # A call that failed after the provider billed for its input still lands here.
+        await store.add_spend(
+            rule_id="scan",
+            model="standard",
+            input_tokens=900,
+            output_tokens=0,
+            cost_usd=0.4,
+            call_id="call-3",
+        )
+
+        breakdown = await store.spend_breakdown(days=7)
+        rules = {row["rule_id"]: row for row in breakdown["rules"]}
+        assert list(rules) == ["scan", "titler"], "most expensive first"
+        assert rules["titler"]["calls"] == 2
+        assert rules["titler"]["tokens"] == 180
+        assert rules["titler"]["cost_usd"] == pytest.approx(0.03)
+        assert rules["scan"]["models"] == ["standard"]
+
+        # Reconciles with the headline the dashboard already shows.
+        today = await store.spend()
+        assert breakdown["totals"]["today_cost_usd"] == pytest.approx(today["cost_usd"])
+        assert breakdown["totals"]["today_tokens"] == today["tokens"]
+        assert breakdown["totals"]["cost_usd"] == pytest.approx(0.43)
+        assert breakdown["totals"]["calls"] == 3
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_spend_breakdown_window_excludes_older_days_from_today(tmp_path: Path) -> None:
+    """A rule that ran only on an earlier day still belongs in the window total, and still
+    reads as zero for today - otherwise yesterday's expensive run looks like a live cost."""
+    store = AutomationStore(tmp_path / "mux.db")
+    try:
+        await store.add_spend(
+            rule_id="scan",
+            model="standard",
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=0.5,
+            call_id="call-1",
+        )
+        old_day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 3 * 86400))
+        store._db.execute("UPDATE automation_budget_ledger SET day=?", (old_day,))
+        store._db.commit()
+
+        breakdown = await store.spend_breakdown(days=7)
+        assert breakdown["rules"][0]["cost_usd"] == pytest.approx(0.5)
+        assert breakdown["rules"][0]["today_cost_usd"] == 0
+        assert breakdown["totals"]["today_calls"] == 0
+
+        # Outside the window it drops out entirely rather than reappearing as today's spend.
+        narrow = await store.spend_breakdown(days=1)
+        assert narrow["rules"] == []
+        assert narrow["totals"]["cost_usd"] == 0
+    finally:
+        store.close()

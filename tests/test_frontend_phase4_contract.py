@@ -612,7 +612,10 @@ def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
     assert "PROCESS FLEET" in panel
     assert "buildProcessTree" in panel
     assert "renderDaemonGroup" in panel
-    assert "swe-mux::daemon + infrastructure" in panel
+    # The runtime keeps its own group. Its heading dropped the `swe-mux::` prefix that the
+    # session-group heading immediately below it already spelled out.
+    assert "daemon + infrastructure" in panel
+    assert "swe-mux runtime" in panel
     assert "daemon-owned child not attributed to a terminal session" in panel
     assert "combinedResourceTotals(snapshot)" in panel
 

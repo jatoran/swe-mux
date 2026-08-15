@@ -10,12 +10,18 @@ def source(name: str) -> str:
 
 def test_process_fleet_exposes_durable_identity_state_and_rechecked_actions() -> None:
     panel = source("ProcessPanel.tsx")
+    # Each process draws as one line, so the identity evidence moved behind that line's
+    # expander and is assembled in the pure row model rather than inline in the panel. It is
+    # still every field, and the actions still sit beside it.
+    rows = source("processRows.ts")
     assert "identity_id" in panel
     assert "suspected_orphan" in panel
-    assert "evidence_reason" in panel
-    assert "confidence" in panel
-    assert "first seen" in panel
-    assert "last seen" in panel
+    assert "evidence_reason" in rows
+    assert "confidence" in rows
+    assert "attribution" in rows
+    assert "first_seen" in rows
+    assert "last_seen" in rows
+    assert "'seen'" in rows
     assert "Re-checks the durable process fingerprint" in panel
     assert "identity_id:process.identity_id" in panel
     assert "auto" + "kill" not in panel.lower()

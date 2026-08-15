@@ -1,0 +1,163 @@
+/**
+ * Formatting and the row model behind the automation dashboard's cost view.
+ *
+ * Two problems live here, and both are about a number being technically present and
+ * practically unreadable.
+ *
+ * The first is scale. These tables mix `$0.0006258` of observer spend with `$8,600.75` of
+ * agent spend, and `2,269` tokens with `9,664,898,958`. One formatter cannot serve both, and
+ * the fixed four-decimal currency format the dashboard used printed the large figure as
+ * `$8,600.7548` — eleven characters of which two matter — which is most of why every table
+ * here truncated. So money and counts switch representation by magnitude, and the exact value
+ * stays available as a title rather than being thrown away.
+ *
+ * The second is attribution. `spend_today` is a single number, and a single number cannot be
+ * acted on: turning something off requires knowing which something. The daemon now groups its
+ * ledger by rule, and `buildSpendRows` turns that into ranked rows carrying each one's share
+ * of the total, so the answer to "what is costing me" is the first row rather than an
+ * inference across three screens.
+ *
+ * Pure, so the magnitude thresholds and the share arithmetic are testable without a DOM.
+ */
+
+export type SpendRule = {
+  rule_id: string
+  label?: string
+  detail?: string
+  /** `observer` and `custom` are automation rules; `feature` bills the same budget without
+   *  being one; `retired` billed under an id nothing on the page can turn off any more. */
+  kind?: 'observer' | 'custom' | 'feature' | 'retired'
+  enabled?: boolean
+  setting_label?: string
+  calls: number
+  tokens: number
+  cost_usd: number
+  today_calls: number
+  today_tokens: number
+  today_cost_usd: number
+  models?: string[]
+  last_at?: number
+}
+
+export type SpendBreakdown = {
+  days: number
+  today: string
+  start_day: string
+  rules: SpendRule[]
+  totals: {
+    calls: number
+    tokens: number
+    cost_usd: number
+    today_calls: number
+    today_tokens: number
+    today_cost_usd: number
+  }
+}
+
+export type SpendRow = SpendRule & {
+  label: string
+  kind: 'observer' | 'custom' | 'feature' | 'retired'
+  /** Fraction of the window's total cost, for the inline share bar. */
+  share: number
+  /** Fraction of the window's calls — the honest denominator when everything cost ~nothing. */
+  callShare: number
+}
+
+const usd = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+const integer = new Intl.NumberFormat()
+const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+
+/**
+ * Currency at whatever precision the magnitude actually carries.
+ *
+ * Sub-cent observer calls and four-figure agent bills share these tables, so a fixed number of
+ * decimals is wrong for one of them by construction. Below a hundredth of a cent the digits
+ * stop meaning anything at all and the row says so rather than printing `$0.0000`, which reads
+ * as free.
+ */
+export function formatMoney(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return '$0'
+  const magnitude = Math.abs(value)
+  if (magnitude >= 0.01) return usd.format(value)
+  if (magnitude >= 0.0001) return `$${value.toFixed(4)}`
+  return value > 0 ? '<$0.0001' : '>-$0.0001'
+}
+
+/** The exact figure, for the title of whatever cell shows the rounded one. Eight decimals
+ *  because a single cheap-model call lands around the sixth, and rounding the title too
+ *  would leave the precise number nowhere at all. */
+export const exactMoney = (value: number) =>
+  `$${(Number.isFinite(value) ? value : 0).toFixed(8).replace(/0+$/, '').replace(/\.$/, '')}`
+
+/**
+ * Counts stay exact while they are readable and go compact once they are not.
+ *
+ * Token totals here reach ten figures. `9,664,898,958` is thirteen characters that no reader
+ * compares against anything; `9.7B` is four that they can.
+ */
+export function formatCount(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  return Math.abs(value) < 100_000 ? integer.format(value) : compact.format(value)
+}
+
+/** Seconds as the largest two units that matter — `8404s` is a duration nobody reads. */
+export function formatDuration(seconds: number | null | undefined): string {
+  const total = Math.round(Number(seconds) || 0)
+  if (total <= 0) return '—'
+  if (total < 60) return `${total}s`
+  if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s`
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.round((total % 3600) / 60)
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`
+}
+
+export const formatPercent = (fraction: number | null | undefined) =>
+  `${Math.round((Number(fraction) || 0) * 100)}%`
+
+/**
+ * Ranked spend rows with each one's share of the window.
+ *
+ * Ranking is by window cost, not by today's, so a rule that ran expensively yesterday and not
+ * yet today does not drop out of sight — the point of the view is to find what to turn off,
+ * and that decision is about the habit rather than the current day.
+ *
+ * When nothing has cost measurable money the share falls back to call count, because a bar
+ * chart of zeroes hides the one row making hundreds of calls.
+ */
+export function buildSpendRows(breakdown: SpendBreakdown | null | undefined): SpendRow[] {
+  const rules = breakdown?.rules || []
+  const costTotal = rules.reduce((sum, rule) => sum + (rule.cost_usd || 0), 0)
+  const callTotal = rules.reduce((sum, rule) => sum + (rule.calls || 0), 0)
+  return rules
+    .map(rule => ({
+      ...rule,
+      label: rule.label || rule.rule_id,
+      kind: rule.kind || 'retired',
+      share: costTotal > 0 ? (rule.cost_usd || 0) / costTotal : 0,
+      callShare: callTotal > 0 ? (rule.calls || 0) / callTotal : 0,
+    }))
+    .sort((left, right) => (right.cost_usd || 0) - (left.cost_usd || 0) || (right.calls || 0) - (left.calls || 0))
+}
+
+/** The bar's width: cost share when there is cost to share, call share otherwise. */
+export const spendBarShare = (row: SpendRow, costTotal: number) =>
+  costTotal > 0 ? row.share : row.callShare
+
+/**
+ * A one-line reading of the observer call log.
+ *
+ * The dashboard summed these lifetime status counts under the heading "calls today", which was
+ * wrong in both directions: the number was every call ever made, and today's real figure lives
+ * in the ledger. Failures are pulled out because they are the actionable half — a rule failing
+ * two hundred times is still being billed for its input.
+ */
+export function callHealth(counts: Record<string, number> | undefined): {
+  total: number; failed: number; failureRate: number
+} {
+  const entries = Object.entries(counts || {})
+  const total = entries.reduce((sum, [, count]) => sum + (Number(count) || 0), 0)
+  const failed = entries
+    .filter(([status]) => status === 'failed' || status === 'cancelled')
+    .reduce((sum, [, count]) => sum + (Number(count) || 0), 0)
+  return { total, failed, failureRate: total > 0 ? failed / total : 0 }
+}

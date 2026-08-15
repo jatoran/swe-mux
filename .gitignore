@@ -20,6 +20,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 frontend/test-results/
+# Playwright also lands here when the renderer suite is run from the repo root.
+/test-results/
 frontend/playwright-report/
 
 # === Python ===
