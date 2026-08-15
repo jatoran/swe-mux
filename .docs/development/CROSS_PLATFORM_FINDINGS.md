@@ -187,6 +187,7 @@ These are Windows trial-readiness issues even if native Linux/macOS work never s
 - Preserve structured argv/env and the `MUX_<NAME>_EXE`/`MUX_<NAME>_ARGS` contract.
 - Keep PATHEXT, COMSPEC, batch-file, and Windows Node-shim handling inside the Windows implementation.
 - Resolve POSIX commands through PATH without importing Windows suffix assumptions.
+- Extend the shim-aware resolver to POSIX. Harness-installation detection (`harness.detect_installation` via `shim_paths.which_real`) strips mux's own launchers before deciding a CLI is present, but `is_mux_shim`/`path_without_shim_dirs` recognize only `.cmd`/`.bat` shims. With POSIX shebang launchers, `which_real` would resolve to the mux shim and detection would report every harness installed, the same self-invocation trap the shim guard exists to prevent.
 - Adapt hook commands to each provider's actual shell on each host; do not infer hook-shell portability from the interactive terminal shell.
 - Prove promotion/demotion, hook secrets, native IDs, transcript ownership, resume, rollover, and account switching independently for every host/agent-runtime pair.
 
@@ -207,6 +208,8 @@ These are Windows trial-readiness issues even if native Linux/macOS work never s
 - Direct Tailscale HTTP is encrypted transport but not a browser secure context; clipboard and microphone behavior differs from private HTTPS through Tailscale Serve.
 - swe-mux has no application login; a tailnet peer admitted by policy has terminal and code-execution authority.
 - External proving should default to local-only unless the tester has deliberately reviewed Tailscale policy and the remote-control boundary.
+- The connect-onboarding surface planned in `NEW_USER_RELEASE_READINESS.md` (Tailscale connection state, the phone-side DNS checklist, and the QR of the connection URL) is browser-side and reads `tailscale status --json`, so it is platform-neutral and the headless-Linux plus browser target inherits it unchanged.
+- The Windows Defender Firewall inbound-rule check and repair for the tailnet socket is Windows-specific and must sit behind a platform boundary. A headless Linux host usually leaves the Tailscale interface unfiltered, so the POSIX-appropriate equivalent is a reachability probe plus `ufw`/`firewalld` guidance rather than an elevated rule edit.
 
 ## Packaging and external-trial readiness
 
@@ -223,6 +226,7 @@ Current gaps:
 - WebView2 Runtime, provider CLIs, PATH/PATHEXT/COMSPEC, port availability, writable data paths, Tailscale, browser capability, and shell profiles are not covered by one startup preflight.
 - `mux doctor` currently reports remote-access status rather than the consolidated platform/profile/ownership diagnostic described in Roadmap Phase 7.
 - Rotating daemon/access/crash/lifecycle logs exist, but there is no one-click sanitized install-wide support bundle for startup and compatibility failures.
+- Some features download assets silently on first use, so a clean install does not match its documented capabilities until the network round trip completes. STT is enabled by default and the first Talk pulls the Whisper model and the Silero VAD runtime; preview capture assumes a local Chromium. These downloads are platform-neutral and should be gated or documented rather than silent (`NEW_USER_RELEASE_READINESS.md`).
 
 A Windows alpha does not require Linux/macOS support.
 It does require an explicit Windows support matrix, a self-contained signed artifact, clean-machine smoke tests, actionable diagnostics, and a bounded support bundle.
@@ -290,6 +294,7 @@ They do not justify a rewrite and they do not disappear when native platform cod
 ## Related documentation
 
 - Windows proving, diagnostics, native platform work, and public release: `ROADMAP.md` Phase 7, Phase 10, Phase 11
+- Fresh-machine onboarding, remote-connection flow, and first-use costs: `NEW_USER_RELEASE_READINESS.md`
 - Runtime/process boundaries: `../design/architecture.md`
 - Shell profile contract: `../design/features/launch-profiles.md`
 - Agent launch, shims, hooks, and transcripts: `../design/features/backends.md`

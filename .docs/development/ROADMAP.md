@@ -244,6 +244,7 @@ A phase here may depend on one, but none of them is a phase.
 | `archive/HARNESS_ABSTRACTION_AND_OMP.md` | complete and archived: 138 items, 0 open, close-out signed off | Delivered the harness registry and `omp`; its result is the "harness-neutral" line in Product direction. Current harness behaviour lives in `design/features/backends.md`; the archived plan is the record of how it was built. |
 | `AGENT_ENVIRONMENT_RUNTIME_INVENTORY.md` | active plan, nothing committed | Would replace the passive Agent Environment scan with evidence-tagged runtime inventory. Deliberately unscheduled: it needs a product decision on probe cost before it earns a phase. |
 | `CROSS_PLATFORM_FINDINGS.md` | research | Feeds Phases 10 and 11; holds the platform-interface inventory and verification matrix those phases would otherwise duplicate. |
+| `NEW_USER_RELEASE_READINESS.md` | active plan | Feeds Phases 7 and 11; holds the fresh-machine onboarding detail those phases depend on: the remote-connection connect flow (connection state, phone DNS, QR), Windows Defender Firewall repair, agent instrumentation toggles, the onboarding-prerequisites surface, and first-use download costs. Records the audit finding that the shippable code is free of hardcoded identity, absolute personal paths, and a hardcoded daemon host, so agnosticism here is a defaults-and-onboarding concern rather than an un-hardcoding one. |
 | `PLUGIN_SYSTEM_FINDINGS.md` | research | Decision-gated. Records what a plugin system would add over the shipped meta-hooks/automation/project-actions substrate, and the constraints any design must accept. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
@@ -1825,10 +1826,13 @@ that nothing currently answers.
 
 - [ ] Turn `mux doctor` from its `GET /api/remote/status` alias into one read-only report over
   the existing diagnostic endpoints: daemon/frontend version, ConPTY and Job Object health,
-  shell/profile executables, harness promotion, writable global/Project paths, Project config,
-  artifact/migration conflicts, `ccusage`, process/orphan evidence, previews/listeners,
-  Tailscale/Serve, observer/delivery capabilities, rule state, OpenRouter catalog, budgets,
-  quota sampling, queue health, and instruction-copy conflicts.
+  shell/profile executables, harness detection and promotion, writable global/Project paths,
+  Project config, artifact/migration conflicts, `ccusage`, process/orphan evidence,
+  previews/listeners, Tailscale connection state (installed, logged in, connected) and Serve,
+  the Windows Defender Firewall inbound rule for the tailnet socket, observer/delivery
+  capabilities, rule state, OpenRouter catalog, budgets, quota sampling, queue health, and
+  instruction-copy conflicts. The tailnet connection-state, phone-side DNS, and firewall checks,
+  and the separate (mutating) firewall repair, are detailed in `NEW_USER_RELEASE_READINESS.md`.
 - [ ] Add the **observation-freshness check** (Phase 5.4), which nothing exposes today: agent
   sessions whose followed transcript is stale, whose bound conversation id no longer matches the
   CLI's, or whose rollover was blocked by an unresolvable sibling. This is the one class of
@@ -2195,6 +2199,11 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
 - [ ] Resolve the preview-capture Chromium assumption (`CONTROL_PLANE_ROADMAP.md` §9 known
   gaps): a clean-machine build needs Chromium bundled or a first-run `playwright install`,
   otherwise screenshot capture is silently unavailable on a fresh install.
+- [ ] Make every first-use asset download explicit rather than silent, and neutralize
+  workflow-specific defaults, so a fresh install matches its documented capabilities: the STT
+  Whisper model and Silero VAD assets download on first Talk (default STT off or gate it), and
+  the voice/language defaults are locale-neutral rather than one operator's choice
+  (`NEW_USER_RELEASE_READINESS.md` owns the inventory).
 
 ### Release automation
 
