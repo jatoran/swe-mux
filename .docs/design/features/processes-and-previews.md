@@ -118,6 +118,23 @@
   identity evidence, ownership diagnostics, parent/connection detail, and daemon members.
   Its `Full inspector` button opens the modal prefiltered to the tab's scope and fetches the full
   snapshot.
+- **The inspector draws one line per process, and expands for the rest.** The line carries what
+  you scan for — executable, PID, the command with its own executable stripped off the front,
+  live CPU/RSS, and network counts only when there are any — plus anything abnormal.
+  Its expander carries what you read before acting: the full command, parent, evidence
+  reason/confidence, attribution, verification and first/last-seen times, listener and connection
+  detail, warnings, and the actions themselves. Putting interrupt/terminate behind the same
+  expander is deliberate: the evidence a destructive action depends on is then on screen at the
+  moment it is pressed. Printed unconditionally that was six lines and ~120 px per process, so
+  one session filled the panel and a phone showed one process at a time; it is now ~24 px on a
+  desktop and two wrapped lines at column width.
+- Redundancy is stripped rather than repeated at every level. `active` is the state of nearly
+  every row, so it is a coloured dot and only the other states get a badge — a badge appearing at
+  all means something is wrong. The parent PID is a detail, not a column, because the tree
+  already draws that edge. A session heading does not restate the Project heading directly above
+  it, and its rollup is suppressed when the session has a single live process, where it would
+  only restate the row beneath it. Loopback listeners and registered Previews are single rows
+  with their actions inline, not headed sub-lists.
 - The inspector opens from session/terminal right-click, the drawer tab's `Full inspector`,
   sidebar
   `: menu` Process fleet, or the command palette. The pane header's `proc` chip is gone: it was
@@ -390,7 +407,9 @@ more — swe-mux does not reap or share language servers.
 - Proxy and runtime bridge: `src/swe_mux/server.py`
 - Durable evidence: `src/swe_mux/operational_telemetry.py`
 - Job boundary: `src/swe_mux/win_jobobj.py`, `src/swe_mux/session.py`
-- Inspector (the act surface, modal): `frontend/src/ProcessPanel.tsx`
+- Inspector (the act surface, modal): `frontend/src/ProcessPanel.tsx`, `frontend/src/processRows.ts`
+  (the pure row model: command-tail stripping, the abnormal-state rule, detail assembly, rollup
+  suppression), `frontend/test/renderer/process-fleet-layout.spec.ts` (the density geometry)
 - Drawer watch tab: `frontend/src/ProcessesTab.tsx`, `frontend/src/processWatch.ts` (the pure row
   model: rollups, focused-first ordering, ended-process rules)
 - Resource summary: `frontend/src/ResourceUsage.tsx`, `frontend/src/resourceTotals.ts`

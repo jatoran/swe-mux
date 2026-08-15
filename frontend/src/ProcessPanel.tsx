@@ -5,6 +5,10 @@ import type { Session, Project } from './types'
 import { useModalFocus } from './modalFocus'
 import { buildProcessTree, type ProcessTreeNode } from './processTree'
 import { buildProjectGroups } from './projectGroups'
+import {
+  commandTail, isAbnormalState, memoryLabel, processDetails, processMetrics, processRowKey,
+  processState, rollupLabel, sessionRollup,
+} from './processRows'
 import { combinedResourceTotals } from './resourceTotals'
 
 type Listener = {host:string;port:number;loopback:boolean;url:string}
@@ -49,7 +53,6 @@ type Props={
   onAttached:(preview:Preview,project:Project)=>void
 }
 
-export const memoryLabel=(bytes:number)=>bytes>=1073741824?`${(bytes/1073741824).toFixed(1)} GiB`:`${(bytes/1048576).toFixed(1)} MiB`
 
 const normalizeProcesses=(processes:ProcessItem[])=>(processes||[]).map(item=>({
   ...item,
@@ -114,6 +117,9 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
   const [includeEnded,setIncludeEnded] = useState(false)
   // Set when opened from a Project row; clearable so the fleet stays browsable.
   const [projectScope,setProjectScope] = useState(initialProjectId||'')
+  // Keyed by durable process identity, not PID, so a row survives the 2s refresh that
+  // replaces every object in the snapshot.
+  const [expanded,setExpanded] = useState<ReadonlySet<string>>(new Set())
   const panel = useRef<HTMLElement>(null)
   const sessionsRef=useRef(sessions)
   sessionsRef.current=sessions
@@ -169,6 +175,11 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
     if(action!=='interrupt'&&confirm!==key){setConfirm(key);return}
     try {await api('POST','/api/processes/action',{session_id:sessionId,pid:process.pid,identity_id:process.identity_id,action});setConfirm('');await load()} catch(cause){setError((cause as Error).message)}
   }
+  const toggleExpanded = (key:string) => setExpanded(current=>{
+    const next=new Set(current)
+    if(!next.delete(key))next.add(key)
+    return next
+  })
   const attach = async (sessionId:string,url:string,approved=false) => {
     try {const result=await api<PreviewResult>('POST','/api/previews',{session_id:sessionId,url,approved,attach:true,target_session_id:sessionId,direction:'horizontal'});onAttached(result.preview,result.project);onClose()} catch(cause){setError((cause as Error).message)}
   }
@@ -178,25 +189,54 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
     const project=projects.find(item=>item.id===(session?.project_id||group.project_id))
     const previews=registered.filter(item=>item.session_id===group.session_id)
     const listeners=group.processes.flatMap(process=>process.listeners.map(listener=>({process,listener})))
-    const live=group.processes.filter(process=>!process.exited_at)
     const renderProcessNode=(node:ProcessTreeNode<ProcessItem>):JSX.Element=>{
       const process=node.process
       const terminateKey=`${group.session_id}:${process.pid}:terminate`
       const treeKey=`${group.session_id}:${process.pid}:terminate_tree`
-      const state=process.evidence_state||(process.exited_at?'exited':'active')
-      const evidenceTime=process.last_verified_at||process.last_seen
-      return <li class={`${process.exited_at?'ended ':''}evidence-${state}`} key={process.identity_id||`${process.pid}:${process.started_at}`}>
-        <article><div class="process-copy"><strong>{process.executable} · PID {process.pid} <b class={`process-evidence ${state}`}>{state.replace('_',' ')}</b></strong><span>parent {process.parent_pid||'—'} · CPU {process.cpu_pct.toFixed(1)}% · memory {memoryLabel(process.memory_bytes)} · net {process.listeners.length}L/{process.connections.length}C</span><small title={process.command}>{process.command||`command fingerprint ${process.command_hash?.slice(0,12)||'unavailable'}`}</small><small>{process.evidence_reason||'live observation'} · confidence {process.confidence||'high'} · attribution {process.attribution_source||'unknown'} v{process.attribution_version||1} · {process.job_assignment||'job assignment unknown'}{evidenceTime?` · checked ${new Date(evidenceTime*1000).toLocaleString()}`:''}</small>{process.first_seen&&<small>first seen {new Date(process.first_seen*1000).toLocaleString()} · last seen {new Date((process.last_seen||process.first_seen)*1000).toLocaleString()}{process.exit_evidence?` · exit evidence ${process.exit_evidence}`:''}</small>}{process.conditions.length>0&&<em>{process.conditions.join(' · ')}</em>}</div><div class="process-actions"><button onClick={()=>void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button disabled={!!process.exited_at} title="Re-checks PID, creation time, and ownership before acting" onClick={()=>void act(group.session_id,process,'interrupt')}>Interrupt</button><button disabled={!!process.exited_at} title="Re-checks the durable process fingerprint before acting" class={confirm===terminateKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate')}>{confirm===terminateKey?'✓':'Terminate'}</button><button disabled={!!process.exited_at} title="Re-checks this process and every attributable child before acting" class={confirm===treeKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate_tree')}>{confirm===treeKey?'✓':'Terminate tree'}</button></div></article>
+      const state=processState(process)
+      const key=processRowKey(process)
+      const open=expanded.has(key)
+      return <li class={`${process.exited_at?'ended ':''}evidence-${state}${open?' open':''}`} key={key}>
+        <button class="process-row" aria-expanded={open} title={process.command||undefined} onClick={()=>toggleExpanded(key)}>
+          <i class="process-caret" aria-hidden="true"/>
+          <i class={`process-state-dot ${state}`} title={`evidence ${state.replace('_',' ')}`}/>
+          <strong>{process.executable}</strong>
+          <span class="process-pid">{process.pid}</span>
+          <span class="process-args">{commandTail(process)}</span>
+          {process.conditions.length>0&&<em class="process-warn" title={process.conditions.join(' · ')}>⚠ {process.conditions.length}</em>}
+          {isAbnormalState(state)&&<b class={`process-evidence ${state}`}>{state.replace('_',' ')}</b>}
+          <span class="process-metrics">{processMetrics(process)}</span>
+        </button>
+        {open&&<div class="process-detail">
+          <dl>{processDetails(process).map(detail=><div key={detail.label}><dt>{detail.label}</dt><dd>{detail.value}</dd></div>)}</dl>
+          <div class="process-actions"><button onClick={()=>void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button onClick={()=>void navigator.clipboard.writeText(process.command||String(process.pid))}>Copy command</button><button disabled={!!process.exited_at} title="Re-checks PID, creation time, and ownership before acting" onClick={()=>void act(group.session_id,process,'interrupt')}>Interrupt</button><button disabled={!!process.exited_at} title="Re-checks the durable process fingerprint before acting" class={confirm===terminateKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate')}>{confirm===terminateKey?'✓':'Terminate'}</button><button disabled={!!process.exited_at} title="Re-checks this process and every attributable child before acting" class={confirm===treeKey?'confirming':''} onClick={()=>void act(group.session_id,process,'terminate_tree')}>{confirm===treeKey?'✓':'Terminate tree'}</button></div>
+        </div>}
         {node.children.length>0&&<ul>{node.children.map(renderProcessNode)}</ul>}
       </li>
     }
+    // The Project heading directly above already names the Project, and the rollup only
+    // earns its place once it aggregates more than the single row below it.
+    const rollup=sessionRollup(group.processes)
     return <section class="process-session-group" key={group.session_id}>
-      <button class="process-session-heading" onClick={()=>setSelectedSessionId(group.session_id)}>
-        <span><i class={`state-dot ${session?.state||'running'}`}/><strong>{project?.name||'unknown project'} :: {session?.name||group.session_id}</strong></span>
-        <small>{live.length} proc · CPU {live.reduce((total,item)=>total+item.cpu_pct,0).toFixed(1)}% · {memoryLabel(live.reduce((total,item)=>total+item.memory_bytes,0))} · net {listeners.length}L/{live.reduce((total,item)=>total+item.connections.length,0)}C</small>
+      <button class="process-session-heading" title={`${project?.name||'unknown project'} :: ${session?.name||group.session_id}`} onClick={()=>setSelectedSessionId(group.session_id)}>
+        <span><i class={`state-dot ${session?.state||'running'}`}/><strong>{session?.name||group.session_id}</strong></span>
+        {rollup&&<small>{rollupLabel(rollup)}</small>}
       </button>
-      {previews.length>0&&<div class="registered-preview-list"><h3>Registered previews</h3>{previews.map(preview=><article><div><strong>{preview.url}</strong><span>{preview.source} · port {preview.port}</span></div><button onClick={()=>void navigator.clipboard.writeText(preview.url)}>Copy URL</button></article>)}</div>}
-      {listeners.length>0&&<div class="listener-list"><h3>Loopback listeners</h3>{listeners.map(({process,listener})=><article><div><strong>{listener.url}</strong><span>{process.executable} · PID {process.pid}</span></div><button onClick={()=>void attach(group.session_id,listener.url)}>Open preview</button><button onClick={()=>void navigator.clipboard.writeText(listener.url)}>Copy URL</button></article>)}</div>}
+      {/* One line each, for the same reason the process rows are: the URL and its owner are
+          the whole content, and a heading plus a stacked button pair cost four rows to say it. */}
+      {previews.map(preview=><div class="process-link-row" key={preview.id}>
+        <i class="process-link-mark registered" title="Registered preview">▣</i>
+        <strong>{preview.url}</strong>
+        <span>{preview.source} · port {preview.port}</span>
+        <button onClick={()=>void navigator.clipboard.writeText(preview.url)}>copy</button>
+      </div>)}
+      {listeners.map(({process,listener})=><div class="process-link-row" key={`${process.pid}:${listener.url}`}>
+        <i class="process-link-mark" title="Loopback listener">⇢</i>
+        <strong>{listener.url}</strong>
+        <span>{process.executable} {process.pid}</span>
+        <button title={`Open ${listener.url} as a preview beside this session`} onClick={()=>void attach(group.session_id,listener.url)}>preview</button>
+        <button onClick={()=>void navigator.clipboard.writeText(listener.url)}>copy</button>
+      </div>)}
       <ul class="process-list process-tree">{buildProcessTree(group.processes).map(renderProcessNode)}</ul>
     </section>
   }
@@ -208,15 +248,39 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
     const renderDaemonNode=(node:ProcessTreeNode<ProcessItem>):JSX.Element=>{
       const process=node.process
       const role=process.pid===daemon.pid?'daemon':'infrastructure'
-      return <li key={`${process.pid}:${process.started_at||0}`}>
-        <article><div class="process-copy"><strong>{process.executable} · PID {process.pid} <b class={`process-evidence ${role==='daemon'?'active':''}`}>{role}</b></strong><span>parent {process.parent_pid||'—'} · CPU {process.cpu_pct.toFixed(1)}% · memory {memoryLabel(process.memory_bytes)} · net {process.listeners.length}L/{process.connections.length}C</span><small title={process.command}>{process.command||'command line unavailable'}</small><small>{role==='daemon'?'swe-mux server process':'daemon-owned child not attributed to a terminal session'}</small>{process.conditions.length>0&&<em>{process.conditions.join(' · ')}</em>}</div><div class="process-actions"><button onClick={()=>void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button></div></article>
+      const key=processRowKey(process)
+      const open=expanded.has(key)
+      // Runtime members carry no session attribution or evidence chain, so they get the
+      // observational subset rather than blank rows where those would be.
+      const details=[
+        {label:'command',value:process.command||'command line unavailable'},
+        {label:'parent',value:process.parent_pid?`PID ${process.parent_pid}`:'none observed'},
+        {label:'role',value:role==='daemon'?'swe-mux server process':'daemon-owned child not attributed to a terminal session'},
+        ...processDetails(process).filter(detail=>detail.label==='network'||detail.label==='warnings'),
+      ]
+      return <li class={open?'open':''} key={key}>
+        <button class="process-row" aria-expanded={open} title={process.command||undefined} onClick={()=>toggleExpanded(key)}>
+          <i class="process-caret" aria-hidden="true"/>
+          <i class={`process-state-dot ${role==='daemon'?'active':''}`} title={role}/>
+          <strong>{process.executable}</strong>
+          <span class="process-pid">{process.pid}</span>
+          <span class="process-args">{commandTail(process)}</span>
+          {process.conditions.length>0&&<em class="process-warn" title={process.conditions.join(' · ')}>⚠ {process.conditions.length}</em>}
+          {role==='daemon'&&<b class="process-evidence active">daemon</b>}
+          <span class="process-metrics">{processMetrics(process)}</span>
+        </button>
+        {open&&<div class="process-detail">
+          <dl>{details.map(detail=><div key={detail.label}><dt>{detail.label}</dt><dd>{detail.value}</dd></div>)}</dl>
+          {/* Observational only: the runtime is never interrupt/terminate territory. */}
+          <div class="process-actions"><button onClick={()=>void navigator.clipboard.writeText(String(process.pid))}>Copy PID</button><button onClick={()=>void navigator.clipboard.writeText(process.command||String(process.pid))}>Copy command</button></div>
+        </div>}
         {node.children.length>0&&<ul>{node.children.map(renderDaemonNode)}</ul>}
       </li>
     }
     return <section class="process-project-group process-daemon-group">
-      <h2>swe-mux::daemon + infrastructure</h2>
+      <h2>daemon + infrastructure</h2>
       <section class="process-session-group">
-        <div class="process-session-heading process-daemon-heading"><span><i class="state-dot running"/><strong>swe-mux runtime</strong></span><small>{daemon.processes} proc · CPU {daemon.cpu_pct.toFixed(1)}% · {memoryLabel(daemon.memory_bytes)} · net {daemon.listeners||0}L/{daemon.connections||0}C</small></div>
+        <div class="process-session-heading process-daemon-heading"><span><i class="state-dot running"/><strong>swe-mux runtime</strong></span><small>{daemon.processes} proc · CPU {daemon.cpu_pct.toFixed(1)}% · {memoryLabel(daemon.memory_bytes)}{daemon.listeners||daemon.connections?` · ${daemon.listeners||0}L/${daemon.connections||0}C`:''}</small></div>
         {members.length>0?<ul class="process-list process-tree">{buildProcessTree(members).map(renderDaemonNode)}</ul>:<p class="process-empty">Detailed daemon members are unavailable from the running daemon.</p>}
       </section>
     </section>

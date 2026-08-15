@@ -1,5 +1,5 @@
 import { useMemo } from 'preact/hooks'
-import { memoryLabel } from './ProcessPanel'
+import { memoryLabel } from './processRows'
 import { buildWatchRows, watchTotals, type WatchScope, type WatchSnapshot } from './processWatch'
 import type { Project, Session } from './types'
 
