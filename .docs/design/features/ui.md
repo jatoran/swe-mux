@@ -1201,7 +1201,9 @@ responsive controls.
   Insertion appends to any text already present in the live terminal composer, because terminal applications do not expose that existing buffer for safe import into Draft.
   Hiding Draft always preserves it; discarding text requires the explicit **Clear** action.
 - Paste uses the browser clipboard when permitted and otherwise opens a focused native-paste
-  target. Claude and Codex
+  target.
+  Native terminal paste and the rail action use the same pane-owned text path, including the agent multiline stale-mode repair, so Ctrl+V cannot submit clipboard lines individually while the rail keeps them composed.
+  Claude and Codex
   rails prefetch normalized transcript text so Copy reply runs inside the button gesture rather
   than typing `/copy` or waiting for OSC 52. Reply extraction walks back to the newest turn with
   meaningful assistant text; provider control acknowledgements such as `No response requested.`

@@ -28,7 +28,7 @@ import {
   type TerminalCell,
 } from './mobileInput'
 import { isMobileTerminalInput, mobileEnterNeedsPinnedSend, mobileEnterPayload, mobileImeDelta } from './mobileTerminalIme'
-import { clipboardImage, copyPreparedText, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
+import { claimTerminalTextPaste, clipboardImage, copyPreparedText, pasteNeedsManualBracketing, ResilientClipboardProvider } from './terminalClipboard'
 import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
@@ -2898,15 +2898,25 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       event.preventDefault()
     }
     const pasteEvent = (event: ClipboardEvent) => {
-      if (event.clipboardData?.getData('text/plain')) notePhysicalInput(event, 'paste')
-      if (!isAgentBackend(backendRef.current) || !event.clipboardData) return
-      const transferred=Array.from(event.clipboardData.files)
-      const image = clipboardImage(Array.from(event.clipboardData.items))
-      const files:Blob[]=transferred.length?transferred:image?[image]:[]
-      if (!files.length) return
-      event.preventDefault()
-      event.stopPropagation()
-      void attachFilesRef.current(files)
+      const data=event.clipboardData
+      if (!data) return
+      if (isAgentBackend(backendRef.current)) {
+        const transferred=Array.from(data.files)
+        const image = clipboardImage(Array.from(data.items))
+        const files:Blob[]=transferred.length?transferred:image?[image]:[]
+        if(files.length){
+          event.preventDefault()
+          event.stopPropagation()
+          void attachFilesRef.current(files)
+          return
+        }
+      }
+      const text=data.getData('text/plain')
+      if(!text)return
+      notePhysicalInput(event, 'paste')
+      claimTerminalTextPaste(event,value=>{
+        pasteIntoTerminal(term,session,value)
+      })
     }
     const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types || []).includes('Files')
     const dragEnter = (event: DragEvent) => {

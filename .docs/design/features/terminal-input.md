@@ -249,6 +249,9 @@ work, while a claim that changes owners must use the freshly registered viewport
 - Synthetic paste-and-submit actions append through the mounted pane, wait 180 ms for an interactive TUI to commit bracketed paste, and only then send carriage return.
   Append-only actions do not wait or submit.
   The action acknowledgement follows the carriage return, so a caller cannot clear its source draft before submission was actually attempted.
+- Native terminal text paste and the command-rail Paste action converge on the mounted pane's paste path.
+  The pane takes ownership of the native clipboard event before xterm can turn unbracketed newlines into carriage returns.
+  Agent multiline text is manually bracketed when xterm's mode mirror is stale, while shell and single-line paste behavior stays unchanged.
 - Pointer-generated mouse reports and caret-steering keys (Codex, OMP, pi) are unicast regardless of broadcast membership.
   A pointer target belongs only to the pane in which it was chosen.
 

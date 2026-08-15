@@ -39,6 +39,27 @@ export function clipboardImage(items: Iterable<ClipboardFileItem>): Blob | null 
   return null
 }
 
+type TerminalTextPasteEvent = Pick<ClipboardEvent, 'clipboardData' | 'preventDefault' | 'stopPropagation'>
+
+/**
+ * Claim a native text paste before xterm's DOM listener handles it.
+ *
+ * Every terminal paste surface must converge on the pane's paste function because that
+ * function repairs stale bracketed-paste mode. Letting xterm own Ctrl+V while the command
+ * rail uses the pane path makes the two controls observably different after a reconnect.
+ */
+export function claimTerminalTextPaste(
+  event: TerminalTextPasteEvent,
+  paste: (text: string) => void,
+): boolean {
+  const text = event.clipboardData?.getData('text/plain') || ''
+  if (!text) return false
+  event.preventDefault()
+  event.stopPropagation()
+  paste(text)
+  return true
+}
+
 function browserClipboard(): ClipboardAccess {
   return {
     readText: () => navigator.clipboard.readText(),

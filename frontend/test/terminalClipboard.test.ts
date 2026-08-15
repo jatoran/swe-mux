@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing } from '../src/terminalClipboard.ts'
+import { MAX_TERMINAL_CLIPBOARD_CHARS, ResilientClipboardProvider, claimTerminalTextPaste, clipboardImage, copyPreparedText, hasTerminalImage, isTerminalImage, pasteNeedsManualBracketing } from '../src/terminalClipboard.ts'
 
 test('ordinary paste events prefer an image file when one is present', () => {
   const image = new Blob(['png'], { type: 'image/png' })
@@ -128,4 +128,28 @@ test('a bare carriage return counts as multi-line', () => {
     }),
     true,
   )
+})
+
+test('native text paste is claimed before xterm and handed to the pane paste path', () => {
+  const calls: string[] = []
+  const event = {
+    clipboardData: { getData: (type: string) => type === 'text/plain' ? 'first\nsecond' : '' },
+    preventDefault: () => calls.push('prevent'),
+    stopPropagation: () => calls.push('stop'),
+  }
+
+  assert.equal(claimTerminalTextPaste(event as unknown as ClipboardEvent, text => calls.push(text)), true)
+  assert.deepEqual(calls, ['prevent', 'stop', 'first\nsecond'])
+})
+
+test('an empty native paste remains available to non-text handlers', () => {
+  const calls: string[] = []
+  const event = {
+    clipboardData: { getData: () => '' },
+    preventDefault: () => calls.push('prevent'),
+    stopPropagation: () => calls.push('stop'),
+  }
+
+  assert.equal(claimTerminalTextPaste(event as unknown as ClipboardEvent, text => calls.push(text)), false)
+  assert.deepEqual(calls, [])
 })
