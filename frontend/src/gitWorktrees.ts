@@ -447,6 +447,14 @@ export type GitWorktreeOverview = {
   worktrees: GitOverviewWorktree[]
 }
 
+export function localMeasurement(tree: GitOverviewWorktree): { measured: boolean; total: number } {
+  const summaries=[tree.conflicted,tree.unstaged,tree.staged]
+  return {
+    measured:summaries.every(summary=>summary!==null),
+    total:summaries.reduce((sum,summary)=>sum+(summary?.total||0),0),
+  }
+}
+
 export type GitCommitChanges = {
   commit: string
   parent: string | null

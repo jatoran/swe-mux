@@ -145,6 +145,8 @@ uncommitted work together.
 
 - The Project-scoped Git tab has Map, Log, and Provenance readings of one repository.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
+- A prunable worktree is unmeasured and shown as unavailable rather than clean.
+  Overview measurement first requires Git's reported top-level to equal the exact listed root, so a broken nested worktree cannot inherit status from an enclosing checkout.
 - Each collapsed Map row gives the branch identity its own bounded line and wraps status metrics on a separate line, so divergence and state cannot overlap the title at narrow drawer widths.
   The worktree indicator is inline with the identity, while the left-aligned expand control is inline with the metrics; neither control reserves an otherwise empty row.
   The worktree leaf appears beside the branch only when it adds information; the exact root remains in expanded detail.
@@ -212,6 +214,12 @@ uncommitted work together.
 - The Git surface mutates only through the existing worktree create and remove operations.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
+- Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
+  Client cancellation cannot interrupt a mutation after Git starts changing repository state.
+- Removing an exact prunable root whose directory still exists but whose `.git` link is missing first runs path-specific `git worktree repair`, re-lists the repository, and removes only after the same root is no longer prunable.
+  Missing directories and other non-repairable prune states return a typed conflict instead of globally pruning unrelated worktrees.
+- A failed removal refreshes Map because repair or an interrupted Git command may have changed the row even though the request failed.
+- Mutation logs carry one operation id across start, repair, completion, failure, timeout, Git result, force intent, exact path, and duration.
 
 ## Spawning a session into a worktree
 

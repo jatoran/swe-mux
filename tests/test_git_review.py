@@ -136,6 +136,31 @@ async def test_overview_separates_staged_unstaged_and_untracked(repository: Path
 
 
 @pytest.mark.asyncio
+async def test_prunable_nested_worktree_never_inherits_parent_status(repository: Path) -> None:
+    (repository / ".gitignore").write_text(".codex/\n", encoding="utf-8")
+    git(repository, "add", ".gitignore")
+    git(repository, "commit", "-m", "ignore managed worktrees")
+    worktree = repository / ".codex" / "worktrees" / "broken"
+    worktree.parent.mkdir(parents=True)
+    git(repository, "worktree", "add", "-b", "broken", str(worktree))
+    (worktree / ".git").rename(worktree / ".git.moved")
+    (repository / "tracked.txt").write_text("parent is dirty\n", encoding="utf-8")
+
+    overview = await git_review.worktree_overview("project", str(repository), None)
+    row = next(
+        item
+        for item in overview["worktrees"]
+        if Path(str(item["worktree"])).resolve() == worktree.resolve()
+    )
+    assert row["prunable"] == "gitdir file points to non-existent location"
+    assert row["unstaged"] is None
+    assert row["staged"] is None
+    assert row["conflicted"] is None
+    assert row["comparison_counts"] is None
+    assert row["branch_delta"] is None
+
+
+@pytest.mark.asyncio
 async def test_branch_counts_can_be_ahead_and_behind(repository: Path) -> None:
     git(repository, "checkout", "-b", "feature")
     (repository / "feature.txt").write_text("feature\n", encoding="utf-8")

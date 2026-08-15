@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import {
   isAbsolutePath,
+  localMeasurement,
   normalizePath,
   parseGitGraph,
   parseGitProvenance,
@@ -205,7 +206,7 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     if(!remove)return
     setBusy(true)
     try{await api('DELETE','/api/git/worktrees',{cwd:project.root,path:remove.path,force:remove.force});setRemove(null);setExpandedTree('');await refresh()}
-    catch(cause){setError(describeGitError(cause,'Removing the worktree'))}finally{setBusy(false)}
+    catch(cause){const message=describeGitError(cause,'Removing the worktree');await refresh();setError(message)}finally{setBusy(false)}
   }
 
   return <div class="git-tab git-review-tab">
@@ -220,7 +221,7 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     {view==='map'&&<>
       {!overview&&!error&&<p class="git-state">Reading repository…</p>}
       {overview?.worktrees.map(tree=>{
-        const expanded=expandedTree===tree.path,total=[tree.conflicted,tree.unstaged,tree.staged].reduce((sum,item)=>sum+(item?.total||0),0)
+        const expanded=expandedTree===tree.path,{measured:localMeasured,total}=localMeasurement(tree)
         const branchRef=overview.comparison.available?overview.comparison.display||overview.comparison.ref:null
         const attached=sessionsFor(tree.path),upstream=attached.find(session=>session.git?.ahead||session.git?.behind)?.git
         const removalBlocked=tree.locked!==null||attached.length>0
@@ -229,10 +230,11 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
           <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
             <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
             <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
-            <span class="git-map-metrics">{total===0&&<em class="clean">clean</em>}{total>0&&<em class="local">{total} local</em>}{tree.comparisonCounts?.ahead?<em>{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{attached.length>0&&<em class="live">{attached.length} live</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
+            <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em>{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{attached.length>0&&<em class="live">{attached.length} live</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
             <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
           </button>
           {expanded&&<div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
+            {tree.prunable!==null&&<p class="git-change-empty">Git cannot use this checkout: {tree.prunable||'the worktree registration is prunable'}.</p>}
             {tree.conflicted&&tree.conflicted.total>0&&<ReviewGroup id={`${tree.path}:conflicted`} title="CONFLICTS" summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {tree.unstaged&&tree.unstaged.total>0&&<ReviewGroup id={`${tree.path}:unstaged`} title="UNSTAGED" summary={tree.unstaged} projectId={project.id} locator={{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:unstaged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:unstaged`]:value}))} onReview={file=>startReview(tree.unstaged!,{scope:'unstaged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
             {tree.staged&&tree.staged.total>0&&<ReviewGroup id={`${tree.path}:staged`} title="STAGED" summary={tree.staged} projectId={project.id} locator={{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:staged`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:staged`]:value}))} onReview={file=>startReview(tree.staged!,{scope:'staged',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}

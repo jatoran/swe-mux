@@ -5,6 +5,7 @@ import {
   changeStatusLabel,
   divergenceLabel,
   isAbsolutePath,
+  localMeasurement,
   normalizePath,
   comparisonSourceLabel,
   fileStatLabel,
@@ -286,6 +287,15 @@ test('the project-scoped overview parser keeps null measurements distinct from c
   assert.equal(fileStatLabel(overview!.worktrees[0].unstaged!.files[1]),'binary')
   assert.equal(comparisonSourceLabel(overview!.comparison),'origin default: origin/main')
   assert.equal(parseGitOverview({repository:{}}),null)
+})
+
+test('an unmeasured prunable worktree is unavailable rather than clean',()=>{
+  const overview=parseGitOverview({
+    repository:{root:'/repo',common_dir:'/repo/.git'},
+    comparison:{ref:'main',display:'main',source:'local_fallback',available:true,reason:null,candidates:['main']},
+    worktrees:[{worktree:'/repo/.codex/worktrees/broken',HEAD:'a'.repeat(40),branch:'refs/heads/broken',prunable:'missing gitdir',main:false,comparison_counts:null,unstaged:null,staged:null,conflicted:null,branch_delta:null}],
+  })
+  assert.deepEqual(localMeasurement(overview!.worktrees[0]),{measured:false,total:0})
 })
 
 test('commit and patch responses are defensively parsed',()=>{

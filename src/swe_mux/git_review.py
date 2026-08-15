@@ -775,20 +775,46 @@ async def worktree_overview(
     items = await listed_worktrees(repository)
     semaphore = asyncio.Semaphore(GIT_CONCURRENCY)
 
+    def unmeasured(row: dict[str, Any]) -> dict[str, Any]:
+        row.update(
+            comparison_counts=None,
+            unstaged=None,
+            staged=None,
+            conflicted=None,
+            branch_delta=None,
+        )
+        return row
+
     async def measure(index: int, item: dict[str, Any]) -> dict[str, Any]:
         row = dict(item)
         row["main"] = index == 0
         worktree = row.get("worktree")
-        if not isinstance(worktree, str) or row.get("bare"):
-            row.update(
-                comparison_counts=None,
-                unstaged=None,
-                staged=None,
-                conflicted=None,
-                branch_delta=None,
-            )
-            return row
+        if (
+            not isinstance(worktree, str)
+            or row.get("bare")
+            or "prunable" in row
+        ):
+            return unmeasured(row)
         async with semaphore:
+            top_level_result = await _run_git_bytes(worktree, "rev-parse", "--show-toplevel")
+            if top_level_result.code:
+                return unmeasured(row)
+            reported_root = top_level_result.stdout.decode("utf-8", "replace").strip()
+            try:
+                exact_root = os.path.normcase(os.path.normpath(str(Path(worktree).resolve())))
+                reported_exact_root = os.path.normcase(
+                    os.path.normpath(str(Path(reported_root).resolve()))
+                )
+            except OSError:
+                return unmeasured(row)
+            if reported_exact_root != exact_root:
+                log.warning(
+                    "git_review worktree_identity_mismatch project_id=%s listed=%s reported=%s",
+                    project_id,
+                    worktree,
+                    reported_root,
+                )
+                return unmeasured(row)
             local_task = _local_summaries(worktree)
             counts_task: asyncio.Task[GitResult] | None = None
             branch_task: asyncio.Task[GitChangeSummary | None] | None = None

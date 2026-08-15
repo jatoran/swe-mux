@@ -1204,6 +1204,12 @@ Setup failure does not change `spawn.status`: session creation is still attempte
 The worktree is the durable artifact, so a failed spawn is reported rather than raised and never unwinds it.
 If the target parent is missing, the daemon creates it only when it is below the configured `worktree_root`; otherwise the existing-parent requirement remains.
 The public configuration returns `worktree_root` as an absolute path, resolving an empty stored value to `<data_dir>/worktrees`.
+`DELETE /git/worktrees` takes `{cwd, path, force?}` and validates `path` against the exact current porcelain list.
+Create and remove responses carry an `operation_id` that correlates daemon mutation logs.
+Worktree mutations are daemon-owned, survive requesting-client cancellation, and have a 30-minute deadline distinct from four-second Git reads.
+An exact prunable path with an existing directory and missing `.git` link is repaired and revalidated before removal; success and post-repair failures report `repaired`.
+Non-repairable prune states return `409 prunable_worktree`; repair failure returns `409 worktree_repair_failed`; mutation timeout returns `504 git_timeout`.
+No removal path invokes repository-wide `git worktree prune`.
 
 Process snapshots expose bounded observational states `active | exited | escaped |
 suspected_orphan | stale | inaccessible`. Actions revalidate PID, creation-time identity,

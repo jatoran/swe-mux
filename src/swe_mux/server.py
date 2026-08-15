@@ -72,6 +72,7 @@ from .file_manager import open_in_file_manager
 from .fleet_intelligence import FleetIntelligence
 from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor, _git
+from .git_operations import run_git_mutation
 from .git_projects import ProjectIdentity, resolve_project
 from .git_provenance import GitProvenanceService
 from .harness import (
@@ -9523,14 +9524,21 @@ async def git_diff(request: web.Request) -> web.Response:
     )
 
 
-async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
+async def _listed_worktree_entries(cwd: str) -> dict[str, dict[str, Any]]:
     code, output = await _git(cwd, "worktree", "list", "--porcelain")
     if code:
         raise ValueError(output or "unable to inspect repository worktrees")
     return {
-        str(Path(str(item["worktree"])).resolve()).casefold(): str(item["worktree"])
+        str(Path(str(item["worktree"])).resolve()).casefold(): item
         for item in git_review.parse_worktrees(output)
         if item.get("worktree")
+    }
+
+
+async def _listed_worktree_paths(cwd: str) -> dict[str, str]:
+    return {
+        key: str(item["worktree"])
+        for key, item in (await _listed_worktree_entries(cwd)).items()
     }
 
 
@@ -9656,12 +9664,14 @@ def _ensure_worktree_parent(config: Config, target: Path) -> None:
 
 async def create_worktree(request: web.Request) -> web.Response:
     started_at = time.perf_counter()
+    operation_id = uuid4().hex
     body = await request.json()
     cwd, path = str(body["cwd"]), str(Path(body["path"]).resolve())
     spawn_body = body.get("spawn")
     log.info(
-        "worktree_create_started cwd=%s path=%s branch=%s start_point=%s "
+        "worktree_create_started operation_id=%s cwd=%s path=%s branch=%s start_point=%s "
         "spawn_requested=%s project_id=%s backend=%s",
+        operation_id,
         cwd,
         path,
         body.get("branch"),
@@ -9682,31 +9692,42 @@ async def create_worktree(request: web.Request) -> web.Response:
     args.append(path)
     if start_point := body.get("start_point"):
         args.append(str(start_point))
-    code, output = await _git(cwd, *args)
-    if code:
+    mutation = await run_git_mutation(
+        cwd, *args, operation="worktree_create", operation_id=operation_id
+    )
+    if mutation.code:
         log.warning(
-            "worktree_create_failed cwd=%s path=%s branch=%s git_code=%s duration_ms=%.1f",
+            "worktree_create_failed operation_id=%s cwd=%s path=%s branch=%s "
+            "git_code=%s duration_ms=%.1f",
+            operation_id,
             cwd,
             path,
             body.get("branch"),
-            code,
+            mutation.code,
             (time.perf_counter() - started_at) * 1000,
         )
         return json_response(
             {
-                "error": output or "git worktree add failed",
-                "code": "git_timeout" if code == 124 else "git_error",
+                "error": mutation.output or "git worktree add failed",
+                "code": "git_timeout" if mutation.timed_out else "git_error",
+                "operation_id": operation_id,
             },
-            504 if code == 124 else 400,
+            504 if mutation.timed_out else 400,
         )
-    result: dict[str, Any] = {"ok": True, "path": path, "spawn": {"status": "not_requested"}}
+    result: dict[str, Any] = {
+        "ok": True,
+        "path": path,
+        "operation_id": operation_id,
+        "spawn": {"status": "not_requested"},
+    }
     if spawn_body is not None:
         setup = await _prepare_worktree_setup(request.app, spawn_body, path)
         result["spawn"] = await _spawn_into_worktree(request.app, spawn_body, path, setup)
     await request.app["events"].emit("worktree_created", source="user", cwd=cwd, path=path)
     log.info(
-        "worktree_create_completed cwd=%s path=%s branch=%s spawn_status=%s session_id=%s "
-        "duration_ms=%.1f",
+        "worktree_create_completed operation_id=%s cwd=%s path=%s branch=%s "
+        "spawn_status=%s session_id=%s duration_ms=%.1f",
+        operation_id,
         cwd,
         path,
         body.get("branch"),
@@ -9752,34 +9773,160 @@ async def spawn_worktree_session(request: web.Request) -> web.Response:
 
 
 async def remove_worktree(request: web.Request) -> web.Response:
+    started_at = time.perf_counter()
+    operation_id = uuid4().hex
     body = await request.json()
     cwd = str(body["cwd"])
     requested = str(Path(str(body["path"])).resolve())
-    listed = await _listed_worktree_paths(cwd)
-    registered = listed.get(requested.casefold())
-    if not registered:
+    force = body.get("force") is True
+    log.info(
+        "worktree_remove_started operation_id=%s cwd=%s path=%s force=%s",
+        operation_id,
+        cwd,
+        requested,
+        force,
+    )
+    listed = await _listed_worktree_entries(cwd)
+    entry = listed.get(requested.casefold())
+    if not entry:
+        log.warning(
+            "worktree_remove_refused operation_id=%s cwd=%s path=%s "
+            "reason=not_registered duration_ms=%.1f",
+            operation_id,
+            cwd,
+            requested,
+            (time.perf_counter() - started_at) * 1000,
+        )
         return json_response(
             {
                 "error": "path is not a registered worktree for this repository",
                 "code": "not_registered_worktree",
+                "operation_id": operation_id,
             },
             409,
         )
+    registered = str(entry["worktree"])
+    repaired = False
+    if "prunable" in entry:
+        worktree_path = Path(registered)
+        if not worktree_path.is_dir() or (worktree_path / ".git").exists():
+            log.warning(
+                "worktree_remove_refused operation_id=%s cwd=%s path=%s "
+                "reason=prunable_not_repairable prune_reason=%s duration_ms=%.1f",
+                operation_id,
+                cwd,
+                registered,
+                entry.get("prunable"),
+                (time.perf_counter() - started_at) * 1000,
+            )
+            return json_response(
+                {
+                    "error": "worktree is prunable but cannot be repaired at its registered path",
+                    "code": "prunable_worktree",
+                    "operation_id": operation_id,
+                },
+                409,
+            )
+        log.info(
+            "worktree_remove_repair_started operation_id=%s cwd=%s path=%s prune_reason=%s",
+            operation_id,
+            cwd,
+            registered,
+            entry.get("prunable"),
+        )
+        repair = await run_git_mutation(
+            cwd,
+            "worktree",
+            "repair",
+            registered,
+            operation="worktree_repair",
+            operation_id=operation_id,
+        )
+        if repair.code:
+            log.warning(
+                "worktree_remove_repair_failed operation_id=%s cwd=%s path=%s "
+                "git_code=%s duration_ms=%.1f",
+                operation_id,
+                cwd,
+                registered,
+                repair.code,
+                (time.perf_counter() - started_at) * 1000,
+            )
+            return json_response(
+                {
+                    "error": repair.output or "git worktree repair failed",
+                    "code": "git_timeout" if repair.timed_out else "worktree_repair_failed",
+                    "operation_id": operation_id,
+                },
+                504 if repair.timed_out else 409,
+            )
+        repaired_entries = await _listed_worktree_entries(cwd)
+        repaired_entry = repaired_entries.get(requested.casefold())
+        if not repaired_entry or "prunable" in repaired_entry:
+            log.warning(
+                "worktree_remove_repair_failed operation_id=%s cwd=%s path=%s "
+                "reason=still_prunable duration_ms=%.1f",
+                operation_id,
+                cwd,
+                registered,
+                (time.perf_counter() - started_at) * 1000,
+            )
+            return json_response(
+                {
+                    "error": "Git did not restore the worktree registration",
+                    "code": "worktree_repair_failed",
+                    "operation_id": operation_id,
+                },
+                409,
+            )
+        registered = str(repaired_entry["worktree"])
+        repaired = True
+        log.info(
+            "worktree_remove_repair_completed operation_id=%s cwd=%s path=%s",
+            operation_id,
+            cwd,
+            registered,
+        )
     args = ["worktree", "remove"]
-    if body.get("force"):
+    if force:
         args.append("--force")
     args.append(registered)
-    code, output = await _git(cwd, *args)
-    if code:
+    mutation = await run_git_mutation(
+        cwd, *args, operation="worktree_remove", operation_id=operation_id
+    )
+    if mutation.code:
+        log.warning(
+            "worktree_remove_failed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
+            "git_code=%s duration_ms=%.1f",
+            operation_id,
+            cwd,
+            registered,
+            force,
+            repaired,
+            mutation.code,
+            (time.perf_counter() - started_at) * 1000,
+        )
         return json_response(
             {
-                "error": output or "git worktree remove failed",
-                "code": "git_timeout" if code == 124 else "git_error",
+                "error": mutation.output or "git worktree remove failed",
+                "code": "git_timeout" if mutation.timed_out else "git_error",
+                "operation_id": operation_id,
+                "repaired": repaired,
             },
-            504 if code == 124 else 400,
+            504 if mutation.timed_out else 400,
         )
     await request.app["events"].emit("worktree_removed", source="user", cwd=cwd, path=registered)
-    return json_response({"ok": True})
+    log.info(
+        "worktree_remove_completed operation_id=%s cwd=%s path=%s force=%s repaired=%s "
+        "duration_ms=%.1f",
+        operation_id,
+        cwd,
+        registered,
+        force,
+        repaired,
+        (time.perf_counter() - started_at) * 1000,
+    )
+    return json_response({"ok": True, "operation_id": operation_id, "repaired": repaired})
 
 
 async def reveal_path(request: web.Request) -> web.Response:
