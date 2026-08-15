@@ -135,6 +135,7 @@ export const BUILTIN_RAIL: RailItem[] = [
   // Clipboard history picker. Paired with Paste because it is the paste path on
   // touch, where reading the system clipboard is unreliable or refused outright.
   { id: 'clipboardHistory', type: 'action', action: 'clipboardHistory', label: 'Clip' },
+  { id: 'actionsDrawer', type: 'action', action: 'openActions', label: 'Actions', title: 'Open Actions temporarily' },
   { id: 'kbdToggle', type: 'action', action: 'toggleKeyboard', label: '⌨', className: 'term-key kbd-toggle' },
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
   { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter', voicePhrases: ['enter', 'press enter', 'enter key'] },

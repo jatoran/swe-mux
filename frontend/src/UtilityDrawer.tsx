@@ -48,6 +48,8 @@ import { hasHarnessTranscript } from './harnessRegistry'
 type Props = {
   layout: DrawerLayout
   presentation: DrawerProjectPresentation
+  /** Momentary rail-opened tab. Actions taken there close the drawer on either device. */
+  transientTab?: DrawerTabId
   /** Select a tab. A direct click on the pane's already-selected tab asks the
    *  caller to collapse the entire drawer; focus and keyboard navigation do not. */
   onTab: (tab: DrawerTabId, collapseIfSelected?: boolean) => void
@@ -195,7 +197,7 @@ export function UtilityDrawer(props: Props) {
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
-  const onDone = () => { if (mobile) onClose() }
+  const onDone = () => { if (mobile || props.transientTab) onClose() }
 
   const noteIdentity = props.drawerNoteId ? parseNoteResourceId(props.drawerNoteId) : null
   // `file` is a legal parse but never a drawer note: files are the Files tab's business, and

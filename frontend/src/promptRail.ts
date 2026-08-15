@@ -29,6 +29,11 @@ export const PROMPT_RAIL_EVENT = 'mux:open-prompt-template'
 
 export type PromptLibraryResponse = { items: PromptTemplate[] }
 
+export type PromptRailActivation =
+  | { status: 'inserted' }
+  | { status: 'fields' }
+  | { status: 'error'; message: string }
+
 /** Split a `scope:id` library key. Ids are UUIDs, so the first colon is the seam. */
 export function splitPromptKey(key: string): { scope: string; id: string } | null {
   const seam = key.indexOf(':')
@@ -55,27 +60,26 @@ export function fetchPromptTemplates(projectId?: string): Promise<PromptTemplate
   return api<PromptLibraryResponse>('GET', `/api/prompts${scope}`).then(library => library.items || [])
 }
 
-/** Run a 'prompt' rail item. Resolves to '' on success, or to a message the caller
- *  shows in its own status line (the rail has no error surface of its own). */
+/** Run a prompt rail item, distinguishing insertion from a variable-field handoff. */
 export async function activatePromptRailItem(
   item: RailItem,
   ctx: { sessionId: string; projectId?: string },
-): Promise<string> {
+): Promise<PromptRailActivation> {
   const key = item.promptKey
-  if (!key) return `“${item.label}” has no prompt template attached. Re-add it from Configure Actions.`
+  if (!key) return { status: 'error', message: `“${item.label}” has no prompt template attached. Re-add it from Configure Actions.` }
   let templates: PromptTemplate[]
   try {
     templates = await fetchPromptTemplates(ctx.projectId)
   } catch (cause) {
-    return cause instanceof Error ? cause.message : 'Could not load prompt templates.'
+    return { status: 'error', message: cause instanceof Error ? cause.message : 'Could not load prompt templates.' }
   }
   const template = findPromptTemplate(templates, key)
   // A template can be deleted, or its Project scope switched off, long after a rail
   // button was made. Say which button is dangling rather than failing silently.
-  if (!template) return `“${item.label}” points at a prompt template that is no longer available.`
+  if (!template) return { status: 'error', message: `“${item.label}” points at a prompt template that is no longer available.` }
   if (template.variables.length) {
     window.dispatchEvent(new CustomEvent(PROMPT_RAIL_EVENT, { detail: { key } }))
-    return ''
+    return { status: 'fields' }
   }
   window.dispatchEvent(new CustomEvent('mux:terminal-action', {
     detail: { sessionId: ctx.sessionId, action: 'insertText', text: template.body },
@@ -83,5 +87,5 @@ export async function activatePromptRailItem(
   // Recency/use counts are the library's own bounded state; a failure to record one
   // must not look like a failed insert.
   void api('POST', `/api/prompts/${template.scope}/${template.id}/use`, { project_id: ctx.projectId }).catch(() => {})
-  return ''
+  return { status: 'inserted' }
 }

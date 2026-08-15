@@ -47,6 +47,20 @@ test('custom action creation leads the editor and keeps its checkbox compact', (
   assert.ok(styles.includes('width:14px;height:14px'))
 })
 
+test('the Action rail can open Actions without replacing the saved Project tab', () => {
+  const app = source('App.tsx')
+  const rail = source('commandRail.ts')
+  const terminal = source('TerminalPane.tsx')
+  const drawer = source('UtilityDrawer.tsx')
+
+  assert.ok(rail.includes("id: 'actionsDrawer', type: 'action', action: 'openActions'"))
+  assert.ok(terminal.includes("runCommand('drawer.peekActions')"))
+  assert.ok(app.includes("id:'drawer.peekActions'"))
+  assert.ok(app.includes('presentation={renderedDrawerPresentation}'))
+  assert.ok(app.includes('transientTab={transientDrawerTab||undefined}'))
+  assert.ok(drawer.includes('mobile || props.transientTab'))
+})
+
 test('prompt templates render excerpts inside Actions while the full editor stays modal', () => {
   const prompts = source('PromptsTab.tsx')
   const actions = source('ActionsTab.tsx')

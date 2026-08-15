@@ -3321,8 +3321,8 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   }
 
   const runPromptItem=async(item:RailItem)=>{
-    const note=await activatePromptRailItem(item,{sessionId:session.id,projectId:session.project_id})
-    if(note)reportError(note)
+    const result=await activatePromptRailItem(item,{sessionId:session.id,projectId:session.project_id})
+    if(result.status==='error')reportError(result.message)
   }
 
   // The rail region after the leading voice chips is data-driven so it can be
@@ -3372,6 +3372,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       }
       case 'paste':return <button key={key} class="rail-icon" aria-label="Paste into terminal" title="Paste the clipboard into this terminal" onClick={()=>void paste()}><PasteIcon/></button>
       case 'clipboardHistory':return <button key={key} title="Open clipboard history — recent copies, insertable into this terminal" onClick={()=>runCommand('clipboard.open')}>Clip</button>
+      case 'actionsDrawer':return <button key={key} title={item.title} onClick={()=>runCommand('drawer.peekActions')}>Actions</button>
       case 'endSession':{
         // Ended sessions keep the button: the same command removes their row from the
         // sidebar, which is the only remaining thing left to do with them.

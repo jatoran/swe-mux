@@ -164,7 +164,10 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     if (!session) return
     if (item.type === 'prompt') {
       void activatePromptRailItem(item, { sessionId: session.id, projectId: session.project_id })
-        .then(problem => { if (problem) setNote(problem); else onDone() })
+        .then(result => {
+          if (result.status === 'error') setNote(result.message)
+          else if (result.status === 'inserted') onDone()
+        })
       return
     }
     if (item.type === 'key') dispatch(session.id, 'sendKey', { text: item.bytes || '' })
@@ -191,12 +194,12 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     onDone()
   }
 
-  // `clipboardHistory` opens this drawer, so running it from inside the drawer
-  // would be a no-op; it is filtered out of every row entirely.
+  // These two built-ins open this drawer, so running either from inside the drawer
+  // would be a no-op; they are filtered out of every row entirely.
   const visibleRows = session ? rows
     .map(row => ({
       ...row,
-      entries: row.entries.filter(entry => entry.item.id !== 'clipboardHistory' && (entry.item.action !== 'attach' || isAgent)),
+      entries: row.entries.filter(entry => !['clipboardHistory', 'openActions'].includes(entry.item.action || '') && (entry.item.action !== 'attach' || isAgent)),
     }))
     .filter(row => row.entries.length) : []
   const anyVisible = visibleRows.some(row => row.entries.length)

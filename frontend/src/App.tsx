@@ -67,6 +67,9 @@ import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
   pruneDrawerNotes, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
+import {
+  presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
+} from './drawerTransient'
 import type { WatchScope } from './processWatch'
 import { DRAWER_TAB_ICONS, NavPanelIcon, SidePanelIcon } from './railIcons'
 import {
@@ -620,6 +623,10 @@ export function App() {
   const activeDrawerPresentation=projectId
     ?drawerProjectPresentationFor(drawerProjectPresentations,projectId,drawerLayout)
     :normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayout)
+  const [transientDrawer,setTransientDrawer]=useState<TransientDrawerTab|null>(null)
+  const transientDrawerTab=transientDrawerTabForProject(transientDrawer,projectId)
+  const renderedDrawerPresentation=presentationWithTransientDrawerTab(
+    activeDrawerPresentation,drawerLayout,transientDrawerTab)
   const drawerTabId=activeDrawerPresentation.focused_tab
   const clipboardOpen=mobileWorkspace?mobileDrawerOpen:(drawerResizeOpen??activeDrawerPresentation.desktop_expanded)
   // An Action rail prompt button whose template has {{placeholders}} has nothing to
@@ -639,6 +646,9 @@ export function App() {
   const [drawerAnnouncement,setDrawerAnnouncement]=useState('')
   const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
+  // A momentary drawer belongs only to the Project that opened it. Clear the state
+  // after any Project switch so returning later cannot revive a stale Actions peek.
+  useEffect(()=>setTransientDrawer(null),[projectId])
   const [xtermScrollback, setXtermScrollback] = useState(10000)
   const [terminalRenderer, setTerminalRenderer] = useState<TerminalRendererPreference>('auto')
   const [claudeMaxColumns, setClaudeMaxColumns] = useState<number>(DEFAULT_CLAUDE_MAX_COLUMNS)
@@ -696,7 +706,7 @@ export function App() {
   const setClipboardOpen=(next:OpenState,targetProject=projectId)=>{
     if(mobileWorkspace){
       const open=typeof next==='function'?next(mobileDrawerOpen):next
-      if(!open)activePointerDragCancelRef.current?.()
+      if(!open){activePointerDragCancelRef.current?.();setTransientDrawer(null)}
       setMobileDrawerOpen(open)
       if(open){setSidebarOpenState(false);dismissSoftKeyboard()}
       return
@@ -704,7 +714,7 @@ export function App() {
     if(!targetProject){
       const current=normalizeDrawerProjectPresentation(unscopedDrawerPresentation,drawerLayoutRef.current)
       const open=typeof next==='function'?next(current.desktop_expanded):next
-      if(!open)activePointerDragCancelRef.current?.()
+      if(!open){activePointerDragCancelRef.current?.();setTransientDrawer(null)}
       updateDrawerPresentation('',current=>updateDrawerProjectPresentation(current,drawerLayoutRef.current,{
         desktop_expanded:open,
       }))
@@ -712,12 +722,13 @@ export function App() {
     }
     const current=drawerProjectPresentationFor(drawerProjectPresentations,targetProject,drawerLayoutRef.current)
     const open=typeof next==='function'?next(current.desktop_expanded):next
-    if(!open)activePointerDragCancelRef.current?.()
+    if(!open){activePointerDragCancelRef.current?.();setTransientDrawer(null)}
     updateDrawerPresentation(targetProject,presentation=>updateDrawerProjectPresentation(presentation,drawerLayoutRef.current,{
       desktop_expanded:open,
     }))
   }
   const selectDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
+    setTransientDrawer(null)
     updateDrawerPresentation(targetProject,current=>activateDrawerTab(current,drawerLayoutRef.current,tab))
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
@@ -744,6 +755,12 @@ export function App() {
   const openDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
     selectDrawerTab(tab,targetProject)
     setClipboardOpen(true,targetProject)
+    setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
+  }
+  /** Open Actions as a momentary tool without changing this Project's saved tab. */
+  const peekActions=()=>{
+    setTransientDrawer({projectId,tab:'actions'})
+    setClipboardOpen(true)
     setMainMenuOpen(false);setProjectMenu(null);setContextMenu(null)
   }
   const commitDrawerLayout=(candidate:DrawerLayout,focusedTab?:DrawerTabId,targetProject=projectId)=>{
@@ -3897,6 +3914,7 @@ export function App() {
     { id:'drawer.close',label:'Close side panel',category:'view',available:true,run:()=>{setClipboardOpen(false);setMainMenuOpen(false);setContextMenu(null)},voice:{
       phrases:['close side panel','hide side panel','close right sidebar','hide right sidebar','close utility sidebar','hide utility sidebar'],
     }},
+    { id:'drawer.peekActions',label:'Open Actions temporarily',category:'view',available:true,run:peekActions },
     ...DRAWER_TABS.map((tab): Command => ({
       id: `drawer.${tab.id}`, label: `Side panel: ${tab.label}`, category: tab.id === 'notifications' ? 'view' : 'clipboard',
       available: true, run: () => showDrawerTab(tab.id),
@@ -4213,6 +4231,10 @@ export function App() {
       const detail = (event as CustomEvent<{ key?: string }>).detail
       if (!detail?.key) return
       setPromptPreselect({ key: detail.key })
+      // A variable prompt chosen inside a temporary Actions visit still needs the
+      // same drawer to fill its fields. Keep the override and, crucially, do not
+      // promote Actions into the Project's persistent selection.
+      if (transientDrawerTab === 'actions') { setClipboardOpen(true); return }
       openDrawerTab('actions')
     }
     window.addEventListener(PROMPT_RAIL_EVENT, onPromptTemplate)
@@ -5051,13 +5073,16 @@ export function App() {
           scrim, which is why both renderings share one component. */}
       {clipboardOpen&&<UtilityDrawer
         layout={drawerLayout}
-        presentation={activeDrawerPresentation}
+        presentation={renderedDrawerPresentation}
+        transientTab={transientDrawerTab||undefined}
         onLayout={layout=>commitDrawerLayout(layout)}
         // The drag ghost's pointer-up also fires a click on the tab it started from, which
         // would switch to the tab the user was only moving.
         onTab={(tab,collapseIfSelected)=>{
           if(suppressDragClickRef.current===`drawer-tab:${tab}`){suppressDragClickRef.current=null;return}
-          if(collapseIfSelected){setClipboardOpen(false);return}
+          // Clicking the temporarily selected Actions tab is an explicit choice to
+          // keep it, not the normal second-click request to collapse the drawer.
+          if(collapseIfSelected&&!transientDrawerTab){setClipboardOpen(false);return}
           selectDrawerTab(tab)
         }}
         onClose={()=>setClipboardOpen(false)}
@@ -5070,8 +5095,8 @@ export function App() {
         unread={notificationUnread}
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
-        onConfigureActions={()=>{if(mobileWorkspace)setClipboardOpen(false);openActionEditor()}}
-        onManagePrompts={()=>{if(mobileWorkspace)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
+        onConfigureActions={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);openActionEditor()}}
+        onManagePrompts={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
         onOpenFile={path=>{
           // The drag ghost's pointer-up also fires a click on the row it started from.
           if(suppressDragClickRef.current===`file:${noteResourceId('file',path)}`){suppressDragClickRef.current=null;return}

@@ -1031,6 +1031,7 @@ responsive controls.
   placed there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
   It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+  Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
   Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
@@ -1117,6 +1118,7 @@ responsive controls.
   It is a configured overflow and favorites surface, not another catalog editor.
   Skills and prompt templates may intentionally appear both in Quick actions and in their complete sections because one is the chosen shortcut layout and the others are browsable inventories.
   The Configure control in the Quick actions header opens the standalone Configure Actions modal.
+  A transient visit opened from the Action rail closes after an action completes on desktop as well as mobile; a prompt with unresolved fields remains open until those fields are completed, and an ordinary visit retains the existing repeated-action behavior.
   The Manage control in the Prompt templates header opens the full prompt-template editor.
   Prompt rows include a bounded body excerpt so similar titles can be distinguished in the drawer.
   Actions renders outside the terminal pane, so it activates items over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`, `branch`, `relaunch`, `endSession`).
