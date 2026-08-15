@@ -9,6 +9,8 @@ instances will fight over the same mux.db.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import difflib
 import hashlib
 import ipaddress
 import json
@@ -144,7 +146,12 @@ from .preview_capture import (
 )
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import find_profile, profile_payload, resolve_agent_profile, resolve_profile
-from .project_actions import ProjectActionService, action_spawn_body
+from .project_actions import (
+    ActionStep,
+    ProjectActionService,
+    action_spawn_body,
+    substituted_action,
+)
 from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
 from .project_files import (
@@ -303,6 +310,10 @@ RETENTION_LOOP = "store-retention"
 # budget is the shape of an incident, and it left no trace of its own until a
 # 36s start expired the tray's wait and looked like a daemon that never started.
 SLOW_STARTUP_SECONDS = 20.0
+# What one task file's approval diff may occupy in a response. Generous enough for
+# a rewritten `tasks.json` and bounded so a generated `package.json` cannot make the
+# approval dialog unrenderable.
+MAX_ACTION_DIFF = 64 * 1024
 # Browser reconnects use a small recovery window. Wider gaps fall back to one
 # authoritative REST refresh instead of replaying a large, stale event history.
 EVENTS_CATCHUP_LIMIT = 64
@@ -668,6 +679,7 @@ def create_app(
             web.patch("/api/projects/{project_id}", patch_project),
             web.delete("/api/projects/{project_id}", delete_project),
             web.get("/api/projects/{project_id}/actions", list_project_actions),
+            web.get("/api/projects/{project_id}/actions/diff", diff_project_actions),
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
@@ -1349,6 +1361,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             automation_store,
             agent_context,
             projects,
+            project_actions,
+            # A closure over the same app, so an agent-started action goes through the
+            # identical trust check, substitution, spawn path, and timeout arming as
+            # the Run menu. A second implementation would be a second authority path.
+            lambda project, action_id, inputs: _start_project_action(
+                app, project, action_id, inputs, origin="agent"
+            ),
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -1387,6 +1406,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         project_actions=project_actions,
         project_watcher=project_watcher,
         automation_tasks=set(),
+        # One entry per running Project Action step that declared `timeout_seconds`.
+        # Kept beside the automation set and cancelled the same way, so a daemon
+        # shutdown does not leave a timer holding a reference to a dead session.
+        action_timeout_tasks=set(),
     )
     # The startup duration nobody could see. A daemon takes this long to become
     # reachable, and the desktop shell budgets its health wait against it, so a
@@ -1421,6 +1444,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     for task in tuple(app["automation_tasks"]):
         task.cancel()
     await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
+    for task in tuple(app["action_timeout_tasks"]):
+        task.cancel()
+    await asyncio.gather(*app["action_timeout_tasks"], return_exceptions=True)
     for loop_name in (
         CONFIG_WATCH_LOOP,
         MEDIA_CLEANUP_LOOP,
@@ -6309,20 +6335,87 @@ async def trust_project_actions(request: web.Request) -> web.Response:
     fingerprint = str(body.get("fingerprint") or "")
     if not fingerprint:
         raise ValueError({"fingerprint": "is required"})
+    # With `source`, the fingerprint is that one file's digest and only it is
+    # approved. Without, the fingerprint is the whole-catalog digest, which is what
+    # the Run menu's single prompt sends and what every existing client sends.
+    source = str(body.get("source")) if body.get("source") else None
     service: ProjectActionService = request.app["project_actions"]
-    catalog = service.trust(project.root, fingerprint)
+    catalog = service.trust(project.root, fingerprint, source=source)
+    log.info(
+        "project_actions_trusted project_id=%s source=%s files=%d",
+        project.id,
+        source or "*",
+        len(catalog.sources),
+    )
     await request.app["events"].emit(
         "project_actions_trusted",
         source="user",
         project_id=project.id,
         fingerprint=catalog.fingerprint,
+        approved_source=source,
         files=list(catalog.sources),
     )
     return json_response(catalog.snapshot())
 
 
-async def _project_profile_id(request: web.Request, project) -> str:  # type: ignore[no-untyped-def]
-    """The shell profile a Project-owned command should be launched through."""
+async def diff_project_actions(request: web.Request) -> web.Response:
+    """What changed in each task file since it was last approved.
+
+    "These files changed" is not enough information to approve safely: it cannot
+    separate a renamed label from a new `curl | sh`. Every source is reported, with
+    an explicit reason when no diff can be produced, so a caller never has to read
+    an empty diff as "nothing changed".
+    """
+    project = _action_project(request)
+    service: ProjectActionService = request.app["project_actions"]
+    catalog = service.catalog(project.root)
+    root = Path(catalog.root)
+    entries: list[dict[str, Any]] = []
+    for item in catalog.files:
+        if not item.present:
+            entries.append({**item.snapshot(), "status": "absent", "diff": ""})
+            continue
+        if item.trusted:
+            entries.append({**item.snapshot(), "status": "unchanged", "diff": ""})
+            continue
+        approved = service.approved_source(catalog.root, item.path)
+        if approved is None:
+            # Two different situations, and a reader needs to know which: a file
+            # swe-mux has never seen, versus one whose approved bytes were too large
+            # to retain (or predate the retained-snapshot store). The second still
+            # means "this changed", it just cannot show how.
+            entries.append(
+                {
+                    **item.snapshot(),
+                    "status": "changed, approved bytes not retained"
+                    if service.was_approved(catalog.root, item.path)
+                    else "never approved",
+                    "diff": "",
+                }
+            )
+            continue
+        try:
+            current = (root / item.path).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            entries.append({**item.snapshot(), "status": f"unreadable: {exc}", "diff": ""})
+            continue
+        diff = "".join(
+            difflib.unified_diff(
+                approved.splitlines(keepends=True),
+                current.splitlines(keepends=True),
+                fromfile=f"approved/{item.path}",
+                tofile=f"current/{item.path}",
+                n=3,
+            )
+        )
+        entries.append({**item.snapshot(), "status": "changed", "diff": diff[:MAX_ACTION_DIFF]})
+    return json_response({"project_root": catalog.root, "sources": entries})
+
+
+async def _project_profile_id_for(  # type: ignore[no-untyped-def]
+    app: web.Application, project
+) -> str:
+    """The shell launch profile a Project-owned command should run through."""
     portable = await read_project_config(
         project.root, project=ProjectIdentity(project.id, project.name, project.root, "registered")
     )
@@ -6330,8 +6423,148 @@ async def _project_profile_id(request: web.Request, project) -> str:  # type: ig
     return str(
         project.default_profile_id
         or values.get("default_shell_profile")
-        or request.app["config"].default_shell_profile
+        or app["config"].default_shell_profile
     )
+
+
+async def _project_profile_id(request: web.Request, project) -> str:  # type: ignore[no-untyped-def]
+    return await _project_profile_id_for(request.app, project)
+
+
+async def _start_project_action(
+    app: web.Application,
+    project: ProjectRecord,
+    action_id: str,
+    inputs: dict[str, str],
+    *,
+    origin: str,
+) -> tuple[dict[str, Any], int]:
+    """Run one approved action and return its response body and status.
+
+    Shared by the HTTP route and the MCP tool so both go through the same trust
+    check, the same substitution, and the same timeout arming. An agent-facing
+    caller that reimplemented any of those would be a second authority path.
+    """
+    service: ProjectActionService = app["project_actions"]
+    catalog, action = service.action(project.root, action_id)
+    action = substituted_action(action, inputs, Path(catalog.root))
+    profile_id = await _project_profile_id_for(app, project)
+    sessions: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for batch in action.batches:
+        results = await asyncio.gather(
+            *(
+                _spawn_from_body(
+                    app,
+                    action_spawn_body(
+                        step,
+                        project_id=project.id,
+                        config=app["config"],
+                        profile_id=str(profile_id),
+                    ),
+                )
+                for step in batch
+            ),
+            return_exceptions=True,
+        )
+        for step, result in zip(batch, results, strict=True):
+            if isinstance(result, BaseException):
+                errors.append({"step": step.name, "error": str(result)})
+                continue
+            # Task shells retain their exact spawn argv, so their rail offers an
+            # in-place Relaunch. The flag is set post-spawn and republished so
+            # every attached client sees it, not only this action's caller.
+            result.record.relaunchable = True
+            result.publish_update()
+            sessions.append(result.record.snapshot())
+            if step.timeout_seconds is not None:
+                _arm_action_timeout(app, result.record.id, step, project.id, action.id)
+    log.info(
+        "project_action_started project_id=%s action_id=%s origin=%s sessions=%d failures=%d",
+        project.id,
+        action.id,
+        origin,
+        len(sessions),
+        len(errors),
+    )
+    await app["events"].emit(
+        "project_action_started",
+        source=origin,
+        project_id=project.id,
+        action_id=action.id,
+        action_label=action.label,
+        fingerprint=catalog.fingerprint,
+        session_ids=[item["id"] for item in sessions],
+        failures=len(errors),
+    )
+    body = {
+        "action": action.snapshot(trusted=True),
+        "sessions": sessions,
+        "errors": errors,
+        "inputs": inputs,
+    }
+    return body, 201 if not errors else 207
+
+
+def _arm_action_timeout(
+    app: web.Application, session_id: str, step: ActionStep, project_id: str, action_id: str
+) -> None:
+    """Stop this step's session if it is still running when its timeout elapses.
+
+    A timer rather than a supervised loop: it fires once and is done, so restarting
+    it on failure (which is what the background-task supervisor does) would be
+    wrong. It resolves the session by id at fire time and does nothing if the
+    session already ended, so a completed step leaves no trace beyond the timer's
+    own wakeup.
+
+    Not restored across a daemon restart. The alternative is persisting a deadline
+    per session and reconciling it at adoption, which is real machinery for a bound
+    whose purpose is stopping a runaway task on the machine the user is sitting at.
+    Stated here rather than left to be discovered.
+    """
+    seconds = float(step.timeout_seconds or 0)
+
+    async def expire() -> None:
+        await asyncio.sleep(seconds)
+        sessions = app["sessions"]
+        session = sessions.sessions.get(session_id)
+        if session is None or session.record.state == "ended":
+            return
+        log.warning(
+            "project_action_step_timeout project_id=%s action_id=%s step=%s "
+            "session_id=%s seconds=%.1f",
+            project_id,
+            action_id,
+            step.name,
+            session_id,
+            seconds,
+        )
+        await app["events"].emit(
+            "project_action_step_timeout",
+            source="project_actions",
+            session_id=session_id,
+            project_id=project_id,
+            action_id=action_id,
+            step=step.name,
+            timeout_seconds=seconds,
+        )
+        with contextlib.suppress(KeyError, OSError, RuntimeError):
+            await sessions.stop(session_id)
+
+    task = asyncio.create_task(expire(), name=f"action-timeout-{session_id}")
+    app["action_timeout_tasks"].add(task)
+    task.add_done_callback(app["action_timeout_tasks"].discard)
+
+
+def _action_inputs(body: dict[str, Any]) -> dict[str, str]:
+    raw = body.get("inputs")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in raw.items()
+    ):
+        raise ValueError({"inputs": "must be a map of input id to string value"})
+    return dict(raw)
 
 
 async def run_project_action(request: web.Request) -> web.Response:
@@ -6342,7 +6575,9 @@ async def run_project_action(request: web.Request) -> web.Response:
         raise ValueError({"action_id": "is required"})
     service: ProjectActionService = request.app["project_actions"]
     try:
-        catalog, action = service.action(project.root, action_id)
+        payload, status = await _start_project_action(
+            request.app, project, action_id, _action_inputs(body), origin="user"
+        )
     except PermissionError as exc:
         return json_response(
             {
@@ -6354,49 +6589,7 @@ async def run_project_action(request: web.Request) -> web.Response:
         )
     except KeyError as exc:
         raise ValueError(f"unknown Project Action: {action_id}") from exc
-    profile_id = await _project_profile_id(request, project)
-    sessions: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-    for batch in action.batches:
-        results = await asyncio.gather(
-            *(
-                _spawn_from_body(
-                    request.app,
-                    action_spawn_body(
-                        step,
-                        project_id=project.id,
-                        config=request.app["config"],
-                        profile_id=str(profile_id),
-                    ),
-                )
-                for step in batch
-            ),
-            return_exceptions=True,
-        )
-        for step, result in zip(batch, results, strict=True):
-            if isinstance(result, BaseException):
-                errors.append({"step": step.name, "error": str(result)})
-            else:
-                # Task shells retain their exact spawn argv, so their rail offers an
-                # in-place Relaunch. The flag is set post-spawn and republished so
-                # every attached client sees it, not only this action's caller.
-                result.record.relaunchable = True
-                result.publish_update()
-                sessions.append(result.record.snapshot())
-    await request.app["events"].emit(
-        "project_action_started",
-        source="user",
-        project_id=project.id,
-        action_id=action.id,
-        action_label=action.label,
-        fingerprint=catalog.fingerprint,
-        session_ids=[item["id"] for item in sessions],
-        failures=len(errors),
-    )
-    return json_response(
-        {"action": action.snapshot(), "sessions": sessions, "errors": errors},
-        201 if not errors else 207,
-    )
+    return json_response(payload, status)
 
 
 async def run_project_init_scripts(request: web.Request) -> web.Response:

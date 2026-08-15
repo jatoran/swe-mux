@@ -1259,9 +1259,11 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "message_status",
         "project_notes",
         "read_project_note",
+        "project_actions",
         "spawn_requests",
         "notify",
         "request_spawn",
+        "run_action",
     }
     assert names == {tool["name"] for tool in TOOLS}
     by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}

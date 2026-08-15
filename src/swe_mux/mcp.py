@@ -52,8 +52,9 @@ from typing import Any
 
 from .clipboard_store import looks_like_secret
 from .git_projects import ProjectIdentity
-from .harness import agent_harnesses
+from .harness import agent_harnesses, is_agent_harness
 from .mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
+from .project_actions import project_actions_schema
 from .project_files import (
     DEFAULT_NOTE_STORAGE_ID,
     project_note_summaries,
@@ -126,6 +127,12 @@ _NOT_FOUND = (
 
 _REDACTED = "[redacted: credential-shaped content withheld by mux]"
 
+# The most terminal output one `get_session` call may return. Sized against a
+# failing test run's tail, which is the case this exists for, and well under the
+# 512 KiB read cap the transcript surface uses: a caller wanting more of a shell's
+# history wants the pane, not a tool result.
+MAX_SESSION_OUTPUT_BYTES = 64 * 1024
+
 # The retryable-error contract (CP §7.3): a daemon restart kills the TCP
 # connection mid-call, which every MCP client already treats as retryable. The
 # one server-visible aftermath is a token the daemon no longer knows — either
@@ -154,6 +161,14 @@ def session_summary(record: Any, *, display_name: str | None = None) -> dict[str
         "awaiting_reason": record.awaiting_reason,
         "idle_reason": record.idle_reason,
         "model": record.model,
+        # How this session ends and how it ended. Without them a caller that ran a
+        # Project Action could see the session leave `running` and had no way to
+        # learn whether the command succeeded, which made running one pointless.
+        # `one_shot` distinguishes a task that is meant to finish from an
+        # interactive pane, so `exit_code: null` reads as "still running" rather
+        # than as "no result".
+        "completion_mode": getattr(record, "completion_mode", "interactive"),
+        "exit_code": getattr(record, "exit_code", None),
         "cwd": record.cwd,
         "project_id": record.project_id,
         "project_label": record.project_label,
@@ -377,6 +392,10 @@ TOOLS: list[dict[str, Any]] = [
             "Status and metadata for one session in your Project, by session id "
             "or exact backend/display name. Omit session_id or use 'self' for "
             "the caller. Live sessions report current state; ended ones report their final state. "
+            "Every result carries completion_mode and exit_code, so a one-shot task "
+            "reports whether its command succeeded. Pass output_bytes to read the tail "
+            "of a shell or task session's terminal output, which is where a failing "
+            "command's error text is. "
             'Pass project:"fleet" or a Project name to reach a session outside your Project.'
         ),
         "inputSchema": {
@@ -385,6 +404,16 @@ TOOLS: list[dict[str, Any]] = [
                 "session_id": {
                     "type": "string",
                     "description": "Session id or exact backend/display name",
+                },
+                "output_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_SESSION_OUTPUT_BYTES,
+                    "description": (
+                        "Read this many bytes from the end of a shell or task session's "
+                        f"terminal output (max {MAX_SESSION_OUTPUT_BYTES}). Ignored for an "
+                        "agent session, whose conversation is read with read_transcript."
+                    ),
                 },
                 "project": _PROJECT_ARG,
             },
@@ -738,6 +767,64 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_actions",
+        "description": (
+            "List the runnable tasks a Project declares: native .swe-mux/actions.toml "
+            "actions, imported .vscode/tasks.json tasks, and root package.json scripts. "
+            "Each entry names its source file, its steps, its declared inputs, and "
+            "whether a human has approved that file's exact current bytes. Only an "
+            "approved action can be started with run_action. "
+            "Pass include_schema:true to also receive the complete authoring reference "
+            "for .swe-mux/actions.toml, which is what you need to write or edit one. "
+            'Your own Project is the default; pass project:"fleet" or a Project name '
+            "for another Project's actions."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_schema": {
+                    "type": "boolean",
+                    "description": (
+                        "Include the .swe-mux/actions.toml authoring reference in the result"
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "run_action",
+        "description": (
+            "Start one Project Action that a human has already approved. Each step "
+            "opens as an ordinary terminal session in that Project; the result names "
+            "the session ids, and get_session reports each one's exit_code and, with "
+            "output_bytes, its terminal output. "
+            "This grants no new authority: it can only run a command whose exact bytes "
+            "a human approved, and editing a task file un-approves it, so you cannot "
+            "approve a command you wrote. An unapproved action refuses with "
+            "trust_required and names the file a human must review. "
+            "Supply inputs for any action that declares them."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action_id": {
+                    "type": "string",
+                    "description": "Action id from project_actions",
+                },
+                "inputs": {
+                    "type": "object",
+                    "description": "Values for the action's declared inputs, by input id",
+                    "additionalProperties": {"type": "string"},
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["action_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "spawn_requests",
         "description": (
             "List the status of spawn requests attributed to your session. "
@@ -812,6 +899,8 @@ class McpService:
         automation_store: Any = None,
         agent_context: Any = None,
         projects: Any = None,
+        project_actions: Any = None,
+        action_runner: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -821,6 +910,12 @@ class McpService:
         self.automation_store = automation_store
         self.agent_context = agent_context
         self.projects = projects
+        self.project_action_service = project_actions
+        # A callable rather than the aiohttp application: starting an action needs
+        # the spawn handler, the event bus, and the config, and MCP is a transport
+        # over the daemon's own operations rather than a second implementation of
+        # them. Injected so this module stays free of the HTTP layer.
+        self.action_runner = action_runner
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -1210,6 +1305,7 @@ class McpService:
                 "ended": False,
                 **self._scope_envelope(scope),
             }
+            result.update(self._session_output(session, args))
             result["run_brief"] = await self._run_brief(
                 run_id=self._record_run_id(session.record),
                 path=session.transcript_path,
@@ -1240,6 +1336,44 @@ class McpService:
             native_id=str(row.get("native_id") or "") or None,
         )
         return result
+
+    def _session_output(self, session: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """The tail of a shell session's terminal output, when the caller asked.
+
+        Only for shells and tasks. An agent session's conversation is
+        `read_transcript`, and returning its raw PTY bytes here would hand back a
+        differential frame stream that reads as gibberish and costs a lot of context.
+
+        Redacted through the same `looks_like_secret` gate every other excerpt uses.
+        The bytes are whatever the command printed, so a task that echoes a token is
+        exactly the case this gate exists for.
+        """
+        requested = args.get("output_bytes")
+        if requested is None:
+            return {}
+        if is_agent_harness(session.record.backend):
+            return {
+                "output": "",
+                "output_available": False,
+                "output_note": (
+                    "This is an agent session; use read_transcript for its conversation."
+                ),
+            }
+        limit = max(1, min(int(requested), MAX_SESSION_OUTPUT_BYTES))
+        try:
+            raw = session.scrollback.tail_bytes(limit)
+        except (AttributeError, OSError, ValueError):
+            return {"output": "", "output_available": False, "output_note": "output unavailable"}
+        text = raw.decode("utf-8", "replace")
+        lines = [
+            _REDACTED if looks_like_secret(line) else line for line in text.splitlines()
+        ]
+        return {
+            "output": "\n".join(lines),
+            "output_available": True,
+            "output_bytes": len(raw),
+            "output_truncated": len(raw) >= limit,
+        }
 
     @staticmethod
     def _history_row_in_scope(scope: ProjectScope, row: dict[str, Any]) -> bool:
@@ -1991,6 +2125,118 @@ class McpService:
             result["project"] = {"id": projects[0].id, "name": projects[0].name}
         return result
 
+    async def project_actions(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        scope = self._requested_scope(caller, args)
+        projects, truncated = self._scoped_projects(caller, args)
+        service = self.project_action_service
+        if service is None:
+            raise QueueError(
+                "unavailable",
+                "Project Actions are not available on this daemon.",
+                status=503,
+            )
+        actions: list[dict[str, Any]] = []
+        catalogs: list[dict[str, Any]] = []
+        for project in projects:
+            catalog = await asyncio.to_thread(service.catalog, project.root)
+            snapshot = catalog.snapshot()
+            catalogs.append(
+                {
+                    "project_id": str(project.id),
+                    "project_name": str(project.name),
+                    "trusted": snapshot["trusted"],
+                    "files": snapshot["files"],
+                    "diagnostics": snapshot["diagnostics"],
+                }
+            )
+            actions.extend(
+                {**item, "project_id": str(project.id), "project_name": str(project.name)}
+                for item in snapshot["actions"]
+            )
+        result: dict[str, Any] = {
+            "actions": actions,
+            "catalogs": catalogs,
+            # Stated in the result and not only in the tool description: an agent
+            # reads answers far more often than schemas, and an untrusted action is
+            # otherwise indistinguishable from a broken one.
+            "note": (
+                "Only an action whose source file a human has approved can be started "
+                "with run_action. Editing a task file un-approves it."
+            ),
+            **self._covered_projects(projects, truncated),
+            **self._scope_envelope(scope),
+        }
+        if args.get("include_schema"):
+            result["schema"] = project_actions_schema()
+        return result
+
+    async def run_action(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        action_id = str(args.get("action_id") or "").strip()
+        if not action_id:
+            raise ValueError("action_id is required")
+        raw_inputs = args.get("inputs") or {}
+        if not isinstance(raw_inputs, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in raw_inputs.items()
+        ):
+            raise ValueError("inputs must be a map of input id to string value")
+        if self.action_runner is None or self.project_action_service is None:
+            raise QueueError(
+                "unavailable",
+                "Project Actions are not available on this daemon.",
+                status=503,
+            )
+        scope = self._requested_scope(caller, args)
+        projects, _truncated = self._scoped_projects(caller, args)
+        owner = None
+        for project in projects:
+            catalog = await asyncio.to_thread(
+                self.project_action_service.catalog, project.root
+            )
+            if any(item.id == action_id for item in catalog.actions):
+                owner = project
+                break
+        if owner is None:
+            raise QueueError(
+                "unknown_action",
+                f"no action {action_id!r} in {scope.label}. Call project_actions to "
+                "list what this Project declares.",
+                status=404,
+            )
+        try:
+            payload, _status = await self.action_runner(owner, action_id, dict(raw_inputs))
+        except PermissionError as exc:
+            # Typed rather than raised as a protocol fault, and it names the file a
+            # human has to look at. An agent that cannot tell "refused" from "broken"
+            # retries blindly or stops calling.
+            raise QueueError(
+                "trust_required",
+                f"{exc} Ask the operator to approve it in the Project Run menu.",
+                status=409,
+            ) from exc
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return {
+            "action_id": action_id,
+            "project_id": str(owner.id),
+            "project_name": str(owner.name),
+            "sessions": [
+                {
+                    "session_id": item.get("id"),
+                    "name": item.get("name"),
+                    "state": item.get("state"),
+                }
+                for item in payload["sessions"]
+            ],
+            "errors": payload["errors"],
+            "inputs": payload["inputs"],
+            "note": (
+                "Each step runs as its own session. Call get_session with a session_id "
+                "for its exit_code, and add output_bytes to read its terminal output."
+            ),
+            **self._scope_envelope(scope),
+        }
+
     async def read_project_note(
         self, caller: Any, args: dict[str, Any]
     ) -> dict[str, Any]:
@@ -2159,10 +2405,12 @@ class McpService:
             "read_memory": self.read_memory,
             "project_notes": self.project_notes,
             "read_project_note": self.read_project_note,
+            "project_actions": self.project_actions,
             "message_status": self.message_status,
             "spawn_requests": self.spawn_requests,
             "notify": self.notify,
             "request_spawn": self.request_spawn,
+            "run_action": self.run_action,
         }
         handler = handlers.get(name)
         if handler is None:

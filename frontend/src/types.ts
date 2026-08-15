@@ -186,10 +186,31 @@ export interface Project {
 export interface ProjectGroup { id:string;name:string;position:number }
 
 export type ProjectActionSource='vscode'|'package'|'native'
-export interface ProjectActionStep { name:string;kind:'shell'|'process';command:string }
-export interface ProjectAction { id:string;label:string;source:ProjectActionSource;steps:ProjectActionStep[] }
+export interface ProjectActionStep {
+  name:string;kind:'shell'|'process';command:string
+  cwd?:string;platforms?:string[];timeout_seconds?:number|null
+}
+export interface ProjectActionInput {
+  id:string;label:string;default:string;kind:'string'|'choice';options:string[]
+}
+export interface ProjectAction {
+  id:string;label:string;description?:string;source:ProjectActionSource
+  /** Which task file declares this action. Trust is per file, so this is what a
+   *  human approves before the action can run. */
+  source_path?:string
+  /** Whether this action's own source file is currently approved. */
+  trusted?:boolean
+  inputs?:ProjectActionInput[]
+  steps:ProjectActionStep[]
+}
+export interface ProjectActionFile {
+  path:string;present:boolean;fingerprint:string;trusted:boolean
+}
+export interface ProjectActionDiff extends ProjectActionFile { status:string;diff:string }
 export interface ProjectActionCatalog {
   project_root:string;fingerprint:string;trusted:boolean;sources:string[]
+  /** Per-file approval. `trusted` above is true only when every present file is. */
+  files?:ProjectActionFile[]
   actions:ProjectAction[];diagnostics:string[]
 }
 

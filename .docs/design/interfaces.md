@@ -141,14 +141,21 @@ machine-local and user-authored, so no trust fingerprint is involved.
 
 ```text
 GET  /projects/{project_id}/actions
-POST /projects/{project_id}/actions/trust   {fingerprint}
-POST /projects/{project_id}/actions/run     {action_id}
+GET  /projects/{project_id}/actions/diff
+POST /projects/{project_id}/actions/trust   {fingerprint}            # every present file
+POST /projects/{project_id}/actions/trust   {source, fingerprint}    # one file
+POST /projects/{project_id}/actions/run     {action_id, inputs}
 ```
 
 Action discovery is inert. The catalog returns `fingerprint`, `trusted`, contributing `sources`,
-normalized actions/steps, and import diagnostics. Trust succeeds only for the current exact
-fingerprint. Run returns the spawned ordinary session snapshots plus per-step errors and returns
-`409 project_actions_trust_required` when files are untrusted or changed.
+per-file approval state in `files`, normalized actions/steps with `description`, `source_path`,
+`trusted`, and declared `inputs`, and import diagnostics. `trusted` on the catalog is true only
+when every present file is approved; `trusted` on an action reflects its own source file, which is
+what governs whether it can run. Trust succeeds only for the current exact fingerprint, of the
+whole catalog or of the one named `source`. The diff route reports, per source, its status and a
+unified diff against the retained approved bytes, bounded at 64 KiB. Run substitutes `inputs` into
+the approved template, returns the spawned ordinary session snapshots plus per-step errors, and
+returns `409 project_actions_trust_required` when the action's file is untrusted or changed.
 
 ```ts
 interface Project {
