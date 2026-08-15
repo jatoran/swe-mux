@@ -24,7 +24,7 @@ import {
 } from './voiceCommandReference'
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
-import { allBackendNames, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
+import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './PromptLibrary'
@@ -39,6 +39,7 @@ type Config = {
   harness_exe:Record<string,string>; scrollback_bytes:number; history_limit:number
   terminal_renderer:'auto'|'dom'|'webgl'
   harness_args:Record<string,string[]>
+  harness_enabled:Record<string,boolean>
   git_poll_seconds:number;worktree_root:string;reconcile_external_history:boolean;theme:ThemeName
   drawer_tab_display:'icon'|'title'
   utility_rail_display:'icon'|'title'
@@ -206,6 +207,11 @@ const noteChordLabel = (chord:string) => chord.split('+').map(part=>
 // A chord is on the editor's policy default, bound to its command explicitly, or
 // released to the browser. '' is how a release survives TOML (see config.py).
 type NoteChordState = 'default'|'bind'|'release'
+type HistoryScanJob = {
+  status:'idle'|'running'|'completed'|'cancelled'|'failed'
+  phase:string;backends:string[];scanned:number;processed:number;imported:number
+  started_at:number|null;completed_at:number|null;error:string|null;cancel_requested:boolean
+}
 const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordState =>
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
@@ -245,6 +251,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
   const [errors, setErrors] = useState<Record<string,string>>({})
+  const [scanJob, setScanJob] = useState<HistoryScanJob|null>(null)
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>initialSection?tabForSection(initialSection):rememberedTab())
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
   const [noteChordQuery,setNoteChordQuery] = useState('')
@@ -301,6 +308,23 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   },[initialSection])
 
   useEffect(()=>rememberTab(activeTab),[activeTab])
+
+  // Native-history scan status: fetch once when the Agents tab opens, then poll while
+  // a scan is running so its progress and completion land without a manual refresh.
+  useEffect(()=>{
+    if(activeTab!=='agents')return
+    let live=true
+    const poll=async()=>{
+      try{
+        const job=(await api<{job:HistoryScanJob}>('GET','/api/history/scan')).job
+        if(live)setScanJob(job)
+        return job.status
+      }catch{ return undefined }
+    }
+    void poll()
+    const timer=window.setInterval(async()=>{ if((await poll())!=='running')window.clearInterval(timer) },900)
+    return ()=>{ live=false; window.clearInterval(timer) }
+  },[activeTab,scanJob?.status==='running'])
 
   // Ctrl+wheel/+/- is owned by App so it can intercept before xterm and browser zoom.
   // While Settings is open, reflect that active-profile preview into this panel's draft
@@ -589,6 +613,29 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     }
     return ''
   }
+  // Harness enablement is three-state: `harness_enabled` holds only explicit
+  // choices, and an absent key follows detection. These read the draft so the
+  // section reflects unsaved edits, and match the daemon's `enabled_backends` rule.
+  const enablementChoice = (name:string):boolean|undefined => draft!.harness_enabled?.[name]
+  const detectedInstalled = (name:string):boolean => allHarnessesIncludingDisabled().find(harness=>harness.name===name)?.installed ?? false
+  const detectedPath = (name:string):string|null|undefined => allHarnessesIncludingDisabled().find(harness=>harness.name===name)?.resolved_path
+  const harnessEnabledDraft = (name:string):boolean => {
+    const choice = enablementChoice(name)
+    return typeof choice==='boolean' ? choice : detectedInstalled(name)
+  }
+  const setHarnessEnabledChoice = (name:string, enabled:boolean):void =>
+    change('harness_enabled',{...draft!.harness_enabled,[name]:enabled})
+  const clearHarnessEnabledChoice = (name:string):void => {
+    const next={...draft!.harness_enabled}; delete next[name]; change('harness_enabled',next)
+  }
+  const startHistoryScan = async ():Promise<void> => {
+    try { setScanJob((await api<{job:HistoryScanJob}>('POST','/api/history/scan')).job) }
+    catch(cause){ setStatus(`Scan could not start: ${cause instanceof Error?cause.message:String(cause)}`) }
+  }
+  const cancelHistoryScan = async ():Promise<void> => {
+    try { setScanJob((await api<{job:HistoryScanJob}>('DELETE','/api/history/scan')).job) }
+    catch{ /* the poll below reconciles the real state */ }
+  }
   // Init scripts are ordinary config rows; the id is generated once and then left
   // alone, because the Add-project dialog selects by id and a label edit must not
   // silently orphan a selection.
@@ -733,9 +780,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
         {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
           <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
-        <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback.</p>
-          <label>Claude width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
-          <p>Claude Code's renderer can leave stale and duplicated cells when its width changes by a lot, so a Claude pane dragged past this many columns adds margin instead of resizing the terminal again. That is why a wide Claude pane stops growing its text while Codex and shell panes keep filling the space. Raise it for wide diffs and long log lines; choose <strong>No limit</strong> to let Claude fill its pane like every other session, and watch for leftover text on the right after a resize. Phone and other compact panes are never limited - they are narrower than the smallest setting here.</p>
+        <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback. A harness's width limit lives with the harness, under Agents.</p>
           <label>Global default terminal profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
           <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
           <div class="profile-browser">
@@ -833,7 +878,41 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>
         </Fragment>}
 
-        {activeTab==='agents'&&<section><h3>Agents</h3>{harnesses().map(harness=><Fragment key={harness.name}><label>{harness.display_name} executable<input value={draft.harness_exe[harness.name]||''} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label><label>{harness.display_name} default args<input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder="--model claude-opus-4-8" onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label><p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminal. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p></Fragment>)}<label class="check"><span>Reconcile native history</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
+        {activeTab==='agents'&&<section class="settings-harnesses"><h3>Agents</h3>
+          <p>Which harnesses appear in the launchers, and how each one starts. Enabling follows detection until you choose otherwise: turn a detected harness off to hide it, or turn one on before it is installed. A disabled harness still opens from an existing session, the command line, or the API, and its past conversations stay searchable in History.</p>
+          {allHarnessesIncludingDisabled().map(harness=><div class="settings-harness" key={harness.name}>
+            <div class="settings-harness-head">
+              <label class="check"><span>{harness.display_name}</span><input type="checkbox" checked={harnessEnabledDraft(harness.name)} onChange={e=>setHarnessEnabledChoice(harness.name,e.currentTarget.checked)} /></label>
+              <small class={detectedInstalled(harness.name)?'settings-harness-detected':'settings-harness-missing'}>{detectedInstalled(harness.name)?(detectedPath(harness.name)?`Detected: ${detectedPath(harness.name)}`:'Detected (data present)'):'Not detected'}{typeof enablementChoice(harness.name)==='boolean'?` · manually ${enablementChoice(harness.name)?'enabled':'disabled'}`:' · following detection'}</small>
+              {typeof enablementChoice(harness.name)==='boolean'&&<button type="button" onClick={()=>clearHarnessEnabledChoice(harness.name)}>follow detection</button>}
+            </div>
+            <label>Executable<input value={draft.harness_exe[harness.name]||''} placeholder={harness.name} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label>
+            <label>Default args<input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder="--model claude-opus-4-8" onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label>
+            {appliesWidthEnvelope(harness.name)&&<Fragment>
+              <label>Width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
+              <p class="profile-hint">{harness.display_name}'s renderer can leave stale and duplicated cells when its width changes by a lot, so a pane dragged past this many columns adds margin instead of resizing the terminal again. Raise it for wide diffs and long log lines; choose No limit to let it fill its pane like every other session. Phone and other compact panes are never limited.</p>
+            </Fragment>}
+            <p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminal. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
+          </div>)}
+          <div class="keybinding-heading"><div><strong>NATIVE HISTORY</strong><p>swe-mux can index conversations a CLI wrote on its own, so they are searchable and resumable alongside the sessions it launched. The startup scan is scoped to the enabled harnesses above. A real machine can hold tens of thousands of transcripts, so a first import is opt-in and interruptible rather than a silent startup stall.</p></div></div>
+          <label class="check"><span>Reconcile native history on startup</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
+          <div class="settings-history-scan">
+            <div class="settings-history-scan-head">
+              <div><strong>Scan native history now</strong><p>Indexes past conversations from the enabled harnesses without waiting for a restart. A first import can take a while on a machine with a large history, so it runs in the background and can be cancelled.</p></div>
+              {scanJob?.status==='running'
+                ?<button type="button" class="danger" onClick={()=>void cancelHistoryScan()}>{scanJob.phase==='cancelling'?'Cancelling…':'Cancel scan'}</button>
+                :<button type="button" onClick={()=>void startHistoryScan()}>Scan now</button>}
+            </div>
+            {scanJob&&scanJob.status!=='idle'&&<p class="settings-history-scan-status" aria-live="polite">{
+              scanJob.status==='running'
+                ?(scanJob.phase==='indexing'
+                    ?`Indexing ${scanJob.processed} of ${scanJob.scanned} conversations (${scanJob.imported} imported)…`
+                    :`Scanning… ${scanJob.scanned} conversations found`)
+                :scanJob.status==='completed'?`Done: ${scanJob.imported} imported of ${scanJob.scanned} found across ${scanJob.backends.join(', ')||'no enabled harness'}.`
+                :scanJob.status==='cancelled'?`Cancelled after ${scanJob.imported} imported.`
+                :`Scan failed: ${scanJob.error||'unknown error'}`
+            }</p>}
+          </div>
           <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p></div></div>
           <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>

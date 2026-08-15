@@ -1080,6 +1080,9 @@ GET    /history/backfills[?project_id=]
 POST   /history/backfills              {project_id}
 GET    /history/backfills/{job_id}
 DELETE /history/backfills/{job_id}
+GET    /history/scan
+POST   /history/scan
+DELETE /history/scan
 GET    /history/duplicates
 POST   /history/duplicates/repair     {dry_run?}
 POST   /history/{id}/resume           {project_id, ...}
@@ -1097,7 +1100,10 @@ The resumed pane keeps the conversation's effective visible name (manual name, o
 A resume inherits that effective name before any new run is minted, so a generated title does not disappear with the old annotation key. A row the user renamed resumes under that name, never under its generated title.
 Whether a resume continues the conversation is the adapter's rule: `codex resume` always does, `claude --resume` only at the conversation's recorded root. A Claude resume into a different root is a new conversation and gets its own entry plus a `resume` lineage edge.
 `GET /history/duplicates` reports conversations still split across several rows. `POST /history/duplicates/repair` folds each back into its earliest row and defaults to `dry_run: true`, reporting the keeper, the rows it would remove, the values it would carry over, and any group skipped because a live pane is still writing to a duplicate. It never edits native transcripts and never touches a quarantined row.
-Backfill jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history.
+Backfill jobs are daemon-local, cancellable, idempotent scans of complete shared native CLI history, scoped to one Project by cwd ownership.
+`/history/scan` is the global, user-triggered counterpart of the startup reconcile, scoped to the enabled harnesses rather than to a Project.
+`POST` starts the single scan (a second start while one runs is a no-op that returns the in-flight job), `GET` returns its `{status, phase, backends, scanned, processed, imported}` job for polling, and `DELETE` requests cancellation.
+It exists because a first import can be expensive on a machine with a large history, so it runs in the background with progress and can be cancelled rather than blocking startup.
 Handoff Markdown exposes the swe-mux history ID, provider-native session ID, and recorded native
 transcript path; transcript bytes remain in the provider-owned file and are never copied into the
 export. A missing or stale transcript pointer is reported explicitly.

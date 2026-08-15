@@ -165,6 +165,18 @@
   so scanning Project A must not rewrite the history of a session that ran under nested
   Project B. For the same reason startup reconcile leaves an already-assigned row's
   Project label/root alone rather than re-deriving them from Git.
+- Both the startup reconcile and the on-demand global scan are scoped to the enabled
+  harnesses (`harness.enabled_backends`, resolved from `config.harness_enabled` and detection;
+  `features/backends.md`). A disabled harness's own past conversations are simply not indexed
+  that run and are picked up on the next scan after it is enabled. The scope is an import
+  filter only, not a capability one: an already-indexed conversation on a now-disabled harness
+  still renders in History.
+- The global scan is `HistoryScanManager` (`src/swe_mux/history_scan.py`), the interruptible,
+  user-triggered counterpart of the silent startup reconcile. It runs one scan at a time,
+  reports `{status, phase, backends, scanned, processed, imported}`, and supports cancellation
+  through `reconcile_external_history`'s `should_cancel`/`on_progress` plumbing. It exists
+  because a first import can be expensive on a machine holding tens of thousands of transcripts,
+  so importing is opt-in and interruptible rather than a startup stall.
 - Provider housekeeping is excluded, not indexed. `<id>.orphaned-<ts>-<hash>.jsonl` still
   reports the original conversation's `sessionId`, so treating it as a transcript maps the
   fragment onto the real conversation's row; the two then alternate ownership of one
@@ -189,6 +201,7 @@
 - `src/swe_mux/event_bus.py`
 - `src/swe_mux/reconcile.py`
 - `src/swe_mux/history_backfill.py`
+- `src/swe_mux/history_scan.py`
 - `src/swe_mux/transcript_view.py`
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`

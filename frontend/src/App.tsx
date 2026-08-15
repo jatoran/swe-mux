@@ -3,7 +3,7 @@ import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
 import {
   allBackendNames, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
-  isObservedHarness, type HarnessRegistryPayload,
+  isObservedHarness, setHarnessEnablement, type HarnessRegistryPayload,
 } from './harnessRegistry'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
@@ -98,6 +98,7 @@ import { watchDevicePresence } from './devicePresence'
 import type { Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
+import { HarnessSetup } from './HarnessSetup'
 import { ActionEditorModal } from './ActionEditorModal'
 import { GuidedTutorial, type TutorialStepId } from './GuidedTutorial'
 import { completeTutorial, emitTutorialAction, resetTutorial, shouldStartTutorial } from './tutorial'
@@ -519,6 +520,7 @@ export function App() {
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
   const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
   // user left off" - Settings remembers its own last tab, so an unqualified open must
@@ -1328,6 +1330,12 @@ export function App() {
   // difference: theme is applied once at boot and by Settings itself.
   const applyConfig = (config:AppConfig, includeTheme:boolean) => {
     if (includeTheme) { configureCustomTheme(config.custom_theme); applyTheme(config.theme) }
+    // Explicit harness enablement choices, so the launcher accessors filter on the
+    // user's list. Detection (the descriptor `installed` flag) fills the rest.
+    setHarnessEnablement(config.harness_enabled as Record<string,boolean>|undefined)
+    // First-run harness panel, gated daemon-side so a choice made on one device does
+    // not reappear on another. False (or a daemon predating the flag) shows it once.
+    setHarnessSetupNeeded(config.harness_setup_complete===false)
     applyNoteEditorConfig(config)
     previewUiScaleConfig(config)
     setXtermScrollback(config.xterm_scrollback_lines)
@@ -5497,6 +5505,8 @@ export function App() {
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
     {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+
+    {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
     {actionEditorOpen && <ActionEditorModal onClose={() => setActionEditorOpen(false)} />}
 

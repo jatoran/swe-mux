@@ -551,6 +551,101 @@ def test_instruction_files_are_declared_for_every_harness_that_reads_one() -> No
             assert harness.global_instruction_parts[-1] == harness.instruction_file_name, name
 
 
+def test_detection_uses_which_real_and_the_data_home_signal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Detection resolves the real executable, never a mux shim, and unions two signals."""
+    from swe_mux.harness import HarnessInstallation, detect_installation
+
+    # `which_real` (not `shutil.which`) is the resolver, because the daemon writes a
+    # shim for every harness onto PATH and a plain `which` would succeed on a machine
+    # with no such CLI installed.
+    calls: list[str] = []
+
+    def fake_which_real(command: str) -> str | None:
+        calls.append(command)
+        return "C:/real/claude.exe" if "claude" in command else None
+
+    monkeypatch.setattr("swe_mux.shim_paths.which_real", fake_which_real)
+
+    # A resolved executable is installed with its real path reported.
+    resolved = detect_installation("claude")
+    assert resolved == HarnessInstallation(installed=True, resolved_path="C:/real/claude.exe")
+    assert calls and "claude" in calls[0]
+
+    # An executable override is what detection resolves, so it agrees with the launcher;
+    # a blank override falls back to the descriptor default.
+    detect_installation("claude", "  ")
+    assert calls[-1] == "claude.exe"
+    detect_installation("codex", "my-codex")
+    assert calls[-1] == "my-codex"
+
+    # Codex's executable does not resolve above, so installation rests on the second
+    # signal: its data home. `_codex_data_home` reads CODEX_HOME, so pointing it at an
+    # absent directory reads not-installed and at an existing one reads installed.
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "absent"))
+    assert detect_installation("codex") == HarnessInstallation(installed=False, resolved_path=None)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    assert detect_installation("codex") == HarnessInstallation(installed=True, resolved_path=None)
+
+
+def test_enabled_backends_resolves_the_three_state_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit choice wins; an absent choice follows detection."""
+    import swe_mux.harness as harness_module
+    from swe_mux.harness import HarnessInstallation, enabled_backends
+
+    present = {"claude", "omp"}
+    monkeypatch.setattr(
+        harness_module,
+        "detect_installation",
+        lambda name, executable=None: HarnessInstallation(name in present, None),
+    )
+
+    # No explicit choices: an installed harness is offered and an absent one is not.
+    assert enabled_backends({}, {}) == ("claude", "omp")
+
+    # An explicit choice overrides detection in both directions: force an absent
+    # harness on, hide an installed one, and leave the rest to follow detection.
+    result = enabled_backends({"codex": True, "claude": False}, {})
+    assert "codex" in result
+    assert "claude" not in result
+    assert "omp" in result
+
+
+def test_detection_rides_the_payload_only_when_supplied_and_never_the_seed() -> None:
+    """Machine state travels in the live snapshot; the static seed carries none."""
+    from swe_mux.harness import (
+        HarnessInstallation,
+        detect_installations,
+        frontend_registry_seed_source,
+    )
+
+    # No installations: the payload is pure descriptor data, so it stays deterministic.
+    plain = public_harness_registry()
+    for item in plain["harnesses"]:  # type: ignore[attr-defined]
+        assert "installed" not in item
+        assert "resolved_path" not in item
+
+    supplied = public_harness_registry(
+        {name: HarnessInstallation(True, f"/x/{name}") for name in HARNESSES}
+    )
+    for item in supplied["harnesses"]:  # type: ignore[attr-defined]
+        assert item["installed"] is True
+        assert item["resolved_path"] == f"/x/{item['name']}"
+
+    # The generated seed is a static file and must not embed a machine fact, so it
+    # omits detection entirely - which is what keeps the drift test deterministic.
+    seed = frontend_registry_seed_source()
+    assert '"installed"' not in seed
+    assert '"resolved_path"' not in seed
+    # And detection itself covers every registered harness.
+    assert set(detect_installations()) == set(HARNESSES)
+
+
 def test_public_registry_exposes_frontend_capability_gates() -> None:
     payload = public_harness_registry()
     assert payload["version"] == 1

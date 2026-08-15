@@ -1394,6 +1394,82 @@ def replay_needs_repaint(name: object) -> bool:
     return isinstance(name, str) and name in HARNESSES and HARNESSES[name].screen == "alternate"
 
 
+@dataclass(frozen=True, slots=True)
+class HarnessInstallation:
+    """Whether one harness's CLI is present on this machine, and where.
+
+    Machine state, deliberately kept out of the descriptor: a `HarnessDescriptor`
+    is the same on every host, while this answer differs per machine and per
+    configured executable. It rides the public payload only when the daemon
+    computes it (`public_harness_registry(installations=...)`); the generated seed
+    carries none, because a static file cannot hold a machine fact.
+
+    `installed` is the union of two independent signals so a freshly installed CLI
+    that has not run yet, and a CLI whose executable resolves but whose data home
+    is absent, both read as present. `resolved_path` is the real executable the
+    launcher would run, with mux's own `~/.mux/bin` shims stripped, or ``None``
+    when nothing resolves.
+    """
+
+    installed: bool
+    resolved_path: str | None
+
+
+def detect_installation(name: str, executable: str | None = None) -> HarnessInstallation:
+    """Detect whether ``name``'s CLI is installed, resolving its real executable.
+
+    ``executable`` is the user's configured override for this harness when set,
+    which is what makes detection agree with what the launcher would actually run;
+    it falls back to the descriptor default.
+
+    Resolution goes through ``which_real`` and never ``shutil.which``: the daemon
+    prepends ``~/.mux/bin`` to PATH and writes a shim for every harness, so a plain
+    ``which`` succeeds on a machine with no such CLI installed. The data-home check
+    is the second, independent signal.
+    """
+    from .shim_paths import which_real
+
+    harness = HARNESSES[name]
+    override = executable.strip() if executable and executable.strip() else ""
+    resolved = which_real(override or harness.executable)
+    try:
+        home_exists = harness.data_home().exists()
+    except OSError:
+        home_exists = False
+    return HarnessInstallation(installed=bool(resolved) or home_exists, resolved_path=resolved)
+
+
+def detect_installations(
+    harness_exe: dict[str, str] | None = None,
+) -> dict[str, HarnessInstallation]:
+    """Detect every registered harness, honouring per-harness executable overrides."""
+    overrides = harness_exe or {}
+    return {name: detect_installation(name, overrides.get(name)) for name in HARNESSES}
+
+
+def enabled_backends(
+    harness_enabled: dict[str, bool], harness_exe: dict[str, str] | None = None
+) -> tuple[str, ...]:
+    """Harnesses a launcher should offer, resolving the three-state enablement rule.
+
+    ``harness_enabled`` holds only explicit user choices; an absent key means
+    "follow detection". So a CLI installed later appears on its own, a user may
+    force one on before installing it, and one they own but never use can be
+    hidden. This is a launcher filter only: a disabled harness stays spawnable by
+    an explicit API or CLI call, and every status, transcript, and history surface
+    keeps seeing all registered harnesses.
+    """
+    overrides = harness_exe or {}
+    result: list[str] = []
+    for name in HARNESSES:
+        if name in harness_enabled:
+            if harness_enabled[name]:
+                result.append(name)
+        elif detect_installation(name, overrides.get(name)).installed:
+            result.append(name)
+    return tuple(result)
+
+
 def external_usage_harnesses() -> tuple[str, ...]:
     return tuple(name for name, harness in HARNESSES.items() if harness.external_usage_command)
 
@@ -1433,7 +1509,9 @@ def frontend_registry_seed_source() -> str:
     )
 
 
-def public_harness_registry() -> dict[str, object]:
+def public_harness_registry(
+    installations: dict[str, HarnessInstallation] | None = None,
+) -> dict[str, object]:
     """Browser-safe registry projection used to gate frontend surfaces.
 
     Every per-harness fact the browser needs travels here. A trait absent from this
@@ -1443,12 +1521,27 @@ def public_harness_registry() -> dict[str, object]:
     `version` stays at 1 while fields are only added: consumers read the keys they
     know and default the rest, so a browser older than the daemon keeps working.
     Removing or re-typing a field is what would require a bump.
+
+    ``installations`` is the machine's live detection, added per harness as
+    ``installed`` and ``resolved_path`` when the daemon supplies it. It is
+    deliberately omitted from the generated seed (which passes ``None``): a static
+    file cannot carry a machine fact, and the browser treats a missing ``installed``
+    as "detection not yet known", which reads as enabled for the first paint until
+    the daemon snapshot narrows it.
     """
+
+    def detection(name: str) -> dict[str, object]:
+        if installations is None or name not in installations:
+            return {}
+        found = installations[name]
+        return {"installed": found.installed, "resolved_path": found.resolved_path}
+
     return {
         "version": 1,
         "harnesses": [
             {
                 "name": harness.name,
+                **detection(harness.name),
                 "display_name": harness.display_name,
                 "level": harness.level.name,
                 "state_sources": list(harness.state_sources),

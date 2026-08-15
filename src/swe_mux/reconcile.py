@@ -254,6 +254,7 @@ def scan_external_transcripts(
     *,
     limit: int | None = 2000,
     roots: Iterable[str | Path] | None = None,
+    backends: Iterable[str] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_progress: Callable[[int], None] | None = None,
 ) -> list[ExternalTranscript]:
@@ -274,15 +275,25 @@ def scan_external_transcripts(
     rather than a prefix-preserving encoding declares `cwd_scoped=False` and is
     scanned in full, as is Codex, which stores sessions flat by date.
 
+    ``backends`` restricts the scan to a set of harness names, which is how the
+    startup reconcile and the on-demand "scan now" both scope themselves to the
+    harnesses the user has enabled. ``None`` scans every registered harness. This is
+    an import filter, not a capability one: an unlisted harness's own past sessions
+    are simply not indexed this run, and enabling it later indexes them on the next
+    scan.
+
     ``should_cancel`` is polled per file so a long scan aborts promptly, and
     ``on_progress`` receives the running count of files examined.
     """
+    selected = set(backends) if backends is not None else None
     encoded_roots = (
         [encode_cwd(root).lower() for root in roots] if roots is not None else None
     )
     found: list[ExternalTranscript] = []
     scanned = 0
     for name, harness in HARNESSES.items():
+        if selected is not None and name not in selected:
+            continue
         discovery = harness.conversation_discovery
         if discovery is None:
             # A declared refusal: this harness's past conversations are not indexed.
@@ -477,8 +488,50 @@ def summarize_transcript(
     return summary
 
 
-async def reconcile_external_history(history: HistoryIndex, home: Path | None = None) -> int:
-    transcripts = await asyncio.to_thread(scan_external_transcripts, home)
+@dataclass(slots=True)
+class ScanProgress:
+    """Progress of one native-history reconcile, for a user-triggered scan.
+
+    ``phase`` is ``"scanning"`` while transcripts are discovered and ``"indexing"``
+    while each is read into History. ``scanned`` is the running discovery count, and
+    once scanning finishes it is the total to index, against which ``processed`` and
+    ``imported`` advance.
+    """
+
+    phase: str = "scanning"
+    scanned: int = 0
+    processed: int = 0
+    imported: int = 0
+
+
+async def reconcile_external_history(
+    history: HistoryIndex,
+    home: Path | None = None,
+    *,
+    backends: Iterable[str] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_progress: Callable[[ScanProgress], None] | None = None,
+) -> int:
+    progress = ScanProgress()
+
+    def report() -> None:
+        if on_progress is not None:
+            on_progress(progress)
+
+    def scan_progress(count: int) -> None:
+        progress.scanned = count
+        report()
+
+    transcripts = await asyncio.to_thread(
+        lambda: scan_external_transcripts(
+            home, backends=backends, should_cancel=should_cancel, on_progress=scan_progress
+        )
+    )
+    if should_cancel is not None and should_cancel():
+        return 0
+    progress.phase = "indexing"
+    progress.scanned = len(transcripts)
+    report()
     # Skip transcripts whose (mtime_ns, size) are unchanged since the last
     # reconcile so unchanged native files are never re-read/re-parsed. The
     # watermark is persisted per external row, so this holds across restarts.
@@ -488,6 +541,10 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
     projects: dict[str, ProjectIdentity] = {}
     skipped = 0
     for item in transcripts:
+        if should_cancel is not None and should_cancel():
+            break
+        progress.processed += 1
+        report()
         history_id = history_ids.get((item.backend, item.native_id))
         messages_current = bool(
             history_id
@@ -531,6 +588,8 @@ async def reconcile_external_history(history: HistoryIndex, home: Path | None = 
                 await history.index_transcript(
                     history_id, item.path, item.backend, native_id=item.native_id
                 )
+            progress.imported += 1
+            report()
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -2,10 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   allBackendNames,
+  allHarnessesIncludingDisabled,
   applicationTouchScrollProfile,
   appliesWidthEnvelope,
   assignsConversationId,
   deliversHarnessPrompts,
+  enabledHarnessNames,
+  harnessDisplayName,
+  harnessEnabled,
   hasHarnessMeasurement,
   hasHarnessTranscript,
   hasExternalUsage,
@@ -15,9 +19,12 @@ import {
   isObservedHarness,
   minDesktopColumns,
   ownsScrollViewport,
+  promptDeliveryHarnesses,
+  setHarnessEnablement,
   skillInvocationPrefix,
   supportsBranch,
   suppressesLateColorResponse,
+  transcriptHarnesses,
   webglUnsafe,
 } from '../src/harnessRegistry.ts'
 import { HARNESS_REGISTRY_SEED } from '../src/harnessRegistrySeed.ts'
@@ -132,6 +139,56 @@ test('the generated seed carries the daemon capabilities the browser gates on', 
     HARNESS_REGISTRY_SEED.harnesses.filter(item => item.capabilities.branch).map(item => item.name),
     ['claude', 'codex'],
   )
+})
+
+test('enablement is a launcher filter that never reaches display, transcript, or history surfaces', () => {
+  const caps = (extra: Record<string, boolean> = {}) => ({
+    observed: true, transcript: true, measurement: true, lifecycle_hooks: true,
+    pty_delivery: true, external_usage: false, provider_accounts: false, ...extra,
+  })
+  // codex is genuinely absent from this machine; claude and omp are present.
+  installHarnessRegistry({
+    version: 1,
+    harnesses: [
+      { name: 'claude', display_name: 'Claude Code', installed: true, resolved_path: '/x/claude', level: 'managed', state_sources: ['hook'], measurement_source: 'transcript', capabilities: caps() },
+      { name: 'codex', display_name: 'Codex', installed: false, resolved_path: null, level: 'managed', state_sources: ['hook'], measurement_source: 'transcript', capabilities: caps() },
+      { name: 'omp', display_name: 'oh-my-pi', installed: true, resolved_path: '/x/omp', level: 'managed', state_sources: ['hook'], measurement_source: 'transcript', capabilities: caps() },
+    ],
+  })
+
+  // No explicit choices: enablement follows detection, so an uninstalled harness is
+  // hidden from the launchers.
+  setHarnessEnablement({})
+  assert.deepEqual(allBackendNames(), ['shell', 'claude', 'omp'])
+  assert.deepEqual(enabledHarnessNames(), ['claude', 'omp'])
+  assert.deepEqual(promptDeliveryHarnesses().map(h => h.name), ['claude', 'omp'])
+  assert.equal(harnessEnabled('codex'), false)
+
+  // The main risk: a disabled harness must still render everywhere that is not a
+  // launcher. Its display name, transcript parsing, and history rows keep seeing it.
+  assert.equal(harnessDisplayName('codex'), 'Codex')
+  assert.deepEqual(transcriptHarnesses().map(h => h.name), ['claude', 'codex', 'omp'])
+  assert.deepEqual(allHarnessesIncludingDisabled().map(h => h.name), ['claude', 'codex', 'omp'])
+
+  // An explicit choice wins in both directions: force an absent harness on, and hide
+  // an installed one the user never uses.
+  setHarnessEnablement({ codex: true, claude: false })
+  assert.deepEqual(enabledHarnessNames(), ['codex', 'omp'])
+  assert.equal(harnessEnabled('claude'), false)
+  // ...but display and history are still unfiltered.
+  assert.deepEqual(transcriptHarnesses().map(h => h.name), ['claude', 'codex', 'omp'])
+
+  // First paint: the static seed carries no `installed`, which reads as enabled so
+  // the very first render never hides a harness the user actually has.
+  setHarnessEnablement({})
+  installHarnessRegistry({
+    version: 1,
+    harnesses: [{ name: 'codex', display_name: 'Codex', level: 'managed', state_sources: ['hook'], measurement_source: 'transcript', capabilities: caps() }],
+  })
+  assert.equal(harnessEnabled('codex'), true)
+
+  setHarnessEnablement({})
+  seed()
 })
 
 test('a skill rail item uses each harness own invocation spelling', () => {

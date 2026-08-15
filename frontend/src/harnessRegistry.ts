@@ -57,6 +57,15 @@ export interface HarnessCapabilities {
 export interface HarnessDescriptor {
   name: string
   display_name: string
+  /** Whether this harness's CLI is present on this machine. Machine state, so it
+   *  rides only the live daemon snapshot and never the static seed - a seed
+   *  descriptor leaves it `undefined`, which every enablement reader treats as
+   *  "detection not yet known" and therefore enabled, so the first paint hides
+   *  nothing the user actually has until the snapshot narrows it. */
+  installed?: boolean
+  /** The real executable the launcher would run, with mux's own shims stripped,
+   *  or `null` when nothing resolves. Present only in the live snapshot. */
+  resolved_path?: string | null
   level: HarnessLevel
   state_sources: string[]
   /** How measurements are obtained. `database` is a harness that keeps running
@@ -109,6 +118,36 @@ export function installHarnessRegistry(payload: HarnessRegistryPayload): void {
     state_sources: [...harness.state_sources],
     capabilities: { ...harness.capabilities },
   }))
+}
+
+// Explicit per-harness enablement choices only, mirroring `config.harness_enabled`.
+// An absent key means "follow detection". Set from the loaded config; empty until
+// then, which - combined with a seed descriptor's `installed === undefined` reading
+// as enabled - is what keeps the first paint from hiding a harness the user has.
+let enablementChoices: Readonly<Record<string, boolean>> = {}
+
+export function setHarnessEnablement(choices: Record<string, boolean> | undefined | null): void {
+  enablementChoices = { ...(choices ?? {}) }
+}
+
+/**
+ * Whether a harness should appear in the launchers (Run menu, command palette,
+ * project defaults, prompt-library targets).
+ *
+ * The three-state rule: an explicit choice wins; otherwise follow detection.
+ * `installed === undefined` means the live snapshot has not arrived yet, and that
+ * reads as enabled so the very first render never hides an installed harness.
+ *
+ * This is a launcher filter only. It must not gate display names, transcript
+ * parsing, status detection, or history rendering: an existing session or past
+ * conversation on a now-disabled harness must still render. Callers facing those
+ * surfaces use `harnesses()` / `harnessDescriptor()` / `harnessDisplayName()`,
+ * none of which consult this.
+ */
+export function harnessEnabled(name: string | undefined): boolean {
+  if (!name) return false
+  if (Object.prototype.hasOwnProperty.call(enablementChoices, name)) return enablementChoices[name]
+  return harnessDescriptor(name)?.installed ?? true
 }
 
 export const harnesses = (): readonly HarnessDescriptor[] => installed
@@ -214,7 +253,18 @@ export const resolvesTranscriptByCwd = (name: string | undefined): boolean =>
 export const skillInvocationPrefix = (name: string | undefined): string =>
   harnessDescriptor(name)?.skill_invocation_prefix ?? '/'
 export const harnessDisplayName = (name: string): string => harnessDescriptor(name)?.display_name || name
+// Every registered harness, ignoring enablement. Kept for the display/history
+// surfaces and for `allHarnessesIncludingDisabled`; the launcher accessors below
+// filter it through `harnessEnabled`.
 export const harnessNames = (): string[] => installed.map(harness => harness.name)
-export const allBackendNames = (): string[] => ['shell', ...harnessNames()]
-export const promptDeliveryHarnesses = (): HarnessDescriptor[] => installed.filter(harness => harness.capabilities.pty_delivery)
+/** Registered harnesses the user has enabled (or that detection reports present),
+ *  in declaration order. The launcher filter. */
+export const enabledHarnessNames = (): string[] => installed.filter(harness => harnessEnabled(harness.name)).map(harness => harness.name)
+/** Every registered harness including disabled ones, for the Settings agent section
+ *  which must show and let the user re-enable a harness it is hiding elsewhere. */
+export const allHarnessesIncludingDisabled = (): readonly HarnessDescriptor[] => installed
+export const allBackendNames = (): string[] => ['shell', ...enabledHarnessNames()]
+export const promptDeliveryHarnesses = (): HarnessDescriptor[] => installed.filter(harness => harness.capabilities.pty_delivery && harnessEnabled(harness.name))
+// Deliberately NOT enablement-filtered: history and the Transcript tab must render
+// a past conversation on a harness the user has since disabled.
 export const transcriptHarnesses = (): HarnessDescriptor[] => installed.filter(harness => harness.capabilities.transcript)

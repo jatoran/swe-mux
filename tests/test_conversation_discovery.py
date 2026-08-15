@@ -169,6 +169,22 @@ def test_every_registered_harness_is_discovered(populated_home: Path) -> None:
     assert all(item.cwd == CWD for item in found)
 
 
+def test_a_scan_can_be_scoped_to_a_set_of_backends(populated_home: Path) -> None:
+    """The startup reconcile and the on-demand scan both narrow to enabled harnesses.
+
+    An unlisted harness's own conversations are simply not indexed this run; enabling
+    it later indexes them on the next scan. `None` still scans everything.
+    """
+    scoped = scan_external_transcripts(populated_home, backends={"claude", "opencode"})
+    assert {item.backend for item in scoped} == {"claude", "opencode"}
+    # An empty set scans nothing rather than everything.
+    assert scan_external_transcripts(populated_home, backends=set()) == []
+    # `None` is unchanged: every discoverable harness.
+    assert {item.backend for item in scan_external_transcripts(populated_home)} == {
+        name for name, harness in HARNESSES.items() if harness.conversation_discovery is not None
+    }
+
+
 def test_the_two_pi_forks_are_told_apart_by_where_they_were_found(
     populated_home: Path,
 ) -> None:

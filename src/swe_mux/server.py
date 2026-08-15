@@ -84,6 +84,8 @@ from .harness import (
     branch_strategy,
     delivers_prompts_through_pty,
     descriptor,
+    detect_installations,
+    enabled_backends,
     harnesses_at_least,
     has_observable_transcript,
     is_agent_harness,
@@ -97,6 +99,7 @@ from .harness import (
 )
 from .history import HistoryIndex
 from .history_backfill import HistoryBackfillManager
+from .history_scan import HistoryScanManager
 from .keybindings import (
     DEFAULT_KEYBINDINGS,
     KEYBINDING_COMMANDS,
@@ -824,6 +827,9 @@ def create_app(
             web.post("/api/history/backfills", start_history_backfill),
             web.get("/api/history/backfills/{job_id}", get_history_backfill),
             web.delete("/api/history/backfills/{job_id}", cancel_history_backfill),
+            web.get("/api/history/scan", get_history_scan),
+            web.post("/api/history/scan", start_history_scan),
+            web.delete("/api/history/scan", cancel_history_scan),
             # Registered before the `{sid}` routes so the static segment wins.
             web.get("/api/history/duplicates", list_history_duplicates),
             web.post("/api/history/duplicates/repair", repair_history_duplicates),
@@ -998,6 +1004,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     for project in projects.projects.values():
         agent_context.capture_project(project.root)
     history_backfills = HistoryBackfillManager(history, projects)
+    history_scan = HistoryScanManager(history, config)
     reaper = ReaperJob()
     supervisor_client: SupervisorClient | None = None
     if config.pty_supervisor_enabled:
@@ -1362,8 +1369,15 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     history_search_maintenance_task.add_done_callback(_log_task_failure)
     reconcile_task: asyncio.Task[int] | None = None
     if config.reconcile_external_history:
+        # Scope the startup scan to the harnesses the user has enabled. Detection
+        # runs off the loop; a disabled harness's past sessions are simply not
+        # indexed this start and are picked up when it is enabled and a scan runs.
+        reconcile_backends = await asyncio.to_thread(
+            enabled_backends, dict(config.harness_enabled), dict(config.harness_exe)
+        )
         reconcile_task = asyncio.create_task(
-            reconcile_external_history(history), name="history-reconcile"
+            reconcile_external_history(history, backends=reconcile_backends),
+            name="history-reconcile",
         )
         # A one-shot task that dies is silent by default; the scan's failure mode
         # is "external history is quietly stale", which nothing else reports.
@@ -1373,6 +1387,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         events=events,
         projects=projects,
         history_backfills=history_backfills,
+        history_scan=history_scan,
         sessions=sessions,
         mcp=McpService(
             sessions,
@@ -1461,6 +1476,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         history_search_maintenance_task.cancel()
     await asyncio.gather(history_search_maintenance_task, return_exceptions=True)
     await history_backfills.stop()
+    await history_scan.stop()
     for task in tuple(app["automation_tasks"]):
         task.cancel()
     await asyncio.gather(*app["automation_tasks"], return_exceptions=True)
@@ -1708,8 +1724,13 @@ async def health(request: web.Request) -> web.Response:
     )
 
 
-async def get_harnesses(_request: web.Request) -> web.Response:
-    return json_response(public_harness_registry())
+async def get_harnesses(request: web.Request) -> web.Response:
+    config: Config = request.app["config"]
+    # Detection touches the filesystem (PATH resolution and a data-home stat per
+    # harness), so it runs off the event loop. The configured executable override
+    # is passed through so detection agrees with what the launcher would run.
+    installations = await asyncio.to_thread(detect_installations, dict(config.harness_exe))
+    return json_response(public_harness_registry(installations))
 
 
 async def get_log_level(request: web.Request) -> web.Response:
@@ -7153,6 +7174,21 @@ async def cancel_history_backfill(request: web.Request) -> web.Response:
     return json_response(
         {"job": request.app["history_backfills"].cancel(request.match_info["job_id"])}
     )
+
+
+async def get_history_scan(request: web.Request) -> web.Response:
+    return json_response({"job": request.app["history_scan"].status()})
+
+
+async def start_history_scan(request: web.Request) -> web.Response:
+    # Scoped to the enabled harnesses inside the manager. Returns the running job so
+    # the caller can begin polling immediately; a second start while one runs is a
+    # no-op that returns the in-flight job rather than a second scan.
+    return json_response({"job": request.app["history_scan"].start()}, 202)
+
+
+async def cancel_history_scan(request: web.Request) -> web.Response:
+    return json_response({"job": request.app["history_scan"].cancel()})
 
 
 def _parse_conversation(

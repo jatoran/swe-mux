@@ -13,7 +13,7 @@ from typing import Any
 from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
 from .keybindings import is_command
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -355,6 +355,20 @@ class Config:
     shell_exe: str = "powershell.exe"
     harness_exe: dict[str, str] = field(default_factory=default_harness_executables)
     harness_args: dict[str, list[str]] = field(default_factory=default_harness_args)
+    # Explicit per-harness enablement choices only. An absent key means "follow
+    # detection", so a CLI installed later appears on its own and one the user
+    # forces on or off stays that way. This is a launcher/UI filter: a disabled
+    # harness is hidden from the pickers but stays spawnable by an explicit API or
+    # CLI call, and every status, transcript, and history surface keeps seeing all
+    # registered harnesses. Empty by default, so a fresh install follows detection
+    # for everything.
+    harness_enabled: dict[str, bool] = field(default_factory=dict)
+    # Whether the first-run harness panel has been dismissed (enabled or skipped).
+    # Machine-side rather than device-local, because harness enablement is machine
+    # config: a first-run choice made on the desktop must not reappear on the phone.
+    # Skipping sets only this flag and writes no `harness_enabled` entries, so a
+    # harness installed next week is still picked up by detection.
+    harness_setup_complete: bool = False
     scrollback_bytes: int = 5 * 1024 * 1024
     # What a *fresh attach* replays, as opposed to what the daemon retains. The
     # client has to parse every replayed byte before it can render anything, and
@@ -815,7 +829,12 @@ def _validate(config: Config) -> None:
         for name, executable in config.harness_exe.items()
     ):
         errors["harness_exe"] = "must map harness names to non-empty executable strings"
-    for field_name in ("harness_exe", "harness_args", "usage_commands"):
+    if not isinstance(config.harness_enabled, dict) or any(
+        not isinstance(name, str) or not isinstance(flag, bool)
+        for name, flag in config.harness_enabled.items()
+    ):
+        errors["harness_enabled"] = "must map harness names to booleans"
+    for field_name in ("harness_exe", "harness_args", "usage_commands", "harness_enabled"):
         value = getattr(config, field_name)
         if isinstance(value, dict):
             unknown = set(value) - set(HARNESSES)
@@ -1305,6 +1324,12 @@ def load_config(path: Path | None = None) -> Config:
                     voice_command["phrases"] = ["mute", "stop", *old_mute_phrases[1:]]
                     migrated = True
                     break
+        if source_schema < 22 and "harness_setup_complete" not in raw:
+            # The first-run harness panel is new. An existing config is by definition
+            # not a first run, so mark setup complete on upgrade; only a brand-new
+            # install (no config file, so this block never runs) shows the panel.
+            cfg.harness_setup_complete = True
+            migrated = True
     if not cfg.shell_profiles:
         if "shell_exe" not in raw and shutil.which("pwsh.exe"):
             cfg.shell_exe = "pwsh.exe"

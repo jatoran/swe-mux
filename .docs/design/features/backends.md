@@ -46,6 +46,25 @@ A trait the browser needs therefore has to travel in the payload; `test_every_br
 Adding a field to the payload keeps `version` at 1, because consumers read the keys they know and default the rest.
 Removing or re-typing a field is what would require a bump.
 
+## Detection and enablement
+
+Detection is machine state, kept out of the descriptor because a `HarnessDescriptor` is identical on every host while installation differs per machine and per configured executable.
+`detect_installation(name, executable)` resolves the harness through `shim_paths.which_real`, never `shutil.which`: the daemon prepends `~/.mux/bin` to PATH and writes a shim for every harness, so a plain `which` succeeds on a machine with no such CLI installed, and `which_real` strips those shim directories.
+`installed` is the union of two independent signals: the executable resolves, or the harness `data_home()` exists.
+`resolved_path` is the real executable the launcher would run, or `null`.
+
+Detection rides the payload only when the daemon supplies it: `GET /api/harnesses` computes `detect_installations(config.harness_exe)` off the event loop and passes it to `public_harness_registry(installations)`, which adds `installed` and `resolved_path` per harness.
+The generated seed calls `public_harness_registry()` with no installations and omits both fields, because a static file cannot carry a machine fact; a missing `installed` reads as "detection not yet known", which the browser treats as enabled for the first paint until the snapshot narrows it.
+
+Enablement is a launcher filter with three states.
+`config.harness_enabled` holds only explicit user choices; an absent key follows detection.
+`enabled_backends(harness_enabled, harness_exe)` resolves the rule: an explicit choice wins in either direction, otherwise detection decides, so a CLI installed later appears on its own, one forced on before install stays on, and one the user owns but hides stays off.
+Enablement never gates capability: a disabled harness stays spawnable by an explicit API or CLI call, and every display-name, transcript, status, and history surface keeps seeing all registered harnesses.
+The frontend applies the same rule in `harnessRegistry.ts` (`harnessEnabled`, `enabledHarnessNames`, `allBackendNames`, `promptDeliveryHarnesses`); `allHarnessesIncludingDisabled` is the unfiltered accessor the Settings agent section and first-run panel use so a hidden harness can be re-enabled.
+
+The first-run harness panel is gated daemon-side by `config.harness_setup_complete`, not device-local storage, because harness enablement is machine config and a choice made on one device must not reappear on another.
+Skipping the panel sets only that flag and writes no `harness_enabled` entries, so a harness installed next week is still picked up by detection.
+
 ## Capability queries
 
 | Question | Registry query | Consumers |

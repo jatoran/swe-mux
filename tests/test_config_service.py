@@ -307,6 +307,43 @@ def test_legacy_harness_executable_and_argument_keys_migrate_to_registry_maps(
     assert "codex_args" not in persisted
 
 
+def test_harness_enabled_holds_only_explicit_choices_and_hot_reloads(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    # Empty by default: a fresh install follows detection for every harness rather
+    # than pinning any of them, so a CLI installed next week appears on its own.
+    assert config.harness_enabled == {}
+
+    hot, restart = update_config(config, {"harness_enabled": {"codex": False, "claude": True}})
+
+    # A launcher/UI filter, so it applies live rather than forcing a restart.
+    assert hot == {"harness_enabled"}
+    assert restart == set()
+    assert load_config(path).harness_enabled == {"codex": False, "claude": True}
+
+
+def test_first_run_shows_only_for_a_fresh_install(tmp_path: Path) -> None:
+    # A brand-new install (no config file) starts with the first-run panel pending.
+    fresh = load_config(tmp_path / "fresh.toml")
+    assert fresh.harness_setup_complete is False
+
+    # An existing config from before the flag is not a first run: it upgrades to
+    # complete so a long-running install never suddenly sees the setup panel.
+    legacy = tmp_path / "legacy.toml"
+    legacy.write_text('schema_version = 21\nshell_exe = "powershell.exe"\n', encoding="utf-8")
+    migrated = load_config(legacy)
+    assert migrated.harness_setup_complete is True
+
+
+def test_harness_enabled_rejects_unknown_harnesses_and_non_bool_values(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+    with pytest.raises(ValueError, match="unknown harnesses"):
+        update_config(config, {"harness_enabled": {"ghost": True}})
+    with pytest.raises(ValueError, match="harness names to booleans"):
+        update_config(config, {"harness_enabled": {"claude": "yes"}})
+
+
 def test_invalid_update_changes_neither_memory_nor_disk(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     config = load_config(path)
