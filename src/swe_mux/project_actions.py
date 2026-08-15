@@ -30,6 +30,9 @@ MAX_STEP_TIMEOUT_SECONDS = 86_400
 # digest is still stored and the diff reports that it is too large, rather than the
 # store growing without bound for a generated `package.json`.
 MAX_APPROVED_SNAPSHOT_BYTES = 128 * 1024
+# What the editor may save. Generous for a manifest and small enough that the whole
+# file stays reviewable in one approval dialog, which is the point of the format.
+MAX_ACTIONS_SOURCE_BYTES = 64 * 1024
 PLATFORMS = ("windows", "linux", "darwin")
 _VARIABLE = re.compile(r"\$\{([^}]+)\}")
 _INPUT_REFERENCE = re.compile(r"\$\{input:([A-Za-z0-9_.-]+)\}")
@@ -717,7 +720,18 @@ def _native_inputs(raw: dict[str, Any], label: str) -> tuple[ActionInput, ...]:
 def _native_actions(path: Path, root: Path) -> tuple[list[ProjectAction], list[str]]:
     if not path.is_file():
         return [], []
-    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    return parse_native_actions(path.read_text(encoding="utf-8"), root)
+
+
+def parse_native_actions(text: str, root: Path) -> tuple[list[ProjectAction], list[str]]:
+    """Parse `.swe-mux/actions.toml` content, without reading it from disk.
+
+    Split out so the editor can validate what the user typed *before* it is written.
+    Saving a file that fails to parse would leave the Run menu showing one import
+    diagnostic and no way to see what was wrong except by opening it again, and it
+    would replace a working file with a broken one.
+    """
+    document = tomllib.loads(text)
     if int(document.get("version", 0)) != 1 or not isinstance(document.get("actions", []), list):
         raise ValueError(".swe-mux/actions.toml requires version = 1 and [[actions]]")
     source_path = ACTION_FILES[2].as_posix()
@@ -1001,6 +1015,102 @@ class ProjectActionService:
                 f"{action.source_path} is not trusted or changed since approval"
             )
         return catalog, action
+
+
+STARTER_ACTIONS_TOML = '''\
+# Project Actions for this repository. Every action appears in the Run menu.
+#
+# An action is a manifest entry, not a program: no conditionals, no loops. Put
+# logic in a script in the repo and point a `process` step at it.
+#
+# Nothing here runs because it exists. The first run of each action asks a human to
+# approve this file's exact bytes, and every edit asks again.
+version = 1
+
+[[actions]]
+id = "example"
+label = "Example"
+description = "What this action is for. Agents read this to tell two actions apart."
+# `process` resolves the command on PATH and passes args verbatim: no shell, no
+# quoting surprises. Use type = "shell" when you need pipes or redirection.
+type = "process"
+command = "echo"
+args = ["hello from a Project Action"]
+
+# Uncomment for a step that must not run forever.
+# timeout_seconds = 600
+
+# Uncomment to ask for a value when the action runs. Reference it as
+# ${input:target} inside args, cwd, or env. It cannot go in a `shell` command
+# with no args, because that string reaches the shell unquoted.
+#
+# [[actions.inputs]]
+# id = "target"
+# label = "Target"
+# kind = "choice"
+# options = ["staging", "production"]
+# default = "staging"
+'''
+
+
+def read_actions_source(project_root: str) -> dict[str, Any]:
+    """The native action file's text and a revision, for the editor.
+
+    A missing file is not an error: it is the ordinary state of a Project that has
+    no actions yet, and the editor opens on a starter template instead.
+    """
+    path = Path(project_root).resolve() / ACTION_FILES[2]
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return {
+            "path": ACTION_FILES[2].as_posix(),
+            "exists": False,
+            "text": STARTER_ACTIONS_TOML,
+            "revision": "missing",
+            "starter": True,
+        }
+    return {
+        "path": ACTION_FILES[2].as_posix(),
+        "exists": True,
+        "text": data.decode("utf-8", "replace"),
+        "revision": hashlib.sha256(data).hexdigest()[:24],
+        "starter": False,
+    }
+
+
+def write_actions_source(project_root: str, text: str, expected_revision: str) -> list[str]:
+    """Validate and write the native action file. Returns import diagnostics.
+
+    Validation runs against the *text* before anything is written, so a file that
+    cannot be parsed is refused rather than saved and then reported as one useless
+    import diagnostic.
+
+    The revision guard is the same shape the Project file editor uses: two browsers
+    editing the same file must not silently clobber each other.
+    """
+    root = Path(project_root).resolve()
+    path = root / ACTION_FILES[2]
+    if len(text.encode("utf-8")) > MAX_ACTIONS_SOURCE_BYTES:
+        raise ValueError(f"actions.toml exceeds {MAX_ACTIONS_SOURCE_BYTES} bytes")
+    try:
+        current = path.read_bytes()
+        revision = hashlib.sha256(current).hexdigest()[:24]
+    except OSError:
+        revision = "missing"
+    if expected_revision != revision:
+        raise ValueError("actions.toml changed elsewhere; reload before saving")
+    try:
+        _actions, diagnostics = parse_native_actions(text, root)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"TOML syntax error: {exc}") from exc
+    except (ValueError, TypeError) as exc:
+        raise ValueError(str(exc)) from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_bytes(text.encode("utf-8"))
+    temporary.replace(path)
+    return diagnostics
 
 
 def substituted_action(

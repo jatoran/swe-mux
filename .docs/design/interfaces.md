@@ -143,10 +143,19 @@ machine-local and user-authored, so no trust fingerprint is involved.
 ```text
 GET  /projects/{project_id}/actions
 GET  /projects/{project_id}/actions/diff
+GET  /projects/{project_id}/actions/source
+PUT  /projects/{project_id}/actions/source  {text, revision}
 POST /projects/{project_id}/actions/trust   {fingerprint}            # every present file
 POST /projects/{project_id}/actions/trust   {source, fingerprint}    # one file
 POST /projects/{project_id}/actions/run     {action_id, inputs}
 ```
+
+The source routes read and write `.swe-mux/actions.toml` for the Run menu's editor. `GET`
+returns `{path, exists, text, revision, starter}`, answering a missing file with a starter
+template rather than a 404. `PUT` validates the text before writing, refuses a stale
+`revision` and an unparseable file, returns import `diagnostics` for a file that parses with
+problems, and returns the fresh catalog. A save always changes the file's bytes and therefore
+un-approves it.
 
 Action discovery is inert. The catalog returns `fingerprint`, `trusted`, contributing `sources`,
 per-file approval state in `files`, normalized actions/steps with `description`, `source_path`,

@@ -27,8 +27,11 @@ from swe_mux.event_bus import EventBus
 from swe_mux.project_actions import (
     ProjectActionService,
     current_platform,
+    parse_native_actions,
     project_actions_schema,
+    read_actions_source,
     substituted_action,
+    write_actions_source,
 )
 from swe_mux.server import (
     _arm_action_timeout,
@@ -677,6 +680,137 @@ async def test_a_timeout_does_nothing_to_a_session_that_was_removed() -> None:
     await asyncio.gather(*app["action_timeout_tasks"])
 
     assert stopped == []
+
+
+# --- authoring from the UI ------------------------------------------------------
+
+
+def test_a_project_with_no_actions_file_opens_on_a_working_template(tmp_path: Path) -> None:
+    """A missing file is the ordinary state, not an error.
+
+    The template has to parse, or the first thing a new author sees after pressing
+    Save is a syntax error in text they did not write.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+
+    source = read_actions_source(str(root))
+
+    assert source["exists"] is False
+    assert source["starter"] is True
+    assert source["revision"] == "missing"
+    actions, diagnostics = parse_native_actions(source["text"], root)
+    assert [item.id for item in actions] == ["native:example"]
+    assert diagnostics == []
+
+
+def test_saving_validates_before_writing_so_a_broken_file_never_lands(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    write(root, ".swe-mux/actions.toml", 'version = 1\n[[actions]]\nid = "ok"\ncommand = "echo"\n')
+    before = (root / ".swe-mux" / "actions.toml").read_text(encoding="utf-8")
+    revision = read_actions_source(str(root))["revision"]
+
+    with pytest.raises(ValueError, match="TOML syntax error"):
+        write_actions_source(str(root), "version = 1\n[[actions]\nid=", revision)
+    with pytest.raises(ValueError, match="version = 1"):
+        write_actions_source(str(root), "version = 2\n", revision)
+
+    # The working file is untouched by either refusal.
+    assert (root / ".swe-mux" / "actions.toml").read_text(encoding="utf-8") == before
+
+
+def test_saving_refuses_a_stale_revision(tmp_path: Path) -> None:
+    """Two browsers editing one file must not silently clobber each other."""
+    root = tmp_path / "project"
+    write(root, ".swe-mux/actions.toml", 'version = 1\n[[actions]]\nid = "a"\ncommand = "echo"\n')
+    stale = read_actions_source(str(root))["revision"]
+    write(root, ".swe-mux/actions.toml", 'version = 1\n[[actions]]\nid = "b"\ncommand = "echo"\n')
+
+    with pytest.raises(ValueError, match="changed elsewhere"):
+        write_actions_source(str(root), "version = 1\n", stale)
+
+
+def test_saving_creates_the_file_and_its_directory(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+
+    diagnostics = write_actions_source(
+        str(root),
+        'version = 1\n[[actions]]\nid = "hello"\nlabel = "Hello"\ncommand = "echo hi"\n',
+        "missing",
+    )
+
+    assert diagnostics == []
+    catalog = ProjectActionService(tmp_path / "data").catalog(str(root))
+    assert [item.id for item in catalog.actions] == ["native:hello"]
+
+
+def test_saving_returns_diagnostics_without_refusing_a_parseable_file(
+    tmp_path: Path,
+) -> None:
+    """A file that parses but reports an import problem is still the user's to keep.
+
+    Refusing it would trap someone mid-edit on a multi-action file where only one
+    entry is wrong.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+
+    diagnostics = write_actions_source(
+        str(root),
+        'version = 1\n[[actions]]\nid = "a"\nlabel = "A"\ncommand = "echo"\n'
+        '[[actions.inputs]]\nid = "unused"\nlabel = "Unused"\ndefault = "x"\n',
+        "missing",
+    )
+
+    assert any("never referenced" in item for item in diagnostics)
+    assert (root / ".swe-mux" / "actions.toml").is_file()
+
+
+def test_saving_un_approves_the_file_it_just_wrote(tmp_path: Path) -> None:
+    """The editor must not be able to approve its own command.
+
+    An author who can write a command and grant it authority in one step makes the
+    approval meaningless, so a save always returns the file to unapproved.
+    """
+    root = tmp_path / "project"
+    write(root, ".swe-mux/actions.toml", 'version = 1\n[[actions]]\nid = "a"\ncommand = "echo"\n')
+    service = ProjectActionService(tmp_path / "data")
+    service.trust(str(root), service.catalog(str(root)).fingerprint)
+    assert service.catalog(str(root)).trusted
+
+    write_actions_source(
+        str(root),
+        'version = 1\n[[actions]]\nid = "a"\ncommand = "echo changed"\n',
+        read_actions_source(str(root))["revision"],
+    )
+
+    assert not service.catalog(str(root)).trusted
+
+
+def test_this_repository_ships_actions_that_parse() -> None:
+    """The shipped `.swe-mux/actions.toml` is a worked example, so it must load.
+
+    It is also the only Project Actions fixture that exercises the real format
+    against real commands rather than against a string written inside a test.
+    """
+    root = Path(__file__).resolve().parents[1]
+    actions, diagnostics = parse_native_actions(
+        (root / ".swe-mux" / "actions.toml").read_text(encoding="utf-8"), root
+    )
+
+    by_id = {item.id: item for item in actions}
+    assert {"native:verify", "native:test", "native:frontend", "native:checks"} <= set(by_id)
+    assert diagnostics == []
+    assert all(item.description for item in actions), "every shipped action states its purpose"
+    # The filtered-test action is the one that demonstrates inputs, and its value
+    # must sit in `args` where it is quoted rather than in a bare shell command.
+    filtered = by_id["native:test"]
+    assert [item.id for item in filtered.inputs] == ["pattern"]
+    assert any("${input:pattern}" in argument for argument in filtered.steps[0].args)
+    assert by_id["native:checks"].steps[0].name == "ruff"
 
 
 def test_the_authoring_reference_ships_as_a_package_asset() -> None:

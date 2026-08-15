@@ -29,6 +29,8 @@ const sourceLabel:Record<ProjectAction['source'],string>={
 
 type WorktreeDraft={backend:ProjectBackend;branch:string;startPoint:string;path:string;pathEdited:boolean}
 type WorktreeCreateResult={ok:true;path:string}
+type ActionsSource={path:string;exists:boolean;text:string;revision:string;starter:boolean}
+type ActionsSaved=ActionsSource&{diagnostics:string[];catalog:ProjectActionCatalog}
 
 export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCustom,onSessions,onWorktreeCreated,onError}:Props){
   const harnesses=promptDeliveryHarnesses()
@@ -56,6 +58,13 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
   // still needs this step, and an unapproved one needs both in order.
   const [prompting,setPrompting]=useState<ProjectAction|null>(null)
   const [inputValues,setInputValues]=useState<Record<string,string>>({})
+  // One editor serves both authoring and editing: the file is the unit a human
+  // reasons about and the unit trust is granted over, so a per-action form would
+  // have to reassemble it anyway and would always trail the format.
+  const [source,setSource]=useState<ActionsSource|null>(null)
+  const [sourceText,setSourceText]=useState('')
+  const [sourceError,setSourceError]=useState('')
+  const [sourceHelp,setSourceHelp]=useState(false)
   const [worktreeOpen,setWorktreeOpen]=useState(false)
   const [worktreeError,setWorktreeError]=useState('')
   const [worktreeRoot,setWorktreeRoot]=useState('')
@@ -92,6 +101,7 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
   useDismissLevel(()=>setWorktreeOpen(false),worktreeOpen,'run-menu-worktree')
   useDismissLevel(()=>{setPending(null);setDiffs(null)},!!pending,'run-menu-trust')
   useDismissLevel(()=>setPrompting(null),!!prompting,'run-menu-inputs')
+  useDismissLevel(()=>setSource(null),!!source,'run-menu-source')
   useEffect(()=>{
     const close=(event:KeyboardEvent)=>{if(event.key==='Escape')dismissStack.pop()}
     window.addEventListener('keydown',close)
@@ -118,6 +128,24 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
       if(result.errors.length)onError(result.errors.map(item=>`${item.step}: ${item.error}`).join('\n'))
       onClose()
     }catch(cause){onError(cause instanceof Error?cause.message:String(cause));load()}
+    finally{setBusy('')}
+  }
+  const openSource=()=>{
+    setSourceError('');setSourceHelp(false)
+    void api<ActionsSource>('GET',`/api/projects/${project.id}/actions/source`)
+      .then(result=>{setSource(result);setSourceText(result.text)})
+      .catch(cause=>onError(cause instanceof Error?cause.message:String(cause)))
+  }
+  const saveSource=async()=>{
+    if(!source)return
+    setBusy('__source__');setSourceError('')
+    try{
+      const saved=await api<ActionsSaved>('PUT',`/api/projects/${project.id}/actions/source`,{text:sourceText,revision:source.revision})
+      setCatalog(saved.catalog)
+      setSource(saved);setSourceText(saved.text)
+      setSourceError(saved.diagnostics.length?saved.diagnostics.join('\n'):'')
+      if(!saved.diagnostics.length)setSource(null)
+    }catch(cause){setSourceError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy('')}
   }
   const openInputs=(action:ProjectAction)=>{
@@ -209,11 +237,15 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
         <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>
       </div>
       <div class="run-menu-section"><small>ISOLATED CHECKOUT</small><button role="menuitem" aria-label="Create a worktree and start a session" disabled={!!busy} onClick={openWorktree}><span aria-hidden="true">⑂</span><div><strong>New worktree session…</strong></div></button></div>
-      {loading?<p>Reading Project tasks…</p>:groups.map(group=><div class="run-menu-section" key={group.source}><small>{sourceLabel[group.source]}</small>{group.items.map(action=><button role="menuitem" key={action.id} disabled={!!busy} title={[action.description,...action.steps.map(step=>step.command)].filter(Boolean).join('\n')} onClick={()=>execute(action)}>{/* Hollow triangle for an action whose file is not approved: monospace-safe,
-    unlike an emoji, and it reads as "not armed" beside the filled one. The em
-    says so in words too, because a glyph alone is not an explanation. */}
-<span>{busy===action.id?'…':isTrusted(action)?'▶':'▷'}</span><div><strong>{action.label}</strong><em>{[isTrusted(action)?'':'needs approval',action.description,action.steps.length>1?`${action.steps.length} terminals`:'',action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')}</em></div></button>)}</div>)}
+      {loading?<p>Reading Project tasks…</p>:groups.map(group=><div class="run-menu-section" key={group.source}><small>{sourceLabel[group.source]}</small>{group.items.map(action=><button role="menuitem" key={action.id} disabled={!!busy} title={[action.description,...action.steps.map(step=>step.command)].filter(Boolean).join('\n')} onClick={()=>execute(action)}>{/* Hollow triangle for an action whose file is not approved, filled once it is:
+    monospace-safe unlike an emoji, and it reads as "not armed". Deliberately the
+    only hint in the row. Spelling it out in the subtitle pushed out the thing a
+    reader actually chooses between, the description, and did so on every action
+    at once, because a Project with a new actions file has none approved yet.
+    The trust prompt is where the state gets explained, in full, with a diff. */}
+<span>{busy===action.id?'…':isTrusted(action)?'▶':'▷'}</span><div><strong>{action.label}</strong><em>{[action.description,action.steps.length>1?`${action.steps.length} terminals`:'',action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')}</em></div></button>)}</div>)}
       {!loading&&groups.length===0&&<p>No Project tasks found.</p>}
+      <div class="run-menu-section"><small>AUTHOR</small><button role="menuitem" aria-label="Edit this Project's actions file" disabled={!!busy} onClick={openSource}><span aria-hidden="true">✎</span><div><strong>{catalog?.files?.find(item=>item.path==='.swe-mux/actions.toml')?.present?'Edit Project Actions…':'New Project Action…'}</strong><em>.swe-mux/actions.toml</em></div></button></div>
       {!!catalog?.diagnostics.length&&<details><summary>Import diagnostics ({catalog.diagnostics.length})</summary>{catalog.diagnostics.map((item,index)=><p key={`${index}:${item}`}>{item}</p>)}</details>}
       </>}
     </section>
@@ -231,6 +263,31 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
           </details>)}
       </div>
       <div class="modal-footer"><button onClick={()=>{setPending(null);setDiffs(null)}}>Cancel</button><button class="primary" disabled={!!busy} onClick={()=>void trustAndContinue()}>{busy?'Starting…':'Trust and run'}</button></div>
+    </section></div>}
+    {source&&<div class="modal-layer project-action-source-layer"><section class="modal project-action-source" role="dialog" aria-modal="true" aria-label="Edit Project Actions">
+      <div class="modal-heading"><div><span>PROJECT ACTIONS</span><h2>{source.path}</h2></div><button onClick={()=>setSource(null)}>×</button></div>
+      <div class="project-action-source-body">
+        <p>{source.starter
+          ?'This Project has no actions file yet. The template below is a working example: edit it and save.'
+          :'Saving changes this file, so its actions ask for approval again before they run. That is the trust boundary working, not a bug: an editor that could write a command and approve it would make the approval meaningless.'}</p>
+        <button class="link" onClick={()=>setSourceHelp(!sourceHelp)}>{sourceHelp?'Hide syntax':'Show syntax'}</button>
+        {sourceHelp&&<div class="project-action-help">
+          <p><strong>An action is a manifest entry, not a program.</strong> No conditionals, no loops. Put logic in a script in the repository and point a <code>process</code> step at it.</p>
+          <ul>
+            <li><code>id</code> required · <code>label</code> · <code>description</code>, which agents read to tell two actions apart</li>
+            <li><code>type</code> is <code>process</code> (no shell, args verbatim, no quoting surprises) or <code>shell</code> (pipes and redirection work)</li>
+            <li><code>command</code> required · <code>args</code> · <code>cwd</code>, which must stay inside the Project · <code>env</code></li>
+            <li><code>platforms</code> of <code>windows</code>, <code>linux</code>, <code>darwin</code> · <code>timeout_seconds</code> · <code>sequential</code> to start steps in order</li>
+            <li><code>[[actions.steps]]</code> for more than one step, up to 32</li>
+            <li><code>[[actions.inputs]]</code>, then <code>{'${input:id}'}</code> in args, cwd, or env. Never in a <code>shell</code> command with no args: that string reaches the shell unquoted.</li>
+            <li>Variables: <code>{'${workspaceFolder}'}</code>, <code>{'${workspaceFolderBasename}'}</code>, <code>{'${pathSeparator}'}</code>, <code>{'${env:NAME}'}</code></li>
+          </ul>
+          <p>Full reference: <code>src/swe_mux/assets/project-actions-schema.md</code>, also served to agents by the <code>project_actions</code> MCP tool.</p>
+        </div>}
+        <textarea class="project-action-source-text" spellcheck={false} value={sourceText} onInput={event=>setSourceText(event.currentTarget.value)}/>
+        {sourceError&&<pre class="error" role="alert">{sourceError}</pre>}
+      </div>
+      <div class="modal-footer"><button onClick={()=>setSource(null)}>Cancel</button><button class="primary" disabled={busy==='__source__'} onClick={()=>void saveSource()}>{busy==='__source__'?'Saving…':'Save'}</button></div>
     </section></div>}
     {prompting&&<div class="modal-layer project-action-inputs-layer"><section class="modal project-action-inputs" role="dialog" aria-modal="true" aria-label={`Inputs for ${prompting.label}`}>
       <div class="modal-heading"><div><span>RUN ACTION</span><h2>{prompting.label}</h2></div><button onClick={()=>setPrompting(null)}>×</button></div>

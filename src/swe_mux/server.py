@@ -150,7 +150,9 @@ from .project_actions import (
     ActionStep,
     ProjectActionService,
     action_spawn_body,
+    read_actions_source,
     substituted_action,
+    write_actions_source,
 )
 from .project_card import PROJECT_CARD_RULE_ID
 from .project_context import ProjectContext, ProjectContextService
@@ -695,6 +697,8 @@ def create_app(
             web.delete("/api/projects/{project_id}", delete_project),
             web.get("/api/projects/{project_id}/actions", list_project_actions),
             web.get("/api/projects/{project_id}/actions/diff", diff_project_actions),
+            web.get("/api/projects/{project_id}/actions/source", get_project_actions_source),
+            web.put("/api/projects/{project_id}/actions/source", put_project_actions_source),
             web.post("/api/projects/{project_id}/actions/trust", trust_project_actions),
             web.post("/api/projects/{project_id}/actions/run", run_project_action),
             web.post("/api/projects/{project_id}/init-scripts/run", run_project_init_scripts),
@@ -6445,6 +6449,54 @@ async def _project_profile_id_for(  # type: ignore[no-untyped-def]
 
 async def _project_profile_id(request: web.Request, project) -> str:  # type: ignore[no-untyped-def]
     return await _project_profile_id_for(request.app, project)
+
+
+async def get_project_actions_source(request: web.Request) -> web.Response:
+    """The native action file's text, or a starter template when it does not exist."""
+    project = _action_project(request)
+    return json_response(await asyncio.to_thread(read_actions_source, project.root))
+
+
+async def put_project_actions_source(request: web.Request) -> web.Response:
+    """Validate and save the native action file, then return the fresh catalog.
+
+    Saving changes the file's bytes, so it un-approves itself and the next run asks
+    for approval again. That is the trust boundary working as designed and not a
+    regression: an editor that could write a command *and* approve it would make the
+    approval meaningless. The response carries the catalog so the caller can show the
+    new state immediately.
+    """
+    project = _action_project(request)
+    body = await request.json()
+    text = body.get("text")
+    if not isinstance(text, str):
+        raise ValueError({"text": "is required"})
+    diagnostics = await asyncio.to_thread(
+        write_actions_source, project.root, text, str(body.get("revision") or "missing")
+    )
+    service: ProjectActionService = request.app["project_actions"]
+    catalog = service.catalog(project.root)
+    log.info(
+        "project_actions_source_saved project_id=%s bytes=%d actions=%d diagnostics=%d",
+        project.id,
+        len(text.encode("utf-8")),
+        len(catalog.actions),
+        len(diagnostics),
+    )
+    await request.app["events"].emit(
+        "project_actions_source_saved",
+        source="user",
+        project_id=project.id,
+        actions=len(catalog.actions),
+        diagnostics=len(diagnostics),
+    )
+    return json_response(
+        {
+            **await asyncio.to_thread(read_actions_source, project.root),
+            "diagnostics": diagnostics,
+            "catalog": catalog.snapshot(),
+        }
+    )
 
 
 async def _start_project_action(
