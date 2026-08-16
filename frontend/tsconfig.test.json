@@ -1,0 +1,5 @@
+{
+  "//": "Typechecks the Playwright renderer harnesses/specs, which the base tsconfig (include: src) skips. A renderer harness mounts real components, so a prop that drifts from a component silently fails only at Playwright runtime otherwise - which is exactly how pane-layout.spec.ts rotted. Scoped to test/renderer because the Node unit tests under test/ use loose runtime-checked typing that a strict pass would flag wholesale.",
+  "extends": "./tsconfig.json",
+  "include": ["src", "test/renderer"]
+}

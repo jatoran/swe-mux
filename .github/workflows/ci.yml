@@ -5,14 +5,14 @@
 # a single windows-latest runner rather than a broad multi-OS grid (public
 # artifacts and a multi-OS matrix are Phase 11). This mirrors the local
 # `.worktree-verify` gate and adds the two things that gate does not run: the
-# production frontend build, and a focused browser smoke.
+# production frontend build, and the Playwright renderer suite.
 #
 # The suite is the canonical verification: ruff, mypy, pytest (live-provider
 # canaries excluded - they need an authenticated CLI and quota), the frontend
-# typecheck and unit suite, the production build, and a small trusted Playwright
-# renderer smoke. The real-ConPTY integration tests (`-m conpty`) and the
-# harness-adapter coverage matrix run inside the ordinary pytest step on the
-# Windows runner.
+# typecheck and unit suite, the production build, and the Playwright renderer
+# suite (`npm run test:renderer`). The real-ConPTY integration tests (`-m conpty`)
+# and the harness-adapter coverage matrix run inside the ordinary pytest step on
+# the Windows runner.
 name: ci
 
 on:
@@ -61,6 +61,9 @@ jobs:
       - name: Frontend typecheck
         run: npm --prefix frontend exec tsc -- --noEmit
 
+      - name: Frontend renderer-harness typecheck
+        run: npm --prefix frontend run check:renderer
+
       - name: Frontend unit tests
         run: npm --prefix frontend test
 
@@ -70,7 +73,5 @@ jobs:
       - name: Install Playwright Chromium
         run: npm --prefix frontend exec playwright install chromium
 
-      - name: Browser smoke (focused renderer suite)
-        run: >-
-          npm --prefix frontend exec playwright test --
-          --config playwright.renderer.config.ts workspace-smoke
+      - name: Browser smoke (Playwright renderer suite)
+        run: npm --prefix frontend run test:renderer

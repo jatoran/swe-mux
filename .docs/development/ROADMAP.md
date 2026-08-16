@@ -1910,8 +1910,10 @@ observation-freshness reporting instead.
   `playwright.renderer.config.ts` - and the four targets are covered by the unit suite
   (`inputOwnership`, `mobileKeyboard`/`keyboardReserve`, `dragReorder`/`pointerDragClaim`,
   `modalFocus`) plus renderer geometry. Added `frontend/test/renderer/workspace-smoke.spec.ts`:
-  a deliberately small, trusted, green pane-geometry + mobile-composer smoke on stable
-  selectors, run by CI. See the friction note below on the pre-existing renderer rot.)
+  a deliberately small pane-geometry + mobile-composer smoke on stable selectors that stays green
+  even if the voice overlay regresses. The pre-existing `pane-layout.spec.ts` rot was then
+  root-caused and fixed (see the note below), so CI runs the whole renderer suite
+  (`npm run test:renderer`, 73 tests green).)
 - [x] Add real Windows ConPTY integration tests for paths with spaces/Unicode, large output,
   resize, Ctrl+C, bracketed paste, input-owner handoff, browser reconnect, process
   attribution, forced daemon death, manual queue send, and safe auto-delivery races.
@@ -1936,14 +1938,18 @@ observation-freshness reporting instead.
 
 **Proving-period friction (follow-up, not reopening decisions):**
 
-- The `frontend/test/renderer/pane-layout.spec.ts` renderer suite is **pre-existing red on
-  master**: every case that navigates `pane-harness.html?overlay=1` fails because the harness no
-  longer mounts the voice/dictation surfaces (`.voice-overlay`, `.dictation-panel`,
-  `.voice-command-dialog`) it asserts, though those classes still exist in the app source. This
-  is a harness/spec drift in the voice UI, unrelated to this phase's work and out of scope to
-  fix here; it is why CI runs the focused `workspace-smoke` spec rather than the whole renderer
-  suite. Follow-up: the voice-UI owner should re-sync `pane-harness.tsx`/`pane-layout.spec.ts`
-  or retire the dead assertions, after which CI can widen to the full renderer suite.
+- The `frontend/test/renderer/pane-layout.spec.ts` renderer suite was **pre-existing red on
+  master** and is now **fixed**. Root cause: `paneHarness.tsx` stubbed `status.commands` as `{}`
+  and omitted the now-required `commands: Command[]` prop on `<VoicePlayer>`/`<ConversationSurface>`;
+  `VoicePlayer` passes `status.commands` straight into `configuredCommands`, and `{} || []` stays
+  `{}`, so `configuredActionsFor` called `.find` on a non-array and crashed the *entire* overlay
+  render (`rootChildCount: 0`). It went unnoticed because **`frontend/tsconfig.json` includes only
+  `src`, so `test/` is never typechecked**, and `.worktree-verify` does not run `test:renderer`.
+  Fixed by making the harness stub match the current component contracts; the whole renderer suite
+  (73 tests) is green and now runs in CI. The deeper gap - test files being outside tsc's scope,
+  which is how a harness can silently drift from the components it mounts - is the real follow-up:
+  a `tsconfig.test.json` (or adding `test` to `include` with the vite/preact ambient types) would
+  have caught this at typecheck time.
 - Writing `\x03` to a `cmd.exe` ConPTY does not interrupt a running command in this
   environment (a console-control-event nuance, not a byte-delivery one). swe-mux only owns
   forwarding the byte, so the ConPTY test asserts the shell *survives* the injection rather than
