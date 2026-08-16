@@ -157,6 +157,19 @@ and reattachable browser viewports.
   cancels any frozen pywinpty read still parked after root exit. Retained scrollback is independent
   of the OS pseudoconsole handle. This lets ended sessions remain visible until explicitly
   dismissed without retaining `OpenConsole.exe`/`conhost.exe`.
+- **A graceful session end is a shared typed daemon operation (Phase 7.6).** Distinct from the
+  explicit hard kill above, it interrupts the current turn, sends the harness's own exit
+  sequence (the adapter `graceful_exit_keys()`, carried on the PTY as `graceful_exit`), waits
+  `session_control_graceful_timeout_s` for the CLI to tear itself down cleanly, and falls back
+  to the hard stop only on timeout. The browser, CLI, and the MCP `end_session` tool call it,
+  and it stamps `SessionRecord.requested_end_reason` before sending the exit sequence so the
+  reason survives even a CLI that exits on its own (`interfaces.md`, `mux-mcp.md`).
+- **`agent_ended` is a distinct durable end reason.** An agent-initiated end reached through the
+  graceful operation - graceful or hard fallback - records `agent_ended`, kept apart from an
+  operator `killed`, a CLI-initiated `exited`/`completed`, and a `crashed`. `SessionManager.stop`
+  gained a `reason` parameter (default `killed`) and `_mark_ended` prefers
+  `requested_end_reason`, so a post-mortem can tell an agent-directed end from an operator one
+  (`data-model.md`).
 - Ended-session history remains durable.
 - Sessions do not own notes.
   Notes are created and managed through the owning Project's flat Notes collection.

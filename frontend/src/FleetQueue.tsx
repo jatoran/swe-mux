@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
-  cancelQueueMessage, decideSpawnRequest, deleteQueueMessage, fetchAutoStatus, fetchFleetQueue,
-  scheduleStatus, senderLabel, type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus,
+  cancelQueueMessage, decideControlRequest, decideSpawnRequest, deleteQueueMessage,
+  fetchAutoStatus, fetchFleetQueue, scheduleStatus, senderLabel,
+  type FleetQueueAuthor, type FleetQueueView, type QueueAutoStatus,
   type QueueMessage, type SpawnRequestRow,
 } from './queueApi'
 import { useModalFocus } from './modalFocus'
@@ -60,7 +61,8 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   const [projectId, setProjectId] = useState(initialProjectId || '')
   const [targetSessionId, setTargetSessionId] = useState('')
   const [view, setView] = useState<FleetQueueView>({
-    author: 'non_human', messages: [], spawn_requests: [], spawn_request_errors: [], targets: [],
+    author: 'non_human', messages: [], spawn_requests: [], spawn_request_errors: [],
+    control_requests: [], targets: [],
   })
   const [auto, setAuto] = useState<QueueAutoStatus | null>(null)
   const [busyId, setBusyId] = useState('')
@@ -105,8 +107,9 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
   const projectOptions = useMemo(() => {
     const ids = new Set(view.targets.map(target => target.project_id).filter((id): id is string => !!id))
     for (const request of view.spawn_requests) ids.add(request.project_id)
+    for (const request of view.control_requests) ids.add(request.project_id)
     return [...ids].sort((a, b) => (projectNames.get(a) || a).localeCompare(projectNames.get(b) || b))
-  }, [projectNames, view.spawn_requests, view.targets])
+  }, [projectNames, view.control_requests, view.spawn_requests, view.targets])
   const targetOptions = useMemo(
     () => view.targets.filter(target => !projectId || target.project_id === projectId),
     [projectId, view.targets],
@@ -277,6 +280,46 @@ export function FleetQueue({ projects, initialProjectId, onOpenQueue, onClose }:
                       <span>{request.status === 'approved' ? 'Session started' : 'Nothing was started'}</span>
                     )}
                     <button type="button" disabled={busy} onClick={() => void copyPrompt(request)}>Copy prompt</button>
+                  </div>
+                </li>
+              )
+            })}
+            {!targetSessionId && view.control_requests.map(request => {
+              const busy = busyId === request.id
+              const pending = request.status === 'pending'
+              const verb = request.action === 'interrupt' ? 'interrupt' : 'end'
+              return (
+                <li key={`control:${request.project_id}:${request.id}`} class={`observation-request${pending ? '' : ' done'}`}>
+                  <div class="observation-request-head">
+                    <span class="observation-request-tag">{verb} request</span>
+                    <span>{request.from_name || request.from_session || 'an agent'}</span>
+                    <span>→ {request.target_name || request.target_session_id}</span>
+                    <span class="fleet-queue-project">
+                      Project: {projectNames.get(request.project_id) || request.project_name || request.project_id}
+                    </span>
+                    <span class="observation-request-status">{request.outcome || request.status}</span>
+                  </div>
+                  {request.reason && <p class="observation-request-reason">{request.reason}</p>}
+                  <div class="observation-request-actions">
+                    {pending ? <>
+                      <button
+                        type="button"
+                        class="primary"
+                        disabled={busy}
+                        onClick={() => void run(request.id, () => decideControlRequest(request.project_id, request.id, 'approve'))}
+                      >
+                        Approve and {verb}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void run(request.id, () => decideControlRequest(request.project_id, request.id, 'dismiss'))}
+                      >
+                        Dismiss
+                      </button>
+                    </> : (
+                      <span>{request.status === 'approved' ? `Session ${request.outcome || 'acted on'}` : 'Nothing was done'}</span>
+                    )}
                   </div>
                 </li>
               )

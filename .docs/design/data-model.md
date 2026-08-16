@@ -35,6 +35,12 @@
   A mismatched terminal ID is diagnosable stale evidence and cannot close a newer generation.
 - `SessionRecord.interrupt_pending_at` and `interrupt_pending_source` expose operator interrupt intent separately from lifecycle proof.
   They freeze the user-visible timer and status wording while delivery remains blocked, clear on terminal evidence or a new root generation, and expire when an interrupt cannot be confirmed.
+- `SessionRecord.requested_end_reason`: the end reason to persist when this session terminates,
+  set by a deliberate Phase 7.6 end operation before it sends the exit sequence.
+  It lets an agent-initiated graceful end record `agent_ended` even when the CLI exits on its
+  own and the ordinary process-exit path is what marks the record; `None` leaves the terminal
+  path to classify the exit as it always has (`features/sessions.md`).
+  Round-tripped through the record snapshot, so supervisor adoption preserves it across a daemon restart.
 - `SessionRecord.standing_activity`: the standing-engagement annotation axis — a list of
   `StandingActivity {kind: loop|cron|background_tasks|subagents, source, evidence, since,
   expires_at, count, detail}`. Not states: SessionState, `awaiting_reason`, and delivery are
@@ -233,16 +239,23 @@
 ## Filesystem records
 
 - `<project>/.swe-mux/config.toml`: versioned, typed portable Project profile, prompt-scope,
-  notification-permission, additive ignore overrides, and an `automations` opt-in table gating
-  control-plane substrate/consumers (`features/automation-enablement.md`). Legacy
-  `resource_open_mode` input remains parseable for compatibility but is omitted from current
+  notification-permission, additive ignore overrides, an `automations` opt-in table gating
+  control-plane substrate/consumers (`features/automation-enablement.md`), and the
+  `session_control_grant` field (`"draft"` | `"granted"`, default `"draft"`) that sets the
+  authority of the Phase 7.6 `interrupt`/`end_session` tools once the `session_control`
+  automation is opted in - read by `project_session_control_grant()`, and never machine-wide.
+  Legacy `resource_open_mode` input remains parseable for compatibility but is omitted from current
   effective/public options.
 - `<project>/.swe-mux/observations.json`: the Project's capture inbox — a bounded list of
   `{id, body, done, created_at}` notes-to-self, append-only capture with revision-checked
   edits. An item may also carry `kind: "spawn_request"` and a typed, inert `request`
   payload written by `mux.requestSpawn` (prompt, backend, cwd, calling-session provenance,
   decision status) — text in the user's own file until a human approves it. Not stored in
-  SQLite. See `features/observations.md`, `features/agent-messaging.md`.
+  SQLite. An item may instead carry `kind: "control_request"` and an inert Phase 7.6 `request`
+  payload written by a drafted `mux.interrupt`/`mux.end_session` (action, target session id and
+  name, reason, calling-session provenance, decision status) — likewise inert until a human
+  approves it in the Fleet Queue. See `features/observations.md`, `features/agent-messaging.md`,
+  `features/mux-mcp.md`.
 - `<project>/.swe-mux/preview-shots/<id>.png`: headless preview screenshots saved into the
   owning Project (data-dir fallback) so a local agent can read them. See
   `features/processes-and-previews.md`.

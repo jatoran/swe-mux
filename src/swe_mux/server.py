@@ -178,6 +178,7 @@ from .project_files import (
     project_automations,
     project_note_summaries,
     project_path,
+    project_session_control_grant,
     read_global_note,
     read_note,
     read_observations,
@@ -240,6 +241,7 @@ from .session_attachments import (
     attachment_workspace_root,
     store_session_attachment,
 )
+from .session_control import SessionControlService
 from .settings_store import SettingsStore
 from .spawn_contract import (
     SpawnRequest,
@@ -1227,6 +1229,28 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         automation_gate_cache[root] = (now, enabled)
         return enabled
 
+    # Phase 7.6 session control. Every bound lives here in the daemon operation;
+    # the MCP tools are thin callers. The interrupt and graceful-end operations
+    # are the shared daemon ops the browser and CLI would call too, bound to this
+    # app.
+    session_control = SessionControlService(
+        sessions=sessions,
+        projects=projects,
+        config=config,
+        events=events,
+        readiness_evaluate=prompt_queue.readiness.evaluate,
+        automation_gate=_enabled_automations,
+        grant_field=project_session_control_grant,
+        interrupt_op=lambda session: _interrupt_session_pty(app, session),
+        graceful_end_op=lambda session, reason: _end_session_gracefully(
+            app, session, reason
+        ),
+        is_daemon_owner=_session_owns_daemon,
+        append_observation=append_observation,
+        read_observations=read_observations,
+    )
+    app["session_control"] = session_control
+
     def _session_project_root(session_id: str) -> tuple[Any, str] | None:
         session = sessions.sessions.get(session_id)
         if session is None:
@@ -1416,6 +1440,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             lambda project, action_id, inputs: _start_project_action(
                 app, project, action_id, inputs, origin="agent"
             ),
+            # Phase 7.5 memory reads: the deterministic fact store and the same
+            # per-project enablement closure Tier 0 capture and the detectors gate
+            # on, so an MCP read can never run under a stale opt-in answer one of
+            # them already refreshed.
+            tier0=tier0,
+            automation_gate=_enabled_automations,
+            session_control=session_control,
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -3706,6 +3737,82 @@ async def put_observations(request: web.Request) -> web.Response:
     return json_response(result)
 
 
+async def _approve_control_request(
+    request: web.Request,
+    project: Any,
+    identity: Any,
+    observation_id: str,
+    req: dict[str, Any],
+) -> web.Response:
+    """Perform a human-approved drafted interrupt/end (Phase 7.6, CP §7.6).
+
+    Approval is the human act that carries the authority; it runs the same shared
+    daemon operation the granted path uses. The daemon-owner and non-agent guards
+    still hold - a human approving cannot make the daemon-hosting session a valid
+    target - and the readiness gate still protects an interrupt from landing in an
+    approval prompt.
+    """
+    app = request.app
+    action = str(req.get("action") or "")
+    target_id = str(req.get("target_session_id") or "")
+    target = app["sessions"].sessions.get(target_id)
+    extra: dict[str, Any] = {}
+    if target is None or target.record.state in {"exited", "crashed"}:
+        outcome = "target_gone"
+    elif _session_owns_daemon(target) or not is_agent_harness(target.record.backend):
+        return json_response(
+            {
+                "error": "the target is not a valid control target",
+                "code": "forbidden_target",
+            },
+            409,
+        )
+    elif action == "interrupt":
+        evaluation = app["prompt_queue"].readiness.evaluate(target)
+        if str(evaluation.get("delivery_state") or "unknown") != "safe":
+            return json_response(
+                {
+                    "error": "the target is not safe to interrupt right now",
+                    "code": "readiness_not_safe",
+                    "delivery_state": evaluation.get("delivery_state"),
+                },
+                409,
+            )
+        await _interrupt_session_pty(app, target)
+        outcome = "interrupted"
+    elif action == "end_session":
+        result = await _end_session_gracefully(app, target, "agent_ended")
+        outcome = "ended"
+        extra = {"final_state": result.get("final_state"), "graceful": result.get("graceful")}
+    else:
+        raise ValueError(f"unknown control action {action!r}")
+    updated = await update_observation_request(
+        project.root,
+        observation_id,
+        {
+            "status": "approved",
+            "decided_by": _human_sender_kind(request),
+            "outcome": outcome,
+        },
+        done=True,
+        project=identity,
+    )
+    await app["events"].emit(
+        "agent_session_control",
+        session_id=str(req.get("from_session") or "") or None,
+        source="user",
+        action=action,
+        outcome=outcome,
+        target_session_id=target_id,
+        request_id=observation_id,
+        project_id=project.id,
+    )
+    updated.update(
+        {"project_id": project.id, "project_name": project.name, "outcome": outcome, **extra}
+    )
+    return json_response(updated)
+
+
 async def decide_observation_request(request: web.Request) -> web.Response:
     """Approve or dismiss a drafted `mux.requestSpawn` (Phase 5, CP §7.2).
 
@@ -3729,17 +3836,19 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         (
             entry
             for entry in current["observations"]
-            if entry.get("id") == observation_id and entry.get("kind") == "spawn_request"
+            if entry.get("id") == observation_id
+            and entry.get("kind") in {"spawn_request", "control_request"}
         ),
         None,
     )
     if item is None:
-        raise ValueError("no such spawn request")
-    spawn_request = dict(item.get("request") or {})
-    if spawn_request.get("status") not in {None, "", "pending"}:
+        raise ValueError("no such request")
+    kind = str(item.get("kind"))
+    pending_request = dict(item.get("request") or {})
+    if pending_request.get("status") not in {None, "", "pending"}:
         return json_response(
             {
-                "error": f"this request was already {spawn_request.get('status')}",
+                "error": f"this request was already {pending_request.get('status')}",
                 "code": "already_decided",
             },
             409,
@@ -3753,8 +3862,10 @@ async def decide_observation_request(request: web.Request) -> web.Response:
             project=identity,
         )
         await request.app["events"].emit(
-            "spawn_request_decided",
-            session_id=str(spawn_request.get("from_session") or "") or None,
+            "control_request_decided"
+            if kind == "control_request"
+            else "spawn_request_decided",
+            session_id=str(pending_request.get("from_session") or "") or None,
             source="user",
             request_id=observation_id,
             project_id=project.id,
@@ -3762,6 +3873,13 @@ async def decide_observation_request(request: web.Request) -> web.Response:
         )
         result.update({"project_id": project.id, "project_name": project.name})
         return json_response(result)
+    if kind == "control_request":
+        # Phase 7.6: approving a drafted interrupt/end is the human act that
+        # performs it, through the same daemon operation the granted path uses.
+        return await _approve_control_request(
+            request, project, identity, observation_id, pending_request
+        )
+    spawn_request = pending_request
     prompt = str(body.get("prompt") or spawn_request.get("prompt") or "")
     if not prompt.strip():
         raise ValueError("the request has no prompt to seed")
@@ -5794,6 +5912,104 @@ def _record_operator_input(
         input_owner=input_owner,
         bytes=len(data.encode("utf-8")),
     )
+
+
+#: The keystroke that interrupts an agent's current turn. Universal across the
+#: harnesses (their CLIs all treat ETX as an interrupt), the same byte the voice
+#: interrupt path and the browser terminal already send. The graceful *exit*
+#: sequence, by contrast, is per-harness and lives on the adapter/PTY.
+_INTERRUPT_KEYS = "\x03"
+#: How long the graceful end lets the interrupt land before it sends the exit
+#: sequence, and how often it polls for the CLI to tear itself down.
+_INTERRUPT_SETTLE_SECONDS = 0.4
+_GRACEFUL_POLL_SECONDS = 0.25
+
+
+def _session_owns_daemon(session: Any) -> bool:
+    """Whether ending this session would take the running daemon down.
+
+    The hazard is job-object inheritance: a daemon relaunched from a shell inside
+    a session is a descendant of that session's root process, so closing the
+    session's Job on removal terminates the daemon too (see `popen_outside_job`,
+    which exists to break this exact link). This checks the ancestry directly -
+    is this daemon process a descendant of the session's process? - and fails
+    closed only for the positive case. A shell session, the realistic host for a
+    hand-launched daemon, is already rejected as a non-agent target; this is the
+    defence in depth for the case that slips past that.
+    """
+    pid = getattr(session.record, "pid", None)
+    if not pid:
+        return False
+    try:
+        import psutil
+
+        daemon = psutil.Process(os.getpid())
+        return any(ancestor.pid == pid for ancestor in daemon.parents())
+    except Exception:
+        # Cannot prove ownership; the agent-only guard covers the realistic case,
+        # so an inspection failure does not itself forbid every end.
+        return False
+
+
+async def _interrupt_session_pty(app: web.Application, session: Any) -> None:
+    """Interrupt an agent's current turn through the shared operator-input path.
+
+    The daemon operation MCP `interrupt` and the browser both call. It writes the
+    interrupt byte with full input accounting - never straight to the PTY, which
+    would skip the `input_revision`/`terminal_input` bookkeeping the
+    delivery-readiness contract depends on.
+    """
+    _record_operator_input(
+        app["events"], session, _INTERRUPT_KEYS, source="agent_control"
+    )
+    await app["events"].emit(
+        "agent_turn_interrupted", session_id=session.record.id, source="agent_control"
+    )
+
+
+async def _end_session_gracefully(
+    app: web.Application, session: Any, reason: str = "agent_ended"
+) -> dict[str, Any]:
+    """Graceful session end as a typed daemon operation (Phase 7.6).
+
+    Interrupt the current turn, send the harness's own exit sequence from its
+    adapter (carried on the PTY as `graceful_exit`), wait bounded for the CLI to
+    tear itself down, and fall back to the existing hard stop only on timeout.
+    The end reason is stamped on the record first, so a CLI that exits on its own
+    still records `agent_ended` rather than the ordinary process-exit reason.
+    """
+    sessions = app["sessions"]
+    config: Config = app["config"]
+    sid = str(session.record.id)
+    session.record.requested_end_reason = reason
+    if session.record.state in {"exited", "crashed"}:
+        return {"final_state": session.record.state, "graceful": True, "reason": reason}
+    _record_operator_input(
+        app["events"], session, _INTERRUPT_KEYS, source="agent_control"
+    )
+    await asyncio.sleep(_INTERRUPT_SETTLE_SECONDS)
+    exit_keys = str(getattr(session.pty, "graceful_exit", "") or "")
+    if exit_keys and session.record.state not in {"exited", "crashed"}:
+        _record_operator_input(
+            app["events"], session, exit_keys, source="agent_control"
+        )
+    deadline = time.monotonic() + float(config.session_control_graceful_timeout_s)
+    while time.monotonic() < deadline:
+        if session.record.state in {"exited", "crashed"}:
+            return {
+                "final_state": session.record.state,
+                "graceful": True,
+                "reason": session.record.requested_end_reason or reason,
+            }
+        await asyncio.sleep(_GRACEFUL_POLL_SECONDS)
+    # The CLI did not exit in time: fall back to the hard stop, still recording
+    # the agent-initiated reason so the two remain distinguishable.
+    await sessions.stop(sid, reason=reason)
+    return {
+        "final_state": session.record.state,
+        "graceful": False,
+        "reason": session.record.requested_end_reason or reason,
+    }
 
 
 async def session_input(request: web.Request) -> web.Response:

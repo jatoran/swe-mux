@@ -161,8 +161,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                            (return-path channel 2: standing context, not pull) [CP §7]
                           -> Phase 6.5  Attention ranking + narration       [done: CP steps 6-7]
                             -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
-                              -> Phase 7.5  mux MCP v1 semantic memory      [open, gated on 5.5: CP step 8]
-                                -> Phase 7.6  mux MCP session control       [open: CP step 9]
+                              -> Phase 7.5  mux MCP v1 semantic memory      [done: CP step 8]
+                                -> Phase 7.6  mux MCP session control       [done: CP step 9]
                                   -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [open, needs 5.5]
                                     -> Phase 8  Telegram control            [descoped to decision-gated]
                                     -> Phase 9  SSH/native attach           [descoped to decision-gated]
@@ -211,8 +211,8 @@ document and are not duplicated here.
 | 3.5 · Run boundary contract | **Phase 5.4** | not a control-plane step of its own, but a hard prerequisite for steps 4–8, which inherit their boundary from it and must never implement conversation-change detection themselves |
 | 4–5 · Project context + scan timeline | **Phase 5.5** | shipped; context is one user-owned Markdown file, and the timeline is opt-in at the global, Project, and current-run levels with explicit full-session backfill and Phase 5.4's run boundary |
 | 6–7 · Attention ranking + narration | **Phase 6.5** | shipped; the four channels are in-app surfaces and route to no push path, and both halves stop at Phase 5.4's run boundary |
-| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | semantic half only; the memory-source reads moved to Phase 5.6. Needs the CP 5 timeline, the Phase 6 harness-coverage fix, the Phase 7 typed operations, and Phase 5.4 run-scoped retrieval |
-| 9 · Agent session control | **Phase 7.6** | the first agent-reachable actuation; needs the Phase 1/5 readiness predicate, a graceful-stop daemon op that does not exist yet (Phase 7), and the Phase 6.5 attention channels so a remote interrupt is never silent |
+| 8 · Cross-session + mux MCP v1 | **Phase 7.5** | shipped (semantic half): the four reads `provenance`/`verified_status`/`prior_resolutions`/`dead_ends`, each DAG-gated and run-attributed. The memory-source reads moved to Phase 5.6; cross-session interlocks/digests (CP §6.6/§6.8) stay deferred |
+| 9 · Agent session control | **Phase 7.6** | shipped: `interrupt`/`end_session` over `SessionControlService`, the per-Project off/draft/granted grant, the shared graceful-end daemon op, and the fail-closed readiness gate. Agent-held spawn `granted` stays deferred pending the grant-model soak |
 | §7.2 return-path write tools | shipped (Phase 5) | callers over the Phase 5 A→B queue, not a separate path |
 | §13 queue-draft channel | inside **Phase 4** | `sender_kind` + typed payload land with the queue model |
 
@@ -1989,14 +1989,21 @@ Do not hold the deterministic half behind the semantic half.
 
 ### v1 tool surface
 
-- [ ] `mux.provenance(file)` — who touched this, at what hash, and what tests ran on it
-  (CP §6.1).
-- [ ] `mux.priorResolutions(error)` — normalized error signature to a previously verified fix
-  (CP §6.10).
-- [ ] `mux.deadEnds(subsystem)` — approaches tried, abandoned, and why (CP §6.2).
-- [ ] `mux.verifiedStatus(claim)` — is this actually tested or merely declared done (CP §6.3).
+- [x] `mux.provenance(file)` — who touched this, at what hash, and what tests ran on it
+  (CP §6.1). (`build_provenance_edges` plus raw file_write/file_read/test_result facts;
+  ambiguous edges withheld and counted.)
+- [x] `mux.priorResolutions(error)` — normalized error signature to a previously verified fix
+  (CP §6.10). (Equality on the SHA-256 error fingerprint via `automation_store.experiences`,
+  never a substring; low-confidence <0.5 withheld.)
+- [x] `mux.deadEnds(subsystem)` — approaches tried, abandoned, and why (CP §6.2). (Scan records
+  with `approach_status in {abandoned,failed}` and a non-empty `dead_end`; `subsystem` matched
+  as a substring of target/intent/summary; a `/clear` rollover structurally never counts.)
+- [x] `mux.verifiedStatus(claim)` — is this actually tested or merely declared done (CP §6.3).
+  (`detect_declared_vs_verified` over a run's test facts; defaults to the caller's own current
+  run, `session_id` targets another.)
 - [ ] Cross-session interlocks (CP §6.6) and digests (CP §6.8) as the human-facing half of the
-  same substrate.
+  same substrate. (Deferred: `cross_session_interlocks` stays reserved and unimplemented in
+  `automation_registry.py`; the four agent-facing reads shipped without it.)
 
 ### Harness-memory bridge
 
@@ -2016,31 +2023,47 @@ The tools moved to Phase 5.6; these are the rules that govern them wherever they
 
 ### Retrieval precision gate
 
-- [ ] Enforce per-tool scope and confidence thresholds below which a tool returns **nothing**
+- [x] Enforce per-tool scope and confidence thresholds below which a tool returns **nothing**
   rather than a weak match: same Project, exact normalized signature, verified provenance.
   Empty is acceptable; plausible-but-wrong is corrosive, because an agent that acts on one bad
-  match either stops calling or propagates the error.
-- [ ] **A retrieved memory names the agent run it came from, and a result from the caller's
+  match either stops calling or propagates the error. (Fingerprint equality on
+  `prior_resolutions`, ambiguous-edge withholding on `provenance`, and the <0.5 / <0.4
+  confidence floors, each returning a suppressed count.)
+- [x] **A retrieved memory names the agent run it came from, and a result from the caller's
   own earlier run is labelled as such rather than blended into the present.** After a `/clear`
   the agent has no memory of the work Phase 5.4 attributed to its predecessor run; a tool that
   returns that work unlabelled reads as the agent's own recollection and is exactly the
   "plausible but wrong" failure this gate exists to prevent. Sibling-run results are legitimate
-  and useful — they just have to be attributed.
-- [ ] Tag every retrievable insight with confidence and scope so low-confidence items can be
+  and useful — they just have to be attributed. (`_run_attribution` tags every result
+  `your_current_run` | `your_earlier_run` | `sibling_run` | `unknown`.)
+- [x] Tag every retrievable insight with confidence and scope so low-confidence items can be
   withheld from the agent while still being shown, with a suppressed count, to the human.
-- [ ] Measure retrieval outcomes. A tool whose results are not being used, or are being
-  contradicted, is a defect to fix, not a feature to leave running.
+  (Each tool returns `low_confidence_suppressed`/`ambiguous_suppressed` counts and a
+  `not_opted_in` note for Projects in scope that did not enable the automation.)
+- [x] Measure retrieval outcomes. A tool whose results are not being used, or are being
+  contradicted, is a defect to fix, not a feature to leave running. (`McpService.memory_outcomes`
+  records per memory tool how often it returned something, returned empty, and how many
+  low-confidence items it withheld, surfaced in `McpService.status()` under `memory_outcomes`; a
+  tool whose `empty` count dominates its `calls` is the defect this makes visible. A
+  used-vs-contradicted behavioural signal, which needs correlating later agent turns, is the
+  deeper follow-on and is not built.)
 
 ### Phase 7.5 exit criteria
 
-- [ ] Every v1 tool returns results traceable to specific Tier 0 facts, annotations, or scan
-  records, and returns empty in preference to a low-confidence match.
-- [ ] v1 adds no authority: the surface remains read-only, with writes still confined to the
-  Phase 5 queue callers.
-- [ ] Enabling v1 is per-project opt-in through the existing enablement DAG, and disabling it
-  leaves the Phase 4.5 and 5.6 read surfaces working.
-- [ ] No tool result silently merges two agent runs, and a caller can always tell which run a
-  result came from.
+- [x] Every v1 tool returns results traceable to specific Tier 0 facts, annotations, or scan
+  records, and returns empty in preference to a low-confidence match. (Each result carries the
+  source facts/rows and its run attribution; the confidence floors and ambiguous-edge
+  withholding enforce empty-over-weak.)
+- [x] v1 adds no authority: the surface remains read-only, with writes still confined to the
+  Phase 5 queue callers. (All four tools carry read-only MCP annotations and live in
+  `READ_TOOL_NAMES`.)
+- [x] Enabling v1 is per-project opt-in through the existing enablement DAG, and disabling it
+  leaves the Phase 4.5 and 5.6 read surfaces working. (`MEMORY_TOOL_AUTOMATION` gates each tool;
+  a disabled automation raises `disabled` (409), an absent substrate `unsupported` (503), never
+  a fake empty, and the other read tools are untouched.)
+- [x] No tool result silently merges two agent runs, and a caller can always tell which run a
+  result came from. (`_run_attribution` labels every result, and a caller's own superseded run
+  reads as `your_earlier_run` rather than blending into the present.)
 
 ## Phase 7.6 - mux MCP session control: interrupt and end
 
@@ -2064,73 +2087,105 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
 
 ### The daemon operations underneath
 
-- [ ] Build a **graceful session end** as a typed daemon operation, used identically by the
+- [x] Build a **graceful session end** as a typed daemon operation, used identically by the
   browser, CLI, and MCP: interrupt the current turn, send the harness's own exit sequence
   from its adapter, wait bounded for the CLI to tear itself down (transcript flushed, history
   row closed, run ended cleanly), and fall back to the existing hard stop only on timeout.
-- [ ] Distinguish the end reasons durably: `agent_ended` (a session ended by an agent through
+  (`_end_session_gracefully` in `server.py`, bounded by `session_control_graceful_timeout_s`;
+  the interrupt op is `_interrupt_session_pty`, both routed through `_record_operator_input`.)
+- [x] Distinguish the end reasons durably: `agent_ended` (a session ended by an agent through
   this surface, gracefully or by fallback) is not `killed` (operator hard stop) and not
-  `exited` (the CLI ended on its own). A post-mortem must be able to tell which happened.
-- [ ] Own the interrupt sequence in the **adapter**, never in the MCP layer. The escape
+  `exited` (the CLI ended on its own). A post-mortem must be able to tell which happened. (New
+  `SessionRecord.requested_end_reason`, preferred by `_mark_ended`; `SessionManager.stop` gained
+  a `reason` param.)
+- [x] Own the interrupt sequence in the **adapter**, never in the MCP layer. The escape
   sequence is per-harness and already resolved for the voice interrupt path; MCP calls the
-  same operation rather than learning any keystroke.
-- [ ] Gate the interrupt on the delivery-readiness predicate with its existing fail-closed
+  same operation rather than learning any keystroke. (The graceful exit sequence comes from the
+  adapter's `graceful_exit_keys()`, carried on the PTY as `graceful_exit`.)
+- [x] Gate the interrupt on the delivery-readiness predicate with its existing fail-closed
   contract: `safe` proceeds, `blocked` refuses, `unknown` never authorizes. Interrupting a
-  session that is mid-approval-prompt or in a menu is corruption, not a stop.
+  session that is mid-approval-prompt or in a menu is corruption, not a stop. (`_gate_readiness`
+  in `session_control.py`, refusal code `readiness_not_safe`; no confirm override exists.)
 
 ### Authority: a per-Project grant, and the same model spawn has been waiting for
 
-- [ ] Add a per-Project **agent authority grant** for these tools with three positions, and
+- [x] Add a per-Project **agent authority grant** for these tools with three positions, and
   make `draft` the default: `off` (typed refusal), `draft` (the call writes an inert
   observation-inbox request with full provenance, identical in shape to `request_spawn`, and a
   human approves and the approval is what acts), and `granted` (direct, inside a per-origin
   budget, fully audited). It lives in the existing enablement/opt-in surface, per Project,
-  never machine-wide.
-- [ ] Resolve agent-held **spawn** authority under this same grant, or not at all. The
+  never machine-wide. (`off` is the absence of the new `session_control` automation; the
+  draft/granted split is the `.swe-mux/config.toml` field `session_control_grant`, default
+  `draft`, read by `project_session_control_grant()`; a draft writes a `control_request`
+  observation.)
+- [x] Resolve agent-held **spawn** authority under this same grant, or not at all. The
   decision-gated entry exists because spawn converts one prompt injection into unbounded
   fan-out; the answer is a bounded standing grant with a budget and an audit trail, not a
   permanently different mechanism for a capability the user wants exposed. If the grant model
   proves out for interrupt/end, `request_spawn` gains the same `granted` position with its
-  own budget; if it does not, spawn stays drafted and so do these.
-- [ ] Bound the granted path with the machinery `agent_messaging.py` already proves: Project
+  own budget; if it does not, spawn stays drafted and so do these. (Resolved to the
+  "or not at all" branch for now: the grant machinery is proven and shipped for interrupt/end,
+  but spawn's blast radius - one injection into unbounded fan-out - is categorically larger
+  than a single interrupt or end, so the `granted` position is deliberately not extended to
+  `request_spawn` in this phase. It continues to draft only. The mechanism it would reuse -
+  the per-Project three-position grant, the per-origin budget, the audit event - now exists in
+  `SessionControlService`, so adding a `spawn_grant` later is a bounded follow-on rather than a
+  new design.)
+- [x] Bound the granted path with the machinery `agent_messaging.py` already proves: Project
   scope, live-agent-only targets, per-origin budget, chain depth and cycle detection over the
   recorded path (A interrupting B while B interrupts A is a loop), idempotency keys, typed
-  refusals instead of JSON-RPC faults, and a master kill switch.
+  refusals instead of JSON-RPC faults, and a master kill switch. (`SessionControlService`:
+  per-origin hourly budget, reciprocal-cycle guard `relay_cycle`, `correlation_id` idempotency,
+  typed `QueueError` refusals, and the `session_control_enabled` master switch.)
 
 ### What must stay impossible
 
-- [ ] Never reachable: a target outside the scope the call asked for (indistinguishable from
+- [x] Never reachable: a target outside the scope the call asked for (indistinguishable from
   nonexistent, as everywhere else), a shell or non-agent pane, and **the session that owns
   the running daemon**, because job-object inheritance means ending that session takes the daemon
   with it, which is a known failure mode and not something an agent may trigger.
   Scope here means what it means for `notify` since 2026-08-14: the caller's own Project by
-  default, another Project only when the call names it.
-- [ ] Self-termination is permitted and is the ordinary case for a finished worker, but it is
+  default, another Project only when the call names it. (Refusal codes `unknown_target`,
+  `not_agent_target`, and `forbidden_target`; the daemon-owner check is `_session_owns_daemon`,
+  a psutil ancestry test, holding even for an approved draft.)
+- [x] Self-termination is permitted and is the ordinary case for a finished worker, but it is
   the caller's last act and must not destroy the record of why: the tool returns its result
   before teardown begins, the final turn is flushed and retained, and the ended session stays
   readable through `list_sessions(include_ended)`, `get_session`, and history. An agent may
-  end itself; it may not erase itself.
-- [ ] Never add automatic remediation on top of this. "Interrupt and re-run the turn" is
+  end itself; it may not erase itself. (Self-end schedules the graceful op and returns a
+  `self: true` result before teardown; only `end_session` allows self, `interrupt` refuses it
+  with `self_not_allowed`.)
+- [x] Never add automatic remediation on top of this. "Interrupt and re-run the turn" is
   resampling, which amplifies injected content (CP §16); a rewind stays human-directed with a
-  corrected instruction.
-- [ ] Never let an interrupt or end happen silently. Each one emits to the event log with the
+  corrected instruction. (No resampling or auto-retry path exists on either tool.)
+- [x] Never let an interrupt or end happen silently. Each one emits to the event log with the
   calling session and run as provenance, appears in the fleet audit surface beside agent
   messages, and is a candidate for the Phase 6.5 attention channels. The human learning that
-  one agent stopped another from a status change alone is a defect.
+  one agent stopped another from a status change alone is a defect. (Every action emits
+  `agent_session_control`; drafts emit `agent_control_drafted` and surface in the Fleet Queue
+  `control_requests` list.)
 
 ### Phase 7.6 exit criteria
 
-- [ ] A live agent can interrupt and end another agent session in its Project, and its own,
+- [x] A live agent can interrupt and end another agent session in its Project, and its own,
   through MCP, with the default grant requiring a human approval and the granted position
-  bounded and audited.
-- [ ] An agent-ended session's transcript, final turn, history row, and end reason survive the
-  end and are readable afterwards.
-- [ ] A graceful end is attempted before any hard stop, and the two are distinguishable in the
-  durable record.
-- [ ] An interrupt is refused when readiness is `blocked` or `unknown`, and no interrupt lands
-  in an approval prompt or a menu in the proving corpus.
-- [ ] Disabling the grant leaves every earlier MCP phase working unchanged, and the browser's
-  own stop/interrupt controls are unaffected by any setting here.
+  bounded and audited. (`interrupt`/`end_session` MCP tools over `SessionControlService`;
+  `draft` writes a `control_request`, `granted` acts inside the budget/cycle/idempotency
+  bounds.)
+- [x] An agent-ended session's transcript, final turn, history row, and end reason survive the
+  end and are readable afterwards. (Self-end returns before teardown; the record persists with
+  `agent_ended` and stays readable through `list_sessions(include_ended)`/`get_session`/history.)
+- [x] A graceful end is attempted before any hard stop, and the two are distinguishable in the
+  durable record. (`_end_session_gracefully` tries the adapter exit sequence within
+  `session_control_graceful_timeout_s` and reports `graceful: true/false`; the hard fallback
+  still records `agent_ended`.)
+- [x] An interrupt is refused when readiness is `blocked` or `unknown`, and no interrupt lands
+  in an approval prompt or a menu in the proving corpus. (`_gate_readiness` refuses any
+  non-`safe` state as `readiness_not_safe`, on both the granted and the approved-draft paths.)
+- [x] Disabling the grant leaves every earlier MCP phase working unchanged, and the browser's
+  own stop/interrupt controls are unaffected by any setting here. (The grant gates only the two
+  tools; the read surface, `notify`/`request_spawn`, and the browser's own DELETE/interrupt
+  paths are untouched.)
 
 ## Phase 7.7 — Consolidate behavioral summary: retire the turn summarizer, adaptive titling, and near-term scan-timeline consumers
 

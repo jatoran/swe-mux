@@ -1,29 +1,35 @@
-# mux MCP: the agent return path (reads + two bounded writes)
+# mux MCP: the agent return path (reads + bounded writes and session control)
 
 ## What it is
 
 A streamable-HTTP MCP endpoint (`POST /mcp`) hosted in the daemon that gives every spawned
 agent session visibility into the fleet — sibling sessions, their live status,
 bounded transcript reads, indexed search over conversation history, exact Agent
-Context sources, Project notes, and request outcomes, plus two bounded write tools added in Phase 5.
+Context sources, Project notes, cross-session memory reads, and request outcomes, plus the
+bounded write tools added in Phase 5 and the session-control tools added in Phase 7.6.
 Every tool answers within the caller's own Project until the caller asks for more with the
 shared `project` argument.
-Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), and Phase 5
-(`notify`, `request_spawn`) / control-plane build-order step 2.5
-(`CONTROL_PLANE_ROADMAP.md` §7.1–7.5). Registered automatically into every spawned Claude
+Roadmap Phase 4.5 (reads), Phase 5.6 (situational-awareness reads), Phase 5
+(`notify`, `request_spawn`), Phase 7.5 (cross-session memory reads), and Phase 7.6
+(`interrupt`, `end_session`) / control-plane build-order steps 2.5, 8, and 9
+(`CONTROL_PLANE_ROADMAP.md` §7.1–7.6). Registered automatically into every spawned Claude
 and Codex session — no user setup — and reachable by a user-typed `claude`/`codex` inside a
 mux shell session via the agent shims.
 
-**No tool delivers anything.** `notify` stages a message in another session's Phase 4
-queue, where head-of-line order, receiver readiness, and (by default) human arming still
-apply; `request_spawn` writes an inert Fleet Queue approval draft and starts nothing.
+**No read tool delivers anything, and neither `notify` nor `request_spawn` does.** `notify`
+stages a message in another session's Phase 4 queue, where head-of-line order, receiver
+readiness, and (by default) human arming still apply; `request_spawn` writes an inert Fleet
+Queue approval draft and starts nothing. The Phase 7.6 tools `interrupt` and `end_session`
+are the first that act on a running agent, and they act only under a per-Project grant that
+defaults to writing an inert approval a human must decide (see "Session control" below).
 
 `run_action` is the one tool that starts a process, and its authority is borrowed rather than
 granted: it can run only a command whose exact bytes a human already approved through the Project
 Run menu, and an agent that edits a task file un-approves it. An agent therefore cannot approve
 its own command. This grants strictly less than the caller already has, since an agent in a mux
 session holds a shell; what it adds is that the command is one a human has seen. The v1
-memory tools (`provenance`, `priorResolutions`, `deadEnds`) stay in control-plane step 8.
+memory tools (`provenance`, `verifiedStatus`, `priorResolutions`, `deadEnds`) shipped in
+Phase 7.5 and are covered in "Cross-session memory reads" below.
 
 ## Key concepts
 
@@ -135,20 +141,98 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `project_actions` | what a Project declares as runnable: native actions, imported VS Code tasks, and package scripts, each with its source file, steps, declared inputs, and whether a human has approved that file's exact current bytes; `include_schema` returns the `.swe-mux/actions.toml` authoring reference in the same result |
 | `message_status` | current outcome of one `notify`, visible only to its attributed sending session, wherever it was sent |
 | `spawn_requests` | status of spawn requests attributed to the caller; approval remains a human Fleet Queue act |
+| `provenance` | cross-session lineage for one file: who wrote which content hash, who later read it, and the tests those runs ran, from Tier 0 facts plus `build_provenance_edges`. Ambiguous edges (another write landed between the reported write and read) are withheld and only counted. Lineage, never blame |
+| `verified_status` | whether a claim is tested or only declared done, via `detect_declared_vs_verified` over a run's Tier 0 test facts; reports "claims done · tests ran · tests passed", "tests failed", or "nothing verified". Defaults to the caller's own current run; `session_id` targets another |
+| `prior_resolutions` | a previously verified fix for an exact normalized error signature, from the experience corpus (`automation_store.experiences`), matched on equality of the error fingerprint and never a substring. Low-confidence (<0.5) matches are withheld and only counted |
+| `dead_ends` | approaches abandoned or failed within a run with a recorded dead-end note, from scan records; `subsystem` matches as a substring of the record's target paths, intent, or summary. Low-confidence (<0.4) records are withheld. A conversation rollover writes a boundary not a record, so `/clear` never counts as an abandonment |
 | `notify` | stages a message with a visible sender/message/correlation envelope, and a `from_project` header when it crossed a Project; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
+| `interrupt` | stops the target agent's current turn (writes the interrupt byte through the shared operator-input path); the session, conversation, and PTY survive. Refused unless delivery-readiness is `safe`, and it cannot target the caller's own session. Under the default `draft` grant it writes an inert approval instead of acting |
+| `end_session` | ends the target session (`self` allowed); tries the harness's own graceful exit sequence, then a hard-stop fallback. A self-end returns before teardown and leaves the record readable. Under the default `draft` grant it writes an inert approval instead of acting |
 
 The write tools are listed even when disabled by config: they answer with a typed refusal,
 because an MCP client caches `tools/list` at session start and a tool that vanishes is
 indistinguishable from a broken server.
+
+## Cross-session memory reads (Phase 7.5)
+
+The four memory reads make swe-mux's third-person, all-sessions record queryable by a
+first-person agent mid-task. They are deterministic queries over shipped substrate - Tier 0
+facts, the git-provenance edges, the experience corpus, and the scan timeline - and add no
+authority. The v0.5 memory-source reads (`memory_sources`, `read_memory`) are separate and
+shipped in Phase 5.6.
+
+- **Precision over recall.** Each tool prefers an empty result to a weak match, because an
+  agent that acts on one plausible-but-wrong answer either stops calling or propagates the
+  error. `prior_resolutions` matches on equality of the normalized error fingerprint and never
+  a substring; `provenance` withholds an ambiguous edge; low-confidence experiences (<0.5) and
+  dead-ends (<0.4) are withheld and only counted for the human.
+- **Every result names the run it came from.** A `run` / `writer` / `reader` / `source_run`
+  object carries `run_relation`, one of `your_current_run`, `your_earlier_run` (the caller's
+  own run superseded by an in-CLI `/clear`), `sibling_run`, or `unknown`. A result from the
+  caller's own retired run is labelled rather than blended into the present, because after a
+  `/clear` the agent has no memory of its predecessor's work and an unlabelled return would read
+  as its own recollection (`backends.md`, Phase 5.4).
+- **Per-Project opt-in through the enablement DAG.** Each tool gates on a specific automation
+  (`MEMORY_TOOL_AUTOMATION` in `mcp.py`): `provenance` → `provenance_graph`,
+  `verified_status` → `declared_vs_verified`, `dead_ends` → `dead_end_memory`, and
+  `prior_resolutions` → its own `prior_resolutions` automation (both in
+  `automation_registry.py`, each requiring `tier0`).
+- **Off is never a fake empty.** When the daemon does not run the memory substrate the tool
+  raises `unsupported` (503); when no Project in scope has opted the backing automation in it
+  raises `disabled` (409) naming the automation. An agent that cannot tell "off" from "nothing
+  here" trusts a silence it should not.
+
+## Session control (Phase 7.6)
+
+`interrupt` and `end_session` are the first MCP tools that act on another running agent.
+MCP is transport, not authority: every bound lives in `SessionControlService`
+(`session_control.py`), and the tool is a thin caller. Both operations - the interrupt and the
+graceful end - are shared daemon operations the browser and CLI call too
+(`interfaces.md`), so an agent-initiated stop takes the identical accounted path as an
+operator's.
+
+- **`interrupt(target)`** stops the target's current turn and the session lives on. It is a
+  PTY write, so it is refused unless delivery-readiness is `safe`: `blocked` refuses and
+  `unknown` never authorizes (fail closed), because interrupting a session mid-approval-prompt
+  or in a menu is corruption, not a stop. It cannot target the caller's own session.
+- **`end_session(target)`** ends the session, and `self` is allowed and is the ordinary
+  finished-worker case. A self-end returns its result **before** teardown begins; the final
+  turn is flushed and the record stays readable through `list_sessions(include_ended)`,
+  `get_session`, and history. An agent may end itself; it may not erase itself.
+- **A three-position per-Project grant.** `off` is the absence of the `session_control`
+  automation opt-in and refuses both tools. `draft`, the default once opted in, makes the call
+  write an inert `control_request` observation that a human approves in the Fleet Queue - the
+  approval is what acts. `granted` acts directly, inside bounds. The draft/granted split is the
+  `.swe-mux/config.toml` field `session_control_grant` (`"draft"` | `"granted"`, default
+  `"draft"`), read by `project_session_control_grant()`.
+- **Bounds on the granted path.** A per-origin hourly budget (drafts spend it too, because
+  unbounded drafting is its own denial of service), a reciprocal-cycle guard (A interrupting B
+  while B recently controlled A is refused `relay_cycle`), idempotency by `correlation_id`, and
+  typed refusals rather than JSON-RPC faults. The install master switch is
+  `config.session_control_enabled` (default true), with `session_control_hourly_budget`
+  (default 30) and `session_control_graceful_timeout_s` (default 12.0).
+- **What stays impossible at any grant.** A target outside the requested scope is
+  indistinguishable from nonexistent; a shell or other non-agent pane is refused; and the
+  session that hosts the running daemon is refused (`_session_owns_daemon`, a psutil ancestry
+  check), because job-object inheritance means ending it would take the daemon down. There is
+  no automatic remediation: "interrupt and re-run the turn" is resampling, which amplifies
+  injected content, so a rewind stays human-directed.
+- **Never silent.** Every action emits an `agent_session_control` event with the calling
+  session and run as provenance; a draft also emits `agent_control_drafted`. Drafts surface in
+  the Fleet Queue beside spawn requests as `control_requests`, approved through the existing
+  `POST /api/projects/{project_id}/observations/{observation_id}/decide` route.
+- **Durable end reasons.** An agent-initiated end (graceful or hard fallback) records
+  `agent_ended`, distinct from an operator `killed` and a CLI-initiated `exited`/`completed`
+  (`sessions.md`, `data-model.md`).
 
 ## Registration per backend
 
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. Generated per-session settings allow the closed eleven-tool read set without a prompt and do not allow `notify`, `request_spawn`, or `run_action`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed fifteen-tool read set without a prompt and do not allow `notify`, `request_spawn`, `run_action`, `interrupt`, or `end_session`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.
@@ -183,6 +267,10 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - The `project` argument, shared by the read and write surfaces: `src/swe_mux/project_scope.py`
 - Closed read/write declarations and Claude read permissions: `src/swe_mux/mcp_contract.py`
 - Write-tool policy (bounds, provenance, drafts): `src/swe_mux/agent_messaging.py`
+- Session-control authority and bounds (grant, budget, cycle, idempotency, readiness gate):
+  `src/swe_mux/session_control.py`
+- Shared interrupt/graceful-end daemon operations, the daemon-owner guard, and the drafted
+  control-request approval: `src/swe_mux/server.py`
 - Endpoint handler, rate limit, wiring: `src/swe_mux/server.py`
 - Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`
 - Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
@@ -194,10 +282,14 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - `agent-messaging.md` — what the write tools may do, and every bound behind them.
 - `prompt-queue.md` — where a `notify` lands and how it is delivered.
 - `observations.md` - compatibility storage retained after the human Observation Inbox was retired.
-- `delivery-readiness.md` — the operator-input evidence contract this phase also closed.
+- `delivery-readiness.md` — the operator-input evidence contract this phase also closed, and
+  the fail-closed readiness gate the `interrupt` tool consumes.
+- `automation-enablement.md` - the per-Project opt-in DAG the memory reads and session control gate on.
+- `sessions.md` - the graceful session-end operation and the `agent_ended` reason.
+- `observations.md` - the drafted `control_request` storage, mirroring `spawn_request`.
 - `status-detection.md` — the status contract MCP reads through.
 - `history.md` — the archive `search_history` queries.
 - `../development/CONTROL_PLANE_ROADMAP.md` §7 - the full return-path design: §7.5 for the
   v0.5 situational-awareness reads (`ROADMAP.md` Phase 5.6) and the v1 memory tools
-  (Phase 7.5), §7.6 for the planned session-control tools and their authority grant
-  (Phase 7.6). Phase 5.6 is complete; later semantic-memory and control tools remain planned.
+  (Phase 7.5), §7.6 for the session-control tools and their authority grant (Phase 7.6).
+  Phases 5.6, 7.5, and 7.6 are complete.

@@ -43,10 +43,15 @@ annotations rather than states. The corpus pins a loop-armed idle turn end evalu
 `safe`.
 
 Every result remains `authorized: false`: the tracker classifies evidence and never grants
-authority. Two callers act on that classification, both outside this module — the Phase 4
-queue's `send_next` (a human act, with an explicit confirm for blocked/unknown) and the
+authority. Callers act on that classification, all outside this module: the Phase 4
+queue's `send_next` (a human act, with an explicit confirm for blocked/unknown), the
 Phase 5 auto-delivery controller (which requires `safe` held continuously across a window
-and can never confirm). See `auto-delivery.md`.
+and can never confirm), and, since Phase 7.6, the session-control `interrupt` operation. An
+interrupt is a PTY write, so it consumes this predicate with the same fail-closed contract:
+`safe` proceeds, `blocked` refuses, and `unknown` never authorizes, because interrupting a
+session that is mid-approval-prompt or in a menu is corruption, not a stop
+(`mux-mcp.md`, `session_control.py`). Unlike `send_next`, the interrupt offers **no** confirm
+override — a not-safe interrupt is always refused. See `auto-delivery.md`.
 
 The controller's authority is still separate from this classifier: the install master must be
 enabled, and the daemon materializes a bounded default-on grant for each live agent run. A

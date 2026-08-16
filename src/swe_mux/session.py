@@ -6444,11 +6444,16 @@ class SessionManager:
         exit_status = getattr(session.pty, "exit_status", None)
         exit_code = exit_status() if callable(exit_status) else None
         session.record.exit_code = exit_code
+        # A deliberate end operation (Phase 7.6 agent control) stamps the reason it
+        # wants persisted before the CLI exits, so a graceful agent-initiated end
+        # records `agent_ended` even when the ordinary process-exit watcher, not
+        # the end operation itself, is what reaches this method.
+        effective_reason = session.record.requested_end_reason or reason
         state, final_reason, detail = terminal_exit_outcome(
             session.record.completion_mode,
             stopping=session.stopping,
             exit_code=exit_code,
-            reason=reason,
+            reason=effective_reason,
         )
         # Ledger the terminal transition without an update frame: publish_exit
         # below already carries the final snapshot to every subscriber.
@@ -6526,12 +6531,21 @@ class SessionManager:
                     session.record.id,
                 )
 
-    async def stop(self, sid: str) -> None:
+    async def stop(self, sid: str, *, reason: str = "killed") -> None:
+        """Hard-stop a session and persist how it ended.
+
+        The default reason is `killed` - an operator or daemon hard stop, the only
+        caller before Phase 7.6. A deliberate agent end passes `agent_ended` so a
+        post-mortem can tell an agent-initiated end from an operator kill even when
+        this hard path is the graceful end's fallback.
+        """
         session = self.sessions[sid]
         session.stopping = True
         session.stop_event.set()
+        if reason != "killed":
+            session.record.requested_end_reason = reason
         await asyncio.to_thread(session.pty.stop)
-        await self._mark_ended(session, "killed")
+        await self._mark_ended(session, reason)
 
     async def shutdown(self, *, intent: str = "quit") -> None:
         """Stop sessions for daemon shutdown.

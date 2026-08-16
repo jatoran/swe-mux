@@ -247,6 +247,7 @@ GET     /sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 The old observation endpoints and `.swe-mux/observations.json` remain compatibility storage.
 The current frontend has no Observation Inbox command or mounted view.
 Typed `spawn_request` rows are projected into `GET /queue/mailbox` and decided once by a human through the decision route.
+The decision route also acts on `kind: "control_request"` (a drafted Phase 7.6 interrupt/end): approving one runs the same shared daemon operation the granted path uses, still subject to the daemon-owner, non-agent, and readiness guards, so the human approval is what carries the authority (`features/mux-mcp.md`, `features/observations.md`).
 Malformed storage reports `observations_unreadable` and is never rewritten as empty.
 See `features/observations.md`.
 
@@ -444,6 +445,7 @@ policy, not config: live agent runs receive bounded default-on rows, while expli
 and the pause survive a restart and depend on no provider
 (`features/auto-delivery.md`).
 `/queue/mailbox` is an application-wide view over the same message rows, partitioned by authorship rather than inbox/outbox direction and optionally filtered by Project or target session before its result limit (`features/agent-messaging.md`).
+Its view also carries a `spawn_requests` list and, since Phase 7.6, a `control_requests` list of drafted interrupt/end approvals awaiting a human, each sorted newest-first and bounded.
 It backs the **fleet queue** surface; the route keeps its original name because renaming a daemon path for a UI rename would be a breaking change bought with nothing.
 
 ## Clipboard history
@@ -605,6 +607,11 @@ submit). A multi-line body must arrive wrapped in bracketed paste (`ESC[200~` â€
 newlines as CR) or the agent composer submits at every line. Actual message *delivery*
 (paste + submit) to a live agent goes through the prompt queue's `POST /queue/send-next`,
 which performs both writes daemon-side with the same evidence accounting.
+
+Two shared typed daemon operations added in Phase 7.6 stop or end a running agent, and the browser, CLI, and MCP `interrupt`/`end_session` tools all call them so no path skips the accounting.
+The interrupt operation writes the harness interrupt byte through the same operator-input helper (correct `input_revision`/`terminal_input` bookkeeping), leaving the session alive.
+The graceful-end operation interrupts the turn, sends the harness's own exit sequence (the adapter `graceful_exit_keys()`, carried on the PTY as `graceful_exit`), waits `session_control_graceful_timeout_s` for the CLI to tear itself down, and falls back to the existing hard stop only on timeout.
+It stamps `SessionRecord.requested_end_reason` first, so an agent-initiated end records `agent_ended` even when the CLI exits on its own (`features/sessions.md`, `features/mux-mcp.md`).
 
 `POST /sessions/{id}/attachments` accepts exactly one multipart file for a live Claude/Codex
 session and returns `{id, name, path, relative_path, reference, kind, media_type, bytes}`. Storage
@@ -1351,7 +1358,8 @@ Daily responses merge retained rollups with unpruned samples and keep different 
 
 `POST /mcp` is the streamable-HTTP MCP endpoint for spawned agent sessions (JSON-RPC 2.0, protocol 2025-06-18; loopback-only; 256 KiB body cap; 120 calls/min per session).
 Authentication is `Authorization: Bearer <MUX_MCP_TOKEN>`; the token is per-session, minted at spawn, injected into the session environment beside `MUX_MCP_URL`, and survives daemon restarts via supervisor meta.
-The tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `message_status`, `spawn_requests`, `notify`, and `request_spawn`.
+The read tools are `list_sessions`, `get_session`, `read_transcript`, `search_history`, `memory_sources`, `read_memory`, `project_notes`, `read_project_note`, `project_actions`, `message_status`, `spawn_requests`, and the four Phase 7.5 cross-session memory reads `provenance`, `verified_status`, `prior_resolutions`, and `dead_ends`.
+The write tools are `notify`, `request_spawn`, `run_action`, and the two Phase 7.6 session-control tools `interrupt` and `end_session`.
 Each takes a `project` argument selecting the scope it answers within: omitted (or `self`) is the caller's own Project, `fleet` is every Project, and a Project name or id is that one.
 `request_spawn` accepts a name but refuses `fleet`, because one request starts one session in one Project.
 An unknown Project name is refused with the names that exist; a name matching two sessions is refused with their session ids rather than resolved.
@@ -1370,10 +1378,12 @@ Ordinary reads default to 12 messages and 32 KiB of message text while preservin
 An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
 `get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
 Reads and writes default to the caller's own Project and reach another only through an explicit `project` argument; there is no mode, no config flag, and no implicit widening.
-Claude's generated settings allow the ten declared read tools without a prompt, while both write tools remain permission-gated.
+Claude's generated settings allow the fifteen declared read tools without a prompt, while every write tool remains permission-gated.
 Tool annotations declare the same read/write split.
 Successful MCP calls record content-free per-tool call, serialized-response-byte, and truncation counters in background diagnostics.
 `notify` only stages a queue message with a visible sender/message/correlation envelope and `request_spawn` only creates an inert Fleet Queue approval row.
+The four cross-session memory reads are deterministic queries over Tier 0 facts, git-provenance edges, the experience corpus, and the scan timeline; each is per-Project opt-in through the enablement DAG and returns `unsupported` (503) when the substrate is absent or `disabled` (409) when no Project in scope opted its automation in, never a fake empty.
+`interrupt` and `end_session` act on a running agent only under a per-Project grant (`off`/`draft`/`granted`, default `draft`); a `draft` grant writes an inert `control_request` a human decides in Fleet Queue, and `interrupt` is refused unless delivery-readiness is `safe`.
 The full contract is `features/mux-mcp.md`.
 An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.
 

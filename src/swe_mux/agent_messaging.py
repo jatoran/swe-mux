@@ -631,6 +631,44 @@ class AgentMessagingService:
             )
         return requests
 
+    async def _project_control_requests(self, project: Any) -> list[dict[str, Any]]:
+        """Drafted Phase 7.6 interrupt/end requests awaiting a human in one Project."""
+        if self._read_observations is None:
+            return []
+        identity = ProjectIdentity(project.id, project.name, project.root, "registered")
+        result = await self._read_observations(project.root, project=identity)
+        if result.get("status") == "malformed":
+            raise QueueError(
+                "control_requests_unavailable",
+                str(result.get("error") or "control request storage is unreadable"),
+                status=409,
+            )
+        requests: list[dict[str, Any]] = []
+        for item in result.get("observations") or []:
+            if item.get("kind") != "control_request":
+                continue
+            payload = dict(item.get("request") or {})
+            requests.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "created_at": float(item.get("created_at") or 0),
+                    "done": bool(item.get("done")),
+                    "status": str(payload.get("status") or "pending"),
+                    "action": str(payload.get("action") or ""),
+                    "target_session_id": str(payload.get("target_session_id") or ""),
+                    "target_name": str(payload.get("target_name") or ""),
+                    "reason": str(payload.get("reason") or ""),
+                    "from_session": str(payload.get("from_session") or ""),
+                    "from_name": str(payload.get("from_name") or ""),
+                    "from_run_id": str(payload.get("from_run_id") or ""),
+                    "outcome": str(payload.get("outcome") or "") or None,
+                    "decided_by": str(payload.get("decided_by") or "") or None,
+                }
+            )
+        return requests
+
     async def spawn_requests(self, caller: Any, project: Any = None) -> dict[str, Any]:
         """Read only requests attributed to the calling terminal session."""
         scope = self._scope(caller, project)
@@ -774,6 +812,7 @@ class AgentMessagingService:
                 item["origin_live"] = origin is not None
         spawn_requests: list[dict[str, Any]] = []
         spawn_request_errors: list[dict[str, str]] = []
+        control_requests: list[dict[str, Any]] = []
         if author != "human" and target_session_id is None:
             selected = [
                 project
@@ -792,12 +831,25 @@ class AgentMessagingService:
                     spawn_request_errors.append(
                         {"project_id": project.id, "error": exc.code}
                     )
+                try:
+                    control_requests.extend(
+                        await self._project_control_requests(project)
+                    )
+                except QueueError as exc:
+                    log.warning(
+                        "control requests unavailable project_id=%s code=%s",
+                        project.id,
+                        exc.code,
+                    )
             spawn_requests.sort(key=lambda item: item["created_at"], reverse=True)
             spawn_requests = spawn_requests[: max(1, min(limit, 500))]
+            control_requests.sort(key=lambda item: item["created_at"], reverse=True)
+            control_requests = control_requests[: max(1, min(limit, 500))]
         return {
             "author": author,
             "messages": messages,
             "spawn_requests": spawn_requests,
             "spawn_request_errors": spawn_request_errors,
+            "control_requests": control_requests,
             "targets": await self.queue.store.mailbox_targets(),
         }

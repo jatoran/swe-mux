@@ -12,6 +12,7 @@ one human review surface for both kinds of request:
   It starts nothing; a human approving it is what spawns the session.
 - The **fleet queue** - an application-wide authorship view over the same `queue_messages` rows, with sender/target labels, delivery state, Project/session filters, and revocation.
   It reviews; it does not deliver and does not carry the auto-delivery brakes.
+  Its view also carries the drafted `spawn_request` rows and, since Phase 7.6, drafted `control_request` rows (interrupt/end awaiting a human) so both agent-authored drafts are approved in one place.
 
 What is deliberately absent: an agent cannot deliver, cannot spawn, and cannot claim to be
 anyone else. It can address a session in another Project, but only by naming that Project -
@@ -129,6 +130,14 @@ its own is the default and nothing widens implicitly.
   with the prompt as `seed_text`; dismissing marks it decided. A request can only be decided
   once. An agent holding real spawn authority turns one prompt injection into unbounded
   fan-out — that is the failure mode a queue purge cannot undo.
+- **Session control drafts the same way under a `draft` grant** (Phase 7.6, CP §7.6). A
+  `mux.interrupt`/`mux.end_session` call whose Project sits at the default `draft` grant appends
+  a typed `control_request` item to the same `observations.json` (action, target, reason,
+  calling-session provenance), emits `agent_control_drafted`, and starts nothing; approving it
+  runs the shared interrupt/graceful-end daemon operation. It mirrors `spawn_request` exactly -
+  inert draft, one human decision, one place to review - which is why it is worth stating here
+  even though its authority and bounds live in `session_control.py` and its full contract in
+  `mux-mcp.md`. A Project raised to `granted` skips the draft and acts directly, inside bounds.
 - **Write status is readable by the attributed caller.** `message_status(message_id)` exposes
   drafted, armed, delivered, stranded, expired, or refused outcomes only when the MCP token
   owns the message's `sender_id`. Sender attribution is the whole check: the message row

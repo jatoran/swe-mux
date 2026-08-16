@@ -35,7 +35,16 @@ PROJECT_CONFIG_FIELDS = {
     "ignore_patterns",
     "automations",
     "worktree",
+    # Phase 7.6: the authority level for agent session control in this Project,
+    # once the `session_control` automation is opted in. "draft" (the default)
+    # makes an agent interrupt/end write an inert request a human approves;
+    # "granted" lets it act directly inside the daemon's bounds. The on/off is
+    # the automation opt-in; this only distinguishes draft from granted.
+    "session_control_grant",
 }
+#: The two authority levels the grant field may hold. "off" is not a value here -
+#: it is the absence of the `session_control` automation opt-in.
+SESSION_CONTROL_GRANTS = ("draft", "granted")
 # Read and discarded, never written. The scan-timeline dollar budget was a
 # per-project field; it is one global setting now, because a cap that lives in
 # a committed file nobody opens is a cap nobody can find when it stops the
@@ -689,6 +698,26 @@ def project_automations(root: str | Path) -> dict[str, bool]:
     return {}
 
 
+def project_session_control_grant(root: str | Path) -> str:
+    """The agent-session-control authority level for a Project.
+
+    Returns "draft" (the default when the `session_control` automation is on but
+    the field is unset) or "granted". "off" is not returned here: whether the
+    capability exists at all is the automation opt-in, which the caller checks
+    separately. A malformed or unreadable config falls back to the safe default.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            grant = values.get("session_control_grant")
+            if grant in SESSION_CONTROL_GRANTS:
+                return str(grant)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        pass
+    return "draft"
+
+
 def effective_project_ignores(root: str | Path, global_patterns: list[str]) -> list[str]:
     patterns = list(global_patterns)
     path = Path(root) / ".swe-mux" / "config.toml"
@@ -1006,6 +1035,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("resource_open_mode must be dock or popout")
     if parsed.get("prompt_library_scope") not in {None, "off", "global", "project", "both"}:
         raise ValueError("prompt_library_scope must be off, global, project, or both")
+    if parsed.get("session_control_grant") not in {None, *SESSION_CONTROL_GRANTS}:
+        raise ValueError("session_control_grant must be draft or granted")
     if "notification_sounds_enabled" in parsed and not isinstance(
         parsed["notification_sounds_enabled"], bool
     ):
@@ -1062,6 +1093,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "preferred_backend",
         "resource_open_mode",
         "prompt_library_scope",
+        "session_control_grant",
     ):
         if value := values.get(key):
             escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')

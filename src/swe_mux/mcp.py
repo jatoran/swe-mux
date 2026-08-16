@@ -51,6 +51,12 @@ from pathlib import Path
 from typing import Any
 
 from .clipboard_store import looks_like_secret
+from .deterministic_consumers import (
+    CLAIM_PATTERN,
+    build_provenance_edges,
+    detect_declared_vs_verified,
+    normalize_target,
+)
 from .git_projects import ProjectIdentity
 from .harness import agent_harnesses, is_agent_harness
 from .mcp_contract import READ_TOOL_NAMES, WRITE_TOOL_NAMES
@@ -100,6 +106,33 @@ RUN_PROMPT_CHECKPOINT_PREFIX = "run-prompt:"
 #: An inventory is a per-Project filesystem read, so the fleet form is bounded
 #: the way every other tool is rather than being unbounded because it is a list.
 FLEET_INVENTORY_MAX_PROJECTS = 25
+
+# Phase 7.5 cross-session memory reads. Every result names the agent run it came
+# from, low-confidence items are withheld from the agent (still counted for the
+# human), and empty is preferred over a weak match (CP §7, ROADMAP 7.5).
+MEMORY_MAX_RESULTS = 40
+#: Below this a prior resolution is withheld: the experience corpus stores a
+#: model-scored confidence, and a low-confidence fix an agent acts on is exactly
+#: the "plausible but wrong" failure the precision gate exists to stop.
+PRIOR_RESOLUTION_MIN_CONFIDENCE = 0.5
+#: Below this a scan-derived dead end is withheld. A scan record's confidence is
+#: the observer model's own 0..1 score for the turn it summarized.
+DEAD_END_MIN_CONFIDENCE = 0.4
+#: Tier 0 facts a single provenance query scans per Project before it stops. A
+#: file's lineage lives in the file_read/file_write facts, so this bounds the
+#: read the way every other tool is bounded rather than walking a run's history.
+PROVENANCE_FACT_SCAN_LIMIT = 5000
+#: The maps the enablement DAG resolves a Phase 7.5 tool against. A tool is a
+#: read over the output an already-shipped consumer produces, so it is available
+#: only where that consumer's per-Project opt-in is on (ROADMAP 7.5 exit
+#: criteria). `prior_resolutions` reads the experience corpus, which no detector
+#: gates today, so it earns its own consumer id.
+MEMORY_TOOL_AUTOMATION = {
+    "provenance": "provenance_graph",
+    "verified_status": "declared_vs_verified",
+    "dead_ends": "dead_end_memory",
+    "prior_resolutions": "prior_resolutions",
+}
 
 #: The `project` argument, identical on every tool that has one. Written once so
 #: the wording an agent reads cannot drift between tools.
@@ -263,6 +296,36 @@ def _history_list_summary(
 
 def _redact(text: str) -> str:
     return _REDACTED if text and looks_like_secret(text) else text
+
+
+def _load_detail(fact: dict[str, Any]) -> dict[str, Any]:
+    """Parse a Tier 0 fact's `detail_json`, which arrives as a raw JSON string."""
+    raw = fact.get("detail_json")
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _subsystem_matches(needle: str, targets: list[str], *haystacks: str) -> bool:
+    """Whether a subsystem hint matches a scan record.
+
+    A scan record has no subsystem field, only the tier-0 target paths its turn
+    touched, so a subsystem is matched as a case-folded substring of any of
+    those paths, or of the record's own free text (the intent or the dead-end
+    note itself). The hint is deliberately generous: a caller asking about
+    "delivery" wants the records that touched `delivery_readiness.py` as much as
+    the ones that named delivery in prose.
+    """
+    folded = needle.strip().casefold()
+    if not folded:
+        return True
+    if any(folded in str(target).casefold() for target in targets):
+        return True
+    return any(folded in text.casefold() for text in haystacks if text)
 
 
 def _encode_cursor(payload: dict[str, Any]) -> str:
@@ -838,6 +901,194 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "provenance",
+        "description": (
+            "Who touched a file, at what content hash, and what ran against it, "
+            "across every session in the Project. Returns cross-session "
+            "read-after-write edges from the deterministic fact record (session B "
+            "wrote hash X to F; session A later read it) and the git commits that "
+            "carry it. It reports lineage, not blame: it never says one session "
+            "caused another's failure. Every edge names the agent run it came "
+            "from, and one of your own earlier runs is labelled as such rather "
+            "than blended into the present. Empty means no cross-session lineage "
+            "for that file in scope. Needs the Provenance graph automation enabled "
+            "for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Path (repo-relative or absolute) to trace",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["file"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "verified_status",
+        "description": (
+            "Is a claim actually tested against the current code, or only "
+            "declared done? Give the claim text (\"the auth bug is fixed\") and "
+            "this reads the run's own test facts and answers with one of "
+            "'claims done · tests ran · tests passed', 'tests ran · tests "
+            "failed', or 'tests not run · nothing verified' - never a bare check "
+            "mark. Defaults to your own current run; pass session_id to check "
+            "another agent's run, and the result names whose run it read. Needs "
+            "the Declared vs verified automation enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "claim": {
+                    "type": "string",
+                    "description": "The done/fixed/works claim to check",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Session id or exact name whose run to check; omit or "
+                        "use 'self' for your own current run"
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["claim"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "prior_resolutions",
+        "description": (
+            "Has this exact error been fixed before, with a verified resolution? "
+            "Matches on the normalized error signature (equality, never a "
+            "substring guess), so a near-miss returns nothing rather than a "
+            "plausible-but-wrong fix. Give the raw error text. Results carry the "
+            "recorded resolution, the run it came from, and a confidence score; "
+            "low-confidence matches are withheld and only counted. Defaults to "
+            'your own Project (the precision gate wants same-Project); pass '
+            'project:"fleet" to widen. Needs the Prior resolutions automation '
+            "enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "description": "The raw error message or signature to look up",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["error"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "dead_ends",
+        "description": (
+            "Approaches a subsystem's runs tried, abandoned, and why, from the "
+            "scan timeline. Give a subsystem hint (a path fragment or module "
+            "name) and this returns the run-scoped records whose approach was "
+            "abandoned or failed with a recorded dead-end note, so you do not "
+            "re-walk a path a sibling already found closed. A conversation "
+            "rollover is not an abandonment; only an approach dropped within a "
+            "run counts. Every record names its run, and low-confidence records "
+            "are withheld. Needs the Dead-end memory automation enabled for the "
+            "Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "subsystem": {
+                    "type": "string",
+                    "description": (
+                        "A path fragment, module, or file name to match dead ends "
+                        "against; omit for every dead end in scope"
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "interrupt",
+        "description": (
+            "Stop another agent session's current turn. The session keeps living "
+            "- its conversation and terminal survive - and the work the turn was "
+            "doing is discarded. Use it when a sibling is wedged in a loop. It is "
+            "refused unless the target is safe to interrupt right now (never lands "
+            "in an approval prompt or a menu). By default this is not granted: the "
+            "call writes an inert request a human approves, and the result says "
+            "so. Cannot target your own session. "
+            'Your own Project is the default; pass project:"fleet" or a Project '
+            "name to reach another."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Session id or exact name to interrupt",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you are interrupting (recorded, shown to a human)",
+                },
+                "correlation_id": {
+                    "type": "string",
+                    "description": (
+                        "Idempotency key; a retry with the same value does "
+                        "not act twice"
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "end_session",
+        "description": (
+            "End an agent session: it goes away. Allowed against yourself, which "
+            "is the ordinary case for a finished worker - you end before your "
+            "final turn is lost, and your record stays readable through "
+            "list_sessions(include_ended), get_session, and history. Ending "
+            "another session first tries the harness's own graceful exit, then a "
+            "hard stop, and the end is recorded as agent-initiated. By default "
+            "this is not granted: the call writes an inert request a human "
+            "approves. The session that hosts the daemon and non-agent panes are "
+            'never valid targets. Pass project:"fleet" or a Project name to reach '
+            "another Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Session id or exact name to end; 'self' ends your own session",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Why you are ending it (recorded, shown to a human)",
+                },
+                "correlation_id": {
+                    "type": "string",
+                    "description": (
+                        "Idempotency key; a retry with the same value does "
+                        "not act twice"
+                    ),
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 _DECLARED_TOOL_NAMES = {str(tool["name"]) for tool in TOOLS}
@@ -901,6 +1152,9 @@ class McpService:
         projects: Any = None,
         project_actions: Any = None,
         action_runner: Any = None,
+        tier0: Any = None,
+        automation_gate: Any = None,
+        session_control: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -916,10 +1170,27 @@ class McpService:
         # over the daemon's own operations rather than a second implementation of
         # them. Injected so this module stays free of the HTTP layer.
         self.action_runner = action_runner
+        # Phase 7.5 memory reads. Tier 0 is the deterministic fact store; the
+        # gate is the per-project enablement closure (an async `(root) ->
+        # frozenset[str]`). Absent either, the memory tools answer `unsupported`
+        # rather than a fake empty. The experience corpus, scan records, and git
+        # provenance are reached through `automation_store` and `history`, which
+        # are already injected above.
+        self.tier0 = tier0
+        self.automation_gate = automation_gate
+        # Phase 7.6 session control. Absent (tests, minimal wiring) the tools list
+        # but answer unavailable - never a partial actuation.
+        self.session_control = session_control
         self.calls = 0
         self.denied = 0
         self.writes = 0
         self.tool_stats: dict[str, dict[str, int]] = {}
+        # Retrieval-outcome measurement for the Phase 7.5 memory tools (ROADMAP
+        # 7.5): per tool, how often it returned something, returned empty, and how
+        # many low-confidence items it withheld. A tool that only ever returns
+        # empty is a defect to fix, not a feature to leave running - this is the
+        # signal that surfaces it.
+        self.memory_outcomes: dict[str, dict[str, int]] = {}
 
     # ------------------------------------------------------------ identity
 
@@ -2311,6 +2582,468 @@ class McpService:
             await self._messaging().spawn_requests(caller, project=args.get("project"))
         )
 
+    # --------------------------------------------------- memory reads (7.5)
+
+    def _record_memory_outcome(
+        self, tool: str, *, returned: int, suppressed: int
+    ) -> None:
+        """Count what a memory read produced, so a dead tool is visible."""
+        stats = self.memory_outcomes.setdefault(
+            tool, {"calls": 0, "returned": 0, "empty": 0, "suppressed": 0}
+        )
+        stats["calls"] += 1
+        if returned > 0:
+            stats["returned"] += 1
+        else:
+            stats["empty"] += 1
+        stats["suppressed"] += suppressed
+
+    async def _caller_run_ids(self, caller: Any) -> tuple[str, set[str]]:
+        """The caller's current run id, and every run id the caller has owned.
+
+        A retrieved memory that came from one of the caller's own superseded
+        runs must be labelled as such rather than blended into the present: after
+        a `/clear` the agent has no memory of the work its predecessor run did,
+        so an unlabelled result from that run reads as its own recollection
+        (ROADMAP 7.5). Superseded runs are read from history, the same source
+        `get_session` uses for a caller's own superseded-run list.
+        """
+        current = self._record_run_id(caller.record)
+        owned = {current}
+        reader = getattr(self.history, "agent_runs_for_session", None)
+        if callable(reader):
+            for row in await reader(caller.record.id):
+                run_id = self._row_run_id(row)
+                if run_id:
+                    owned.add(run_id)
+        return current, owned
+
+    @staticmethod
+    def _run_attribution(
+        agent_run_id: str, current_run: str, owned_runs: set[str]
+    ) -> dict[str, Any]:
+        """Name the run a memory came from, and its relation to the caller."""
+        run = str(agent_run_id or "")
+        if not run:
+            return {"agent_run_id": None, "run_relation": "unknown"}
+        if run == current_run:
+            return {"agent_run_id": run, "run_relation": "your_current_run"}
+        if run in owned_runs:
+            return {
+                "agent_run_id": run,
+                "run_relation": "your_earlier_run",
+                "superseded": True,
+                "note": (
+                    "your own earlier run, before a /clear or /new; you have no "
+                    "memory of the work it did, so treat it as a sibling's"
+                ),
+            }
+        return {"agent_run_id": run, "run_relation": "sibling_run"}
+
+    def _project_scope_id(self, project: Any) -> str | None:
+        """The git-identity scope id for a Project, borrowed from a live session.
+
+        The experience corpus is keyed by `project_scope_id`, which a registered
+        Project object does not carry; a live session in the Project does. The
+        caller is always a live session in its own Project, so the default
+        (own-Project) path always resolves; a widened call resolves only when the
+        named Project has a live session, and returns `None` (no filter) rather
+        than guessing otherwise.
+        """
+        for session in self.sessions.sessions.values():
+            if str(getattr(session.record, "project_id", "") or "") == str(project.id):
+                scope_id = str(getattr(session.record, "project_scope_id", "") or "")
+                if scope_id:
+                    return scope_id
+        return None
+
+    async def _memory_scope(
+        self, caller: Any, args: dict[str, Any], tool_name: str
+    ) -> tuple[ProjectScope, list[Any], list[Any], bool]:
+        """Resolve scope and the Projects opted into one memory tool.
+
+        Fails with an explicit typed code rather than a fake empty: `unsupported`
+        when the daemon does not run the substrate at all, `disabled` when no
+        Project in scope has opted the backing automation in. An agent that
+        cannot tell "off" from "nothing here" either stops calling or trusts a
+        silence it should not (ROADMAP 7.5).
+        """
+        automation_id = MEMORY_TOOL_AUTOMATION[tool_name]
+        if self.tier0 is None or self.automation_gate is None:
+            raise QueueError(
+                "unsupported",
+                f"{tool_name} needs the control-plane memory substrate, which "
+                "this daemon does not run.",
+                status=503,
+            )
+        scope = self._requested_scope(caller, args)
+        projects, truncated = self._scoped_projects(caller, args)
+        enabled: list[Any] = []
+        disabled: list[Any] = []
+        for project in projects:
+            ids = await self.automation_gate(str(project.root))
+            (enabled if automation_id in ids else disabled).append(project)
+        if not enabled:
+            label = automation_id.replace("_", " ")
+            raise QueueError(
+                "disabled",
+                f"the '{label}' automation is not enabled for {scope.label}. "
+                "Enable it in the Project's automation settings for this tool to "
+                "read anything.",
+                status=409,
+                automation=automation_id,
+            )
+        return scope, enabled, disabled, truncated
+
+    @staticmethod
+    def _disabled_note(disabled: list[Any], automation_id: str) -> dict[str, Any]:
+        if not disabled:
+            return {}
+        return {
+            "not_opted_in": [
+                {"id": str(project.id), "name": str(project.name)}
+                for project in disabled
+            ],
+            "not_opted_in_note": (
+                f"{len(disabled)} Project(s) in scope have not enabled "
+                f"'{automation_id.replace('_', ' ')}' and were not read."
+            ),
+        }
+
+    async def provenance(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.provenance(file)`: file lineage across sessions (CP §6.1).
+
+        Lineage, never blame. It reports that session B wrote a hash to a file
+        and session A later read it, and the tests those runs ran; it never
+        asserts that B caused A to fail. Ambiguous edges (another write landed
+        between the reported write and the read) are withheld from the result and
+        only counted, because an uncertain writer is exactly the weak match the
+        precision gate exists to suppress.
+        """
+        target_arg = str(args.get("file") or "").strip()
+        if not target_arg:
+            raise ValueError("file is required")
+        scope, projects, disabled, _truncated = await self._memory_scope(
+            caller, args, "provenance"
+        )
+        current_run, owned = await self._caller_run_ids(caller)
+        touches: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        tests: list[dict[str, Any]] = []
+        suppressed = 0
+        for project in projects:
+            root = str(project.root)
+            normalized = normalize_target(target_arg, root)
+            if not normalized:
+                continue
+            facts = await self.tier0.facts_for_project(
+                str(project.id), limit=PROVENANCE_FACT_SCAN_LIMIT
+            )
+            run_by_fact = {
+                str(fact.get("id")): str(fact.get("agent_run_id") or "")
+                for fact in facts
+            }
+            writer_runs: set[str] = set()
+            for fact in facts:
+                if normalize_target(fact.get("target"), root) != normalized:
+                    continue
+                kind = str(fact.get("kind") or "")
+                if kind not in {"file_write", "file_read"}:
+                    continue
+                run = str(fact.get("agent_run_id") or "")
+                if kind == "file_write":
+                    writer_runs.add(run)
+                touches.append(
+                    {
+                        "action": "write" if kind == "file_write" else "read",
+                        "session_id": str(fact.get("session_id") or ""),
+                        "run": self._run_attribution(run, current_run, owned),
+                        "content_hash": fact.get("content_hash"),
+                        "at": fact.get("created_at"),
+                        "project_id": str(project.id),
+                    }
+                )
+            for edge in build_provenance_edges(facts, project_root=root):
+                if edge.target != normalized:
+                    continue
+                if edge.ambiguous:
+                    suppressed += 1
+                    continue
+                edges.append(
+                    {
+                        "target": edge.target,
+                        "content_hash": edge.writer_content_hash,
+                        "writer": self._run_attribution(
+                            run_by_fact.get(edge.writer_fact_id, ""),
+                            current_run,
+                            owned,
+                        ),
+                        "writer_session_id": edge.writer_session_id,
+                        "written_at": edge.written_at,
+                        "reader": self._run_attribution(
+                            run_by_fact.get(edge.reader_fact_id, ""),
+                            current_run,
+                            owned,
+                        ),
+                        "reader_session_id": edge.reader_session_id,
+                        "read_at": edge.read_at,
+                        "project_id": str(project.id),
+                    }
+                )
+            for fact in facts:
+                if str(fact.get("kind") or "") != "test_result":
+                    continue
+                if str(fact.get("agent_run_id") or "") not in writer_runs:
+                    continue
+                detail = _load_detail(fact)
+                tests.append(
+                    {
+                        "run": self._run_attribution(
+                            str(fact.get("agent_run_id") or ""), current_run, owned
+                        ),
+                        "outcome": detail.get("test_outcome"),
+                        "target": fact.get("target"),
+                        "at": fact.get("created_at"),
+                        "project_id": str(project.id),
+                    }
+                )
+        touches.sort(key=lambda item: item.get("at") or 0.0)
+        self._record_memory_outcome(
+            "provenance", returned=len(touches) + len(edges), suppressed=suppressed
+        )
+        return {
+            "file": target_arg,
+            "touches": touches[:MEMORY_MAX_RESULTS],
+            "cross_session_edges": edges[:MEMORY_MAX_RESULTS],
+            "tests": tests[:MEMORY_MAX_RESULTS],
+            "ambiguous_suppressed": suppressed,
+            "note": (
+                "Lineage only: a write followed by a read is not a cause of a "
+                "failure. Ambiguous edges are withheld and counted."
+            ),
+            **self._disabled_note(disabled, "provenance_graph"),
+            **self._scope_envelope(scope),
+        }
+
+    async def verified_status(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.verifiedStatus(claim)`: tested, or only declared done (CP §6.3)."""
+        claim = str(args.get("claim") or "").strip()
+        if not claim:
+            raise ValueError("claim is required")
+        scope, projects, disabled, _truncated = await self._memory_scope(
+            caller, args, "verified_status"
+        )
+        current_run, owned = await self._caller_run_ids(caller)
+        identity = str(args.get("session_id") or "self").strip() or "self"
+        run_id = ""
+        session_id = ""
+        try:
+            session, _display = await self._resolve_live(caller, identity, scope)
+        except KeyError:
+            session = None
+        if session is not None:
+            run_id = self._record_run_id(session.record)
+            session_id = str(session.record.id)
+        else:
+            try:
+                row, _display = await self._resolve_history(caller, identity, scope)
+            except KeyError as exc:
+                raise QueueError(
+                    "unknown_target",
+                    f"no session {identity!r} in {scope.label} to check the claim "
+                    "against.",
+                    status=404,
+                ) from exc
+            run_id = self._row_run_id(row)
+            session_id = str(row.get("id") or "")
+        facts = await self.tier0.facts_for_run(run_id) if run_id else []
+        finding = detect_declared_vs_verified(claim, facts)
+        checked = {
+            "session_id": session_id,
+            "run": self._run_attribution(run_id, current_run, owned),
+        }
+        if finding is not None:
+            result: dict[str, Any] = {
+                "declared": finding.declared,
+                "tests_ran": finding.tests_ran,
+                "tests_passed": finding.tests_passed,
+                "verified": bool(finding.tests_ran and finding.tests_passed),
+                "claim": finding.claim,
+                "status": finding.content,
+                "evidence": finding.evidence[:MEMORY_MAX_RESULTS],
+            }
+        elif CLAIM_PATTERN.search(claim):
+            # `detect_declared_vs_verified` returns None both for a non-claim and
+            # for a claim whose tests ran and passed. The pattern still matching
+            # here means the second case: an accurate claim, not flagged.
+            result = {
+                "declared": True,
+                "tests_ran": True,
+                "tests_passed": True,
+                "verified": True,
+                "claim": claim[:240],
+                "status": "claims done · tests ran · tests passed",
+            }
+        else:
+            result = {
+                "declared": False,
+                "tests_ran": False,
+                "tests_passed": False,
+                "verified": False,
+                "claim": claim[:240],
+                "status": "no done/fixed/works claim detected in the text",
+            }
+        result["checked"] = checked
+        result.update(self._disabled_note(disabled, "declared_vs_verified"))
+        result.update(self._scope_envelope(scope))
+        self._record_memory_outcome(
+            "verified_status",
+            returned=1 if result.get("declared") else 0,
+            suppressed=0,
+        )
+        return result
+
+    async def prior_resolutions(
+        self, caller: Any, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`mux.priorResolutions(error)`: a verified fix for this error (CP §6.10).
+
+        Equality on the normalized error signature, never a substring: a
+        usually-wrong prior resolution poisons trust in the whole surface, so a
+        near-miss returns nothing. Low-confidence matches are withheld and only
+        counted.
+        """
+        error = str(args.get("error") or "").strip()
+        if not error:
+            raise ValueError("error is required")
+        scope, projects, disabled, _truncated = await self._memory_scope(
+            caller, args, "prior_resolutions"
+        )
+        current_run, owned = await self._caller_run_ids(caller)
+        results: list[dict[str, Any]] = []
+        suppressed = 0
+        seen: set[str] = set()
+        scope_ids: list[str | None]
+        if scope.fleet:
+            scope_ids = [None]
+        else:
+            scope_ids = [self._project_scope_id(project) for project in projects]
+        for scope_id in scope_ids:
+            rows = await self.automation_store.experiences(
+                error=error, project_scope_id=scope_id, limit=MEMORY_MAX_RESULTS
+            )
+            for row in rows:
+                identity = str(row.get("id") or "")
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                raw_conf = row.get("confidence")
+                confidence = (
+                    float(raw_conf) if isinstance(raw_conf, int | float) else 0.0
+                )
+                if confidence < PRIOR_RESOLUTION_MIN_CONFIDENCE:
+                    suppressed += 1
+                    continue
+                results.append(
+                    {
+                        "resolution": _redact(str(row.get("resolution_summary") or "")),
+                        "error_summary": _redact(str(row.get("error_summary") or "")),
+                        "confidence": confidence,
+                        "backend": row.get("backend"),
+                        "source_run": self._run_attribution(
+                            str(row.get("source_run_id") or ""), current_run, owned
+                        ),
+                        "recorded_at": row.get("created_at"),
+                        "project_scope_id": row.get("project_scope_id"),
+                    }
+                )
+        results.sort(key=lambda item: item.get("confidence") or 0.0, reverse=True)
+        self._record_memory_outcome(
+            "prior_resolutions", returned=len(results), suppressed=suppressed
+        )
+        return {
+            "error": error[:2000],
+            "resolutions": results[:MEMORY_MAX_RESULTS],
+            "low_confidence_suppressed": suppressed,
+            "note": (
+                "Matched on the exact normalized error signature. Empty means no "
+                "verified prior fix for this signature in scope."
+            ),
+            **self._disabled_note(disabled, "prior_resolutions"),
+            **self._scope_envelope(scope),
+        }
+
+    async def dead_ends(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.deadEnds(subsystem)`: approaches tried and abandoned (CP §6.2).
+
+        A scan record is already run-scoped, and a conversation rollover writes a
+        boundary rather than a record, so filtering to records whose approach was
+        abandoned or failed within their run structurally excludes `/clear` from
+        counting as an abandonment. Low-confidence records are withheld.
+        """
+        subsystem = str(args.get("subsystem") or "").strip()
+        scope, projects, disabled, _truncated = await self._memory_scope(
+            caller, args, "dead_ends"
+        )
+        current_run, owned = await self._caller_run_ids(caller)
+        results: list[dict[str, Any]] = []
+        suppressed = 0
+        for project in projects:
+            records = await self.automation_store.scan_records(
+                project_id=str(project.id), limit=2000
+            )
+            for record in records:
+                status = str(record.get("approach_status") or "")
+                dead = str(record.get("dead_end") or "").strip()
+                if status not in {"abandoned", "failed"} or not dead:
+                    continue
+                targets = [str(item) for item in (record.get("target") or [])]
+                intent = str(record.get("intent") or "")
+                summary = str(record.get("summary") or "")
+                if subsystem and not _subsystem_matches(
+                    subsystem, targets, dead, intent, summary
+                ):
+                    continue
+                raw_conf = record.get("confidence")
+                confidence = (
+                    float(raw_conf) if isinstance(raw_conf, int | float) else 0.0
+                )
+                if confidence < DEAD_END_MIN_CONFIDENCE:
+                    suppressed += 1
+                    continue
+                results.append(
+                    {
+                        "dead_end": _redact(dead),
+                        "approach_status": status,
+                        "intent": _redact(intent),
+                        "summary": _redact(summary),
+                        "targets": targets[:20],
+                        "confidence": confidence,
+                        "run": self._run_attribution(
+                            str(record.get("agent_run_id") or ""), current_run, owned
+                        ),
+                        "at": record.get("t1") or record.get("created_at"),
+                        "project_id": str(project.id),
+                    }
+                )
+        results.sort(key=lambda item: item.get("at") or 0.0, reverse=True)
+        self._record_memory_outcome(
+            "dead_ends", returned=len(results), suppressed=suppressed
+        )
+        return {
+            "subsystem": subsystem or None,
+            "dead_ends": results[:MEMORY_MAX_RESULTS],
+            "low_confidence_suppressed": suppressed,
+            "note": (
+                "Approaches abandoned or failed within a run. A conversation "
+                "rollover is not counted as an abandonment."
+            ),
+            **self._disabled_note(disabled, "dead_end_memory"),
+            **self._scope_envelope(scope),
+        }
+
     # ----------------------------------------------------------- write tools
 
     def _messaging(self) -> Any:
@@ -2397,6 +3130,42 @@ class McpService:
         )
         return dict(result)
 
+    def _control(self) -> Any:
+        if self.session_control is None:
+            raise RuntimeError(
+                "transient: the session-control service is not available on this daemon"
+            )
+        return self.session_control
+
+    async def interrupt(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.interrupt`: a caller over the readiness-gated interrupt operation.
+
+        Every bound (grant, scope, readiness, budget, cycle, idempotency, kill
+        switch) lives in the daemon operation, not here. The actor is the token's
+        session; there is no sender argument to forge.
+        """
+        self.writes += 1
+        result = await self._control().interrupt(
+            caller,
+            target=str(args.get("target") or ""),
+            reason=str(args.get("reason") or ""),
+            correlation_id=str(args.get("correlation_id") or "") or None,
+            project=str(args.get("project") or ""),
+        )
+        return dict(result)
+
+    async def end_session(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.end_session`: a caller over the graceful-end operation."""
+        self.writes += 1
+        result = await self._control().end_session(
+            caller,
+            target=str(args.get("target") or ""),
+            reason=str(args.get("reason") or ""),
+            correlation_id=str(args.get("correlation_id") or "") or None,
+            project=str(args.get("project") or ""),
+        )
+        return dict(result)
+
     # ------------------------------------------------------------ protocol
 
     async def dispatch_tool(self, caller: Any, name: str, args: dict[str, Any]) -> Any:
@@ -2424,9 +3193,15 @@ class McpService:
             "project_actions": self.project_actions,
             "message_status": self.message_status,
             "spawn_requests": self.spawn_requests,
+            "provenance": self.provenance,
+            "verified_status": self.verified_status,
+            "prior_resolutions": self.prior_resolutions,
+            "dead_ends": self.dead_ends,
             "notify": self.notify,
             "request_spawn": self.request_spawn,
             "run_action": self.run_action,
+            "interrupt": self.interrupt,
+            "end_session": self.end_session,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -2560,4 +3335,11 @@ class McpService:
             "denied": self.denied,
             "writes": self.writes,
             "tools": {name: dict(values) for name, values in sorted(self.tool_stats.items())},
+            # Retrieval-outcome measurement (ROADMAP 7.5): a memory tool whose
+            # `empty` count dominates its `calls` is returning nothing useful and
+            # is a defect to fix rather than a feature to leave running.
+            "memory_outcomes": {
+                name: dict(values)
+                for name, values in sorted(self.memory_outcomes.items())
+            },
         }

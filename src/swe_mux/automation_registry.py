@@ -49,6 +49,12 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Dead-end memory",
         ("tier0", "scan_timeline"),
     ),
+    # Phase 7.5: the per-project opt-in that gates the `mux.prior_resolutions`
+    # MCP read. It reads the experience corpus (model-scored verified fixes,
+    # keyed by normalized error signature), which no detector produces, so it is
+    # its own consumer id rather than a read over another automation's output. It
+    # needs Tier 0 as the base fact record the experience corpus is derived from.
+    Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",)),
     Automation(
         "continuous_title",
         CONSUMER,
@@ -93,6 +99,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # Fleet Queue.
     Automation("observation_inbox", CONSUMER, "Spawn request review"),
     Automation("screenshot_to_agent", CONSUMER, "Screenshot to agent"),
+    # Phase 7.6: the per-Project opt-in that makes the `interrupt` and
+    # `end_session` MCP tools reachable at all. It gates a capability rather than
+    # a read over another consumer's output, so it depends on no substrate; the
+    # delivery-readiness predicate an interrupt gates on is intrinsic, not an
+    # opt-in. Off by default (not in any defaults template), and even when on the
+    # authority defaults to `draft` - a human approves every action - until the
+    # Project's `session_control_grant` is raised to `granted`.
+    Automation("session_control", CONSUMER, "Agent session control", ()),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}

@@ -1247,13 +1247,17 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
     names = {tool["name"] for tool in listing["result"]["tools"]}
     # A closed allowlist: Phase 5.6 adds only situational-awareness reads to the
     # two bounded Phase 5 writes,
-    # neither of which delivers or spawns anything by itself. A new tool must
-    # be added here deliberately.
+    # neither of which delivers or spawns anything by itself. Phase 7.5 adds four
+    # cross-session memory reads. A new tool must be added here deliberately.
     assert names == {
         "list_sessions",
         "get_session",
         "read_transcript",
         "search_history",
+        "provenance",
+        "verified_status",
+        "prior_resolutions",
+        "dead_ends",
         "memory_sources",
         "read_memory",
         "message_status",
@@ -1264,6 +1268,8 @@ async def test_initialize_negotiates_and_lists_closed_tool_allowlist() -> None:
         "notify",
         "request_spawn",
         "run_action",
+        "interrupt",
+        "end_session",
     }
     assert names == {tool["name"] for tool in TOOLS}
     by_name = {tool["name"]: tool for tool in listing["result"]["tools"]}

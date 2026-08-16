@@ -141,11 +141,31 @@ export interface SpawnRequestRow {
   decided_by: string | null
 }
 
+/** A Phase 7.6 drafted interrupt/end awaiting a human. Approval is what acts. */
+export interface ControlRequestRow {
+  id: string
+  project_id: string
+  project_name: string
+  created_at: number
+  done: boolean
+  status: string
+  action: string
+  target_session_id: string
+  target_name: string
+  reason: string
+  from_session: string
+  from_name: string
+  from_run_id: string
+  outcome: string | null
+  decided_by: string | null
+}
+
 export interface FleetQueueView {
   author: FleetQueueAuthor
   messages: QueueMessage[]
   spawn_requests: SpawnRequestRow[]
   spawn_request_errors: { project_id: string; error: string }[]
+  control_requests: ControlRequestRow[]
   targets: FleetQueueTarget[]
 }
 
@@ -278,6 +298,18 @@ export const decideSpawnRequest = (
   requestId: string,
   decision: 'approve' | 'dismiss',
 ) => api<{ session?: { id: string; name: string } }>(
+  'POST',
+  `/api/projects/${encodeURIComponent(projectId)}/observations/${encodeURIComponent(requestId)}/decide`,
+  { decision },
+)
+
+/** Approve (act) or dismiss a drafted interrupt/end. Same endpoint as spawn
+ *  requests; approval performs the control action through the daemon operation. */
+export const decideControlRequest = (
+  projectId: string,
+  requestId: string,
+  decision: 'approve' | 'dismiss',
+) => api<{ outcome?: string; final_state?: string }>(
   'POST',
   `/api/projects/${encodeURIComponent(projectId)}/observations/${encodeURIComponent(requestId)}/decide`,
   { decision },

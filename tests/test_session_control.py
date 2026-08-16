@@ -1,0 +1,438 @@
+"""Phase 7.6: agent session control - interrupt and end.
+
+What these pin is the contract: the install master switch and the per-Project
+grant gate every action; `draft` (the default) writes an inert request and acts
+nothing; `granted` acts inside bounds (per-origin budget, reciprocal-cycle guard,
+idempotency) and an interrupt only when delivery-readiness is `safe`; a shell
+pane, an out-of-scope session, and the daemon-hosting session are never valid
+targets; and self-end returns before teardown. MCP is transport - every bound
+lives in the service.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from swe_mux.adapters import build_agent_adapter
+from swe_mux.harness import HARNESSES, is_agent_harness
+from swe_mux.prompt_queue import QueueError
+from swe_mux.session_control import SessionControlService
+from tests.test_mcp import live_session, manager_for
+
+
+class EventsStub:
+    def __init__(self) -> None:
+        self.emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(self, name: str, **kwargs: Any) -> None:
+        self.emitted.append((name, kwargs))
+
+    def names(self) -> list[str]:
+        return [name for name, _ in self.emitted]
+
+
+def _projects(root: str = "D:/work") -> Any:
+    return SimpleNamespace(
+        projects={"p1": SimpleNamespace(id="p1", name="Work", root=root)}
+    )
+
+
+def _config(**overrides: Any) -> Any:
+    base = dict(
+        session_control_enabled=True,
+        session_control_hourly_budget=30,
+        session_control_graceful_timeout_s=12.0,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _build(
+    *sessions: Any,
+    grant: str = "granted",
+    automation_on: bool = True,
+    readiness: str = "safe",
+    config: Any = None,
+    events: EventsStub | None = None,
+    clock: _Clock | None = None,
+    interrupt_op: Any = None,
+    graceful_op: Any = None,
+    daemon_owner_ids: frozenset[str] = frozenset(),
+    append_observation: Any = None,
+) -> SessionControlService:
+    async def gate(_root: str) -> frozenset[str]:
+        return frozenset({"session_control"}) if automation_on else frozenset()
+
+    def grant_field(_root: str) -> str:
+        return grant
+
+    def readiness_evaluate(_session: Any) -> dict[str, Any]:
+        return {"delivery_state": readiness, "reason": "test"}
+
+    def is_daemon_owner(session: Any) -> bool:
+        return str(session.record.id) in daemon_owner_ids
+
+    return SessionControlService(
+        sessions=manager_for(*sessions),
+        projects=_projects(),
+        config=config or _config(),
+        events=events or EventsStub(),
+        readiness_evaluate=readiness_evaluate,
+        automation_gate=gate,
+        grant_field=grant_field,
+        interrupt_op=interrupt_op or _noop_interrupt,
+        graceful_end_op=graceful_op or _noop_graceful,
+        is_daemon_owner=is_daemon_owner,
+        append_observation=append_observation,
+        clock=clock or _Clock(),
+    )
+
+
+async def _noop_interrupt(_session: Any) -> None:
+    return None
+
+
+async def _noop_graceful(session: Any, reason: str) -> dict[str, Any]:
+    session.record.state = "exited"
+    session.record.requested_end_reason = reason
+    return {"final_state": "exited", "graceful": True, "reason": reason}
+
+
+def _caller(sid: str = "s1") -> Any:
+    return live_session(sid, token=f"tok-{sid}", project_id="p1", scope_id="scope-1")
+
+
+def _target(sid: str = "s2", *, backend: str = "claude", state: str = "working") -> Any:
+    return live_session(
+        sid, token=f"tok-{sid}", project_id="p1", scope_id="scope-1",
+        backend=backend, state=state,
+    )
+
+
+# ------------------------------------------------------------- master switch
+
+
+@pytest.mark.asyncio
+async def test_master_switch_off_refuses() -> None:
+    caller, target = _caller(), _target()
+    service = _build(caller, target, config=_config(session_control_enabled=False))
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(caller, target="s2")
+    assert excinfo.value.code == "session_control_disabled"
+
+
+@pytest.mark.asyncio
+async def test_grant_off_when_automation_not_enabled() -> None:
+    caller, target = _caller(), _target()
+    service = _build(caller, target, automation_on=False)
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(caller, target="s2")
+    assert excinfo.value.code == "session_control_not_enabled"
+
+
+# -------------------------------------------------------------------- draft
+
+
+@pytest.mark.asyncio
+async def test_draft_writes_inert_request_and_acts_nothing() -> None:
+    caller, target = _caller(), _target()
+    interrupts: list[Any] = []
+    drafts: list[dict[str, Any]] = []
+
+    async def record_interrupt(session: Any) -> None:
+        interrupts.append(session)
+
+    async def append_obs(
+        root: str, body: str, *, kind: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
+        drafts.append({"root": root, "body": body, "kind": kind, "request": request})
+        return {"appended_id": "obs-1"}
+
+    events = EventsStub()
+    service = _build(
+        caller, target, grant="draft", events=events,
+        interrupt_op=record_interrupt, append_observation=append_obs,
+    )
+    result = await service.interrupt(caller, target="s2", reason="stuck in a loop")
+    assert result["status"] == "drafted"
+    assert result["request_id"] == "obs-1"
+    # Nothing acted.
+    assert interrupts == []
+    assert drafts[0]["kind"] == "control_request"
+    assert drafts[0]["request"]["action"] == "interrupt"
+    assert drafts[0]["request"]["status"] == "pending"
+    assert "agent_control_drafted" in events.names()
+
+
+# ------------------------------------------------------------ granted: act
+
+
+@pytest.mark.asyncio
+async def test_granted_interrupt_gates_on_readiness_safe() -> None:
+    caller, target = _caller(), _target()
+    interrupts: list[Any] = []
+
+    async def record_interrupt(session: Any) -> None:
+        interrupts.append(session.record.id)
+
+    service = _build(caller, target, grant="granted", interrupt_op=record_interrupt)
+    result = await service.interrupt(caller, target="s2")
+    assert result["status"] == "interrupted"
+    assert interrupts == ["s2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["blocked", "unknown"])
+async def test_granted_interrupt_refused_when_not_safe(state: str) -> None:
+    caller, target = _caller(), _target()
+    interrupts: list[Any] = []
+
+    async def record_interrupt(session: Any) -> None:
+        interrupts.append(session)
+
+    service = _build(
+        caller, target, grant="granted", readiness=state,
+        interrupt_op=record_interrupt,
+    )
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(caller, target="s2")
+    assert excinfo.value.code == "readiness_not_safe"
+    assert excinfo.value.payload.get("delivery_state") == state
+    # Fail closed: nothing was written to the target.
+    assert interrupts == []
+
+
+@pytest.mark.asyncio
+async def test_granted_end_other_session_is_graceful() -> None:
+    caller, target = _caller(), _target()
+    ends: list[tuple[str, str]] = []
+
+    async def graceful(session: Any, reason: str) -> dict[str, Any]:
+        ends.append((session.record.id, reason))
+        session.record.state = "exited"
+        return {"final_state": "exited", "graceful": True, "reason": reason}
+
+    service = _build(caller, target, grant="granted", graceful_op=graceful)
+    result = await service.end_session(caller, target="s2", reason="worker done")
+    assert result["status"] == "ended"
+    assert result["graceful"] is True
+    assert ends == [("s2", "agent_ended")]
+
+
+@pytest.mark.asyncio
+async def test_self_end_returns_before_teardown() -> None:
+    caller = _caller()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    torn_down: list[str] = []
+
+    async def slow_graceful(session: Any, reason: str) -> dict[str, Any]:
+        started.set()
+        await release.wait()  # would deadlock if end_session awaited this
+        torn_down.append(session.record.id)
+        session.record.state = "exited"
+        return {"final_state": "exited", "graceful": True, "reason": reason}
+
+    service = _build(caller, grant="granted", graceful_op=slow_graceful)
+    result = await service.end_session(caller, target="self")
+    # Returned before teardown finished.
+    assert result["status"] == "ending"
+    assert result["self"] is True
+    assert torn_down == []
+    # The teardown was scheduled and is now running.
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release.set()
+    await asyncio.sleep(0)
+
+
+# --------------------------------------------------------- forbidden targets
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_target_is_not_found() -> None:
+    caller = _caller()
+    other = live_session(
+        "s9", token="t9", project_id="p2", scope_id="scope-2", backend="claude"
+    )
+    service = _build(caller, other, grant="granted")
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(caller, target="s9")
+    assert excinfo.value.code == "unknown_target"
+    assert excinfo.value.status == 404
+
+
+@pytest.mark.asyncio
+async def test_shell_pane_is_not_a_valid_target() -> None:
+    caller = _caller()
+    shell = _target("s2", backend="shell")
+    assert not is_agent_harness("shell")
+    service = _build(caller, shell, grant="granted")
+    with pytest.raises(QueueError) as excinfo:
+        await service.end_session(caller, target="s2")
+    assert excinfo.value.code == "not_agent_target"
+
+
+@pytest.mark.asyncio
+async def test_daemon_owning_session_is_forbidden() -> None:
+    caller = _caller()
+    host = _target("s2")
+    service = _build(caller, host, grant="granted", daemon_owner_ids=frozenset({"s2"}))
+    with pytest.raises(QueueError) as excinfo:
+        await service.end_session(caller, target="s2")
+    assert excinfo.value.code == "forbidden_target"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_cannot_target_self() -> None:
+    caller = _caller()
+    service = _build(caller, grant="granted")
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(caller, target="self")
+    assert excinfo.value.code == "self_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_ended_target_refused() -> None:
+    caller = _caller()
+    dead = _target("s2", state="exited")
+    service = _build(caller, dead, grant="granted")
+    with pytest.raises(QueueError) as excinfo:
+        await service.end_session(caller, target="s2")
+    assert excinfo.value.code == "target_ended"
+
+
+# ------------------------------------------------------------------ bounds
+
+
+@pytest.mark.asyncio
+async def test_per_origin_budget_exhausts() -> None:
+    caller = _caller()
+    targets = [_target(f"t{i}") for i in range(3)]
+    clock = _Clock()
+    service = _build(
+        caller, *targets, grant="granted",
+        config=_config(session_control_hourly_budget=2), clock=clock,
+    )
+    await service.interrupt(caller, target="t0")
+    await service.interrupt(caller, target="t1")
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(caller, target="t2")
+    assert excinfo.value.code == "origin_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_reciprocal_cycle_is_refused() -> None:
+    a = _caller("a")
+    b = _target("b")
+    # Both are agents in the same project; make each addressable as caller.
+    service = _build(a, b, grant="granted")
+    # a ends... no, use interrupt so neither actually ends. a interrupts b.
+    await service.interrupt(a, target="b")
+    # Now b interrupting a back closes the ring.
+    b_caller = b
+    with pytest.raises(QueueError) as excinfo:
+        await service.interrupt(b_caller, target="a")
+    assert excinfo.value.code == "relay_cycle"
+
+
+@pytest.mark.asyncio
+async def test_idempotent_correlation_acts_once() -> None:
+    caller, target = _caller(), _target()
+    calls: list[str] = []
+
+    async def record_interrupt(session: Any) -> None:
+        calls.append(session.record.id)
+
+    service = _build(caller, target, grant="granted", interrupt_op=record_interrupt)
+    first = await service.interrupt(caller, target="s2", correlation_id="k1")
+    second = await service.interrupt(caller, target="s2", correlation_id="k1")
+    assert first == second
+    # Acted once despite two calls.
+    assert calls == ["s2"]
+
+
+# ------------------------------------------------------------ audit / silent
+
+
+@pytest.mark.asyncio
+async def test_actions_emit_audit_events() -> None:
+    caller, target = _caller(), _target()
+    events = EventsStub()
+    service = _build(caller, target, grant="granted", events=events)
+    await service.interrupt(caller, target="s2", reason="loop")
+    assert "agent_session_control" in events.names()
+    payload = dict(events.emitted[-1][1])
+    assert payload["action"] == "interrupt"
+    assert payload["target_session_id"] == "s2"
+
+
+# --------------------------------------------------- durable end reasons
+
+
+def test_end_reason_is_forwarded_and_distinguishable() -> None:
+    """agent_ended, killed, and completed stay distinct in the durable record.
+
+    `_mark_ended` prefers a session's `requested_end_reason` and passes it to
+    `terminal_exit_outcome`, which forwards it verbatim as the `final_reason` the
+    history row and the exit event carry - except a clean one-shot completion,
+    which is always `completed`. A post-mortem reads these apart.
+    """
+    from swe_mux.session import terminal_exit_outcome
+
+    # An agent-initiated end of an interactive session.
+    state, reason, _ = terminal_exit_outcome(
+        "interactive", stopping=True, exit_code=0, reason="agent_ended"
+    )
+    assert (state, reason) == ("exited", "agent_ended")
+    # An operator hard stop stays `killed`.
+    _, killed_reason, _ = terminal_exit_outcome(
+        "interactive", stopping=True, exit_code=0, reason="killed"
+    )
+    assert killed_reason == "killed"
+    # A clean one-shot completion is `completed` regardless of the passed reason.
+    _, completed_reason, _ = terminal_exit_outcome(
+        "one_shot", stopping=False, exit_code=0, reason="agent_ended"
+    )
+    assert completed_reason == "completed"
+
+
+# ------------------------------------------------- per-harness coverage guard
+
+
+def test_every_agent_harness_declares_a_graceful_exit_for_control() -> None:
+    """The graceful end sends the harness's own exit sequence (CP §7.6).
+
+    That sequence is per-harness and adapter-owned; `_end_session_gracefully`
+    reads it off the PTY, where it was set from `adapter.graceful_exit_keys()`.
+    A new agent harness added to the registry with no exit keystrokes would make
+    the graceful end degrade straight to a hard stop with nothing to send, so the
+    interrupt/end path is covered per harness the way the adapter matrix is.
+    """
+    agent_names = [name for name in HARNESSES if is_agent_harness(name)]
+    assert agent_names, "no agent harnesses registered"
+    for name in agent_names:
+        harness = HARNESSES[name]
+        adapter = build_agent_adapter(
+            harness,
+            executable=f"C:/fake/{harness.script_base_name}.cmd",
+            args=list(harness.default_args),
+            data_dir=Path("D:/tmp") / name,
+            mcp_url="http://127.0.0.1:8765/mcp",
+        )
+        assert adapter.graceful_exit_keys(), (
+            f"agent harness {name} declares no graceful exit keystrokes; the "
+            "graceful end has nothing to send and would hard-stop it"
+        )

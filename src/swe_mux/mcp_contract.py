@@ -14,6 +14,14 @@ READ_TOOL_NAMES = (
     "project_actions",
     "message_status",
     "spawn_requests",
+    # Phase 7.5 cross-session memory reads (CP §6.1-6.3, §6.10). Deterministic
+    # queries over Tier 0 facts, the git-provenance ledger, the experience
+    # corpus, and the scan timeline. Each is per-project opt-in through the
+    # enablement DAG and returns nothing in preference to a weak match.
+    "provenance",
+    "verified_status",
+    "prior_resolutions",
+    "dead_ends",
 )
 
 WRITE_TOOL_NAMES = (
@@ -25,6 +33,12 @@ WRITE_TOOL_NAMES = (
     # seen and approved. An agent authoring a new action changes that file's
     # fingerprint, which un-trusts it, so an agent cannot approve its own command.
     "run_action",
+    # Phase 7.6 session control (CP §7.6, §16). The first tools that act on a
+    # running agent. Kept as two tools with different blast radii, each defaulting
+    # to a per-Project `draft` grant: the call writes an inert approval request
+    # and a human is what acts, until the Project raises the grant to `granted`.
+    "interrupt",
+    "end_session",
 )
 
 

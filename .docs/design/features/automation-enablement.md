@@ -20,11 +20,23 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 - **Substrate that spends**: `scan_timeline` costs bounded continuous calls only while one current run is explicitly enabled, which is why it is opt-in rather than ambient.
   Project context is user-owned data rather than an automation and never causes a model call (`project-card.md`, `scan-timeline.md`).
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
-  `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`,
+  `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`, `prior_resolutions`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
-  `model_narration`, `observation_inbox`, `screenshot_to_agent`).
+  `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`).
   `observation_inbox` is a persisted compatibility id whose current label and surface are
   spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
+- **Memory-read opt-ins (Phase 7.5)**: each cross-session memory MCP read is gated by the
+  consumer whose output it reads - `provenance` by `provenance_graph`, `verified_status` by
+  `declared_vs_verified`, `dead_ends` by `dead_end_memory`. `prior_resolutions` is the one that
+  earns its own id (`requires ("tier0",)`), because it reads the experience corpus that no
+  detector produces. Where the automation is off the tool returns `disabled`, never a fake
+  empty (`mux-mcp.md`).
+- **`session_control` (Phase 7.6)** gates a capability rather than a read, so it depends on no
+  substrate (`requires ()`); the delivery-readiness predicate an interrupt gates on is
+  intrinsic, not an opt-in. It is off by default (in no defaults template). Opting it in is
+  necessary but not sufficient: the authority still defaults to `draft` - a human approves
+  every `interrupt`/`end_session` in the Fleet Queue - until the Project's separate
+  `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
 - **Consumer that spends**: `model_narration` is the only consumer that costs model calls.
   It depends on `attention_ranking`, so with ranking off there is nothing to narrate and no
   path to a call (`attention-ranking.md`).

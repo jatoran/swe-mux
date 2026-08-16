@@ -588,6 +588,19 @@ class Config:
     # `mux.requestSpawn` creates an inert Fleet Queue approval draft and nothing
     # else; approval is a human act.
     request_spawn_enabled: bool = True
+    # Phase 7.6 agent session control (`mux.interrupt`, `mux.end_session`). This is
+    # the install-wide master switch; per-Project the capability is off until the
+    # `session_control` automation is opted in, and even then the authority is
+    # `draft` (a human approves every action) until the Project's
+    # `session_control_grant` is raised. False here refuses both tools everywhere,
+    # regardless of any Project's grant.
+    session_control_enabled: bool = True
+    # How many control actions one origin session may take per hour on the granted
+    # path, the analogue of `agent_message_hourly_budget` for actuation.
+    session_control_hourly_budget: int = 30
+    # How long a graceful end waits for the CLI to tear itself down after the exit
+    # sequence before it falls back to a hard stop.
+    session_control_graceful_timeout_s: float = 12.0
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -994,6 +1007,10 @@ def _validate(config: Config) -> None:
         errors["agent_message_max_chain_depth"] = "must be between 1 and 10 hops"
     if not 1 <= config.agent_message_max_thread_turns <= 100:
         errors["agent_message_max_thread_turns"] = "must be between 1 and 100 messages"
+    if not 0 <= config.session_control_hourly_budget <= 1000:
+        errors["session_control_hourly_budget"] = "must be between 0 and 1000 actions per hour"
+    if not 1 <= config.session_control_graceful_timeout_s <= 120:
+        errors["session_control_graceful_timeout_s"] = "must be between 1 and 120 seconds"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

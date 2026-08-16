@@ -318,6 +318,12 @@ class SessionRecord:
     client_startup_timing_ms: dict[str, float] = field(default_factory=dict)
     completion_mode: Literal["interactive", "one_shot"] = "interactive"
     exit_code: int | None = None
+    # The end reason to persist when this session terminates, set by a deliberate
+    # end operation before it sends the exit sequence (Phase 7.6). It lets an
+    # agent-initiated graceful end record `agent_ended` even when the CLI exits on
+    # its own and the ordinary process-exit path is what marks the record. None
+    # leaves the terminal path to classify the exit as it always has.
+    requested_end_reason: str | None = None
     # True only for Project Action / task-launched shells, whose exact spawn argv
     # is retained on this record and can be replayed in place. Agent and plain
     # shell sessions leave this False so their rails never show Relaunch.
