@@ -53,8 +53,17 @@ Detection is machine state, kept out of the descriptor because a `HarnessDescrip
 `installed` is the union of two independent signals: the executable resolves, or the harness `data_home()` exists.
 `resolved_path` is the real executable the launcher would run, or `null`.
 
-Detection rides the payload only when the daemon supplies it: `GET /api/harnesses` computes `detect_installations(config.harness_exe)` off the event loop and passes it to `public_harness_registry(installations)`, which adds `installed` and `resolved_path` per harness.
-The generated seed calls `public_harness_registry()` with no installations and omits both fields, because a static file cannot carry a machine fact; a missing `installed` reads as "detection not yet known", which the browser treats as enabled for the first paint until the snapshot narrows it.
+Detection rides the payload only when the daemon supplies it: `GET /api/harnesses` computes `detect_installations_with_versions(config.harness_exe)` off the event loop and passes it to `public_harness_registry(installations)`, which adds `installed`, `resolved_path`, and a best-effort `cli_version` per harness.
+The generated seed calls `public_harness_registry()` with no installations and omits those machine facts, because a static file cannot carry one; a missing `installed` reads as "detection not yet known", which the browser treats as enabled for the first paint until the snapshot narrows it.
+
+The CLI version is captured only for the registry payload, never in the hot `detect_installation` enablement path: `probe_cli_version(name, executable)` runs `<cli> --version` best-effort with a short timeout and a brief cache, and never raises.
+Each harness entry also carries a static `tested_cli_version` (the last version mux was verified against, from `TESTED_CLI_VERSIONS`; empty by default so the signal never fires on a guessed bound) and a computed `version_untested` when both are known.
+`version_is_untested` compares the parsed leading numeric components and fails closed, so an unparseable version reports untested false rather than a false "newer than tested".
+A CLI newer than its bound degrades gracefully (the model catalog falls unknown ids back to their family context window, `claude_models.py`); the signal only surfaces that the pairing is untested.
+
+Two per-harness instrumentation toggles, both stored like `harness_enabled` (a dict where an absent key means on) and both restart-scoped because adapters are built once at daemon start:
+- `config.harness_mcp_enabled` gates the mux MCP registration. Off, `build_agent_adapter` receives an empty `mcp_url` for that harness, so no MCP server is registered; the harness's status, history, and queue are unaffected. The `mcp` capability (true for every family except pi, which has no MCP client) tells the frontend whether to offer the toggle.
+- `config.harness_instrument_enabled` gates the lifecycle hooks. Off, `build_agent_adapter` passes `instrument=False`, and each adapter family skips its hook wiring (Claude omits `--settings`, Codex is built with `notify=False`, and the omp/opencode/pi extension is not injected). This drops the harness to unobserved: no status detection, history capture, or prompt queue for its sessions, which the UI names before applying.
 
 Enablement is a launcher filter with three states.
 `config.harness_enabled` holds only explicit user choices; an absent key follows detection.

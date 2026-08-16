@@ -45,6 +45,51 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   listener state, secure mobile URL/status, and Funnel warning. `POST
   /api/remote/mobile-voice/enable` requires the dedicated explicit-action header and returns a
   secure URL only when one is actually available; otherwise it returns a non-destructive error.
+- `GET /api/remote/status` also reports the real Tailscale connection state, not only whether the
+  CLI is on PATH.
+  It reads `BackendState` and `Self.DNSName` from `tailscale status --json` and classifies the
+  connection as not-installed, logged-out, connecting, needs-machine-auth, stopped, or
+  connected-as-`<device>.ts.net`, each with the exact next command.
+  `src/swe_mux/tailscale.py` `classify_tailscale_connection` is the pure classifier and is unit
+  tested against real `BackendState` fixtures.
+  The Settings Remote and Voice tabs render this state and cause-pointing text, so a logged-out
+  or stopped tailnet reads as unconfigured rather than broken.
+- The daemon cannot see the phone's DNS state, so the Remote and Voice tabs state it as a
+  checklist: enable "Use Tailscale DNS" on the phone, and on Android set Private DNS to off or
+  automatic.
+  A missing Tailscale DNS setting is the most common silent first-connect failure.
+- Windows only: swe-mux binds a real host socket on the `100.x` tailnet address, so Windows
+  Defender Firewall governs inbound to `swe-mux.exe` on the Private profile.
+  A blocking or absent inbound rule silently stops the first phone connect while the desktop keeps
+  working over loopback.
+  `GET /api/remote/firewall` inspects for a blocking or missing rule, and `POST
+  /api/remote/firewall/repair` (explicit-action header required) runs a one-click elevated
+  PowerShell repair that removes conflicting Block rules and adds one scoped inbound Allow rule.
+  Both are inert off a frozen Windows build (`firewall_supported` is false), because the rule must
+  target the packaged `swe-mux.exe`, not a transient `python.exe`.
+  The scope check is tailnet-specific: a sufficient Allow rule must cover the whole
+  `100.64.0.0/10` range, because the phone connects from an unknown address inside it.
+  `src/swe_mux/windows_firewall.py` owns the inspect/repair logic and its unit tests.
+- `GET /api/diagnostics/export` returns one copyable bundle for a connection report: sanitized
+  config (`public_dict`, no secrets), remote-connection state, firewall status, network counters,
+  the fleet status-health aggregate, and the tails of `daemon.log` and `redeploy.log`.
+  It never includes terminal bytes or message content; the two logs are command-free by design.
+  `mux doctor --export` prints the same bundle from the CLI, and Settings → Remote copies it to
+  the clipboard with a selectable textarea fallback for plain-HTTP tailnet clients where the
+  Clipboard API is restricted.
+- A "Connect a phone" modal (reachable from Settings → Remote) renders a scannable QR of the
+  connection URL alongside the hostname, the DNS checklist, and the live connection state. The URL
+  is built from the `.ts.net` MagicDNS name, not the raw `100.x` IP: the HTTPS certificate is bound
+  to the name, and it prefers the secure Serve address when one is up. The QR is a self-contained
+  inline SVG (the `qrcode-generator` dependency), rendered on a white plate so it scans in either
+  theme.
+- `GET /api/diagnostics/prerequisites` reports the presence of Git, Node, npm, and Tailscale, each
+  with what it backs and a next step, so a feature that needs an absent tool reads as unconfigured
+  rather than broken. It is surfaced in Settings → Remote.
+- The tailnet-only, no-login posture is stated in the UI, not only in this doc: Settings → Remote
+  and the Connect-a-phone modal both carry a line that any tailnet device reaches the daemon with
+  full terminal and code-execution authority and no login, so the listener must not be enabled on a
+  shared tailnet.
 - Browser control validates Host plus the full Origin authority, including an explicit
   port, on mutations and WebSocket upgrades. Responses carry CSP, nosniff, referrer,
   permissions, opener, and resource policy headers.
@@ -116,6 +161,10 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
 - Browser boundary and status route: `src/swe_mux/server.py`
 - Traffic accounting and dynamic compression: `src/swe_mux/network_usage.py`
 - Static precompression: `frontend/scripts/compress-static.mjs`
-- Tailscale inspection and bounded Serve setup: `src/swe_mux/tailscale.py`
+- Tailscale inspection, connection-state classifier, and bounded Serve setup:
+  `src/swe_mux/tailscale.py`
+- Windows Defender Firewall inspect and repair (platform-gated): `src/swe_mux/windows_firewall.py`
+- Diagnostics export bundle: `src/swe_mux/server.py` (`diagnostics_export`), `src/swe_mux/cli.py`
+  (`mux doctor --export`)
 - Settings/status and browser redirect: `frontend/src/Settings.tsx`,
   `frontend/src/mobileVoice.ts`, `frontend/src/ConversationControl.tsx`

@@ -13,14 +13,15 @@ test('scan timeline is explicitly gated per current run and resets at conversati
   assert.ok(timeline.includes("event.kind==='boundary'"))
 })
 
-test('scan timeline exposes cost, run tokens, source expansion, and the fixed model', () => {
+test('scan timeline exposes cost, run tokens, source expansion, and the changeable model', () => {
   const timeline = source('ScanTimelineTab.tsx')
   const settings = source('Settings.tsx')
   const app = source('App.tsx')
   assert.ok(timeline.includes('spend_today.cost_usd'))
   assert.ok(timeline.includes('run_token_budget'))
   assert.ok(timeline.includes('?rehydrate=1'))
-  assert.ok(settings.includes('Fixed default: OpenRouter DeepSeek V4 Flash latest alias.'))
+  // The scan-timeline model is a changeable default, not a fixed one.
+  assert.ok(settings.includes('Changeable default'))
   assert.ok(!app.includes('ScanSpendStatus'))
 })
 

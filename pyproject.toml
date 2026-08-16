@@ -65,6 +65,11 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 ignore = ["ASYNC240"]
 
+[tool.ruff.lint.per-file-ignores]
+# windows_firewall.py embeds PowerShell scripts as f-strings; their pipeline
+# lines legitimately exceed the 100-column limit and cannot wrap cleanly.
+"src/swe_mux/windows_firewall.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

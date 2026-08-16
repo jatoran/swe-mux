@@ -10,6 +10,13 @@ The utility drawer owns a separate **Agent** tab titled **Agent Environment** im
 The Project-scoped Context tab remains the instruction and memory surface and is titled **Instructions & Memory** in its body.
 Commands remains the action surface for inserting a skill or command into the focused terminal.
 
+## What mux injects
+
+When mux launches an instrumented agent it adds exactly two things per session, and both are removed when the session ends: its lifecycle hooks (which power status detection, history capture, and the prompt queue) and a read-only mux MCP server (which gives the agent fleet visibility and messaging).
+The first-run panel states this, and this drawer is the per-session view of the injected hooks (each row's `owner` is `swe_mux`) and the MCP server.
+Both are per-harness toggles under Settings -> Agents: turning off the MCP server removes only the agent's fleet surface, and "launch clean" (instrumentation off) launches the harness with no hooks at all, dropping it to unobserved with no status, history, or queue for its sessions.
+The per-session and cleanup property holds for every harness family: Claude and Codex pass the hooks and MCP registration as launch arguments per spawn, and omp, opencode, and pi carry them in a session-private extension or config that is retired when the session ends.
+
 ## Inventory model
 
 Every item keeps three independent axes:

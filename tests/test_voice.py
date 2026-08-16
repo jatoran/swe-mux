@@ -549,6 +549,8 @@ def wav_bytes(seconds: float = 0.2, rate: int = 16_000) -> bytes:
 
 async def test_daemon_stt_validates_wav_and_reports_stage_timings(tmp_path: Path) -> None:
     service, _events, _emitted, _record = make_service(tmp_path)
+    # STT is off by default now, so the capture path is opt-in; this test exercises it.
+    service.config.stt_enabled = True
     service.config.stt_engine = "sapi"
     seen: list[bytes] = []
 

@@ -407,8 +407,32 @@ responsive controls.
   header, tab rail, footer — renders immediately with a placeholder content area; tabs are
   selectable before data lands. `config` is required; other parts degrade to null with the
   reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
-  form because Save writes them back unconditionally. Remote and voice status stay separate
-  non-blocking fetches.
+  form because Save writes them back unconditionally. Remote, voice, and firewall status stay
+  separate non-blocking fetches.
+- The Remote tab renders the Tailscale connection state (not-installed, logged-out, connecting,
+  stopped, or connected-as-`<device>.ts.net`) with cause-pointing next-step text, a Windows-only
+  Defender Firewall panel with a one-click Repair button when a blocking or missing rule is
+  found, a collapsible phone setup checklist (Use Tailscale DNS on, Android Private DNS off or
+  automatic), and an Export diagnostics button that copies one bundle to the clipboard with a
+  selectable textarea fallback. The Voice tab's Mobile voice section shows the same connection
+  state and phone checklist beside the secure-address button. The firewall panel is hidden off a
+  frozen Windows build, and both tabs read the phone checklist from static copy because the
+  daemon cannot detect the phone's DNS state.
+- The Remote tab also carries a "Connect a phone" button opening a modal (`ConnectPhone.tsx`) with
+  a scannable QR of the connection URL (the `.ts.net` MagicDNS name, secure Serve address when up),
+  a system-prerequisites checklist (Git, Node, npm, Tailscale, each with a next step), and a
+  security-posture line stating that any tailnet device reaches the daemon with no login.
+- Settings -> Agents renders two per-harness instrumentation toggles under each harness: the mux MCP
+  server (offered only where the `mcp` capability is set) and "Instrument with mux hooks", whose
+  off state shows an inline warning that a clean launch drops the harness to unobserved. Both note
+  that the change applies on the next daemon restart. Each harness also shows its detected CLI
+  version, flagged when it is newer than the version mux was tested against.
+- Settings -> Voice defaults microphone input off; enabling it shows a note that the first Talk
+  downloads the local Whisper model, and the language/model inputs are framed as a first-use choice.
+  Settings -> Automation lists what one OpenRouter key unlocks, and the scan-timeline model is an
+  editable, changeable default rather than a fixed read-only value. The first-run panel discloses
+  what mux injects per session and points at the next onboarding steps (project, CLI login, session,
+  phone).
 - The panel header carries a search box that reaches every setting in every tab, including
   tabs that are not mounted. Picking a result switches to its tab, scrolls the control into
   view, and flashes it; `Ctrl`/`Cmd`+`F` focuses the box while the panel is open, arrows and

@@ -442,6 +442,7 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         "transcript",
         "measurement",
         "lifecycle_hooks",
+        "mcp",
         "pty_delivery",
         "external_usage",
         "provider_accounts",

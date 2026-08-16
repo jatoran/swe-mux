@@ -150,12 +150,16 @@ class OpenCodeAdapter(BackendAdapter):
         data_dir: Path | None = None,
         mcp_url: str | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
+        instrument: bool = True,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
         self._config_root = data_dir / "opencode-configs" if data_dir else None
         self._mcp_url = mcp_url
+        # "Launch clean": the opencode config carries both the plugin (lifecycle
+        # hook) and the MCP registration, so dropping it runs this harness unobserved.
+        self.instrument = instrument
         self._context_windows: dict[tuple[str, str], int] | None = None
         # npm installs opencode as a `.cmd` batch shim wrapping the real
         # platform binary, and ConPTY cannot execute a batch shim.
@@ -184,7 +188,7 @@ class OpenCodeAdapter(BackendAdapter):
     # ------------------------------------------------------------------ launch
 
     def _session_config(self, session_id: str, mcp_token: str | None = None) -> Path | None:
-        if self._config_root is None:
+        if self._config_root is None or not self.instrument:
             return None
         try:
             return materialize_mux_config(

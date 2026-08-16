@@ -910,11 +910,24 @@ Configured MCP entries intentionally have no connection-health claim because the
 ```text
 GET  /remote/status
 POST /remote/mobile-voice/enable   X-Mux-User-Gesture: mobile-voice-setup
+GET  /api/remote/firewall
+POST /api/remote/firewall/repair   X-Mux-User-Gesture: firewall-repair
 ```
 
 The mobile-voice request is accepted only while the Tailscale listener is enabled and only from
 the explicit Talk/Settings action. It returns a secure URL only when the daemon has a verified
 secure endpoint; otherwise it returns `error` without changing the working direct HTTP listener.
+
+`remote/status` adds the Tailscale connection state (`connection_state`, `device_name`,
+`connection_command`, `connection_detail`) read from `tailscale status --json`, distinct from
+`available` (CLI on PATH).
+`remote/firewall` reports whether Windows Defender Firewall admits phone connections on the
+Private profile (`supported`, `needs_repair`, `blocking_rule_detected`, `rule_allowed`,
+`private_firewall_enabled`, `network_category`, `detail`); it reports `supported: false` off a
+frozen Windows build.
+`remote/firewall/repair` requires the explicit-action header, runs an elevated PowerShell repair,
+and returns `{ok, reason}` where `reason` is `cancelled` (UAC declined), `unsupported`, or
+`failed`.
 It does not change tailnet policy or make swe-mux public.
 
 ```text
@@ -1007,6 +1020,8 @@ GET /api/diagnostics/background
 GET /api/diagnostics/notifications[?days=7]
 GET /api/diagnostics/network
 DELETE /api/diagnostics/network
+GET /api/diagnostics/export
+GET /api/diagnostics/prerequisites
 ```
 
 `status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
@@ -1068,6 +1083,16 @@ overhead.
 WebSocket byte counts are application text/binary frame payloads before per-message compression.
 The DELETE form records the prior totals in the rotating daemon log and resets the in-memory
 window without disrupting live sessions.
+
+`diagnostics/export` returns one aggregated bundle for a connection report: `config`
+(sanitized `public_dict`, no secrets and no token), `remote_status`, `firewall`, `network_usage`,
+`status_health`, `status_timeline_sink`, and `logs` with bounded tails of `daemon.log` and
+`redeploy.log`.
+It never includes terminal bytes or message content; the two logs are command-free by design.
+`mux doctor --export` prints the same bundle from the CLI.
+
+`diagnostics/prerequisites` reports the presence of Git, Node, npm, and Tailscale, each with `id`, `label`, `purpose`, `present`, `path`, `download_url`, and `install_command`.
+It backs the onboarding checklist so a feature that needs an absent tool reads as unconfigured rather than broken.
 Both forms are excluded from the counters so observing a window does not change it.
 
 ## History and reviews

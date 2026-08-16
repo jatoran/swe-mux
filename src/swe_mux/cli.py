@@ -52,7 +52,12 @@ def main() -> None:
     sub.add_parser("history")
     sub.add_parser("projects")
     sub.add_parser("profiles")
-    sub.add_parser("doctor")
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument(
+        "--export",
+        action="store_true",
+        help="print the full diagnostics bundle (config, remote, firewall, logs)",
+    )
     accounts = sub.add_parser(
         "accounts",
         help="inspect provider accounts, re-verify their identities, or read the credential audit",
@@ -109,7 +114,7 @@ def main() -> None:
     elif args.command == "profiles":
         result = request("GET", "/api/profiles")
     elif args.command == "doctor":
-        result = request("GET", "/api/remote/status")
+        result = request("GET", "/api/diagnostics/export" if args.export else "/api/remote/status")
     elif args.command == "history-duplicates":
         if args.action == "repair":
             result = request("POST", "/api/history/duplicates/repair", {"dry_run": False})

@@ -76,6 +76,12 @@ RESTART_FIELDS = {
     "automation_queue_size",
     "openrouter_request_timeout_seconds",
     "pty_supervisor_enabled",
+    # Adapters are constructed once at daemon start, so the per-harness MCP and
+    # instrumentation gates only re-read on the next restart. Marking them
+    # restart-required keeps the UI honest rather than reporting a hot apply that
+    # does not reach already-built adapters.
+    "harness_mcp_enabled",
+    "harness_instrument_enabled",
 }
 BUILTIN_THEME_PAIRS = {
     "dark": ("#090a0c", "#d9dde2"),
@@ -363,6 +369,19 @@ class Config:
     # registered harnesses. Empty by default, so a fresh install follows detection
     # for everything.
     harness_enabled: dict[str, bool] = field(default_factory=dict)
+    # Per-harness "attach the mux MCP server" choice; absent key means on. Turning
+    # it off for a harness removes only that agent's fleet visibility and
+    # messaging (the read-only mux MCP surface); status, history, and the queue are
+    # unaffected. Empty by default (everything on). Restart-scoped: adapters are
+    # built once at daemon start, so a change takes effect on the next daemon
+    # restart (sessions survive it).
+    harness_mcp_enabled: dict[str, bool] = field(default_factory=dict)
+    # Per-harness "instrument / launch clean" choice; absent key means instrument.
+    # Turning it off launches that harness WITHOUT mux's lifecycle hooks, which
+    # drops it to unobserved: no status detection, no history capture, no prompt
+    # queue for its sessions. Load-bearing, so the UI must name that consequence.
+    # Empty by default (everything instrumented). Restart-scoped like the MCP toggle.
+    harness_instrument_enabled: dict[str, bool] = field(default_factory=dict)
     # Whether the first-run harness panel has been dismissed (enabled or skipped).
     # Machine-side rather than device-local, because harness enablement is machine
     # config: a first-run choice made on the desktop must not reappear on the phone.
@@ -621,7 +640,10 @@ class Config:
     tts_default_mode: str = "off"
     tts_content: str = "summary"
     tts_engine: str = "edge"
-    tts_edge_voice: str = "en-AU-NatashaNeural"
+    # A neutral en-US default rather than a locale-specific voice, so every new
+    # user gets a sensible voice without an accent chosen for one operator. TTS is
+    # off by default, so this only matters once a user turns it on.
+    tts_edge_voice: str = "en-US-JennyNeural"
     tts_edge_rate: str = "+10%"
     tts_edge_pitch: str = "+0Hz"
     tts_soften_stops: bool = True
@@ -632,7 +654,11 @@ class Config:
     tts_verbatim_max_chars: int = 6000
     tts_daily_budget_usd: float = 1.0
     tts_cache_mb: int = 200
-    stt_enabled: bool = True
+    # Off by default so a fresh install never downloads the multi-hundred-MB
+    # Whisper model and the Silero VAD assets on the first Talk without warning.
+    # Enabling it in Settings -> Voice is the explicit opt-in; the Voice tab states
+    # that the first capture downloads a speech model.
+    stt_enabled: bool = False
     stt_engine: str = "whisper"
     stt_language: str = "en-US"
     stt_whisper_model: str = "turbo"
@@ -829,12 +855,20 @@ def _validate(config: Config) -> None:
         for name, executable in config.harness_exe.items()
     ):
         errors["harness_exe"] = "must map harness names to non-empty executable strings"
-    if not isinstance(config.harness_enabled, dict) or any(
-        not isinstance(name, str) or not isinstance(flag, bool)
-        for name, flag in config.harness_enabled.items()
+    for bool_map in ("harness_enabled", "harness_mcp_enabled", "harness_instrument_enabled"):
+        value = getattr(config, bool_map)
+        if not isinstance(value, dict) or any(
+            not isinstance(name, str) or not isinstance(flag, bool) for name, flag in value.items()
+        ):
+            errors[bool_map] = "must map harness names to booleans"
+    for field_name in (
+        "harness_exe",
+        "harness_args",
+        "usage_commands",
+        "harness_enabled",
+        "harness_mcp_enabled",
+        "harness_instrument_enabled",
     ):
-        errors["harness_enabled"] = "must map harness names to booleans"
-    for field_name in ("harness_exe", "harness_args", "usage_commands", "harness_enabled"):
         value = getattr(config, field_name)
         if isinstance(value, dict):
             unknown = set(value) - set(HARNESSES)
@@ -980,7 +1014,7 @@ def _validate(config: Config) -> None:
     if config.tts_engine not in {"edge", "sapi"}:
         errors["tts_engine"] = "must be edge or sapi"
     if not config.tts_edge_voice.strip():
-        errors["tts_edge_voice"] = "must name an edge-tts voice, e.g. en-AU-NatashaNeural"
+        errors["tts_edge_voice"] = "must name an edge-tts voice, e.g. en-US-JennyNeural"
     if not re.fullmatch(r"[+-]\d{1,3}%", config.tts_edge_rate):
         errors["tts_edge_rate"] = "must look like +10% or -5%"
     if not re.fullmatch(r"[+-]\d{1,3}Hz", config.tts_edge_pitch):

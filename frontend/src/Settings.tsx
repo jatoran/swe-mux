@@ -17,6 +17,8 @@ import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } fro
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
 import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
+import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatus, type FirewallStatus } from './remoteConnection'
+import { ConnectPhone } from './ConnectPhone'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
 import {
@@ -40,6 +42,8 @@ type Config = {
   terminal_renderer:'auto'|'dom'|'webgl'
   harness_args:Record<string,string[]>
   harness_enabled:Record<string,boolean>
+  harness_mcp_enabled:Record<string,boolean>
+  harness_instrument_enabled:Record<string,boolean>
   git_poll_seconds:number;worktree_root:string;reconcile_external_history:boolean;theme:ThemeName
   drawer_tab_display:'icon'|'title'
   utility_rail_display:'icon'|'title'
@@ -121,12 +125,7 @@ type UsageStatus = {
   cache?:{updated_at?:number;providers?:Record<string,{totals?:Record<string,number>}>}
 }
 
-type RemoteStatus = {
-  mode:string;listen_url:string;available:boolean;serve_configured:boolean
-  serve_url?:string|null;funnel_detected:boolean;setup_command:string;diagnostic:string
-  tailnet_enabled:boolean;tailnet_ip?:string|null;tailnet_urls:string[];direct_available:boolean
-  mobile_voice_configured:boolean;mobile_voice_url?:string|null;mobile_voice_https_port:number
-}
+type Prerequisite = {id:string;label:string;purpose:string;present:boolean;path:string|null;download_url:string;install_command:string}
 type KeybindingCommand = {id:string;label:string;category:string}
 type KeybindingPolicy = {browser_reserved:string[];desktop_only:string[];application_reserved:string[];terminal_reserved:string[];rules:string[]}
 type KeybindingsResponse = {
@@ -215,6 +214,7 @@ type HistoryScanJob = {
 const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordState =>
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
+
 export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
@@ -247,6 +247,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [remote, setRemote] = useState<RemoteStatus | null>(null)
   const [mobileVoiceBusy,setMobileVoiceBusy]=useState(false)
   const [mobileVoiceMessage,setMobileVoiceMessage]=useState('')
+  const [firewall,setFirewall]=useState<FirewallStatus | null>(null)
+  const [firewallBusy,setFirewallBusy]=useState(false)
+  const [firewallMessage,setFirewallMessage]=useState('')
+  const [diagnosticsBusy,setDiagnosticsBusy]=useState(false)
+  const [diagnosticsMessage,setDiagnosticsMessage]=useState('')
+  const [diagnosticsText,setDiagnosticsText]=useState('')
+  const [connectPhoneOpen,setConnectPhoneOpen]=useState(false)
+  const [prerequisites,setPrerequisites]=useState<Prerequisite[]|null>(null)
   const [savedRules, setSavedRules] = useState('version = 1\n')
   const [savedBindings, setSavedBindings] = useState<Record<string,string>>({})
   const [status, setStatus] = useState('loading…')
@@ -270,6 +278,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(() => {
     api<RemoteStatus>('GET','/api/remote/status').then(setRemote).catch(()=>setRemote(null))
+    api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall).catch(()=>setFirewall(null))
+    api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites').then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
     api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
     api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
     // One bundled request instead of nine — on a high-RTT client (phone over
@@ -385,6 +395,40 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       setRemote(current=>current&&{...current,mobile_voice_configured:true,mobile_voice_url:result.url,mobile_voice_https_port:result.https_port||443,serve_configured:false,serve_url:null,diagnostic:result.diagnostic})
     }catch(cause){setMobileVoiceMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setMobileVoiceBusy(false)}
+  }
+
+  const repairFirewall=async()=>{
+    if(firewallBusy)return
+    setFirewallBusy(true);setFirewallMessage('Requesting an elevated firewall repair; approve the Windows prompt.')
+    try{
+      // Raw fetch (not the api helper) so the explicit user-gesture header the
+      // daemon requires before triggering a UAC prompt is sent.
+      const response=await fetch('/api/remote/firewall/repair',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'firewall-repair'}})
+      const result=await response.json().catch(()=>({}))
+      if(response.ok&&result.ok){
+        setFirewallMessage('Added a scoped inbound Allow rule. Rechecking…')
+        setFirewall(await api<FirewallStatus>('GET','/api/remote/firewall'))
+        setFirewallMessage('Windows Defender Firewall now allows phone connections.')
+      }else{
+        setFirewallMessage(result.reason==='cancelled'?'The Windows elevation prompt was declined; no rule was changed.':result.reason==='unsupported'?'Firewall repair is only available in the packaged Windows app.':'The firewall repair did not complete.')
+      }
+    }catch(cause){setFirewallMessage(cause instanceof Error?cause.message:String(cause))}
+    finally{setFirewallBusy(false)}
+  }
+
+  const exportDiagnostics=async()=>{
+    if(diagnosticsBusy)return
+    setDiagnosticsBusy(true);setDiagnosticsMessage('Collecting diagnostics…')
+    try{
+      const bundle=await api<unknown>('GET','/api/diagnostics/export')
+      const text=JSON.stringify(bundle,null,2)
+      setDiagnosticsText(text)
+      // Clipboard write needs a secure context; over plain-HTTP tailnet it can
+      // reject, so the copy failure falls back to the textarea below.
+      try{await navigator.clipboard.writeText(text);setDiagnosticsMessage('Diagnostics copied to the clipboard.')}
+      catch{setDiagnosticsMessage('Could not copy automatically; select the text below and copy it.')}
+    }catch(cause){setDiagnosticsMessage(cause instanceof Error?cause.message:String(cause))}
+    finally{setDiagnosticsBusy(false)}
   }
 
   useEffect(() => {
@@ -627,6 +671,16 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     change('harness_enabled',{...draft!.harness_enabled,[name]:enabled})
   const clearHarnessEnabledChoice = (name:string):void => {
     const next={...draft!.harness_enabled}; delete next[name]; change('harness_enabled',next)
+  }
+  // The MCP and instrumentation toggles are per-harness dicts where an absent key
+  // means on. Writing false records an override; setting back to true clears it so
+  // the stored map stays minimal, matching harness_enabled's three-state shape.
+  const harnessDictOn = (fieldKey:'harness_mcp_enabled'|'harness_instrument_enabled', name:string):boolean =>
+    draft![fieldKey]?.[name] ?? true
+  const setHarnessDict = (fieldKey:'harness_mcp_enabled'|'harness_instrument_enabled', name:string, on:boolean):void => {
+    const next={...(draft![fieldKey]||{})}
+    if(on) delete next[name]; else next[name]=false
+    change(fieldKey,next)
   }
   const startHistoryScan = async ():Promise<void> => {
     try { setScanJob((await api<{job:HistoryScanJob}>('POST','/api/history/scan')).job) }
@@ -886,8 +940,15 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <small class={detectedInstalled(harness.name)?'settings-harness-detected':'settings-harness-missing'}>{detectedInstalled(harness.name)?(detectedPath(harness.name)?`Detected: ${detectedPath(harness.name)}`:'Detected (data present)'):'Not detected'}{typeof enablementChoice(harness.name)==='boolean'?` · manually ${enablementChoice(harness.name)?'enabled':'disabled'}`:' · following detection'}</small>
               {typeof enablementChoice(harness.name)==='boolean'&&<button type="button" onClick={()=>clearHarnessEnabledChoice(harness.name)}>follow detection</button>}
             </div>
+            {harness.cli_version&&<p class={harness.version_untested?'settings-inline-error':'profile-hint'}>CLI version {harness.cli_version}{harness.version_untested?` · newer than the version mux was tested against (${harness.tested_cli_version}). Features degrade gracefully, but this pairing is untested.`:''}</p>}
             <label>Executable<input value={draft.harness_exe[harness.name]||''} placeholder={harness.name} onInput={e=>change('harness_exe',{...draft.harness_exe,[harness.name]:e.currentTarget.value})} /></label>
             <label>Default args<input value={harnessArgs[harness.name]||''} spellcheck={false} placeholder="--model claude-opus-4-8" onInput={e=>setHarnessArgs(current=>({...current,[harness.name]:e.currentTarget.value}))} /></label>
+            {harnessDescriptor(harness.name)?.capabilities.mcp!==false&&<label class="check"><span>mux MCP server <em>· fleet visibility and messaging for this agent</em></span><input type="checkbox" checked={harnessDictOn('harness_mcp_enabled',harness.name)} onChange={e=>setHarnessDict('harness_mcp_enabled',harness.name,e.currentTarget.checked)} /></label>}
+            {harnessDescriptor(harness.name)?.capabilities.lifecycle_hooks&&<Fragment>
+              <label class="check"><span>Instrument with mux hooks <em>· off launches clean and unobserved</em></span><input type="checkbox" checked={harnessDictOn('harness_instrument_enabled',harness.name)} onChange={e=>setHarnessDict('harness_instrument_enabled',harness.name,e.currentTarget.checked)} /></label>
+              {!harnessDictOn('harness_instrument_enabled',harness.name)&&<p class="settings-inline-error">Clean launch drops {harness.display_name} to unobserved: no status detection, history capture, or prompt queue for its sessions.</p>}
+            </Fragment>}
+            {(harnessDictOn('harness_mcp_enabled',harness.name)===false||harnessDictOn('harness_instrument_enabled',harness.name)===false)&&<p class="profile-hint">Instrumentation changes take effect on the next daemon restart (live sessions are preserved).</p>}
             {appliesWidthEnvelope(harness.name)&&<Fragment>
               <label>Width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
               <p class="profile-hint">{harness.display_name}'s renderer can leave stale and duplicated cells when its width changes by a lot, so a pane dragged past this many columns adds margin instead of resizing the terminal again. Raise it for wide diffs and long log lines; choose No limit to let it fill its pane like every other session. Phone and other compact panes are never limited.</p>
@@ -971,13 +1032,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p class="settings-warning">Privacy boundary: each enabled observer sends only its selected bounded transcript slice to OpenRouter and the routed model provider. swe-mux does not crawl project files.</p>
           <h3>OpenRouter</h3>
           <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
+          <p class="profile-hint">One OpenRouter key unlocks every model-backed feature: automation observers, the scan timeline, spoken TTS summaries, attention narration, the conversation titler and summarizer, and the Project context card. Without it these features stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
           <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
           <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
           <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
           <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
           <label for="cheap-model-picker">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/></label>
           <label for="standard-model-picker">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
-          <label>Scan timeline model<input value={draft.scan_timeline_model} readOnly /><small>Fixed default: OpenRouter DeepSeek V4 Flash latest alias.</small></label>
+          <label>Scan timeline model<input value={draft.scan_timeline_model} spellcheck={false} placeholder="deepseek/deepseek-v4-flash" onInput={event=>change('scan_timeline_model',event.currentTarget.value)} /><small>Changeable default: an exact OpenRouter model id (defaults to DeepSeek V4 Flash latest alias). Needs the key above.</small></label>
           <h3>Budgets + execution</h3>
           <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
@@ -1032,8 +1094,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <h3>Storage and dictation</h3>
           <label>Audio cache limit (MB)<input type="number" min="10" max="5000" value={draft.tts_cache_mb} onInput={e=>change('tts_cache_mb',Number(e.currentTarget.value))} /></label>
           <label class="check"><span>Enable microphone input and hands-free Conversation mode</span><input type="checkbox" checked={draft.stt_enabled} onChange={e=>change('stt_enabled',e.currentTarget.checked)} /></label>
+          {draft.stt_enabled&&draft.stt_engine==='whisper'&&<p class="profile-hint">The first Talk downloads the local Whisper speech model (several hundred MB) plus the browser voice-activity runtime. It runs once, then transcription is offline.</p>}
           <label>Daemon transcription engine<select value={draft.stt_engine} onChange={e=>change('stt_engine',e.currentTarget.value as Config['stt_engine'])}><option value="whisper">Whisper Turbo (local, recommended)</option><option value="sapi">Windows Speech Recognition (legacy)</option></select></label>
-          <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /></label>
+          <label>Recognition language<input value={draft.stt_language} placeholder="en-US" onInput={e=>change('stt_language',e.currentTarget.value)} /><small>Whisper's <code>turbo</code> dictation model is English-first and large. Set a language and model that match how you speak; this is a first-use choice, not a fixed assumption.</small></label>
           {draft.stt_engine==='whisper'&&<label>Dictation model<input value={draft.stt_whisper_model} placeholder="turbo" onInput={e=>change('stt_whisper_model',e.currentTarget.value)} /></label>}
           {draft.stt_engine==='whisper'&&<label title="Used for the speculative pass that only has to recognize a wake word and a command phrase. Blank decodes commands on the dictation model: correct, but slower.">Routing model (spoken commands)<input value={draft.stt_routing_model} placeholder="small.en" onInput={e=>change('stt_routing_model',e.currentTarget.value)} /></label>}
           <p>STT::{voiceInfo?.stt_available?'available':'unavailable'} · engine::{voiceInfo?.stt_engine||draft.stt_engine}{voiceInfo?.stt_diagnostic?` · ${voiceInfo.stt_diagnostic}`:''}</p>
@@ -1080,22 +1143,44 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           />
           <h3>Mobile voice</h3>
           <p>Regular mobile access works over the direct 100.x Tailscale address. Browser microphone capture additionally requires HTTPS. swe-mux configures a private Tailscale Serve address (<code>https://&lt;device&gt;.ts.net/</code>) automatically at startup; use the button below if it needs a one-time Tailscale approval or repair.</p>
+          <TailscaleConnection status={remote} />
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
+          <PhoneDnsChecklist />
         </section>}
 
         {activeTab==='remote'&&<section>
           <h3>Remote and security</h3>
+          <p class="settings-inline-error">Any device on this tailnet reaches this daemon with no login, and an admitted device has full terminal and code-execution authority. Do not enable the tailnet listener on a shared tailnet.</p>
           <label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label>
           <p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p>
+          <TailscaleConnection status={remote} />
+          <div class="theme-actions"><button onClick={()=>setConnectPhoneOpen(true)}>Connect a phone…</button></div>
+          {prerequisites&&<div class="settings-prerequisites">
+            <strong>System prerequisites</strong>
+            <p class="profile-hint">These back specific features. Each fails gracefully when absent, so a missing one reads as unconfigured, not broken.</p>
+            <ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.present?'prereq-ok':'prereq-missing'}>
+              <span>{prereq.present?'✓':'✗'} {prereq.label}</span>
+              <small>{prereq.purpose}{prereq.present&&prereq.path?` · ${prereq.path}`:''}</small>
+              {!prereq.present&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
+            </li>)}</ul>
+          </div>}
           <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
           <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address below.</p>
+          <FirewallPanel status={firewall} busy={firewallBusy} message={firewallMessage} onRepair={()=>void repairFirewall()} />
+          <PhoneDnsChecklist />
           <strong>Optional HTTPS with Tailscale Serve</strong>
           <p>{remote?.diagnostic||'Checking the private HTTPS address…'}</p>
           {remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; swe-mux only configures private tailnet access.</p>}
-          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>void api<RemoteStatus>('GET','/api/remote/status').then(setRemote)}>Recheck</button></div>
+          <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>{void api<RemoteStatus>('GET','/api/remote/status').then(setRemote);void api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall)}}>Recheck</button></div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
           <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
+          <h3>Diagnostics</h3>
+          <p>Export a single copyable bundle of connection state, firewall status, network counters, sanitized config (no secrets), and recent daemon logs. Share it when reporting a connection problem.</p>
+          <div class="theme-actions"><button class="primary" disabled={diagnosticsBusy} onClick={()=>void exportDiagnostics()}>{diagnosticsBusy?'Collecting…':'Export diagnostics'}</button></div>
+          {diagnosticsMessage&&<p aria-live="polite">{diagnosticsMessage}</p>}
+          {diagnosticsText&&<label>Diagnostics bundle<textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /></label>}
+          {connectPhoneOpen&&<ConnectPhone onClose={()=>setConnectPhoneOpen(false)} />}
         </section>}
 
         {activeTab==='appearance'&&<section><h3>Appearance</h3>

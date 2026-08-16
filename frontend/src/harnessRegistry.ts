@@ -19,6 +19,10 @@ export interface HarnessCapabilities {
   transcript: boolean
   measurement: boolean
   lifecycle_hooks: boolean
+  /** The mux MCP server can be registered for this harness, so the per-harness MCP
+   *  toggle is offered. Absent from older daemon payloads; default a missing value
+   *  to true for agent harnesses. */
+  mcp?: boolean
   pty_delivery: boolean
   external_usage: boolean
   provider_accounts: boolean
@@ -66,6 +70,15 @@ export interface HarnessDescriptor {
   /** The real executable the launcher would run, with mux's own shims stripped,
    *  or `null` when nothing resolves. Present only in the live snapshot. */
   resolved_path?: string | null
+  /** The CLI's own reported version, best-effort. Present only in the live
+   *  snapshot when the CLI resolves and answered `--version`. */
+  cli_version?: string
+  /** The last CLI version mux was verified against, or `null` when no bound is
+   *  armed. Static, so it rides the seed. */
+  tested_cli_version?: string | null
+  /** True when the detected `cli_version` is strictly newer than
+   *  `tested_cli_version`. Absent unless both are known. */
+  version_untested?: boolean
   level: HarnessLevel
   state_sources: string[]
   /** How measurements are obtained. `database` is a harness that keeps running

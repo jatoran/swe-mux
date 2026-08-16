@@ -92,6 +92,7 @@ class ClaudeAdapter(BackendAdapter):
         script_base_name: str = "claude",
         data_home_resolver: Callable[[], Path] | None = None,
         user_home_resolver: Callable[[], Path] | None = None,
+        instrument: bool = True,
     ) -> None:
         self.name = name
         self.shim_name = f"{name}.cmd"
@@ -108,10 +109,15 @@ class ClaudeAdapter(BackendAdapter):
         self.default_exe = default_exe
         self.default_args = default_args or []
         self.data_dir = data_dir
+        # "Launch clean": when instrumentation is off, no hook settings are written
+        # or passed, so this harness runs unobserved (no status/history/queue).
+        self.instrument = instrument
         self._mux_read_permissions = claude_read_permissions() if mcp_url else []
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
-        self.settings_path = self._write_hook_settings(data_dir) if data_dir else None
+        self.settings_path = (
+            self._write_hook_settings(data_dir) if data_dir and instrument else None
+        )
         self.mcp_config_path = (
             self._write_mcp_config(data_dir, mcp_url) if data_dir and mcp_url else None
         )
@@ -184,6 +190,8 @@ class ClaudeAdapter(BackendAdapter):
 
     def _session_settings(self, opts: SpawnOptions) -> Path | None:
         """Write this pane's settings and hook identity; return the settings path."""
+        if not self.instrument:
+            return None
         directory = self._session_settings_dir(opts.session_id)
         if directory is None:
             return self.settings_path

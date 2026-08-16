@@ -9,6 +9,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
   "harnesses": [
     {
       "name": "claude",
+      "tested_cli_version": null,
       "display_name": "Claude Code",
       "level": "managed",
       "state_sources": [
@@ -38,6 +39,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "transcript": true,
         "measurement": true,
         "lifecycle_hooks": true,
+        "mcp": true,
         "pty_delivery": true,
         "external_usage": true,
         "provider_accounts": true,
@@ -55,6 +57,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
     },
     {
       "name": "codex",
+      "tested_cli_version": null,
       "display_name": "Codex",
       "level": "managed",
       "state_sources": [
@@ -78,6 +81,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "transcript": true,
         "measurement": true,
         "lifecycle_hooks": true,
+        "mcp": true,
         "pty_delivery": true,
         "external_usage": true,
         "provider_accounts": true,
@@ -95,6 +99,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
     },
     {
       "name": "omp",
+      "tested_cli_version": null,
       "display_name": "oh-my-pi",
       "level": "managed",
       "state_sources": [
@@ -116,6 +121,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "transcript": true,
         "measurement": true,
         "lifecycle_hooks": true,
+        "mcp": true,
         "pty_delivery": true,
         "external_usage": false,
         "provider_accounts": false,
@@ -133,6 +139,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
     },
     {
       "name": "pi",
+      "tested_cli_version": null,
       "display_name": "pi",
       "level": "managed",
       "state_sources": [
@@ -155,6 +162,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "transcript": true,
         "measurement": true,
         "lifecycle_hooks": true,
+        "mcp": false,
         "pty_delivery": true,
         "external_usage": false,
         "provider_accounts": false,
@@ -172,6 +180,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
     },
     {
       "name": "opencode",
+      "tested_cli_version": null,
       "display_name": "opencode",
       "level": "managed",
       "state_sources": [
@@ -191,6 +200,7 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "transcript": true,
         "measurement": true,
         "lifecycle_hooks": true,
+        "mcp": true,
         "pty_delivery": true,
         "external_usage": false,
         "provider_accounts": false,

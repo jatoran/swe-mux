@@ -132,6 +132,98 @@ def mobile_voice_url(urls: list[str], port: int = MOBILE_VOICE_HTTPS_PORT) -> st
     return next((url.rstrip("/") for url in urls if _url_on_port(url, port)), None)
 
 
+# BackendState strings reported by `tailscale status --json`. Each maps to the
+# connection state swe-mux surfaces and the exact next command a user runs to
+# advance it. "Running" is the only connected state; every other real backend
+# state means the tailnet listener cannot reach the phone yet.
+_TS_BACKEND_STATES: dict[str, tuple[str, str | None]] = {
+    "Running": ("connected", None),
+    "Stopped": ("stopped", "tailscale up"),
+    "Starting": ("connecting", None),
+    "NeedsLogin": ("logged_out", "tailscale login"),
+    "NoState": ("logged_out", "tailscale login"),
+    "NeedsMachineAuth": ("needs_machine_auth", None),
+}
+# Shown when the Tailscale CLI is absent. winget is the documented Windows
+# install path; other hosts point at the download page from the UI.
+_TS_INSTALL_COMMAND = "winget install tailscale.tailscale"
+
+
+def classify_tailscale_connection(available: bool, status_payload: Any) -> dict[str, object]:
+    """Map raw `tailscale status --json` output to a display connection state.
+
+    ``available`` is whether the CLI is on PATH. ``status_payload`` is the parsed
+    JSON, or ``None`` when the status probe failed. The result reports
+    not-installed / logged-out / connected-as-``<device>.ts.net`` with the exact
+    next command per state, so the UI can point at the cause instead of a bare
+    "unavailable". Unit-tested against real BackendState fixtures.
+    """
+    if not available:
+        return {
+            "connection_state": "not_installed",
+            "device_name": None,
+            "connection_command": _TS_INSTALL_COMMAND,
+            "connection_detail": "Tailscale is not installed or is not on PATH.",
+        }
+    if not isinstance(status_payload, dict):
+        return {
+            "connection_state": "unknown",
+            "device_name": None,
+            "connection_command": "tailscale status",
+            "connection_detail": "Tailscale is installed, but its status could not be read.",
+        }
+    self_node = status_payload.get("Self")
+    dns = self_node.get("DNSName") if isinstance(self_node, dict) else None
+    device_name = str(dns).strip().rstrip(".") if dns else None
+    backend = str(status_payload.get("BackendState") or "").strip()
+    state, command = _TS_BACKEND_STATES.get(backend, ("logged_out", "tailscale login"))
+    if state == "connected":
+        detail = (
+            f"Connected to Tailscale as {device_name}."
+            if device_name
+            else "Connected to Tailscale."
+        )
+    elif state == "stopped":
+        detail = "Tailscale is installed but stopped. Run `tailscale up` to connect."
+    elif state == "connecting":
+        detail = "Tailscale is connecting."
+    elif state == "needs_machine_auth":
+        detail = "This device is waiting for tailnet admin approval."
+    else:
+        detail = "Tailscale is installed but not logged in. Run `tailscale login`."
+    return {
+        "connection_state": state,
+        "device_name": device_name,
+        "connection_command": command,
+        "connection_detail": detail,
+    }
+
+
+async def _plain_status(executable: str) -> Any | None:
+    """Parse `tailscale status --json` regardless of exit code.
+
+    The CLI prints a JSON body carrying ``BackendState`` even when it exits
+    non-zero (logged out or stopped), so the state classifier must read stdout
+    rather than gate on the return code.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            "status",
+            "--json",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=background_creation_flags(),
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=4)
+    except (OSError, TimeoutError):
+        return None
+    try:
+        return json.loads(stdout.decode("utf-8", "replace").strip() or "{}")
+    except json.JSONDecodeError:
+        return None
+
+
 async def _status(executable: str, command: str) -> tuple[Any | None, str]:
     try:
         process = await asyncio.create_subprocess_exec(
@@ -335,14 +427,21 @@ async def _probe_tailscale_status(port: int, *, tailnet_enabled: bool = True) ->
             f"http://127.0.0.1:{port}"
         ),
         "diagnostic": "Tailscale CLI is not installed or is not on PATH.",
+        **classify_tailscale_connection(bool(executable), None),
     }
     if not executable:
         return result
-    (payload, error), (funnel, _), tailnet_ip = await asyncio.gather(
+    (payload, error), (funnel, _), tailnet_ip, status_payload = await asyncio.gather(
         _status(executable, "serve"),
         _status(executable, "funnel"),
         tailscale_ipv4(executable),
+        _plain_status(executable),
     )
+    # The connection state (installed / logged-out / connected-as-<device>) is
+    # independent of Serve configuration: a fresh install is on PATH but logged
+    # out, so `available` alone cannot tell the two apart. Read it from the same
+    # `tailscale status` payload that yields the DNS name.
+    result.update(classify_tailscale_connection(True, status_payload))
     result["tailnet_ip"] = tailnet_ip
     result["tailnet_urls"] = [f"http://{tailnet_ip}:{port}"] if tailnet_ip else []
     result["direct_available"] = bool(tailnet_enabled and tailnet_ip)

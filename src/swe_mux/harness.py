@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
@@ -1413,6 +1414,83 @@ class HarnessInstallation:
 
     installed: bool
     resolved_path: str | None
+    # The CLI's own reported version, best-effort. `None` when not probed or the
+    # CLI did not answer. Machine state, so it rides the runtime payload only, never
+    # the generated seed.
+    cli_version: str | None = None
+
+
+# The last CLI version mux was verified against, per harness. Empty by default so
+# the "newer than mux tested" signal never fires on a guessed bound; a maintainer
+# arms it by adding a version here after testing a release. A CLI newer than its
+# bound degrades gracefully (unknown models fall back to their family context
+# window, see claude_models.py); this only surfaces that the pairing is untested.
+TESTED_CLI_VERSIONS: dict[str, str] = {}
+
+_VERSION_TOKEN = re.compile(r"\d+(?:\.\d+)*")
+_cli_version_cache: dict[tuple[str, str], tuple[float, str | None]] = {}
+_CLI_VERSION_TTL = 300.0
+
+
+def _parse_version(text: str | None) -> tuple[int, ...] | None:
+    if not text:
+        return None
+    match = _VERSION_TOKEN.search(text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group().split("."))
+
+
+def version_is_untested(cli_version: str | None, tested: str | None) -> bool:
+    """True when a parseable CLI version is strictly newer than the tested bound.
+
+    Fails closed: if either version cannot be parsed, or no bound is set, it
+    reports untested=False rather than a false "newer than tested".
+    """
+    current = _parse_version(cli_version)
+    bound = _parse_version(tested)
+    if current is None or bound is None:
+        return False
+    return current > bound
+
+
+def probe_cli_version(name: str, executable: str | None = None) -> str | None:
+    """Best-effort `<cli> --version`, cached briefly. Never raises.
+
+    Kept out of :func:`detect_installation` so the hot enablement path stays a
+    filesystem-only check; only the registry payload pays for the subprocess.
+    """
+    import subprocess
+
+    from .shim_paths import which_real
+    from .subprocess_flags import background_creation_flags
+
+    harness = HARNESSES[name]
+    override = executable.strip() if executable and executable.strip() else ""
+    resolved = which_real(override or harness.executable)
+    if not resolved:
+        return None
+    key = (name, resolved)
+    now = time.monotonic()
+    cached = _cli_version_cache.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    version: str | None = None
+    try:
+        completed = subprocess.run(  # noqa: S603 - resolved real executable, fixed arg
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+            creationflags=background_creation_flags(),
+        )
+        output = (completed.stdout or completed.stderr or "").strip()
+        match = _VERSION_TOKEN.search(output)
+        version = match.group() if match else (output.splitlines()[0].strip() if output else None)
+    except (OSError, subprocess.SubprocessError):
+        version = None
+    _cli_version_cache[key] = (now + _CLI_VERSION_TTL, version)
+    return version
 
 
 def detect_installation(name: str, executable: str | None = None) -> HarnessInstallation:
@@ -1445,6 +1523,29 @@ def detect_installations(
     """Detect every registered harness, honouring per-harness executable overrides."""
     overrides = harness_exe or {}
     return {name: detect_installation(name, overrides.get(name)) for name in HARNESSES}
+
+
+def detect_installations_with_versions(
+    harness_exe: dict[str, str] | None = None,
+) -> dict[str, HarnessInstallation]:
+    """Detection plus a best-effort CLI version probe, for the registry payload.
+
+    The version subprocess is cached (see :func:`probe_cli_version`), so only the
+    first registry read after a change pays for it; the hot enablement path uses
+    the version-free :func:`detect_installations`.
+    """
+    import dataclasses
+
+    overrides = harness_exe or {}
+    result: dict[str, HarnessInstallation] = {}
+    for name in HARNESSES:
+        found = detect_installation(name, overrides.get(name))
+        if found.resolved_path is not None:
+            found = dataclasses.replace(
+                found, cli_version=probe_cli_version(name, overrides.get(name))
+            )
+        result[name] = found
+    return result
 
 
 def enabled_backends(
@@ -1534,7 +1635,16 @@ def public_harness_registry(
         if installations is None or name not in installations:
             return {}
         found = installations[name]
-        return {"installed": found.installed, "resolved_path": found.resolved_path}
+        payload: dict[str, object] = {
+            "installed": found.installed,
+            "resolved_path": found.resolved_path,
+        }
+        if found.cli_version is not None:
+            payload["cli_version"] = found.cli_version
+            payload["version_untested"] = version_is_untested(
+                found.cli_version, TESTED_CLI_VERSIONS.get(name)
+            )
+        return payload
 
     return {
         "version": 1,
@@ -1542,6 +1652,9 @@ def public_harness_registry(
             {
                 "name": harness.name,
                 **detection(harness.name),
+                # Static "last tested against" bound, in the seed. `None` until a
+                # maintainer arms it in TESTED_CLI_VERSIONS.
+                "tested_cli_version": TESTED_CLI_VERSIONS.get(harness.name),
                 "display_name": harness.display_name,
                 "level": harness.level.name,
                 "state_sources": list(harness.state_sources),
@@ -1560,6 +1673,10 @@ def public_harness_registry(
                     "transcript": bool(harness.transcript),
                     "measurement": harness.measurement_source != "none",
                     "lifecycle_hooks": harness.native_hooks,
+                    # Whether the mux MCP server can be registered for this harness,
+                    # gating the per-harness MCP toggle in Settings. pi has no MCP
+                    # client, so its toggle is not offered.
+                    "mcp": harness.adapter_family != "pi",
                     "pty_delivery": harness.submission == "terminal_line",
                     "external_usage": harness.external_usage_command,
                     "provider_accounts": harness.provider_account_management,

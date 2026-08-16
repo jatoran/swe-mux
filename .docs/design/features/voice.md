@@ -224,6 +224,12 @@ affect the PTY, session state, transcripts, history, or projects.
   GPU whose CUDA/cuDNN runtime DLLs are missing). Models download once from Hugging
   Face on first use, then run from the local cache; download, load, GPU-runtime, and
   CPU-fallback failures surface through the STT diagnostic without submitting the utterance.
+- **`stt_enabled` defaults off** so a fresh install never downloads the several-hundred-MB Whisper
+  model and the browser voice-activity runtime on the first Talk without warning. Enabling
+  microphone input in Settings -> Voice is the explicit opt-in, and the Voice tab states that the
+  first capture downloads a speech model. Existing configs keep their stored value. `tts_edge_voice`
+  defaults to the neutral `en-US-JennyNeural` rather than a locale-specific voice; TTS is off by
+  default, so this only takes effect once a user turns read-aloud on.
 - **Two decoders by job, chosen by the `X-Mux-Decode-Profile` request header.** A spoken command
   is a reflex and a dictated paragraph is read afterwards, so they get opposite trade-offs:
   - `command` (the routing pass, used by speculative decodes and the wake-word tester) decodes on

@@ -28,6 +28,34 @@ swe-mux has no auth: it binds only loopback plus the specific Tailscale IPv4, ne
 Therefore this plan borrows Orca's connection UX and diagnostics, which fit swe-mux's model, and rejects Orca's device registry, bearer credentials, and relay, which contradict it.
 Adopting the registry or relay would mean building the auth subsystem swe-mux deliberately does not have, and is out of scope unless swe-mux later chooses to support LAN or public access.
 
+## Implementation status
+
+Implemented and verified in the backend and frontend; not yet shipped to the frozen desktop app.
+
+P0:
+- Done: real Tailscale connection state (`classify_tailscale_connection` in `tailscale.py`, surfaced through `remote_status`, rendered in the Remote and Voice tabs).
+- Done: phone-side DNS checklist in the Remote and Voice tabs.
+- Done: Tailscale-aware cause-pointing text (`connection_detail` per state).
+- Done: Windows Defender Firewall inspect and repair (`windows_firewall.py`, `GET /api/remote/firewall`, `POST /api/remote/firewall/repair`, Remote-tab panel), platform-gated to a frozen Windows build.
+- Done: one-click diagnostics export (`GET /api/diagnostics/export`, `mux doctor --export`, Remote-tab button with clipboard and textarea fallback).
+
+P1 and P2:
+- Done: QR of the connection URL and the "Connect a phone" modal (`frontend/src/remoteConnection.tsx` `ConnectionQr` via the `qrcode-generator` dependency, `frontend/src/ConnectPhone.tsx`), reachable from Settings -> Remote. The URL uses the `.ts.net` MagicDNS name.
+- Done: "Not installed" next step (winget command plus a download link in the connection readout).
+- Done: per-harness mux MCP toggle and hook-instrumentation toggle (`harness_mcp_enabled`, `harness_instrument_enabled` in `config.py`; the `instrument` gate threaded through `build_agent_adapter` and every adapter family; Settings -> Agents). Both are restart-scoped and named their consequence.
+- Done: "What mux injects" disclosure in the first-run panel.
+- Done: security posture statement in Settings -> Remote and the Connect-a-phone modal.
+- Done: STT off by default with a first-use download note; neutral `en-US` TTS voice default; STT language/model stated as a first-use choice; scan-timeline model made an editable, changeable default.
+- Done: model-catalog unknown-model path confirmed to degrade cleanly (family fallback in `claude_models.py`; covered by `tests/test_claude_models.py`).
+- Done: OpenRouter key surface listing what the key unlocks (Settings -> Automation).
+- Done: provider-account login guidance in the first-run panel.
+- Done: prerequisite checklist for Git, Node, npm, and Tailscale (`prerequisites.py`, `GET /api/diagnostics/prerequisites`, Settings -> Remote).
+- Done: first-run chaining copy (harnesses -> project -> account login -> session) in the first-run panel.
+- Done: CLI-version-drift signal (best-effort `probe_cli_version`, `version_untested` against a maintainer-armed `TESTED_CLI_VERSIONS`, shown in Settings -> Agents).
+- Done: confirmed `ProcessPanel.tsx`'s `127.0.0.1:3000` was a seeded example; changed it to a placeholder so it no longer reads as an assumed dev-server port.
+
+Still open (deliberately not code): ship the frozen `dist/` app for external testers; code-signing and SmartScreen decision; foreign-PATH shim/detection testing across npm, bun, and native installers; CLI-on-PATH packaging verification; arming `TESTED_CLI_VERSIONS` with verified bounds.
+
 ## Remote connection
 
 The current status probe reports only `available` (the Tailscale CLI is on PATH), which cannot tell logged-out from connected.

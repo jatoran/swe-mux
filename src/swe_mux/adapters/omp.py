@@ -139,15 +139,25 @@ class OmpAdapter(BackendAdapter):
         data_home: Path | None = None,
         data_dir: Path | None = None,
         mcp_url: str | None = None,
+        instrument: bool = True,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
         self._extension_root = data_dir / "omp-extensions" if data_dir else None
         self._mcp_url = mcp_url
+        # "Launch clean": the OMP extension carries both the lifecycle hook and the
+        # MCP registration, so dropping it runs this harness unobserved.
+        self.instrument = instrument
         self._model_context_windows: dict[tuple[str, str], int] | None = None
 
     def spawn_spec(self, sid: str, opts: SpawnOptions) -> SpawnSpec:
+        if not self.instrument:
+            return SpawnSpec(
+                opts.exe or self.default_exe,
+                tuple([*self.default_args, *opts.args]),
+                self._omp_env(),
+            )
         extension = self._session_extension(opts.session_id or sid, opts.mcp_token)
         return SpawnSpec(
             opts.exe or self.default_exe,
@@ -156,6 +166,12 @@ class OmpAdapter(BackendAdapter):
         )
 
     def resume_spec(self, native_id: str, opts: SpawnOptions) -> SpawnSpec:
+        if not self.instrument:
+            return SpawnSpec(
+                opts.exe or self.default_exe,
+                tuple(["--resume", native_id, *self.default_args, *opts.args]),
+                self._omp_env(),
+            )
         extension = self._session_extension(opts.session_id or native_id, opts.mcp_token)
         return SpawnSpec(
             opts.exe or self.default_exe,

@@ -27,8 +27,14 @@ def build_agent_adapter(
     data_dir: Path,
     mcp_url: str,
     command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
+    instrument: bool = True,
 ) -> BackendAdapter:
-    """Construct an adapter from one descriptor and runtime configuration."""
+    """Construct an adapter from one descriptor and runtime configuration.
+
+    ``mcp_url`` empty disables the mux MCP registration for this harness (the MCP
+    toggle). ``instrument`` false launches it without mux's lifecycle hooks (the
+    "launch clean" toggle), which drops the harness to unobserved.
+    """
     if harness.adapter_family == "claude":
         return ClaudeAdapter(
             executable,
@@ -39,11 +45,12 @@ def build_agent_adapter(
             config_dir_name=harness.config_dir_name,
             script_base_name=harness.script_base_name,
             data_home_resolver=harness.data_home,
+            instrument=instrument,
         )
     if harness.adapter_family == "codex":
         return CodexAdapter(
             executable,
-            notify=True,
+            notify=instrument,
             default_args=args,
             command_resolver=command_resolver,
             mcp_url=mcp_url,
@@ -58,6 +65,7 @@ def build_agent_adapter(
             data_home=harness.data_home(),
             data_dir=data_dir,
             mcp_url=mcp_url,
+            instrument=instrument,
         )
     if harness.adapter_family == "pi":
         # No `mcp_url`: pi 0.74.2 has no MCP client at all (its bundled docs
@@ -69,6 +77,7 @@ def build_agent_adapter(
             args,
             data_home=harness.data_home(),
             command_resolver=command_resolver,
+            instrument=instrument,
         )
     if harness.adapter_family == "opencode":
         return OpenCodeAdapter(
@@ -78,6 +87,7 @@ def build_agent_adapter(
             data_dir=data_dir,
             mcp_url=mcp_url,
             command_resolver=command_resolver,
+            instrument=instrument,
         )
     assert_never(harness.adapter_family)
 

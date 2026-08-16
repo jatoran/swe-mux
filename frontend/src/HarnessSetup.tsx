@@ -92,6 +92,8 @@ export function HarnessSetup(
       <header><strong>SET UP::AGENTS</strong></header>
       <div class="harness-setup-body">
         <p>swe-mux found these agent CLIs on this machine. Enabled harnesses appear in the launchers; you can change any of this later under Settings → Agents.</p>
+        <p class="harness-setup-note">When mux launches an enabled agent it adds two things per session: its lifecycle hooks (so status, history, and the prompt queue work) and a read-only mux MCP server (so the agent can see the fleet). Both are per-session and removed when the session ends. You can turn either off per harness under Settings → Agents ("launch clean" runs an agent unobserved).</p>
+        <p class="harness-setup-note">Next, after this: create a Project for a folder, sign in to each agent CLI so its account and history appear (mux reads Claude and Codex auth, so the account switcher is empty until you run each CLI's login), then start a session. Set up a phone under Settings → Remote.</p>
         {!ready&&<p class="harness-setup-loading">Detecting…</p>}
         {ready&&!detected.length&&<p>No harnesses are registered.</p>}
         {ready&&detected.map(harness=><label class="harness-setup-row check" key={harness.name}>

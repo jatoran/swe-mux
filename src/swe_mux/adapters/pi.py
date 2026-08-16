@@ -78,10 +78,14 @@ class PiAdapter(BackendAdapter):
         *,
         data_home: Path | None = None,
         command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
+        instrument: bool = True,
     ) -> None:
         self.default_exe = default_exe
         self.default_args = default_args or []
         self._data_home = data_home
+        # "Launch clean": the pi extension is the lifecycle hook, so dropping it
+        # runs this harness unobserved (pi has no MCP client either way).
+        self.instrument = instrument
         # npm installs pi as a `.cmd` batch shim on Windows, which ConPTY cannot
         # execute. Without a resolver the pane opens and immediately dies with
         # "The system cannot find the file specified".
@@ -98,6 +102,8 @@ class PiAdapter(BackendAdapter):
     # ------------------------------------------------------------------ launch
 
     def _with_hook(self, args: list[str]) -> list[str]:
+        if not self.instrument:
+            return args
         target = str(pi_hook_path())
         if target in args:
             return args

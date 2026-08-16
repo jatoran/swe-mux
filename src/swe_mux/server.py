@@ -84,7 +84,7 @@ from .harness import (
     branch_strategy,
     delivers_prompts_through_pty,
     descriptor,
-    detect_installations,
+    detect_installations_with_versions,
     enabled_backends,
     harnesses_at_least,
     has_observable_transcript,
@@ -140,6 +140,7 @@ from .observation import (
 )
 from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
+from .prerequisites import detect_prerequisites
 from .preview_capture import (
     INSTALL_HINT as PREVIEW_CAPTURE_INSTALL_HINT,
 )
@@ -253,6 +254,7 @@ from .supervisor_client import SupervisorClient
 from .tailscale import (
     enable_mobile_voice_serve,
     is_tailscale_ip,
+    tailscale_ipv4,
     tailscale_status,
 )
 from .terminal_arbitration import ClaimReason, ClaimRequest, evaluate_claim
@@ -277,6 +279,11 @@ from .voice import (
     clip_snapshot,
 )
 from .win_jobobj import ReaperJob
+from .windows_firewall import (
+    firewall_supported,
+    inspect_firewall,
+    repair_firewall,
+)
 from .worktree_setup import WorktreeSetupResult, run_worktree_setup
 
 log = logging.getLogger(__name__)
@@ -629,6 +636,9 @@ def create_app(
             web.get("/api/daemon/redeploy", daemon_redeploy_status),
             web.get("/api/remote/status", remote_status),
             web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
+            web.get("/api/remote/firewall", firewall_status),
+            web.post("/api/remote/firewall/repair", firewall_repair),
+            web.get("/api/diagnostics/prerequisites", prerequisites_status),
             web.get("/api/config", get_config),
             web.get("/api/settings/bundle", settings_bundle),
             web.patch("/api/config", patch_config),
@@ -785,6 +795,7 @@ def create_app(
             web.get("/api/diagnostics/notifications", get_notification_diagnostics),
             web.get("/api/diagnostics/network", get_network_usage),
             web.delete("/api/diagnostics/network", reset_network_usage),
+            web.get("/api/diagnostics/export", diagnostics_export),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
@@ -1029,7 +1040,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             executable=config.harness_exe[name],
             args=config.harness_args[name],
             data_dir=config.data_dir,
-            mcp_url=mcp_url,
+            # Per-harness toggles (absent key = on). Empty mcp_url drops the mux MCP
+            # registration; instrument=False launches without lifecycle hooks. Both
+            # are restart-scoped because adapters are built once here.
+            mcp_url=mcp_url if config.harness_mcp_enabled.get(name, True) else "",
+            instrument=config.harness_instrument_enabled.get(name, True),
             # A harness that declares `requires_direct_entrypoint` has an argument a
             # `.cmd` shim cannot carry, so its JS entrypoint is launched directly.
             # Every other npm-shipped harness reads its shim generically, which needs
@@ -1729,7 +1744,9 @@ async def get_harnesses(request: web.Request) -> web.Response:
     # Detection touches the filesystem (PATH resolution and a data-home stat per
     # harness), so it runs off the event loop. The configured executable override
     # is passed through so detection agrees with what the launcher would run.
-    installations = await asyncio.to_thread(detect_installations, dict(config.harness_exe))
+    installations = await asyncio.to_thread(
+        detect_installations_with_versions, dict(config.harness_exe)
+    )
     return json_response(public_harness_registry(installations))
 
 
@@ -2069,6 +2086,43 @@ async def enable_mobile_voice(request: web.Request) -> web.Response:
         )
     result = await enable_mobile_voice_serve(config.port)
     return json_response(result, 200 if result.get("status") == "ready" else 409)
+
+
+async def prerequisites_status(request: web.Request) -> web.Response:
+    """Presence of Git, Node, npm, and Tailscale, each with what it backs and a next step."""
+    del request
+    return json_response({"prerequisites": await asyncio.to_thread(detect_prerequisites)})
+
+
+async def firewall_status(request: web.Request) -> web.Response:
+    """Whether Windows Defender Firewall admits phone connections to swe-mux.
+
+    Off Windows (or off a frozen build) this reports ``supported: false`` and the
+    UI hides the panel; the tailnet listener there is governed by the host's own
+    firewall, covered by the reachability guidance instead.
+    """
+    config: Config = request.app["config"]
+    if not firewall_supported():
+        return json_response(await inspect_firewall(None))
+    # The tailnet adapter's network category decides which firewall profile
+    # governs the inbound phone connection, so its address seeds the lookup.
+    address = await tailscale_ipv4()
+    return json_response(await inspect_firewall(config.port, address))
+
+
+async def firewall_repair(request: web.Request) -> web.Response:
+    """Elevated one-click repair: drop blocking rules, add one scoped Allow rule.
+
+    Requires an explicit user gesture header so a stray poll can never trigger a
+    UAC prompt.
+    """
+    config: Config = request.app["config"]
+    if request.headers.get("X-Mux-User-Gesture") != "firewall-repair":
+        return json_response({"error": "firewall repair requires an explicit user action"}, 400)
+    if not firewall_supported():
+        return json_response({"ok": False, "reason": "unsupported"}, 409)
+    result = await repair_firewall(config.port)
+    return json_response(result, 200 if result.get("ok") else 409)
 
 
 async def get_config(request: web.Request) -> web.Response:
@@ -4866,6 +4920,94 @@ async def reset_network_usage(request: web.Request) -> web.Response:
     )
     meter.reset()
     return json_response({"reset": True, "previous": previous})
+
+
+# Log tails are bounded so the copyable blob stays pasteable and the read is
+# cheap. daemon.log and redeploy.log are the two records a first-connect or
+# redeploy failure leaves behind.
+_DIAGNOSTICS_LOG_TAIL_BYTES = 64 * 1024
+
+
+def _log_tail(path: Path, max_bytes: int = _DIAGNOSTICS_LOG_TAIL_BYTES) -> dict[str, object]:
+    """Read the last ``max_bytes`` of a log file as decoded lines, best-effort."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+            data = handle.read()
+    except OSError as exc:
+        return {"path": str(path), "present": False, "error": str(exc), "lines": []}
+    text = data.decode("utf-8", "replace")
+    return {
+        "path": str(path),
+        "present": True,
+        "bytes": size,
+        "truncated": size > max_bytes,
+        "lines": text.splitlines(),
+    }
+
+
+async def diagnostics_export(request: web.Request) -> web.Response:
+    """One copyable blob aggregating what a first-connect report always needs.
+
+    Bundles the sanitized config, remote-connection state, firewall status,
+    network counters, the fleet status-health aggregate, and the tails of
+    daemon.log and redeploy.log. Everything here is already sanitized: the config
+    goes through ``public_dict`` (no secrets), and the two logs are command-free
+    by design, so no terminal bytes or message content are ever included. Mirrors
+    Orca's ``buildConnectionDiagnosticsReport`` intent, adapted to swe-mux's
+    daemon-side pieces.
+    """
+    from .session import fleet_status_health
+
+    config: Config = request.app["config"]
+    sessions: SessionManager = request.app["sessions"]
+    meter: NetworkUsage = request.app["network_usage"]
+    store: StatusTimelineStore = request.app["status_timeline"]
+    supervisor = request.app.get("supervisor")
+
+    remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
+    firewall: dict[str, object] = {"supported": False}
+    if firewall_supported():
+        firewall = await inspect_firewall(config.port, await tailscale_ipv4())
+
+    live = sum(session.pty.isalive() for session in sessions.sessions.values())
+    export = {
+        "generated_at": time.time(),
+        "swe_mux_version": "0.1.0",
+        "platform": {
+            "system": sys.platform,
+            "python": sys.version.split()[0],
+            "frozen": bool(getattr(sys, "frozen", False)),
+        },
+        "daemon": {
+            "port": config.port,
+            "host": config.host,
+            "data_dir": str(config.data_dir),
+            "live_sessions": live,
+            "supervisor_state": (
+                "connected"
+                if supervisor is not None and supervisor.connected
+                else "lost"
+                if supervisor is not None and getattr(supervisor, "lost", False)
+                else "absent"
+            ),
+        },
+        "config": config.public_dict(),
+        "remote_status": remote,
+        "firewall": firewall,
+        "network_usage": meter.snapshot(),
+        "status_health": fleet_status_health(sessions.sessions.values()),
+        "status_timeline_sink": store.stats(),
+        "logs": {
+            "daemon": _log_tail(config.data_dir / "daemon.log"),
+            "redeploy": _log_tail(config.data_dir / "redeploy.log"),
+        },
+    }
+    response = json_response(export)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def patch_session(request: web.Request) -> web.Response:
