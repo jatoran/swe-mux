@@ -2330,7 +2330,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .clipboard-search input:focus{outline:0;border-color:var(--green)}
 .clipboard-entries{flex:1 1 auto;min-height:0;overflow:auto}
 .clipboard-entry{border-bottom:1px solid var(--line)}
-.clipboard-entry-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;background:var(--panel)}
+.clipboard-entry-head{position:relative;display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;background:var(--panel)}
 .clipboard-entry.active>.clipboard-entry-head{background:var(--panel2)}
 .clipboard-entry.pinned .clipboard-entry-body>small{color:var(--green)}
 .clipboard-entry-body{min-width:0;display:grid;grid-template-columns:11px minmax(0,1fr);grid-template-areas:'caret preview' '. meta';gap:2px 4px;padding:8px 9px;border:0;background:transparent;color:var(--text);text-align:left;font:inherit;cursor:pointer}
@@ -2338,12 +2338,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .clipboard-entry-preview{grid-area:preview;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;word-break:break-word}
 .clipboard-entry-body>small{grid-area:meta;color:var(--muted);font-size:8px}
 .clipboard-entry-body:disabled{opacity:.6;cursor:progress}
-.clipboard-entry-actions{flex:none;display:flex;align-items:center;gap:2px;padding:0 6px 0 2px}
+/* Desktop: the action cluster is an overlay revealed only on the active/hovered
+   row, so a row being scanned is pure preview with zero reserved gutter and the
+   reveal causes no reflow. The gradient lets it sit over the preview's tail. */
+.clipboard-entry-actions{position:absolute;top:0;right:0;bottom:0;display:flex;align-items:center;gap:2px;padding:0 8px 0 28px;background:linear-gradient(to right,transparent,var(--panel2) 34%);visibility:hidden;opacity:0;transition:opacity .1s ease}
+.clipboard-entry-head:hover>.clipboard-entry-actions,.clipboard-entry-head:focus-within>.clipboard-entry-actions,.clipboard-entry.active>.clipboard-entry-head>.clipboard-entry-actions,.clipboard-entry.expanded>.clipboard-entry-head>.clipboard-entry-actions{visibility:visible;opacity:1}
 .clipboard-entry-actions button{width:26px;height:calc(26px*var(--ui-scale));border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .clipboard-entry-actions button:hover:not(:disabled){border-color:var(--line);color:var(--text)}
 .clipboard-entry-actions button:disabled{opacity:.45;cursor:progress}
 /* Icon-only until there is room for words; the label is what makes the mobile
-   full-width action row readable. */
+   primary buttons readable. */
 .clipboard-entry-actions b{display:none;font-weight:400}
 /* Expanded entry. The head pins to the top of the scroll port and the collapse
    footer to its bottom, so a body many screens tall still has this entry's own
@@ -2351,7 +2355,8 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .clipboard-entry.expanded>.clipboard-entry-head{position:sticky;top:0;z-index:2;background:var(--panel2);border-bottom:1px solid var(--line);box-shadow:0 2px 5px #0006}
 .clipboard-entry.expanded .clipboard-entry-preview{-webkit-line-clamp:1}
 .clipboard-entry-text{margin:0;padding:9px 10px;max-width:100%;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);color:var(--text);font:inherit;line-height:1.45;user-select:text;-webkit-user-select:text}
-.clipboard-entry-foot{position:sticky;bottom:0;z-index:2;display:flex;justify-content:flex-end;padding:5px 9px;border-top:1px solid var(--line);background:var(--panel2)}
+.clipboard-entry-foot{position:sticky;bottom:0;z-index:2;display:flex;justify-content:flex-end;gap:6px;padding:5px 9px;border-top:1px solid var(--line);background:var(--panel2)}
+.clipboard-entry-foot button>span{margin-right:5px}
 .clipboard-entry-foot button{min-height:calc(26px*var(--ui-scale));padding:0 12px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}
 .clipboard-entry-foot button:hover{border-color:var(--accent)}
 .clipboard-empty{margin:0;padding:22px 12px;color:var(--muted);font-size:9px;line-height:1.45;text-align:center}
@@ -2369,11 +2374,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .clipboard-panel-scrim{display:block;position:fixed;inset:0;z-index:59;border:0;background:#020403aa}
   .clipboard-search input{height:calc(38px*var(--ui-scale));font-size:16px}
   .clipboard-entry-body{padding:11px 10px}
-  /* Actions drop below the preview instead of squeezing it into a third of the
-     drawer: full-width labelled buttons, which is also what a thumb wants. */
-  .clipboard-entry-head{grid-template-columns:minmax(0,1fr)}
-  .clipboard-entry-actions{gap:0;padding:0;border-top:1px solid var(--line)}
-  .clipboard-entry-actions button{flex:1 1 0;display:flex;align-items:center;justify-content:center;gap:5px;width:auto;height:calc(42px*var(--ui-scale));border-width:0 0 0 1px;border-color:var(--line);border-style:solid}
+  /* No hover on touch, so the primary actions (Insert, Copy) stay in a compact
+     right column beside the preview rather than a persistent full-width row —
+     the collapsed entry keeps its height. Pin/Delete move to the expanded
+     footer (tap the row to read + manage), so browsing is a dense preview list. */
+  .clipboard-entry-head{grid-template-columns:minmax(0,1fr) auto}
+  .clipboard-entry-actions{position:static;visibility:visible;opacity:1;gap:0;padding:0;background:none;border-left:1px solid var(--line)}
+  .clipboard-entry-actions .cb-secondary{display:none}
+  .clipboard-entry-actions button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:auto;min-width:54px;height:auto;padding:4px 6px;color:var(--text);border-width:0 0 0 1px;border-color:var(--line);border-style:solid}
   .clipboard-entry-actions button:first-child{border-left-width:0}
   .clipboard-entry-actions b{display:inline;font-size:9px}
   .clipboard-entry-text{padding:11px 10px;font-size:12px;line-height:1.5;touch-action:auto}
