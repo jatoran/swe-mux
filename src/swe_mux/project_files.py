@@ -1194,7 +1194,7 @@ MAX_OBSERVATION_CHARS = 2000
 # summary line — today only `mux.requestSpawn` (`ROADMAP.md` Phase 5,
 # `CONTROL_PLANE_ROADMAP.md` §7.2/§16). The item is text until a human approves
 # it; nothing here starts anything.
-OBSERVATION_KINDS = ("note", "spawn_request")
+OBSERVATION_KINDS = ("note", "spawn_request", "control_request")
 MAX_SPAWN_REQUEST_PROMPT = 8000
 _REQUEST_STRING_FIELDS = (
     "prompt",
@@ -1209,6 +1209,13 @@ _REQUEST_STRING_FIELDS = (
     "status",
     "session_id",
     "decided_by",
+    # Phase 7.6 control_request fields, preserved through the same allowlist so a
+    # drafted interrupt/end reads back with the target and action a human needs to
+    # approve it. Unknown keys are still dropped.
+    "action",
+    "target_session_id",
+    "target_name",
+    "outcome",
 )
 
 

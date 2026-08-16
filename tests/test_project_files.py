@@ -142,6 +142,32 @@ async def test_corrupt_observations_are_refused_rather_than_clobbered(tmp_path: 
     assert inbox.read_text(encoding="utf-8").startswith("<<<<<<<")
 
 
+async def test_control_request_round_trips_with_its_fields(tmp_path: Path) -> None:
+    # Phase 7.6: a drafted interrupt/end must read back with the target and action
+    # a human needs to approve it. The kind allowlist and the request field
+    # allowlist both have to know about control_request, or the draft is stored
+    # empty and the approval path has nothing to act on (caught live 2026-08-16).
+    request = {
+        "action": "interrupt",
+        "target_session_id": "sess-b",
+        "target_name": "sessionB",
+        "reason": "wedged in a loop",
+        "from_session": "sess-a",
+        "status": "pending",
+    }
+    result = await append_observation(
+        tmp_path, "sessionA asks to interrupt sessionB",
+        kind="control_request", request=request,
+    )
+    listing = await read_observations(tmp_path)
+    item = next(o for o in listing["observations"] if o["id"] == result["appended_id"])
+    assert item["kind"] == "control_request"
+    assert item["request"]["action"] == "interrupt"
+    assert item["request"]["target_session_id"] == "sess-b"
+    assert item["request"]["target_name"] == "sessionB"
+    assert item["request"]["status"] == "pending"
+
+
 async def test_project_note_round_trips_and_detects_external_edits(tmp_path: Path) -> None:
     missing = await read_note(tmp_path, DEFAULT_NOTE_STORAGE_ID)
     assert missing["revision"] == "missing"
