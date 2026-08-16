@@ -37,15 +37,16 @@ from tests.test_mcp import HistoryStub, live_session, manager_for
 
 RUN_AUTO = os.environ.get("SWEMUX_RUN_LIVE_AUTOMATIONS_TESTS") == "1"
 AUTO_HARNESSES = list(live_automation_harnesses())
-# Harnesses whose real write does not produce a Tier 0 fact carrying the file
-# target, so a cross-session file edge cannot be built from their runs. codex
-# writes through apply_patch/shell, whose tool facts the observer records with no
-# `target` (measured live 2026-08-16 — file_write_result facts arrive with
-# target=None), so provenance has nothing to match a later read against. Such a
-# harness still runs the target-independent verified_status canary; it is excluded
-# from provenance by this stated limitation, never silently skipped.
+# Harnesses that cannot form a same-run read-after-write edge, so the provenance
+# canary excludes them by this stated limitation (never a silent skip); they still
+# run the target-independent verified_status canary. codex reads a file through its
+# shell/exec tool, which Tier 0 records as a `command` fact rather than a
+# `file_read`, so there is no read fact to pair with a write within one codex run.
+# Its writes DO now carry a target (the observer reads the path from
+# patch_apply_end.changes, fixed 2026-08-16), so cross-harness lineage — a codex
+# write read by another harness — works; only the codex-only pairing does not.
 _PROVENANCE_EXCLUSIONS: dict[str, str] = {
-    "codex": "codex writes via apply_patch/shell, whose Tier 0 facts carry no target",
+    "codex": "codex reads via its shell/exec tool (a command fact, not a file_read)",
 }
 PROVENANCE_HARNESSES = [h for h in AUTO_HARNESSES if h not in _PROVENANCE_EXCLUSIONS]
 ALL_MEMORY_AUTOMATIONS = frozenset(

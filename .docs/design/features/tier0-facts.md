@@ -68,6 +68,12 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
 - The adapter emits a normalized `target` + parse-time `content_hash` on `tool_use`
   (`observation.tool_call_evidence`) and correlates the same `target` onto the matching
   `tool_result` by call id; Tier 0 prefers those, falling back to key-scan.
+- A codex write is a special case: its path lives in an `*** Add/Update/Delete File:` patch
+  header rather than a key, and it applies through an exec wrapper whose `patch_apply_end` result
+  carries a different call id than the tool call that held the patch. So the target and content
+  are read from that result's `changes` map (`{path: {type, content}}`), which keeps a codex
+  file write traceable instead of recording it with no target (the gap the codex live canary
+  exposed).
 - `git_changed` carries the commit `head` and a `dirty_hash` of the working-tree change set
   (`git_monitor.GitEvidence`), so a fact records which tree it was produced against.
 - Gated per session: capture only for sessions whose owning Project opted `tier0` in,

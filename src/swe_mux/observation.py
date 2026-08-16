@@ -305,6 +305,61 @@ _TOOL_TARGET_FIELDS = (
     "url",
 )
 _TOOL_CONTENT_FIELDS = ("new_string", "content", "contents", "new_source", "text", "patch")
+# The file path in an apply_patch envelope, tolerant of how codex wraps it: the
+# patch may arrive as raw text with real newlines, or as a string literal inside a
+# JS `exec` call where the newlines are escaped (`\n`) and the marker sits mid-line.
+# The terminator therefore accepts an escaped or real newline, a closing quote, or
+# end of text.
+_APPLY_PATCH_FILE_RE = re.compile(
+    r"\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*(?:\\n|[\r\n\"]|$)"
+)
+
+
+def _apply_patch_target(text: str) -> str | None:
+    """The first file path an apply_patch envelope names, if the text is one.
+
+    codex writes through apply_patch, whose tool input carries the file path in an
+    ``*** Add/Update/Delete File:`` header rather than a key. Without mining it the
+    write records with no target and provenance cannot trace that file across
+    sessions — the gap the codex live canary exposed (2026-08-16).
+    """
+    if "*** " not in text:
+        return None
+    match = _APPLY_PATCH_FILE_RE.search(text)
+    if not match:
+        return None
+    path = match.group(1).strip().strip('"').strip()
+    return path[:512] or None
+
+
+def _patch_apply_evidence(
+    changes: Any, fallback_target: str | None
+) -> tuple[str | None, str | None]:
+    """Target and content hash for a codex ``patch_apply_end`` from its ``changes``.
+
+    ``changes`` maps each written path to ``{type, content}``. The first path is the
+    write's target (a single apply_patch usually touches one file), and the
+    concatenated contents are hashed as the exact bytes written, so the write is
+    traceable even though the patch tool call carried a different call id.
+    """
+    if not isinstance(changes, dict) or not changes:
+        return fallback_target, None
+    target = fallback_target
+    for path in changes:
+        if isinstance(path, str) and path.strip():
+            target = path.strip()[:512]
+            break
+    contents = [
+        str(entry.get("content"))
+        for entry in changes.values()
+        if isinstance(entry, dict) and entry.get("content") is not None
+    ]
+    content_hash = (
+        hashlib.sha256("\x00".join(contents).encode("utf-8")).hexdigest()
+        if contents
+        else None
+    )
+    return target, content_hash
 
 
 def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
@@ -315,10 +370,18 @@ def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
     file back off disk after the event has queued. Native shapes never leave here.
     """
     if isinstance(tool_input, str):
+        raw_text = tool_input
         try:
             tool_input = json.loads(tool_input)
         except (json.JSONDecodeError, ValueError):
-            return None, None
+            # Not JSON: codex passes an apply_patch envelope as the raw tool input,
+            # whose file path lives in a `*** Add/Update/Delete File:` header rather
+            # than a key. Hash the exact patch bytes as the write's content.
+            patched = _apply_patch_target(raw_text)
+            content = (
+                hashlib.sha256(raw_text.encode("utf-8")).hexdigest() if raw_text else None
+            )
+            return patched, content
     if not isinstance(tool_input, dict):
         return None, None
     target: str | None = None
@@ -327,6 +390,16 @@ def tool_call_evidence(tool_input: Any) -> tuple[str | None, str | None]:
         if isinstance(value, str) and value.strip():
             target = value.strip()[:512]
             break
+    # A patch may arrive wrapped in a dict (`{"input": "*** Begin Patch..."}`); mine
+    # its file path when no explicit target key carried one.
+    if target is None:
+        for key in ("input", "patch"):
+            value = tool_input.get(key)
+            if isinstance(value, str):
+                patched = _apply_patch_target(value)
+                if patched:
+                    target = patched
+                    break
     parts: list[str] = []
     for key in _TOOL_CONTENT_FIELDS:
         value = tool_input.get(key)
@@ -4239,6 +4312,15 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
         )
         call_id = str(payload.get("call_id") or payload.get("id") or "")
         _, target = _recall_tool_call(session, call_id, tool)
+        content_hash = None
+        if str(payload_type) == "patch_apply_end":
+            # codex applies patches through an exec wrapper whose call_id differs
+            # from this result's, so the remembered target does not correlate.
+            # `changes` is the authoritative record of what was written: a
+            # {path: {type, content}} map. Read the file path and content from it
+            # so a codex write records with its target and a content hash instead
+            # of a bare, untraceable file_write.
+            target, content_hash = _patch_apply_evidence(payload.get("changes"), target)
         await events.emit(
             "tool_result",
             session_id=session.record.id,
@@ -4247,6 +4329,7 @@ async def _codex(session: Session, event: dict[str, Any], events: EventBus) -> N
             tool=tool,
             call_id=call_id or None,
             target=target,
+            content_hash=content_hash,
             success=success,
             exit_code=None,
             duration_ms=payload.get("duration_ms"),

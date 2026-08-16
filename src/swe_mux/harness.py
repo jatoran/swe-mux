@@ -425,17 +425,24 @@ def _pi_data_home() -> Path:
 def _opencode_data_home() -> Path:
     """opencode's data directory, holding ``opencode.db``.
 
-    opencode uses the XDG-style ``~/.local/share/opencode`` on every platform,
-    including Windows (measured: the installed 1.18.16 created
-    ``C:\\Users\\<user>\\.local\\share\\opencode``), so this does not branch on
-    ``APPDATA``. ``OPENCODE_DATA_DIR`` may name a comma-separated list; the first
-    entry is the write target and the only one mux follows.
+    opencode follows the XDG base-directory spec on every platform, including
+    Windows (measured 2026-08-16: with ``XDG_DATA_HOME`` set the installed CLI wrote
+    ``<XDG_DATA_HOME>/opencode/opencode.db``; unset, it defaults to
+    ``~/.local/share/opencode``). ``XDG_DATA_HOME`` is therefore followed here so mux
+    reads the store where the CLI actually wrote it — a plain ``~/.local/share`` guess
+    silently mis-locates it whenever the user has redirected XDG, which was the
+    isolation trap the opencode store canary hit. ``OPENCODE_DATA_DIR`` stays the
+    highest-precedence explicit override (it may name a comma-separated list; the
+    first entry is the one mux follows).
     """
     configured = os.environ.get("OPENCODE_DATA_DIR")
     if configured:
         first = configured.split(",")[0].strip()
         if first:
             return Path(first).expanduser()
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg and xdg.strip():
+        return Path(xdg).expanduser() / "opencode"
     return Path.home() / ".local" / "share" / "opencode"
 
 
@@ -779,10 +786,13 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             read_only=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
             read_tool=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
             subagent=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
-            # workspace-write plus a never-ask approval policy so exec actually
-            # apply_patches the file inside the sandbox: under the default policy
-            # exec cannot ask a human, so it answers conversationally and writes
-            # nothing, and the automations canary records no file_write fact.
+            # workspace-write plus a never-ask approval policy so exec proceeds: under
+            # the default policy exec cannot ask a human, so it answers
+            # conversationally and invokes no tool, and the automations canary records
+            # no facts. `never` makes it call apply_patch and its shell/exec tool,
+            # producing the file_write/command facts the canary reads. The sandbox may
+            # still deny the write itself, which does not affect fact capture — the
+            # observer records the attempt with its target.
             automations=(
                 "exec", "--sandbox", "workspace-write",
                 "-c", "approval_policy=never",

@@ -117,6 +117,15 @@ def _run(
 ) -> None:
     executable = Path(command[0])
     if os.name == "nt" and executable.suffix.casefold() in {".cmd", ".bat"}:
+        # cmd.exe /c splits an argument at its first newline, so a multi-line prompt
+        # reaches a .cmd-launched harness (codex, pi) truncated at the first break --
+        # and the run then behaves oddly on a prompt it never fully received. Fail
+        # loudly here rather than let that truncation pass silently.
+        multiline = [arg for arg in command if "\n" in arg or "\r" in arg]
+        assert not multiline, (
+            "a multi-line argument is truncated by cmd.exe for a .cmd-launched "
+            f"harness; keep the invocation (prompt included) on one line: {multiline!r}"
+        )
         command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", *command]
     completed = subprocess.run(
         command,

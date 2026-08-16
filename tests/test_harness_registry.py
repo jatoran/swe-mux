@@ -175,6 +175,31 @@ def test_every_dialect_has_a_reader_that_actually_reads(
         assert messages[0]["role"] == "assistant"
 
 
+def test_opencode_data_home_follows_xdg_then_explicit_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """mux must read opencode's store where the CLI actually wrote it.
+
+    opencode follows the XDG base-directory spec, so a redirected ``XDG_DATA_HOME``
+    moves its store to ``<XDG_DATA_HOME>/opencode``. A resolver that only ever
+    guessed ``~/.local/share/opencode`` mis-located the database and read nothing;
+    ``OPENCODE_DATA_DIR`` stays the highest-precedence explicit override.
+    """
+    from swe_mux.harness import _opencode_data_home
+
+    monkeypatch.delenv("OPENCODE_DATA_DIR", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    assert _opencode_data_home() == Path.home() / ".local" / "share" / "opencode"
+
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+    assert _opencode_data_home() == xdg / "opencode"
+
+    explicit = tmp_path / "explicit"
+    monkeypatch.setenv("OPENCODE_DATA_DIR", str(explicit))
+    assert _opencode_data_home() == explicit
+
+
 def test_native_id_shape_is_declared_per_harness_and_anchored() -> None:
     """Conversation-id shape is a harness deviation, not a global constant.
 

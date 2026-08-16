@@ -199,6 +199,52 @@ def test_tool_call_evidence_hashes_write_payload_race_free() -> None:
     assert codex_hash is None  # a command has no written content to hash
 
 
+def test_tool_call_evidence_extracts_the_apply_patch_target() -> None:
+    # codex writes via apply_patch, whose raw-string input is not JSON and carries
+    # the file path in a header rather than a key. Without mining it the write
+    # records with no target and provenance is blind to codex file writes.
+    from swe_mux.observation import tool_call_evidence
+
+    patch = (
+        "*** Begin Patch\n"
+        "*** Add File: src/calc.py\n"
+        "+def add(a, b):\n"
+        "+    return a + b\n"
+        "*** End Patch\n"
+    )
+    target, content_hash = tool_call_evidence(patch)
+    assert target == "src/calc.py"
+    assert content_hash is not None  # the patch bytes are the written content
+
+    # An update patch, and a patch wrapped in the custom_tool_call `input` dict.
+    update = "*** Begin Patch\n*** Update File: a/b.py\n@@\n-old\n+new\n*** End Patch"
+    assert tool_call_evidence(update)[0] == "a/b.py"
+    assert tool_call_evidence({"input": update})[0] == "a/b.py"
+
+    # codex's real shape: the patch is a string literal inside a JS exec call, so
+    # its newlines are escaped and the marker sits mid-line. The regex still finds it.
+    js_wrapped = 'const patch = "*** Begin Patch\\n*** Add File: calc.py\\n+x\\n*** End Patch";'
+    assert tool_call_evidence(js_wrapped)[0] == "calc.py"
+
+    # A non-patch string that is not JSON stays target-less rather than misparsed.
+    assert tool_call_evidence("just some prose")[0] is None
+
+
+def test_patch_apply_evidence_reads_the_changes_map() -> None:
+    # codex's patch_apply_end carries the authoritative written path and content in
+    # a `changes` map, under a call id the patch tool call does not share, so the
+    # observer reads target and content from it directly.
+    from swe_mux.observation import _patch_apply_evidence
+
+    changes = {"C:/tmp/calc.py": {"type": "add", "content": "def add(a, b): return a + b\n"}}
+    target, content_hash = _patch_apply_evidence(changes, None)
+    assert target == "C:/tmp/calc.py"
+    assert content_hash is not None
+    # No changes falls back to the remembered target and no content hash.
+    assert _patch_apply_evidence(None, "prev.py") == ("prev.py", None)
+    assert _patch_apply_evidence({}, None) == (None, None)
+
+
 def test_fact_from_event_ignores_uncaptured_types() -> None:
     assert _fact_from_event(MuxEvent(1.0, "s1", "mux", "turn_started", {})) is None
 
