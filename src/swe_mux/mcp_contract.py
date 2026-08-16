@@ -22,6 +22,10 @@ READ_TOOL_NAMES = (
     "verified_status",
     "prior_resolutions",
     "dead_ends",
+    # Phase 7.10: which docs owe an update for a Project's recent source changes,
+    # re-derived from each doc's "Key files" section and gated on the doc-debt
+    # detector's own per-Project opt-in.
+    "doc_debt",
 )
 
 WRITE_TOOL_NAMES = (

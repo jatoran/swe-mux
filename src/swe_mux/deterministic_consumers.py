@@ -427,6 +427,45 @@ def detect_doc_debt(
     )
 
 
+def build_doc_debt_map(
+    facts: Sequence[dict[str, Any]],
+    ownership: dict[str, tuple[str, ...]],
+    *,
+    project_root: str | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Invert doc debt to ``owning doc -> the changed source files that owe it``.
+
+    The same rules `detect_doc_debt` applies — only write-kind facts, the
+    hub-owner-limited ownership map, and a doc edited in the same window is not
+    dirty — but it keeps the per-doc mapping the finding discards. The finding
+    flattens debt to two parallel lists (`dirty` docs, `changed` files) for a
+    human sentence; an agent needs to know *which* files each doc owes an update
+    for, so the `doc_debt` MCP tool re-derives from this rather than scraping the
+    finding.
+    """
+    per_doc: dict[str, dict[str, None]] = {}
+    edited_docs: set[str] = set()
+    for fact in facts:
+        if str(fact.get("kind") or "") not in _WRITE_KINDS:
+            continue
+        target = normalize_target(fact.get("target"), project_root)
+        if not target:
+            continue
+        if ".docs/" in target or target.startswith(".docs"):
+            edited_docs.add(target.split(".docs/", 1)[-1])
+            continue
+        owners = ownership.get(target)
+        if not owners:
+            continue
+        for owner in owners:
+            per_doc.setdefault(owner, {}).setdefault(target, None)
+    return {
+        doc: tuple(files)
+        for doc, files in per_doc.items()
+        if doc.casefold() not in edited_docs
+    }
+
+
 # ------------------------------------------------------------ provenance graph
 
 

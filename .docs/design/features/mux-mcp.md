@@ -145,6 +145,7 @@ Project, so it accepts a name but refuses `"fleet"` with `invalid_project`.
 | `verified_status` | whether a claim is tested or only declared done, via `detect_declared_vs_verified` over a run's Tier 0 test facts; reports "claims done · tests ran · tests passed", "tests failed", or "nothing verified". Defaults to the caller's own current run; `session_id` targets another |
 | `prior_resolutions` | a previously verified fix for an exact normalized error signature, from the experience corpus (`automation_store.experiences`), matched on equality of the error fingerprint and never a substring. Low-confidence (<0.5) matches are withheld and only counted |
 | `dead_ends` | approaches abandoned or failed within a run with a recorded dead-end note, from scan records; `subsystem` matches as a substring of the record's target paths, intent, or summary. Low-confidence (<0.4) records are withheld. A conversation rollover writes a boundary not a record, so `/clear` never counts as an abandonment |
+| `doc_debt` | which docs owe an update for the Project's recently changed source files, as `{doc, changed_files}` pairs re-derived from each doc's "Key files" section (`build_doc_debt_map` over `build_doc_ownership`, inverted to `doc -> changed files` over a 24h Project fact window, a doc edited in that window excluded). Not scraped from the doc-debt annotation, whose content is a human sentence. Blind spot named in the description: a source file no doc lists produces no debt, so empty is not proof the docs are current (Phase 7.10) |
 | `notify` | stages a message with a visible sender/message/correlation envelope, and a `from_project` header when it crossed a Project; also used to *reply* to a session that messaged you, which continues the same thread; returns the message id, correlation id, state, thread id, chain depth, and how many messages the thread has left |
 | `request_spawn` | writes an inert spawn approval row into the Fleet Queue of the Project that would run it; returns the request id and starts nothing |
 | `run_action` | starts one **already-approved** Project Action; each step becomes an ordinary terminal session and the result names the session ids. An unapproved action refuses with `trust_required` naming the file a human must review |
@@ -176,9 +177,11 @@ shipped in Phase 5.6.
   as its own recollection (`backends.md`, Phase 5.4).
 - **Per-Project opt-in through the enablement DAG.** Each tool gates on a specific automation
   (`MEMORY_TOOL_AUTOMATION` in `mcp.py`): `provenance` → `provenance_graph`,
-  `verified_status` → `declared_vs_verified`, `dead_ends` → `dead_end_memory`, and
-  `prior_resolutions` → its own `prior_resolutions` automation (both in
-  `automation_registry.py`, each requiring `tier0`).
+  `verified_status` → `declared_vs_verified`, `dead_ends` → `dead_end_memory`,
+  `prior_resolutions` → its own `prior_resolutions` automation, and `doc_debt` → the
+  `doc_debt` detector's automation (all in `automation_registry.py`, each requiring `tier0`).
+  `doc_debt` (Phase 7.10) reads the same doc-ownership substrate the `doc-debt` detector
+  writes, so it reuses that detector's opt-in rather than a new consumer id.
 - **Off is never a fake empty.** When the daemon does not run the memory substrate the tool
   raises `unsupported` (503); when no Project in scope has opted the backing automation in it
   raises `disabled` (409) naming the automation. An agent that cannot tell "off" from "nothing
@@ -242,7 +245,7 @@ operator's.
 - **Claude**: one static `<data_dir>/claude-mcp.json` (`--mcp-config`, added by
   `ClaudeAdapter._args` and by the shim via `MUX_CLAUDE_MCP_CONFIG`): HTTP server entry with
   a literal URL and `Authorization: Bearer ${MUX_MCP_TOKEN}` env expansion — the token never
-  lands in a shared file. Generated per-session settings allow the closed fifteen-tool read set without a prompt and do not allow `notify`, `request_spawn`, `run_action`, `interrupt`, or `end_session`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
+  lands in a shared file. Generated per-session settings allow the closed sixteen-tool read set without a prompt and do not allow `notify`, `request_spawn`, `run_action`, `interrupt`, or `end_session`; user deny/ask policy still has higher precedence. `--mcp-config` adds servers; user MCP config is untouched.
 - **Codex** (>= 0.145): argv overrides `-c mcp_servers.mux.url="…"` and
   `-c mcp_servers.mux.bearer_token_env_var="MUX_MCP_TOKEN"` — natively env-based bearer, no
   stdio shim needed. Shim path mirrors it for user-typed `codex`.

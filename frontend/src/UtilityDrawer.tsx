@@ -7,7 +7,7 @@ import { ActionsTab } from './ActionsTab'
 import { NotesTab } from './NotesTab'
 import { QueuePane } from './QueuePane'
 import { TranscriptTab } from './TranscriptTab'
-import { ScanTimelineTab } from './ScanTimelineTab'
+import { InsightTab } from './InsightTab'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
@@ -106,6 +106,8 @@ type Props = {
   onOpenInspector: (projectId: string | null) => void
   /** Scan timeline's Project permission, context, and auto-arm all live there. */
   onOpenProjectSettings: (projectId: string) => void
+  /** Insight → Findings footer: open the full Automation dashboard. */
+  onOpenAutomationDashboard: () => void
   /** Notes: the note selected for this Project's persistent sub-tab rail. A note has
    *  one live editor per browser (see `drawerNotes.ts`), so this is also what tells the
    *  matching pane leaf to stand down. */
@@ -195,7 +197,10 @@ export function UtilityDrawer(props: Props) {
   const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
   // Mobile flattens the tree to one stack, so that stack is trivially its own top-right.
   const collapseHostId = mobile ? mobileStack.id : drawerCollapseHostStack(layout.root).id
-  const tabAvailable = (id: DrawerTabId) => !['transcript','timeline'].includes(id) || hasHarnessTranscript(session?.backend)
+  // Transcript needs a harness transcript. Insight does not: its Timeline segment
+  // gates itself, and its Findings segment is Project-aware, so a shell session
+  // still reaches its findings there.
+  const tabAvailable = (id: DrawerTabId) => id !== 'transcript' || hasHarnessTranscript(session?.backend)
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
@@ -295,8 +300,8 @@ export function UtilityDrawer(props: Props) {
         // it has acted, because it acted on the terminal underneath; this one is
         // read there, and closing it after each copy would end the reading.
         return <TranscriptTab session={session} />
-      case 'timeline':
-        return <ScanTimelineTab session={session} onOpenProjectSettings={props.onOpenProjectSettings} />
+      case 'insight':
+        return <InsightTab session={session} project={project} onOpenProjectSettings={props.onOpenProjectSettings} onOpenAutomationDashboard={props.onOpenAutomationDashboard} />
       case 'agent':
         return <AgentEnvironmentTab session={session} />
       case 'files':

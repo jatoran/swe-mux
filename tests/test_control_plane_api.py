@@ -19,6 +19,7 @@ from swe_mux.server import (
     error_middleware,
     export_handoff,
     get_automation_status,
+    list_annotations,
     list_lineage,
     patch_automation_notification,
     patch_automation_notifications,
@@ -504,4 +505,128 @@ async def test_attention_records_dismiss_individually_and_in_bulk(tmp_path: Path
     assert restored.status == 200
     assert [item["title"] for item in after_restore["items"]] == ["Record 0"]
     assert len(await store.notifications()) == 3
+    store.close()
+
+
+async def _seed_findings(store: AutomationStore) -> None:
+    """Two run-anchored findings, one project-anchored, and one other Project."""
+    await store.create_annotation(
+        agent_run_id="run-a",
+        project_id="proj",
+        tag="loop-detected",
+        content="looping",
+        provenance="deterministic_consumer",
+    )
+    await store.create_annotation(
+        agent_run_id="run-b",
+        project_id="proj",
+        tag="declared-vs-verified",
+        content="claimed done",
+        provenance="deterministic_consumer",
+    )
+    await store.create_annotation(
+        project_id="proj",
+        tag="doc-debt",
+        content="docs owe an update",
+        provenance="deterministic_consumer",
+    )
+    await store.create_annotation(
+        agent_run_id="run-x",
+        project_id="other",
+        tag="provenance",
+        content="cross-session edge",
+        provenance="deterministic_consumer",
+    )
+
+
+async def test_annotation_store_filters_resolve_runs_since_and_counts(
+    tmp_path: Path,
+) -> None:
+    store = AutomationStore(tmp_path / "mux.db")
+    await _seed_findings(store)
+
+    # Project scope: everything anchored to this Project, nothing from another.
+    proj = await store.annotations(project_id="proj")
+    assert {row["tag"] for row in proj} == {
+        "loop-detected",
+        "declared-vs-verified",
+        "doc-debt",
+    }
+
+    # Session scope is the resolved run-id set. The project-anchored doc-debt row
+    # has no run, so it is structurally absent - the "off vs quiet" case.
+    sess = await store.annotations(agent_run_ids=["run-a", "run-b"], project_id="proj")
+    assert {row["tag"] for row in sess} == {"loop-detected", "declared-vs-verified"}
+
+    # A session resolved to zero runs matches nothing, not everything.
+    assert await store.annotations(agent_run_ids=[]) == []
+
+    # `since` filters on created_at: the oldest stamp keeps all, a future stamp none.
+    oldest = min(row["created_at"] for row in proj)
+    assert len(await store.annotations(since=oldest, project_id="proj")) == 3
+    assert await store.annotations(since=oldest + 1e9, project_id="proj") == []
+
+    # tag_counts honour scope but ignore the tag chip.
+    assert await store.annotation_tag_counts(project_id="proj") == {
+        "loop-detected": 1,
+        "declared-vs-verified": 1,
+        "doc-debt": 1,
+    }
+    assert await store.annotation_tag_counts(
+        agent_run_ids=["run-a", "run-b"]
+    ) == {"loop-detected": 1, "declared-vs-verified": 1}
+    assert await store.annotation_tag_counts(agent_run_ids=[]) == {}
+    store.close()
+
+
+async def test_list_annotations_endpoint_scopes_and_reports_tag_counts(
+    tmp_path: Path,
+) -> None:
+    store = AutomationStore(tmp_path / "mux.db")
+    await _seed_findings(store)
+
+    live = SimpleNamespace(record=SimpleNamespace(agent_run_id="run-a"))
+
+    class SessionRunHistory:
+        async def agent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+            assert session_id == "sess"
+            # A superseded run of the same session (a /clear mints a fresh one).
+            return [{"agent_run_id": "run-b"}]
+
+    app = web.Application(middlewares=[error_middleware])
+    app["automation_store"] = store
+    app["sessions"] = SimpleNamespace(sessions={"sess": live})
+    app["history"] = SessionRunHistory()
+    app.router.add_get("/api/annotations", list_annotations)
+
+    async with TestClient(TestServer(app)) as client:
+        project = await (await client.get("/api/annotations?project_id=proj")).json()
+        assert {item["tag"] for item in project["items"]} == {
+            "loop-detected",
+            "declared-vs-verified",
+            "doc-debt",
+        }
+        assert project["tag_counts"] == {
+            "loop-detected": 1,
+            "declared-vs-verified": 1,
+            "doc-debt": 1,
+        }
+
+        # The session's live run plus its superseded run; doc-debt (no run) absent.
+        session = await (await client.get("/api/annotations?session_id=sess")).json()
+        assert {item["tag"] for item in session["items"]} == {
+            "loop-detected",
+            "declared-vs-verified",
+        }
+        assert "doc-debt" not in session["tag_counts"]
+
+        # The tag chip narrows the rows but never the counts.
+        one = await (
+            await client.get("/api/annotations?session_id=sess&tag=loop-detected")
+        ).json()
+        assert [item["tag"] for item in one["items"]] == ["loop-detected"]
+        assert one["tag_counts"] == {
+            "loop-detected": 1,
+            "declared-vs-verified": 1,
+        }
     store.close()

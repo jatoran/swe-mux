@@ -1378,11 +1378,12 @@ Ordinary reads default to 12 messages and 32 KiB of message text while preservin
 An omitted session id or `self` addresses the caller; an explicit `agent_run_id` can select the current run or one of only that caller's superseded runs.
 `get_session` includes the run's pinned title and opening request, exposes the caller's own superseded run ids, and also defaults to `self`.
 Reads and writes default to the caller's own Project and reach another only through an explicit `project` argument; there is no mode, no config flag, and no implicit widening.
-Claude's generated settings allow the fifteen declared read tools without a prompt, while every write tool remains permission-gated.
+Claude's generated settings allow the sixteen declared read tools without a prompt, while every write tool remains permission-gated.
 Tool annotations declare the same read/write split.
 Successful MCP calls record content-free per-tool call, serialized-response-byte, and truncation counters in background diagnostics.
 `notify` only stages a queue message with a visible sender/message/correlation envelope and `request_spawn` only creates an inert Fleet Queue approval row.
 The four cross-session memory reads are deterministic queries over Tier 0 facts, git-provenance edges, the experience corpus, and the scan timeline; each is per-Project opt-in through the enablement DAG and returns `unsupported` (503) when the substrate is absent or `disabled` (409) when no Project in scope opted its automation in, never a fake empty.
+The Phase 7.10 `doc_debt` read follows the same gate: it returns `{doc, changed_files}` pairs re-derived from each doc's "Key files" section over the Project's recently changed files, gated on the `doc_debt` detector's automation, and names the same blind spot the surface has — a source file no doc lists produces no debt, so empty is not proof the docs are current.
 `interrupt` and `end_session` act on a running agent only under a per-Project grant (`off`/`draft`/`granted`, default `draft`); a `draft` grant writes an inert `control_request` a human decides in Fleet Queue, and `interrupt` is refused unless delivery-readiness is `safe`.
 The full contract is `features/mux-mcp.md`.
 An unknown token returns 401, non-loopback access returns 403, and rate overflow returns 429 with `Retry-After`.
@@ -1445,6 +1446,12 @@ features bill the observer budget without being automation rules and a raw `rule
 neither them nor the setting that governs them. The rows are grouped from
 `automation_budget_ledger` — the same table `spend_today` sums — so they reconcile with it
 exactly, including the rows a call that failed after the provider billed for its input writes.
+
+`GET /api/annotations` is the human Findings read over the deterministic consumers' output (Phase 7.10).
+It filters by `tag`, `project_id`, `agent_run_id`, `session_id`, and `since` (epoch seconds), and caps at `limit` (default 200, max 1000).
+`session_id` is resolved to the session's run-id set — its live run plus its superseded runs from history — and matched against `agent_run_id`, because the annotation's own `session_id` column is populated by one detector alone; a Project-anchored finding with a null run (doc-debt, provenance) is therefore absent from a session scope by construction.
+The response carries `items` and `tag_counts`, the per-tag totals in the current scope (project/session/since honoured, the tag chip ignored) so a quiet scope reads apart from one buried under provenance edges.
+The dashboard payload's `recent_annotations` key is unchanged; this endpoint is the filtered surface the Findings pane points at.
 
 ## Attention ranking
 
