@@ -157,6 +157,9 @@ CREATE TABLE IF NOT EXISTS git_provenance (
   evidence_rank INTEGER NOT NULL,
   observed_at REAL NOT NULL,
   updated_at REAL NOT NULL,
+  role TEXT NOT NULL DEFAULT 'observer',
+  match_method TEXT,
+  contributed_paths_json TEXT NOT NULL DEFAULT '[]',
   UNIQUE(session_id,agent_run_id,worktree_root,commit_oid)
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
@@ -180,8 +183,9 @@ _GIT_PROVENANCE_UPSERT = (
     "INSERT INTO git_provenance("
     "id,session_id,session_name,agent_run_id,project_id,worktree_root,commit_oid,"
     "parent_oids_json,subject,committed_at,previous_head,relationship,confidence,"
-    "ambiguous,source,source_event_seq,tool_call_id,evidence_rank,observed_at,updated_at"
-    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+    "ambiguous,source,source_event_seq,tool_call_id,evidence_rank,observed_at,updated_at,"
+    "role,match_method,contributed_paths_json"
+    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
     "ON CONFLICT(session_id,agent_run_id,worktree_root,commit_oid) DO UPDATE SET "
     "session_name=excluded.session_name,project_id=excluded.project_id,"
     "parent_oids_json=CASE WHEN excluded.parent_oids_json!='[]' "
@@ -203,6 +207,16 @@ _GIT_PROVENANCE_UPSERT = (
     "THEN excluded.source_event_seq ELSE git_provenance.source_event_seq END,"
     "tool_call_id=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
     "THEN excluded.tool_call_id ELSE git_provenance.tool_call_id END,"
+    "role=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.role ELSE git_provenance.role END,"
+    "match_method=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.match_method ELSE git_provenance.match_method END,"
+    # Paths are evidence, not classification: a later pass that identified fewer
+    # of them must not erase the ones an earlier pass proved, so an empty set
+    # never replaces a populated one regardless of rank.
+    "contributed_paths_json=CASE WHEN excluded.contributed_paths_json!='[]' "
+    "AND excluded.evidence_rank>=git_provenance.evidence_rank "
+    "THEN excluded.contributed_paths_json ELSE git_provenance.contributed_paths_json END,"
     "evidence_rank=MAX(git_provenance.evidence_rank,excluded.evidence_rank),"
     "observed_at=MIN(git_provenance.observed_at,excluded.observed_at),"
     "updated_at=MAX(git_provenance.updated_at,excluded.updated_at)"
@@ -556,6 +570,24 @@ class HistoryIndex:
             )
         if "owner_label" not in artifact_columns:
             self._db.execute("ALTER TABLE artifacts ADD COLUMN owner_label TEXT")
+        provenance_columns = {
+            row["name"]
+            for row in self._db.execute("PRAGMA table_info(git_provenance)").fetchall()
+        }
+        # Attribution columns (Phase 7.8). Existing rows keep `observer`, which is
+        # exactly what they recorded: a session that was present when a commit
+        # appeared. Re-attribution is the backfill's job, never a startup rewrite.
+        if "role" not in provenance_columns:
+            self._db.execute(
+                "ALTER TABLE git_provenance ADD COLUMN role TEXT NOT NULL DEFAULT 'observer'"
+            )
+        if "match_method" not in provenance_columns:
+            self._db.execute("ALTER TABLE git_provenance ADD COLUMN match_method TEXT")
+        if "contributed_paths_json" not in provenance_columns:
+            self._db.execute(
+                "ALTER TABLE git_provenance ADD COLUMN contributed_paths_json "
+                "TEXT NOT NULL DEFAULT '[]'"
+            )
         project_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(projects)").fetchall()
         }
@@ -2032,12 +2064,23 @@ class HistoryIndex:
         tool_call_id: str | None = None,
         evidence_rank: int,
         observed_at: float | None = None,
+        role: str = "observer",
+        match_method: str | None = None,
+        contributed_paths: tuple[str, ...] = (),
     ) -> dict[str, Any]:
-        """Insert one durable association, promoting weaker evidence in place."""
+        """Insert one durable association, promoting weaker evidence in place.
+
+        `role` is what this session did for this commit — `committer`,
+        `contributor`, or `observer` — which is a different question from
+        `relationship`, what the reference did. One row per session per commit
+        keeps both answerable without a set column that every later discovery
+        would have to rewrite.
+        """
         timestamp = observed_at if observed_at is not None else time.time()
         run_id = agent_run_id or ""
         row_id = uuid.uuid4().hex
         parents_json = json.dumps(parent_oids)
+        paths_json = json.dumps([str(path)[:512] for path in contributed_paths][:200])
 
         def op() -> dict[str, Any]:
             self._db.execute(
@@ -2063,6 +2106,9 @@ class HistoryIndex:
                     evidence_rank,
                     timestamp,
                     timestamp,
+                    role,
+                    match_method,
+                    paths_json,
                 ),
             )
             self._db.commit()
@@ -2118,6 +2164,14 @@ class HistoryIndex:
                             int(record["evidence_rank"]),
                             observed_at,
                             timestamp,
+                            str(record.get("role") or "observer"),
+                            record.get("match_method"),
+                            json.dumps(
+                                [
+                                    str(path)[:512]
+                                    for path in (record.get("contributed_paths") or ())
+                                ][:200]
+                            ),
                         ),
                     )
                 self._db.commit()
@@ -2136,8 +2190,16 @@ class HistoryIndex:
         except (TypeError, json.JSONDecodeError):
             parents = []
         item["parent_oids"] = [str(value) for value in parents] if isinstance(parents, list) else []
+        try:
+            paths = json.loads(item.pop("contributed_paths_json", "[]") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            paths = []
+        item["contributed_paths"] = (
+            [str(value) for value in paths] if isinstance(paths, list) else []
+        )
         item["agent_run_id"] = item.get("agent_run_id") or None
         item["ambiguous"] = bool(item.get("ambiguous"))
+        item["role"] = str(item.get("role") or "observer")
         item.pop("evidence_rank", None)
         return item
 

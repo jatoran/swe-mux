@@ -18,10 +18,13 @@ import {
   parsePatchSnapshot,
   parseWorktrees,
   pathTail,
+  provenanceAmbiguityNote,
+  provenanceRoleLabel,
   repoSessions,
   sessionGitCwd,
   shortBranch,
   worktreeForPath,
+  type GitProvenance,
   type SessionGit,
 } from '../src/gitWorktrees.ts'
 
@@ -301,13 +304,61 @@ test('session Git provenance parsing keeps evidence strength and rejects malform
       parent_oids: ['b'.repeat(40)], subject: 'Add provenance', committed_at: 12,
       previous_head: 'b'.repeat(40), relationship: 'created', confidence: 'exact',
       ambiguous: false, source: 'session_tool', observed_at: 13,
+      role: 'committer', match_method: 'command_range', contributed_paths: ['src/one.py'],
     },
     { id: 'bad', relationship: 'invented' },
   ] })
   assert.equal(rows.length, 1)
   assert.equal(rows[0].sessionName, 'Builder')
   assert.equal(rows[0].confidence, 'exact')
+  assert.equal(rows[0].role, 'committer')
+  assert.equal(rows[0].matchMethod, 'command_range')
+  assert.deepEqual(rows[0].contributedPaths, ['src/one.py'])
   assert.deepEqual(rows[0].parentOids, ['b'.repeat(40)])
+})
+
+test('contributor and imported rows survive parsing, and a row without a role reads as an observer', () => {
+  const base = {
+    session_id: 's', session_name: 'Writer', project_id: 'p', worktree_root: '/repo',
+    commit_oid: 'a'.repeat(40), confidence: 'correlated', ambiguous: false, observed_at: 1,
+  }
+  const rows = parseGitProvenance({ items: [
+    { ...base, id: 'c', relationship: 'contributed', source: 'tier0_write', role: 'contributor', contributed_paths: ['a.py', 'b.py'] },
+    // Imported rows carry a compound source. An allowlist here used to drop every one of them.
+    { ...base, id: 'i', relationship: 'created', source: 'transcript_backfill:output_hash' },
+  ] })
+  assert.deepEqual(rows.map(row => row.id), ['c', 'i'])
+  assert.equal(rows[0].role, 'contributor')
+  assert.deepEqual(rows[0].contributedPaths, ['a.py', 'b.py'])
+  assert.equal(rows[1].role, 'observer')
+  assert.deepEqual(rows[1].contributedPaths, [])
+})
+
+test('a provenance row says what the session did and why it could not be pinned down', () => {
+  const row = (over: Partial<GitProvenance>): GitProvenance => ({
+    id: 'r', sessionId: 's', sessionName: 'Builder', agentRunId: null, projectId: 'p',
+    worktreeRoot: '/repo', commitOid: 'a'.repeat(40), parentOids: [], subject: '',
+    committedAt: null, previousHead: null, relationship: 'created', confidence: 'exact',
+    ambiguous: false, role: 'committer', matchMethod: 'command_range', contributedPaths: [],
+    source: 'session_tool', observedAt: 1, ...over,
+  })
+  assert.equal(provenanceRoleLabel(row({})), 'committed')
+  assert.equal(provenanceRoleLabel(row({ relationship: 'rewrote' })), 'amended')
+  assert.equal(
+    provenanceRoleLabel(row({ role: 'contributor', contributedPaths: ['a.py', 'b.py'] })),
+    'wrote 2 files in it',
+  )
+  assert.equal(provenanceRoleLabel(row({ role: 'observer' })), 'was in the checkout')
+  assert.equal(provenanceAmbiguityNote(row({})), '')
+  // A shared checkout is no longer a reason, so the note never claims it is.
+  assert.match(
+    provenanceAmbiguityNote(row({ ambiguous: true, matchMethod: 'command_ambiguous' })),
+    /same window/,
+  )
+  assert.match(
+    provenanceAmbiguityNote(row({ ambiguous: true, role: 'observer', matchMethod: 'monitor_range' })),
+    /merge or a rebase/,
+  )
 })
 
 test('file status labels fit the narrow change list', () => {

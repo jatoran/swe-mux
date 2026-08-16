@@ -83,25 +83,53 @@ The sidebar marks a quantity whose root carries more than one live session
 - A recognized successful `git commit` command snapshots the session, run, Project, checkout root, and starting HEAD at tool start, then reads the resulting HEAD after the paired tool result.
 - Command recognition is deliberately narrow.
   It accepts explicit ordinary `git commit` and `git commit --amend` invocations from command tools and rejects repository-redirection flags such as `-C`, `--git-dir`, and `--work-tree` rather than interpreting shell quoting.
-- A changed HEAD at an isolated checkout records `created` or `rewrote` with `exact` confidence.
+- Two questions are recorded separately, because they have separate answers.
+  The **committer** is the one session whose process ran `git commit`; the **contributors** are the sessions whose file writes the commit contains.
+  Each row therefore carries a `role` of `committer`, `contributor`, or `observer` alongside the `relationship` the reference underwent, and one commit can hold several rows.
+- The commit a command produced is isolated by object, not by reading `HEAD` back.
+  The service lists `started_head..current_head` and selects within it: a single commit settles it, otherwise the command's own `-m` subject decides, then the command's time window.
+  Reading `HEAD` after the command answers "what is on top now", which is a different question and names the wrong commit whenever a sibling session commits in between.
+- An isolated commit records `created` or `rewrote` with `exact` confidence.
   Exact means swe-mux observed that commit appear across that session's successful commit-tool boundary; it is session provenance, not a cryptographic claim about the Git author identity.
+- A shared checkout is **not** ambiguity and never downgrades a committer.
+  A shared `HEAD` is a fact about the starting point, not about the commit event, and the retired rule that treated it as ambiguity stamped nearly every commit in a multi-session checkout `ambiguous` even on the path that watched the exact session run the command.
+- `ambiguous` is reserved for two named cases: several commits in one command's range that neither subject nor time can tell apart, and a reference that moved many commits at once (a merge or a rebase).
 - A HEAD transition first found by the checkout monitor records `observed` with `correlated` confidence.
   It proves that the session occupied that checkout when the transition was observed, not that the session ran the mutating command.
-- More than one live session on the checkout forces either source to `ambiguous` confidence.
-  One checkout has one HEAD, so Git cannot distinguish which attached terminal caused the transition.
-  Sessions whose first Git poll has not completed are resolved on demand before claiming exclusivity.
+- Contributors are matched from Tier 0 `file_write` facts against the commit's own changed files, read once per commit with `git diff-tree`.
+  A write is attributed to a file when its normalized target is one the commit changed and the write can be placed in that checkout: an absolute target inside the worktree places itself, and a relative one is placed by its session's checkout.
+- A whole-file write is confirmed by content: the SHA-256 of the bytes Git stored equals the SHA-256 the adapter took of the bytes the agent wrote, and that contributor is `exact`.
+  Content confirmation is unavailable for an edit tool (which hashes the replacement fragment) and for a patch envelope (which hashes the patch), so those are matched by path and time and recorded as `correlated`.
+  A Git object id is never compared with a content hash; it is SHA-1 over a `blob <len>\0` header rather than a digest of the bytes.
+- Without a content match only the last write to a path counts, because an earlier write another session replaced is not in the commit.
+- The contributor set is plural by design.
+  One session staging files and another running `git commit` resolves to committer B and contributors {A, B}, an answer no Git tool records because Git keeps one configured author.
+- Contributor attribution needs Tier 0, which is a per-Project opt-in.
+  With it off the contributor set is empty and committer attribution is unaffected; an empty set is never a claim that the commit had one author.
+- Attribution stays observational.
+  No `GIT_AUTHOR_*` value, commit trailer, hook, or identity is ever injected to make the answer easier, because that would mutate the bytes the agent committed.
 - The monitor emits `previous_head` only when the old and new observations name the same checkout.
   The initial daemon poll establishes a baseline and does not create provenance for commits that predate the session evidence.
 - Rows are unique by session, run, checkout root, and commit.
   A later stronger observation promotes the existing row while retaining its earliest observation time, so polling cannot duplicate or downgrade exact tool evidence.
-- Commit metadata is copied into the row at capture time: full OID, parent OIDs, subject, Git commit time, previous HEAD, checkout root, session label, Project, run, evidence source, tool-call id, and source event sequence.
+- Commit metadata is copied into the row at capture time: full OID, parent OIDs, subject, Git commit time, previous HEAD, checkout root, session label, Project, run, evidence source, tool-call id, source event sequence, role, match method, and the contributed file paths.
   This keeps the association readable after a branch moves or the worktree is removed.
+- The match method names how the attribution was made, so a reader can judge it: `command_range`, `command_subject`, `command_window`, `command_ambiguous`, `monitor_head`, `monitor_range`, `write_content`, `write_path`, `reattributed_ancestry`, or `transcript_*`.
+- Contributed paths are evidence, not classification.
+  A later stronger observation that identified none of them never erases the ones an earlier pass proved.
+- Every commit is answered once regardless of how many sessions occupy the checkout: contributor resolution is claimed per commit, so a HEAD move seen by ten sessions reads the commit once.
 - Provenance follows History lifecycle rather than the optional Tier 0 retention window.
   Deleting a Project removes its rows, and deleting a History run removes the rows bound to that run.
 - Capture status is part of daemon background health and reports running state, captured rows, dropped observations, pending commit calls, and the last error.
   Failures are rate-limited in logs and never interrupt Git polling or terminal event delivery.
 - Historical provenance is an explicit, idempotent operator action, never a startup migration.
   `python -m swe_mux.git_provenance_backfill PROJECT` is read-only and reports the proposed evidence classes; `--apply` writes the same plan in one bounded transaction.
+  `--all-projects` sweeps every registered Project instead of one, which is what re-attributing existing history needs.
+- The pass has three parts: import commits from native transcripts, promote rows the retired shared-checkout rule downgraded, and derive contributors for the commits already recorded.
+- Re-attribution touches live command evidence only.
+  It re-checks that the row's recorded previous HEAD really is an ancestor of the commit, refuses when two sessions' commands claim one object, and leaves a transcript match's confidence alone because ancestry cannot improve an identification the transcript made.
+- The contributor pass runs the same matching code as the live path, so a historical answer and a live one cannot drift apart.
+  It is bounded: the newest 500 recorded commits, write facts no older than `--since-days` (30 by default, matching Tier 0 retention), and 400 object reads.
 - The importer reads provider-native tool calls and their call-id-paired results, then validates candidate objects against the Project repository without executing transcript text.
   A unique output hash is `exact`, a unique commit-subject/time match is `correlated`, and timestamp-only or cross-session matches are `ambiguous`.
   Failed, unpaired, unresolved, and multiply matching commands are not written.
@@ -190,15 +218,18 @@ uncommitted work together.
 - An ordinary or merge commit defaults to its first parent.
 - A merge commit permits selecting another actual parent and caches immutable summaries by full commit and parent OID.
 - A root commit uses Git's initial-commit comparison support and has no hardcoded empty-tree object ID.
-- Commits with recorded provenance show their session-link count in the collapsed row and the associated session, relationship, and confidence when expanded.
+- Commits with recorded provenance show their session-link count in the collapsed row and the associated session, role, confidence, and contributed files when expanded.
 
 ### Provenance ledger
 
 - Provenance lists durable session-to-commit associations newest first for the selected Project.
-- Each row shows the short commit OID, copied subject, session label, run-id prefix, relationship, confidence, checkout root, and first observation time.
-- Ambiguous rows state why swe-mux cannot identify one author.
+- Each row shows the short commit OID, copied subject, session label, run-id prefix, what the session did (committed, amended, wrote N files in it, or was in the checkout), confidence, the contributed file paths, checkout root, and first observation time.
+- Ambiguous rows state which of the two named cases applies: concurrent commits in one window, or a reference that moved many commits at once.
+- The ledger accepts any evidence source rather than an allowlist of them.
+  An allowlist silently discarded every imported row, whose source is a compound `transcript_backfill:<method>`.
 - The ledger is read-only and refreshes on both Git state and provenance events.
-- Opening a History transcript queries the same ledger by History run id and shows a bounded `Commits from this run` strip.
+- Opening a History transcript queries the same ledger by History run id and shows a bounded `Commits from this run` strip, each row naming what the run did for that commit.
+  A run appears there for a commit it contributed files to as well as for one it made, which is the point of separating the two questions.
 
 ### Patch review
 

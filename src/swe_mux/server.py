@@ -74,7 +74,7 @@ from .ghost_windows import GhostWindowSweeper
 from .git_monitor import GitMonitor, _git
 from .git_operations import run_git_mutation
 from .git_projects import ProjectIdentity, resolve_project
-from .git_provenance import GitProvenanceService
+from .git_provenance import GitProvenanceService, summarize_git_provenance
 from .harness import (
     AGENT_BACKENDS,
     HARNESSES,
@@ -1122,7 +1122,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     git_monitor = GitMonitor(
         sessions, events, config.git_poll_seconds, compare_override=_project_compare_ref
     )
-    git_provenance_service = GitProvenanceService(history, sessions, events)
+    # Tier 0 is what makes contributor attribution possible: the write facts a
+    # commit's changed files are matched against. Without it (or with Tier 0 off
+    # for a Project) committer attribution still works and contributors stay empty.
+    git_provenance_service = GitProvenanceService(history, sessions, events, tier0)
     hooks = MetaHookEngine(config.data_dir / "hooks.toml", events, sessions)
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     automation_store = AutomationStore(config.database_path)
@@ -10092,7 +10095,10 @@ async def git_provenance(request: web.Request) -> web.Response:
         commit_oids=commit_oids or None,
         limit=limit,
     )
-    return json_response({"items": items})
+    # `items` stays one row per session per commit, which is what each piece of
+    # evidence is about. `commits` answers the reader's question — who made this
+    # commit and whose work is in it — without a second round trip.
+    return json_response({"items": items, "commits": summarize_git_provenance(items)})
 
 
 async def git_commit_changes(request: web.Request) -> web.Response:

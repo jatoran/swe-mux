@@ -1,4 +1,10 @@
-import type { GitPatchSnapshot, GitProvenance, ReviewFileChange } from './gitWorktrees.ts'
+import {
+  provenanceAmbiguityNote,
+  provenanceRoleLabel,
+  type GitPatchSnapshot,
+  type GitProvenance,
+  type ReviewFileChange,
+} from './gitWorktrees.ts'
 
 export type GitReviewScope='unstaged'|'staged'|'conflicted'|'branch'|'commit'
 export type AnnotationSide='old'|'new'
@@ -128,7 +134,8 @@ export function generateReviewPacket(context:ReviewPacketContext):{text:string;t
   if(context.provenance?.length){
     lines.push('## Session provenance','')
     for(const item of context.provenance){
-      lines.push(`- ${item.sessionName} (${item.sessionId}${item.agentRunId?`, run ${item.agentRunId}`:''}): ${item.relationship}, ${item.confidence}${item.ambiguous?' (shared checkout)':''}`)
+      const files=item.contributedPaths.length?` [${item.contributedPaths.slice(0,10).join(', ')}${item.contributedPaths.length>10?', …':''}]`:''
+      lines.push(`- ${item.sessionName} (${item.sessionId}${item.agentRunId?`, run ${item.agentRunId}`:''}): ${provenanceRoleLabel(item)}, ${item.confidence}${item.ambiguous?` (${provenanceAmbiguityNote(item)})`:''}${files}`)
     }
     lines.push('')
   }

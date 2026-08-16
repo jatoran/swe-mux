@@ -466,6 +466,33 @@ class Tier0Store:
 
         return await self._run(op)
 
+    async def write_facts_for_project(
+        self,
+        project_id: str,
+        *,
+        since: float,
+        until: float,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Targeted file writes across one project's sessions, oldest first.
+
+        The commit-attribution query: which sessions wrote the files a commit
+        contains. Only the tool-call fact is returned — it is the one that carries
+        the target and the hash of what was written; the paired result fact records
+        that the call succeeded and carries neither.
+        """
+
+        def op() -> list[dict[str, Any]]:
+            rows = self._db.execute(
+                "SELECT * FROM tier0_facts WHERE project_id=? AND kind='file_write' "
+                "AND target IS NOT NULL AND target!='' AND created_at>=? AND created_at<=? "
+                "ORDER BY created_at ASC LIMIT ?",
+                (project_id, since, until, max(1, min(limit, 5000))),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+        return await self._run(op)
+
     async def prune(self, *, retention_days: int | None = None) -> int:
         days = retention_days if retention_days is not None else self.retention_days
         cutoff = time.time() - max(1, days) * 86400

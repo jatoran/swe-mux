@@ -33,6 +33,14 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
   hash different representations — a `Read` result is the CLI's rendering of a file, not the
   file — so they are **not** joinable by equality; use `target` plus time order for
   write→read lineage, and hash equality only within one side.
+  The one cross-source equality that *is* legitimate is a whole-file write against a
+  committed Git blob's bytes (`design/features/git.md`, contributor attribution): both are
+  the file, so their SHA-256 digests match.
+  It holds only for a write whose hash covers whole-file content: an edit tool hashes the
+  replacement fragment and a patch envelope hashes the patch, so most writes are matched by
+  path and time instead.
+  A Git object id is never comparable with a content hash — it is SHA-1 over a
+  `blob <len>\0` header, not a digest of the bytes.
 - **Test outcome**: a structured `{framework, passed, failed, errors, skipped,
   failing_tests[]}` parsed from the full tool output at the adapter boundary (pytest,
   jest/vitest, go, cargo, unittest). It is parsed there, not from the fact's bounded

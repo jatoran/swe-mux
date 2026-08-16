@@ -85,10 +85,17 @@ export type GitProvenance = {
   subject: string
   committedAt: number | null
   previousHead: string | null
-  relationship: 'created' | 'rewrote' | 'observed'
+  relationship: 'created' | 'rewrote' | 'observed' | 'contributed'
   confidence: 'exact' | 'correlated' | 'ambiguous'
   ambiguous: boolean
-  source: 'session_tool' | 'git_monitor'
+  /** What the session did for this commit, as opposed to what the ref did. */
+  role: 'committer' | 'contributor' | 'observer'
+  /** How the attribution was made, for a reader who wants to judge it. */
+  matchMethod: string | null
+  /** Files of this commit that this session's observed writes account for. */
+  contributedPaths: string[]
+  /** Free-form: `session_tool`, `git_monitor`, `tier0_write`, `transcript_backfill:*`. */
+  source: string
   observedAt: number
 }
 
@@ -245,9 +252,12 @@ export function parseGitProvenance(raw: unknown): GitProvenance[] {
       || typeof row.project_id !== 'string'
       || typeof row.worktree_root !== 'string'
       || typeof row.commit_oid !== 'string'
-      || !['created', 'rewrote', 'observed'].includes(String(row.relationship))
+      || !['created', 'rewrote', 'observed', 'contributed'].includes(String(row.relationship))
       || !['exact', 'correlated', 'ambiguous'].includes(String(row.confidence))
-      || !['session_tool', 'git_monitor'].includes(String(row.source))
+      // Source is an open vocabulary, not a closed one: an allowlist here silently
+      // dropped every `transcript_backfill:*` row the importer wrote, and would
+      // have dropped contributor rows too.
+      || typeof row.source !== 'string' || !row.source
       || typeof row.observed_at !== 'number'
     ) continue
     items.push({
@@ -267,11 +277,46 @@ export function parseGitProvenance(raw: unknown): GitProvenance[] {
       relationship: row.relationship as GitProvenance['relationship'],
       confidence: row.confidence as GitProvenance['confidence'],
       ambiguous: row.ambiguous === true,
-      source: row.source as GitProvenance['source'],
+      role: ['committer', 'contributor', 'observer'].includes(String(row.role))
+        ? row.role as GitProvenance['role']
+        : 'observer',
+      matchMethod: typeof row.match_method === 'string' ? row.match_method : null,
+      contributedPaths: Array.isArray(row.contributed_paths)
+        ? row.contributed_paths.filter((item): item is string => typeof item === 'string')
+        : [],
+      source: row.source,
       observedAt: row.observed_at,
     })
   }
   return items
+}
+
+/** What a row claims about the session, in the reader's words. */
+export function provenanceRoleLabel(item: GitProvenance): string {
+  if (item.role === 'committer') return item.relationship === 'rewrote' ? 'amended' : 'committed'
+  if (item.role === 'contributor') {
+    const count = item.contributedPaths.length
+    return count === 1 ? 'wrote 1 file in it' : `wrote ${count} files in it`
+  }
+  return 'was in the checkout'
+}
+
+/**
+ * Why a row could not name one session, or an empty string when it can.
+ *
+ * A shared checkout is deliberately absent: it stopped being a reason for
+ * ambiguity, and leaving the old sentence in would keep explaining a rule the
+ * daemon no longer applies.
+ */
+export function provenanceAmbiguityNote(item: GitProvenance): string {
+  if (!item.ambiguous) return ''
+  if (item.matchMethod === 'monitor_range') {
+    return 'Several commits arrived at once (a merge or a rebase), so no single one belongs to this session.'
+  }
+  if (item.matchMethod === 'command_ambiguous') {
+    return 'Another commit landed in the same window and neither its message nor its time tells them apart.'
+  }
+  return 'swe-mux did not observe enough to name one session for this commit.'
 }
 
 /** Compact porcelain/name-status code for a narrow file list. */

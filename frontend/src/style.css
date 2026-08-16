@@ -3108,6 +3108,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-provenance-confidence{padding:1px 4px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:7px;text-transform:uppercase}
 .git-provenance-confidence.exact{border-color:color-mix(in srgb,var(--green) 60%,var(--line));color:var(--green)}
 .git-provenance-confidence.ambiguous{border-color:color-mix(in srgb,var(--amber) 60%,var(--line));color:var(--amber)}
+/* What the session did (committed / wrote files in it / was present) reads beside
+   how sure that is, because they answer different questions about one row. */
+.git-provenance-role{color:var(--muted);font-size:8px}
+.git-provenance-role.committer{color:var(--accent)}
+.git-provenance-paths{color:var(--muted);font-size:8px}
 .git-provenance{display:grid}
 .git-provenance article{display:grid;gap:4px;padding:8px 10px;border-bottom:1px solid var(--line)}
 .git-provenance article>div{display:flex;gap:8px;min-width:0}.git-provenance article>div strong{color:var(--accent)}.git-provenance article>div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

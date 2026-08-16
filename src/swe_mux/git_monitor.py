@@ -157,6 +157,199 @@ async def read_commit_metadata(cwd: str, oid: str) -> GitCommitMetadata | None:
     )
 
 
+@dataclass(slots=True, frozen=True)
+class GitCommitChange:
+    """One file a commit changed, with the object it left behind.
+
+    `blob` is the *post-image* object id, so it is the bytes the commit actually
+    stored; a deletion carries None. Attribution reads this rather than a patch:
+    a blob is the whole file, which is what a write fact can be compared against.
+    """
+
+    path: str
+    status: str
+    blob: str | None
+
+
+#: Commits examined when isolating which one a commit command produced. A command
+#: that moved more than this many commits is a rebase or a merge, not one commit,
+#: and is classified as such rather than searched.
+COMMIT_RANGE_LIMIT = 50
+#: Changed files read per commit for contributor attribution.
+COMMIT_CHANGE_LIMIT = 400
+#: Blob bytes hashed for an exact content match. A blob past this is compared by
+#: path alone; hashing an arbitrarily large object on the event path is the one
+#: thing this must not do.
+BLOB_DIGEST_MAX_BYTES = 2 * 1024 * 1024
+
+_RAW_CHANGE = re.compile(
+    r"^:(\d{6}) (\d{6}) ([0-9a-f]{40,64}) ([0-9a-f]{40,64}) ([A-Z])(\d*)$"
+)
+_EMPTY_OID = re.compile(r"^0{40,64}$")
+
+
+async def read_commit_range(
+    cwd: str, base: str | None, head: str, *, limit: int = COMMIT_RANGE_LIMIT
+) -> tuple[GitCommitMetadata, ...]:
+    """Commits reachable from `head` but not from `base`, newest first.
+
+    This is what isolates *which* commit a session's command produced when a
+    sibling session committed into the same checkout in between: reading HEAD back
+    after the command answers "what is on top now", which is a different question.
+    An amend is covered by the same range — the replaced commit stops being an
+    ancestor, so the rewritten one appears here.
+    """
+    if not _FULL_OID.fullmatch(head) or (base is not None and not _FULL_OID.fullmatch(base)):
+        return ()
+    selector = f"{base}..{head}" if base else head
+    code, output = await _git(
+        cwd, "log", f"--max-count={max(1, limit)}", "--format=%H%x00%P%x00%ct%x00%s", selector
+    )
+    if code:
+        return ()
+    commits: list[GitCommitMetadata] = []
+    for line in output.splitlines():
+        parts = line.split("\0", 3)
+        if len(parts) != 4 or not _FULL_OID.fullmatch(parts[0]):
+            continue
+        try:
+            committed_at = float(parts[2])
+        except ValueError:
+            continue
+        commits.append(
+            GitCommitMetadata(
+                oid=parts[0].lower(),
+                parents=tuple(
+                    parent.lower() for parent in parts[1].split() if _FULL_OID.fullmatch(parent)
+                ),
+                committed_at=committed_at,
+                subject=parts[3][:512],
+            )
+        )
+    return tuple(commits)
+
+
+def parse_raw_changes(
+    output: str, *, limit: int = COMMIT_CHANGE_LIMIT
+) -> tuple[GitCommitChange, ...]:
+    """Parse `diff-tree --raw -z` into post-image file changes.
+
+    NUL-delimited because a path may legally contain anything but NUL, and the
+    quoted-path form git falls back to without `-z` would have to be unescaped
+    before it could be compared with a recorded write target.
+    """
+    tokens = output.split("\0")
+    changes: list[GitCommitChange] = []
+    index = 0
+    while index < len(tokens) and len(changes) < limit:
+        meta = _RAW_CHANGE.match(tokens[index].strip())
+        if meta is None:
+            index += 1
+            continue
+        status = meta.group(5)
+        # A rename or copy carries source *and* destination; the destination is
+        # the path the commit now holds, which is the one a write can match.
+        paths_needed = 2 if status in {"R", "C"} else 1
+        paths = tokens[index + 1 : index + 1 + paths_needed]
+        index += 1 + paths_needed
+        if len(paths) < paths_needed or not paths[-1]:
+            continue
+        blob = meta.group(4)
+        changes.append(
+            GitCommitChange(
+                path=paths[-1],
+                status=status,
+                blob=None if _EMPTY_OID.fullmatch(blob) else blob.lower(),
+            )
+        )
+    return tuple(changes)
+
+
+async def read_commit_changes(
+    cwd: str, oid: str, *, limit: int = COMMIT_CHANGE_LIMIT
+) -> tuple[GitCommitChange, ...]:
+    """Files one commit changed against its first parent, post-image objects.
+
+    A merge produces no output here by design: `diff-tree` without `-c`/`-m` says
+    nothing about a merge, and a merge is not work any session wrote.
+    """
+    if not _FULL_OID.fullmatch(oid):
+        return ()
+    code, output = await _git(
+        cwd,
+        "diff-tree",
+        "--no-commit-id",
+        "-r",
+        "-z",
+        "--root",
+        "--find-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--raw",
+        oid,
+    )
+    if code:
+        return ()
+    return parse_raw_changes(output, limit=limit)
+
+
+async def _git_bytes(cwd: str, *args: str, timeout_seconds: float = GIT_TIMEOUT_SECONDS) -> bytes:
+    """Run one bounded read-only Git query and return stdout undecoded.
+
+    Blob content cannot go through the decoding runner: `errors="replace"` rewrites
+    every byte it cannot decode, so the digest of the result would be the digest of
+    a repaired string rather than of the file git stores.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "--no-optional-locks",
+            "-C",
+            cwd,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=background_creation_flags(),
+        )
+        try:
+            stdout, _stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout_seconds
+            )
+        except TimeoutError:
+            await reap_process_tree(process)
+            return b""
+        return stdout if process.returncode == 0 else b""
+    except OSError:
+        return b""
+
+
+async def read_blob_digest(cwd: str, blob: str) -> str | None:
+    """SHA-256 of one blob's exact bytes, or None when it is absent or too large.
+
+    The same digest a write fact carries for whole-file content
+    (`observation.tool_call_evidence`), which is what makes an equality comparison
+    between "what the agent wrote" and "what the commit stored" meaningful. Git's
+    own object id is not comparable: it is SHA-1 over a `blob <len>\\0` header.
+    """
+    if not _FULL_OID.fullmatch(blob):
+        return None
+    code, size = await _git(cwd, "cat-file", "-s", blob)
+    if code:
+        return None
+    try:
+        blob_size = int(size.strip())
+    except ValueError:
+        return None
+    if blob_size > BLOB_DIGEST_MAX_BYTES:
+        return None
+    if blob_size == 0:
+        return hashlib.sha256(b"").hexdigest()
+    data = await _git_bytes(cwd, "cat-file", "blob", blob)
+    if not data:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
 def _dirty_hash(porcelain: str) -> str | None:
     """Order-independent fingerprint of the working-tree change set."""
     lines = sorted(line.strip() for line in porcelain.splitlines() if line.strip())

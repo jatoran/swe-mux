@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,13 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, assert_never
 
+from .git_monitor import BLOB_DIGEST_MAX_BYTES, GitCommitChange, parse_raw_changes
+from .git_provenance import (
+    COMMITTER_EXACT_RANK,
+    CONTRIBUTOR_LOOKBACK_SECONDS,
+    candidate_writes,
+    resolve_contributors,
+)
 from .harness import transcript_dialect
 from .history import HistoryIndex
 
@@ -46,6 +54,27 @@ _JS_COMMAND = re.compile(r'\bcommand\s*:\s*("(?:\\.|[^"\\])*")', re.DOTALL)
 _FAILED_OUTPUT = re.compile(r"(?im)^(?:script failed|process exited with code [1-9]\d*)\b")
 _DIRECT_TOLERANCE_SECONDS = 15 * 60
 _TIMESTAMP_ONLY_TOLERANCE_SECONDS = 10
+#: Commits whose contributors one pass resolves, newest first. Contributor
+#: attribution reads Tier 0 write facts, which are retained for weeks, so an
+#: unbounded sweep would read thousands of commits to learn nothing about the old
+#: ones.
+CONTRIBUTOR_COMMIT_LIMIT = 500
+#: Objects hashed for an exact content match across one pass.
+CONTRIBUTOR_BLOB_BUDGET = 400
+#: Ancestry steps walked when re-checking that a recorded previous HEAD really is
+#: the base of the commit a session was credited with.
+ANCESTRY_WALK_LIMIT = 200
+#: Counts every per-Project report carries, so a skipped Project still sums.
+_EMPTY_REPORT_COUNTS = (
+    "commands",
+    "records_planned",
+    "records_written",
+    "committer_records",
+    "contributor_records",
+    "exact_records",
+    "correlated_records",
+    "ambiguous_records",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -183,71 +212,141 @@ def _is_success(payload: dict[str, Any], output: str) -> bool:
     )
 
 
+@dataclass(slots=True, frozen=True)
+class ProjectInputs:
+    """Everything one Project's re-attribution pass reads, in one snapshot."""
+
+    project: dict[str, str]
+    owners: list[HistoryOwner]
+    command_owners: dict[tuple[str, str], str]
+    existing: list[dict[str, Any]]
+    write_facts: list[dict[str, Any]]
+    session_roots: dict[str, str | None]
+    session_names: dict[str, str]
+
+
+def _select_projects(db: sqlite3.Connection, project_selector: str | None) -> list[dict[str, str]]:
+    """One Project by selector, or every registered Project when none is given."""
+    if project_selector is None:
+        rows = db.execute("SELECT id,name,root FROM projects ORDER BY name,id").fetchall()
+        return [{key: str(row[key]) for key in ("id", "name", "root")} for row in rows]
+    rows = db.execute(
+        "SELECT id,name,root FROM projects WHERE id=? OR lower(name)=lower(?) "
+        "OR lower(root)=lower(?)",
+        (project_selector, project_selector, project_selector),
+    ).fetchall()
+    if len(rows) != 1:
+        raise ValueError(
+            "project selector did not identify exactly one Project"
+            if not rows
+            else "project selector is ambiguous"
+        )
+    return [{key: str(rows[0][key]) for key in ("id", "name", "root")}]
+
+
 def _read_inputs(
-    database: Path, project_selector: str
-) -> tuple[dict[str, str], list[HistoryOwner], dict[tuple[str, str], str]]:
+    database: Path, project_selector: str | None, *, since: float
+) -> list[ProjectInputs]:
     uri = database.resolve().as_uri() + "?mode=ro"
     db = sqlite3.connect(uri, uri=True)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA query_only=ON")
     try:
-        projects = db.execute(
-            "SELECT id,name,root FROM projects WHERE id=? OR lower(name)=lower(?) "
-            "OR lower(root)=lower(?)",
-            (project_selector, project_selector, project_selector),
-        ).fetchall()
-        if len(projects) != 1:
-            raise ValueError(
-                "project selector did not identify exactly one Project"
-                if not projects
-                else "project selector is ambiguous"
-            )
-        project = {key: str(projects[0][key]) for key in ("id", "name", "root")}
-        rows = db.execute(
-            "SELECT id,native_id,backend,name,cwd,project_id,project_root,transcript_path,"
-            "external,spawned_at FROM history WHERE project_id=? AND agent_visible=1 "
-            "AND transcript_path IS NOT NULL AND transcript_path!='' "
-            "ORDER BY external ASC,spawned_at ASC,id ASC",
-            (project["id"],),
-        ).fetchall()
-        owners: dict[tuple[str, str], HistoryOwner] = {}
-        for row in rows:
-            path = Path(str(row["transcript_path"]))
-            if not path.is_file():
-                continue
-            owner = HistoryOwner(
-                id=str(row["id"]),
-                native_id=str(row["native_id"]),
-                backend=str(row["backend"]),
-                name=str(row["name"]),
-                cwd=str(row["cwd"]),
-                project_id=str(row["project_id"]),
-                project_root=str(row["project_root"] or project["root"]),
-                transcript_path=path,
-            )
-            owners.setdefault((owner.backend, owner.native_id), owner)
-        command_owners: dict[tuple[str, str], str] = {}
-        has_tier0 = db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tier0_facts'"
-        ).fetchone()
-        if has_tier0:
-            facts = db.execute(
-                "SELECT session_id,agent_run_id,detail_json FROM tier0_facts WHERE project_id=? "
-                "AND kind='command' AND lower(COALESCE(target,'')) LIKE '%git%commit%'",
-                (project["id"],),
-            ).fetchall()
-            for row in facts:
-                try:
-                    detail = json.loads(str(row["detail_json"] or "{}"))
-                except json.JSONDecodeError:
-                    continue
-                call_id = detail.get("call_id") if isinstance(detail, dict) else None
-                run_id = str(row["agent_run_id"] or "")
-                if isinstance(call_id, str) and call_id:
-                    command_owners[(run_id, call_id)] = str(row["session_id"])
-        return project, list(owners.values()), command_owners
+        return [
+            _read_project_inputs(db, project, since=since)
+            for project in _select_projects(db, project_selector)
+        ]
     finally:
         db.close()
+
+
+def _read_project_inputs(
+    db: sqlite3.Connection, project: dict[str, str], *, since: float
+) -> ProjectInputs:
+    rows = db.execute(
+        "SELECT id,native_id,backend,name,cwd,project_id,project_root,transcript_path,"
+        "external,spawned_at FROM history WHERE project_id=? AND agent_visible=1 "
+        "AND transcript_path IS NOT NULL AND transcript_path!='' "
+        "ORDER BY external ASC,spawned_at ASC,id ASC",
+        (project["id"],),
+    ).fetchall()
+    owners: dict[tuple[str, str], HistoryOwner] = {}
+    for row in rows:
+        path = Path(str(row["transcript_path"]))
+        if not path.is_file():
+            continue
+        owner = HistoryOwner(
+            id=str(row["id"]),
+            native_id=str(row["native_id"]),
+            backend=str(row["backend"]),
+            name=str(row["name"]),
+            cwd=str(row["cwd"]),
+            project_id=str(row["project_id"]),
+            project_root=str(row["project_root"] or project["root"]),
+            transcript_path=path,
+        )
+        owners.setdefault((owner.backend, owner.native_id), owner)
+    # Identity for a Tier 0 fact's session: `history.id` is one agent run, while
+    # `note_id` is the persistent session a fact is stamped with, so both maps are
+    # needed to put a name and a checkout on a contributor.
+    session_roots: dict[str, str | None] = {}
+    session_names: dict[str, str] = {}
+    for row in db.execute(
+        "SELECT id,note_id,name,cwd FROM history WHERE project_id=? "
+        "ORDER BY spawned_at DESC,id DESC",
+        (project["id"],),
+    ).fetchall():
+        for key in (str(row["note_id"] or ""), str(row["id"])):
+            if not key:
+                continue
+            session_roots.setdefault(key, str(row["cwd"] or "") or None)
+            session_names.setdefault(key, str(row["name"] or ""))
+    command_owners: dict[tuple[str, str], str] = {}
+    write_facts: list[dict[str, Any]] = []
+    has_tier0 = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tier0_facts'"
+    ).fetchone()
+    if has_tier0:
+        facts = db.execute(
+            "SELECT session_id,agent_run_id,detail_json FROM tier0_facts WHERE project_id=? "
+            "AND kind='command' AND lower(COALESCE(target,'')) LIKE '%git%commit%'",
+            (project["id"],),
+        ).fetchall()
+        for row in facts:
+            try:
+                detail = json.loads(str(row["detail_json"] or "{}"))
+            except json.JSONDecodeError:
+                continue
+            call_id = detail.get("call_id") if isinstance(detail, dict) else None
+            run_id = str(row["agent_run_id"] or "")
+            if isinstance(call_id, str) and call_id:
+                command_owners[(run_id, call_id)] = str(row["session_id"])
+        write_facts = [
+            dict(row)
+            for row in db.execute(
+                "SELECT id,session_id,agent_run_id,target,content_hash,created_at "
+                "FROM tier0_facts WHERE project_id=? AND kind='file_write' "
+                "AND target IS NOT NULL AND target!='' AND created_at>=? "
+                "ORDER BY created_at ASC",
+                (project["id"], since),
+            ).fetchall()
+        ]
+    existing = [
+        dict(row)
+        for row in db.execute(
+            "SELECT * FROM git_provenance WHERE project_id=? ORDER BY observed_at DESC",
+            (project["id"],),
+        ).fetchall()
+    ]
+    return ProjectInputs(
+        project=project,
+        owners=list(owners.values()),
+        command_owners=command_owners,
+        existing=existing,
+        write_facts=write_facts,
+        session_roots=session_roots,
+        session_names=session_names,
+    )
 
 
 def _scan_transcript(owner: HistoryOwner) -> list[CommitCall]:
@@ -461,11 +560,254 @@ def _resolved_worktree_root(cwd: str, project_root: Path) -> str:
     return str(candidate)
 
 
-def _plan(
+def _git_bytes(root: Path, *args: str, timeout: float = 30) -> bytes:
+    """Undecoded stdout for one read-only query. Blob bytes cannot be decoded."""
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else b""
+
+
+def _blob_digest(root: Path, blob: str) -> str | None:
+    """SHA-256 of a blob's exact bytes, comparable with a whole-file write hash."""
+    size = _git(root, "cat-file", "-s", blob, timeout=10)
+    if size.returncode:
+        return None
+    try:
+        blob_size = int(size.stdout.strip())
+    except ValueError:
+        return None
+    if blob_size > BLOB_DIGEST_MAX_BYTES:
+        return None
+    if blob_size == 0:
+        return hashlib.sha256(b"").hexdigest()
+    data = _git_bytes(root, "cat-file", "blob", blob, timeout=15)
+    return hashlib.sha256(data).hexdigest() if data else None
+
+
+def _commit_changes(root: Path, oid: str) -> tuple[GitCommitChange, ...]:
+    result = _git(
+        root,
+        "diff-tree",
+        "--no-commit-id",
+        "-r",
+        "-z",
+        "--root",
+        "--find-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--raw",
+        oid,
+        timeout=20,
+    )
+    return parse_raw_changes(result.stdout) if result.returncode == 0 else ()
+
+
+def _is_ancestor(catalog: dict[str, CommitObject], ancestor: str, commit: str) -> bool:
+    """Walk first parents back from `commit` looking for `ancestor`.
+
+    The catalog is already in memory, so this costs no subprocess. It answers the
+    one question the shared-checkout rule should have been asking: did this commit
+    grow from the head the session started on.
+    """
+    if not ancestor or not commit:
+        return False
+    current = commit
+    for _ in range(ANCESTRY_WALK_LIMIT):
+        if current == ancestor:
+            return True
+        node = catalog.get(current)
+        if node is None or not node.parents:
+            return False
+        current = node.parents[0]
+    return False
+
+
+def _reattribute_committers(
     project: dict[str, str],
-    owners: list[HistoryOwner],
-    command_owners: dict[tuple[str, str], str],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    existing: list[dict[str, Any]],
+    catalog: dict[str, CommitObject],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Promote rows the retired shared-checkout rule stamped ambiguous.
+
+    A row written from an observed commit command already names the commit. What
+    the old rule discarded was the confidence, purely because other sessions
+    happened to share the checkout. The commit is re-checked here against the head
+    the session started from, and a commit no other session's command claims is
+    that session's, however many terminals were open in the directory.
+    """
+    stats: Counter[str] = Counter()
+    claims: dict[str, set[str]] = defaultdict(set)
+    for row in existing:
+        if str(row.get("source") or "").startswith(("session_tool", "transcript_backfill")):
+            claims[str(row.get("commit_oid") or "")].add(str(row.get("session_id") or ""))
+    records: list[dict[str, Any]] = []
+    for row in existing:
+        oid = str(row.get("commit_oid") or "")
+        source = str(row.get("source") or "")
+        # Live command evidence only. A transcript match's confidence expresses how
+        # certainly it identified the commit *object*, which ancestry cannot
+        # improve; only the shared-checkout downgrade is being undone here.
+        if source != "session_tool" or not oid:
+            continue
+        if oid not in catalog:
+            stats["reattribution_commit_missing"] += 1
+            continue
+        if len(claims.get(oid, set())) > 1:
+            # Two sessions ran a commit command that resolved to one object. This
+            # is the undecidable case ambiguity is reserved for.
+            stats["reattribution_contested"] += 1
+            continue
+        previous_head = str(row.get("previous_head") or "")
+        relationship = str(row.get("relationship") or "created")
+        rooted = (
+            _is_ancestor(catalog, previous_head, oid)
+            if previous_head and relationship != "rewrote"
+            else True
+        )
+        if not rooted:
+            stats["reattribution_unrooted"] += 1
+            continue
+        already = (
+            str(row.get("role") or "") == "committer"
+            and str(row.get("confidence") or "") == "exact"
+            and not row.get("ambiguous")
+        )
+        if already:
+            stats["reattribution_current"] += 1
+            continue
+        commit = catalog[oid]
+        records.append(
+            {
+                "session_id": str(row.get("session_id") or ""),
+                "session_name": str(row.get("session_name") or ""),
+                "agent_run_id": str(row.get("agent_run_id") or ""),
+                "project_id": project["id"],
+                "worktree_root": str(row.get("worktree_root") or project["root"]),
+                "commit_oid": oid,
+                "parent_oids": commit.parents,
+                "subject": commit.subject,
+                "committed_at": commit.committed_at,
+                "previous_head": previous_head or (
+                    commit.parents[0] if commit.parents else None
+                ),
+                "relationship": relationship,
+                "confidence": "exact",
+                "ambiguous": False,
+                "source": source,
+                "source_event_seq": row.get("source_event_seq"),
+                "tool_call_id": row.get("tool_call_id"),
+                "evidence_rank": COMMITTER_EXACT_RANK,
+                "observed_at": row.get("observed_at") or commit.committed_at,
+                "role": "committer",
+                "match_method": "reattributed_ancestry",
+                "contributed_paths": row.get("contributed_paths") or (),
+            }
+        )
+        stats["reattributed"] += 1
+    return records, stats
+
+
+def _plan_contributors(
+    project: dict[str, str],
+    inputs: ProjectInputs,
+    commits: list[tuple[str, CommitObject]],
+    catalog: dict[str, CommitObject],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """Match each commit's changed files against recorded Tier 0 writes.
+
+    Identical in substance to the live path — the same `candidate_writes` and
+    `resolve_contributors` decide it, so a historical answer and a live one cannot
+    drift apart — with the budgets a sweep needs and a live event does not.
+    """
+    stats: Counter[str] = Counter()
+    records: list[dict[str, Any]] = []
+    if not inputs.write_facts:
+        return records, stats
+    budget = CONTRIBUTOR_BLOB_BUDGET
+    for worktree_root, commit in commits[:CONTRIBUTOR_COMMIT_LIMIT]:
+        root = Path(worktree_root)
+        if not root.is_dir():
+            root = Path(project["root"])
+            if not root.is_dir():
+                stats["contributor_root_missing"] += 1
+                continue
+        changes = _commit_changes(root, commit.oid)
+        if not changes:
+            stats["contributor_no_changes"] += 1
+            continue
+        floor = commit.committed_at - CONTRIBUTOR_LOOKBACK_SECONDS
+        # The parent commit's time is the real floor: work committed before it is
+        # in that commit, not this one. The lookback bounds the case where the
+        # parent is unreadable (a root commit, a shallow clone).
+        parent = catalog.get(commit.parents[0]) if commit.parents else None
+        since = max(floor, parent.committed_at) if parent else floor
+        window = [
+            fact
+            for fact in inputs.write_facts
+            if since <= float(fact.get("created_at") or 0.0) <= commit.committed_at + 90.0
+        ]
+        if not window:
+            continue
+        candidates = candidate_writes(
+            changes,
+            window,
+            worktree_root=str(root),
+            session_roots=inputs.session_roots,
+        )
+        digests: dict[str, str | None] = {}
+        for candidate in candidates:
+            if budget <= 0 or not candidate.blob:
+                continue
+            if not any(
+                fact.get("content_hash")
+                for fact in (*candidate.positional, *candidate.confirmable)
+            ):
+                continue
+            digests[candidate.path] = _blob_digest(root, candidate.blob)
+            budget -= 1
+        for contributor in resolve_contributors(candidates, digests):
+            if not contributor.paths:
+                continue
+            session_id = contributor.session_id
+            records.append(
+                {
+                    "session_id": session_id,
+                    "session_name": (
+                        inputs.session_names.get(session_id)
+                        or inputs.session_names.get(contributor.agent_run_id or "")
+                        or session_id
+                    ),
+                    "agent_run_id": contributor.agent_run_id or "",
+                    "project_id": project["id"],
+                    "worktree_root": str(root),
+                    "commit_oid": commit.oid,
+                    "parent_oids": commit.parents,
+                    "subject": commit.subject,
+                    "committed_at": commit.committed_at,
+                    "previous_head": commit.parents[0] if commit.parents else None,
+                    "relationship": "contributed",
+                    "confidence": contributor.confidence,
+                    "ambiguous": False,
+                    "source": "tier0_write",
+                    "evidence_rank": contributor.evidence_rank,
+                    "observed_at": commit.committed_at,
+                    "role": "contributor",
+                    "match_method": contributor.method,
+                    "contributed_paths": contributor.paths,
+                }
+            )
+            stats[f"contributor_{contributor.method}"] += 1
+    return records, stats
+
+
+def _plan(inputs: ProjectInputs) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    project = inputs.project
+    owners = inputs.owners
+    command_owners = inputs.command_owners
     calls = [call for owner in owners for call in _scan_transcript(owner)]
     catalog = _commit_catalog(Path(project["root"]))
     subjects: dict[str, set[str]] = defaultdict(set)
@@ -593,13 +935,45 @@ def _plan(
                 "tool_call_id": item.call.call_id,
                 "evidence_rank": item.evidence_rank,
                 "observed_at": item.call.observed_at or item.commit.committed_at,
+                "role": "committer",
+                "match_method": f"transcript_{item.method}",
             }
         )
+
+    # Pass two: promote rows the retired shared-checkout rule downgraded, including
+    # the ones this pass just planned — a transcript match and a live observation
+    # of the same commit both name it, and neither is ambiguous for being in a
+    # busy checkout.
+    reattributed, reattribution_stats = _reattribute_committers(
+        project, [*inputs.existing, *records], catalog
+    )
+    records.extend(reattributed)
+    stats.update(reattribution_stats)
+
+    # Pass three: whose writes are in each commit. Newest first, because Tier 0
+    # facts are retained for weeks and an older commit has nothing left to match.
+    known: dict[str, tuple[str, CommitObject]] = {}
+    for row in (*inputs.existing, *records):
+        oid = str(row.get("commit_oid") or "")
+        known_commit = catalog.get(oid)
+        if known_commit is None or oid in known:
+            continue
+        known[oid] = (str(row.get("worktree_root") or project["root"]), known_commit)
+    ordered = sorted(known.values(), key=lambda item: item[1].committed_at, reverse=True)
+    contributor_records, contributor_stats = _plan_contributors(
+        project, inputs, ordered, catalog
+    )
+    records.extend(contributor_records)
+    stats.update(contributor_stats)
+
     report: dict[str, Any] = {
         "project_id": project["id"],
         "project_name": project["name"],
         "transcripts_scanned": len(owners),
         "repository_commit_objects": len(catalog),
+        "existing_rows": len(inputs.existing),
+        "write_facts_available": len(inputs.write_facts),
+        "commits_examined_for_contributors": min(len(ordered), CONTRIBUTOR_COMMIT_LIMIT),
         **stats,
         "records_planned": len(records),
         "distinct_commits": len({record["commit_oid"] for record in records}),
@@ -607,20 +981,33 @@ def _plan(
         "exact_records": sum(record["confidence"] == "exact" for record in records),
         "correlated_records": sum(record["confidence"] == "correlated" for record in records),
         "ambiguous_records": sum(record["confidence"] == "ambiguous" for record in records),
+        "committer_records": sum(record["role"] == "committer" for record in records),
+        "contributor_records": sum(record["role"] == "contributor" for record in records),
     }
     return records, report
 
 
-async def backfill_git_provenance(
-    database: Path, project_selector: str, *, apply: bool = False
+async def _backfill_project(
+    database: Path, inputs: ProjectInputs, *, apply: bool
 ) -> dict[str, Any]:
-    operation_id = uuid.uuid4().hex
-    started = time.monotonic()
-    project, owners, command_owners = await asyncio.to_thread(
-        _read_inputs, database, project_selector
-    )
-    records, report = await asyncio.to_thread(_plan, project, owners, command_owners)
-    report["operation_id"] = operation_id
+    try:
+        records, report = await asyncio.to_thread(_plan, inputs)
+    except Exception as error:
+        # One Project whose root is gone, is not a repository, or times out must
+        # not abort a sweep over every other Project. It is reported, not hidden.
+        log.warning(
+            "git provenance backfill skipped project_id=%s reason=%s",
+            inputs.project["id"],
+            type(error).__name__,
+            exc_info=True,
+        )
+        return {
+            "project_id": inputs.project["id"],
+            "project_name": inputs.project["name"],
+            "error": f"{type(error).__name__}: {error}",
+            "dry_run": not apply,
+            **dict.fromkeys(_EMPTY_REPORT_COUNTS, 0),
+        }
     report["dry_run"] = not apply
     report["records_written"] = 0
     if apply:
@@ -632,19 +1019,69 @@ async def backfill_git_provenance(
                 )
         finally:
             history.close()
-    report["duration_ms"] = round((time.monotonic() - started) * 1000)
     log.info(
-        "git provenance backfill completed operation_id=%s project_id=%s dry_run=%s "
-        "commands=%d planned=%d written=%d exact=%d correlated=%d ambiguous=%d",
-        operation_id,
-        project["id"],
+        "git provenance backfill project project_id=%s dry_run=%s commands=%d planned=%d "
+        "written=%d committer=%d contributor=%d exact=%d correlated=%d ambiguous=%d",
+        inputs.project["id"],
         not apply,
         report["commands"],
         report["records_planned"],
         report["records_written"],
+        report["committer_records"],
+        report["contributor_records"],
         report["exact_records"],
         report["correlated_records"],
         report["ambiguous_records"],
+    )
+    return report
+
+
+async def backfill_git_provenance(
+    database: Path,
+    project_selector: str | None,
+    *,
+    apply: bool = False,
+    since_days: int = 30,
+) -> dict[str, Any]:
+    """Re-derive committer and contributor attribution for recorded commits.
+
+    Read-only unless `apply`. Idempotent by construction: every write goes through
+    the ranked upsert, so a second run re-plans the same rows and replaces nothing
+    with anything weaker. `project_selector` of None sweeps every registered
+    Project, which is what re-attributing history after Phase 7.8 needs.
+    """
+    operation_id = uuid.uuid4().hex
+    started = time.monotonic()
+    since = time.time() - max(1, since_days) * 86400
+    projects = await asyncio.to_thread(_read_inputs, database, project_selector, since=since)
+    reports = [
+        await _backfill_project(database, inputs, apply=apply) for inputs in projects
+    ]
+    if len(reports) == 1:
+        report = dict(reports[0])
+    else:
+        report = {
+            "projects": reports,
+            "records_planned": sum(item["records_planned"] for item in reports),
+            "records_written": sum(item["records_written"] for item in reports),
+            "committer_records": sum(item["committer_records"] for item in reports),
+            "contributor_records": sum(item["contributor_records"] for item in reports),
+            "exact_records": sum(item["exact_records"] for item in reports),
+            "correlated_records": sum(item["correlated_records"] for item in reports),
+            "ambiguous_records": sum(item["ambiguous_records"] for item in reports),
+        }
+    report["operation_id"] = operation_id
+    report["dry_run"] = not apply
+    report["projects_scanned"] = len(reports)
+    report["duration_ms"] = round((time.monotonic() - started) * 1000)
+    log.info(
+        "git provenance backfill completed operation_id=%s projects=%d dry_run=%s "
+        "planned=%d written=%d",
+        operation_id,
+        len(reports),
+        not apply,
+        report["records_planned"],
+        report["records_written"],
     )
     return report
 
@@ -664,9 +1101,21 @@ def _configure_logging(data_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m swe_mux.git_provenance_backfill",
-        description="Backfill durable session-to-commit provenance from native transcripts.",
+        description=(
+            "Re-derive committer and contributor attribution for recorded commits, "
+            "and import historical commits from native transcripts."
+        ),
     )
-    parser.add_argument("project", help="registered Project id, exact name, or exact root")
+    parser.add_argument(
+        "project",
+        nargs="?",
+        help="registered Project id, exact name, or exact root; omit with --all-projects",
+    )
+    parser.add_argument(
+        "--all-projects",
+        action="store_true",
+        help="sweep every registered Project instead of one",
+    )
     parser.add_argument(
         "--database",
         type=Path,
@@ -678,11 +1127,24 @@ def main() -> None:
         action="store_true",
         help="write the planned rows; omission is a read-only dry run",
     )
+    parser.add_argument(
+        "--since-days",
+        type=int,
+        default=30,
+        help="age of the oldest write fact considered for contributors (default: 30)",
+    )
     args = parser.parse_args()
+    if bool(args.project) == bool(args.all_projects):
+        parser.error("name one Project or pass --all-projects, not both and not neither")
     _configure_logging(args.database.resolve().parent)
     try:
         report = asyncio.run(
-            backfill_git_provenance(args.database, args.project, apply=args.apply)
+            backfill_git_provenance(
+                args.database,
+                None if args.all_projects else args.project,
+                apply=args.apply,
+                since_days=args.since_days,
+            )
         )
     except Exception:
         log.exception(
