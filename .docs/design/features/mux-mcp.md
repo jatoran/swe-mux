@@ -271,6 +271,16 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
   `ping`, `tools/list`, `tools/call`; notifications get 202. Batching is rejected.
 - Every tool advertises MCP annotations from the shared closed contract: reads are read-only and idempotent, while both writes remain permission-gated.
 
+## Live testing
+
+The stub tests in `tests/test_mcp*.py` prove the tool logic against fakes.
+Two gated live tiers prove the surface against real agents and the real endpoint.
+The in-process automations tier (`tests/test_live_automations.py`, `SWEMUX_RUN_LIVE_AUTOMATIONS_TESTS=1`) runs a real CLI, captures the Tier 0 facts that run produced, and asserts the memory reads (`provenance`, `verified_status`) over those real facts with no daemon and no port.
+It also proves `dead_ends` and `prior_resolutions` against a real store round-trip, because neither has a deterministic offline producer.
+The wire tier (`tests/test_live_mcp_control.py`, `SWEMUX_RUN_LIVE_MCP_TESTS=1`) stands up an isolated daemon on an ephemeral port, spawns a real agent, recovers its bearer token from the live process environment with psutil, and drives `/mcp` end to end for `get_session`, `notify`, `interrupt`, `end_session`, and granted `request_spawn`.
+The same read of the child environment asserts the per-session env override held, so the spawned agent's `MUX_HOOK_URL` names the isolated daemon rather than the live fleet.
+Both tiers are excluded from `.worktree-verify` and CI.
+
 ## Key files
 
 - Protocol + tools: `src/swe_mux/mcp.py`
@@ -285,7 +295,10 @@ session ended or predates the surface — explicitly *not* a retry-forever condi
 - Token mint / env / meta mirror / adoption recovery: `src/swe_mux/session.py`
 - Registration: `src/swe_mux/adapters/claude.py`, `src/swe_mux/adapters/codex.py`,
   `src/swe_mux/agent_launcher.py`, `src/swe_mux/launchers.py`
-- Tests: `tests/test_mcp.py`, `tests/test_agent_messaging.py`, `tests/test_project_scope.py`
+- Tests: `tests/test_mcp.py`, `tests/test_agent_messaging.py`, `tests/test_project_scope.py`;
+  live tiers `tests/test_live_automations.py`, `tests/test_live_mcp_control.py`, with the
+  in-process fact and isolated-daemon harnesses in `tests/support/live_facts.py` and
+  `tests/support/live_daemon.py`
 
 ## Relates to
 

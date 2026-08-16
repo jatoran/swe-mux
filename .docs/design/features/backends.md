@@ -193,10 +193,18 @@ Exempting a harness means changing its descriptor, never weakening a test.
 | Wiring | Does every consumer derive behaviour rather than name a harness? | `tests/test_harness_name_literals.py`, plus `assert_never` in every dispatch |
 | Coverage | Is every declared capability actually reachable for this harness? | `test_conversation_discovery.py`, `test_opencode_transcript.py`, `test_harness_registry.py` |
 | Behaviour | Does the harness exercise the status surface it declares? | `tests/test_detection_replay.py` (per-harness matrix and corpus floors) |
-| Live | Does the real CLI still behave as the observer expects? | `tests/test_live_agent_conformance.py`, marker-gated; `test_every_transcript_harness_is_covered_by_the_live_canary` runs without credentials and fails when a transcript harness has no live coverage |
+| Live (transcript) | Does the real CLI still behave as the observer expects? | `tests/test_live_agent_conformance.py`, marker-gated; `test_every_transcript_harness_is_covered_by_the_live_canary` runs without credentials and fails when a transcript harness has no live coverage |
+| Live (store) | Does a store-backed CLI's exact measurement still read? | `tests/test_live_agent_conformance.py` store canary, marker-gated; opencode runs `opencode run` into an isolated store and asserts `session_measurements` |
+| Live (automations) | Does a real run's facts drive the detectors and memory tools? | `tests/test_live_automations.py`, marker-gated; `test_every_fact_producing_harness_is_covered_by_the_automations_canary` runs without credentials |
+| Live (MCP wire) | Does a real session obey the control tools through `/mcp`? | `tests/test_live_mcp_control.py`, marker-gated; `test_every_mcp_capable_agent_harness_is_covered_by_the_control_canary` runs without credentials |
 
-The live tier is excluded from `.worktree-verify` because it needs an authenticated CLI and consumes quota.
-Run it deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1`, `SWEMUX_RUN_LIVE_SUBAGENT_TESTS=1`, or `SWEMUX_RUN_LIVE_PHASE2_TESTS=1`.
+The live tiers are excluded from `.worktree-verify` and CI because they need an authenticated CLI and consume quota.
+Each is derived from a declared capability rather than a per-harness skip, so a new harness either joins its tier or states on its descriptor why it cannot, and the coverage guard fails until it does.
+The four derivations partition the harnesses.
+A transcript-file harness (`transcript_dialect` set and `reports_transcript_path` true) is driven by the transcript canary; a store-backed harness (`measurement_source == "database"`, so opencode) is driven by the store canary instead, because it writes no file to replay.
+A transcript harness that also declares an `automations` probe (one that permits a write, a command, and a test) is driven by the automations canary, which replays its real facts through the deterministic detectors and the mux memory tools in process with no daemon and no port.
+An agent harness with an MCP client (`adapter_family != "pi"`) is driven by the MCP wire canary, which stands up an isolated daemon on an ephemeral port and drives its real session through `/mcp`; pi is excluded there by its declared no-MCP-client capability.
+Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and store), `SWEMUX_RUN_LIVE_SUBAGENT_TESTS=1`, `SWEMUX_RUN_LIVE_PHASE2_TESTS=1`, `SWEMUX_RUN_LIVE_AUTOMATIONS_TESTS=1`, or `SWEMUX_RUN_LIVE_MCP_TESTS=1`.
 
 ## Operations
 

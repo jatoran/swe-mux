@@ -55,6 +55,8 @@ markers = [
   "live_subagent: extended live canary that asks the provider to spawn a subagent",
   "live_telemetry: authenticated provider CLI telemetry-to-store conformance canary",
   "live_quota: non-mutating authenticated provider quota schema canary",
+  "live_automations: runs a real agent whose facts drive Tier 0 -> detectors -> mux memory tools in-process",
+  "live_mcp: drives an isolated daemon on an ephemeral port and a real agent's session through the /mcp wire",
   "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 

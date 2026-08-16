@@ -13,11 +13,13 @@ from typing import Any, Literal
 import pytest
 
 from swe_mux.adapters import build_agent_adapter
+from swe_mux.adapters.opencode import OpenCodeAdapter
 from swe_mux.event_bus import EventBus
 from swe_mux.harness import (
     HARNESSES,
     descriptor,
     live_canary_harnesses,
+    live_store_harnesses,
     live_subagent_harnesses,
     live_telemetry_harnesses,
 )
@@ -33,9 +35,10 @@ RUN_PHASE2 = os.environ.get("SWEMUX_RUN_LIVE_PHASE2_TESTS") == "1"
 
 
 LIVE_HARNESSES = list(live_canary_harnesses())
+LIVE_STORE_HARNESSES = list(live_store_harnesses())
 LIVE_SUBAGENT_HARNESSES = list(live_subagent_harnesses())
 LIVE_TELEMETRY_HARNESSES = list(live_telemetry_harnesses())
-ProbeMode = Literal["read_only", "read_tool", "subagent"]
+ProbeMode = Literal["read_only", "read_tool", "subagent", "automations"]
 
 
 def _executable(backend: str) -> str:
@@ -105,7 +108,13 @@ async def _probe_transcript(
     return max(candidates)[1]
 
 
-def _run(command: list[str], cwd: Path, timeout: int = 120) -> None:
+def _run(
+    command: list[str],
+    cwd: Path,
+    timeout: int = 120,
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
     executable = Path(command[0])
     if os.name == "nt" and executable.suffix.casefold() in {".cmd", ".bat"}:
         command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", *command]
@@ -117,6 +126,7 @@ def _run(command: list[str], cwd: Path, timeout: int = 120) -> None:
         stderr=subprocess.DEVNULL,
         timeout=timeout,
         check=False,
+        env=env,
     )
     assert completed.returncode == 0, f"provider CLI exited with {completed.returncode}"
 
@@ -247,17 +257,37 @@ def test_every_transcript_harness_is_covered_by_the_live_canary() -> None:
     means a new harness either joins it or states on its descriptor why it cannot.
     """
     for name, harness in HARNESSES.items():
-        if harness.transcript_dialect is None:
-            # No transcript to replay: this canary's assertion does not exist for it.
-            # Its measurement is a database read, covered by its own store tests.
-            assert name not in LIVE_HARNESSES, name
-            continue
-        assert harness.headless_probes.read_only is not None, (
-            f"{name} writes a transcript but declares no headless probe, so the live "
-            f"canary cannot run against its real CLI"
+        has_probe = harness.headless_probes.read_only is not None
+        writes_transcript_file = (
+            harness.transcript_dialect is not None and harness.reports_transcript_path
         )
-        assert name in LIVE_HARNESSES, name
+        if writes_transcript_file:
+            # A file to replay: the transcript canary drives it.
+            assert has_probe, (
+                f"{name} writes a transcript but declares no headless probe, so the "
+                f"live canary cannot run against its real CLI"
+            )
+            assert name in LIVE_HARNESSES, name
+            assert name not in LIVE_STORE_HARNESSES, name
+        elif harness.measurement_source == "database":
+            # A store row instead of a file: the store canary drives it.
+            assert has_probe, (
+                f"{name} measures from a store but declares no headless probe, so the "
+                f"store canary cannot run against its real CLI"
+            )
+            assert name in LIVE_STORE_HARNESSES, name
+            assert name not in LIVE_HARNESSES, name
+        else:
+            # Neither a transcript file nor a store measurement: nothing to drive.
+            assert name not in LIVE_HARNESSES, name
+            assert name not in LIVE_STORE_HARNESSES, name
     assert LIVE_HARNESSES, "the live canary covers no harness at all"
+    assert LIVE_STORE_HARNESSES, "the store canary covers no harness at all"
+    # Every harness with a headless probe is covered by exactly one live tier, so a
+    # new harness cannot land with a probe and no live coverage of either shape.
+    for name, harness in HARNESSES.items():
+        if harness.headless_probes.read_only is not None:
+            assert (name in LIVE_HARNESSES) ^ (name in LIVE_STORE_HARNESSES), name
     # The richer tiers are subsets, and each exclusion is a declared capability gap
     # rather than a skip: pi ships no subagent tool, so it runs the base canary and
     # the telemetry canary but is never asked to spawn a child.
@@ -280,6 +310,70 @@ async def test_authenticated_provider_cli_completion_conforms_to_observer(
     )
     assert transcript.exists()
     await _assert_transcript_conformance(backend, _records(transcript))
+
+
+def _newest_store_session_id(database: Path) -> str | None:
+    """The newest root conversation id opencode wrote to its store.
+
+    A store-backed harness mints its own id, so a live test cannot pre-seed one:
+    the run is discovered after the fact. Subagents are child rows (`parent_id`
+    set), excluded here so the assertion targets the run the canary drove.
+    """
+    import sqlite3
+
+    connection = sqlite3.connect(f"file:{database.as_posix()}?mode=ro", uri=True)
+    try:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT id FROM session WHERE parent_id IS NULL "
+            "ORDER BY time_updated DESC, time_created DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    return str(row["id"]) if row else None
+
+
+@pytest.mark.live_agent
+@pytest.mark.skipif(not RUN_LIVE, reason="set SWEMUX_RUN_LIVE_AGENT_TESTS=1")
+@pytest.mark.parametrize("backend", LIVE_STORE_HARNESSES)
+async def test_authenticated_store_backed_cli_measurement_reaches_the_adapter(
+    backend: str, tmp_path: Path
+) -> None:
+    """A store-backed harness proves its live path through the store, not a file.
+
+    The transcript canary cannot see opencode: it writes rows, not a file. This is
+    the derived-store sibling — run the real CLI headless into an isolated store,
+    then read the `session` row through the adapter, so a break in the exact-figure
+    measurement path is caught against the real binary. `OPENCODE_DATA_DIR` isolates
+    the store so the run never lands in the operator's real `~/.local/share/opencode`.
+    """
+    harness = descriptor(backend)
+    assert harness.measurement_source == "database", backend
+    # opencode's CLI writes its store under XDG_DATA_HOME/opencode, honouring the
+    # XDG base-directory spec even on Windows. OPENCODE_DATA_DIR (what mux's own
+    # resolver reads) does not steer the CLI's write, so isolating the run means
+    # setting XDG_DATA_HOME and pointing the adapter at the `opencode` subdirectory.
+    store_dir = tmp_path / "store"
+    store_dir.mkdir()
+    data_home = store_dir / "opencode"
+    env = {**os.environ, "XDG_DATA_HOME": str(store_dir)}
+    command = _probe_command(
+        backend, "Reply with exactly: SWEMUX_STORE_OK", None, "read_only"
+    )
+    _run(command, tmp_path, timeout=180, env=env)
+
+    database = data_home / (harness.conversation_store_file or "")
+    assert database.exists(), f"{backend} wrote no store at {database}"
+    native_id = _newest_store_session_id(database)
+    assert native_id is not None, f"{backend} recorded no conversation in its store"
+
+    adapter = OpenCodeAdapter(data_home=data_home)
+    measurements = adapter.session_measurements(native_id)
+    assert measurements is not None, f"{backend} adapter read no session row"
+    # A real turn produced output tokens and a model; cost is present (>= 0).
+    assert int(measurements["tokens_out"] or 0) > 0, measurements
+    assert measurements["model"], measurements
+    assert measurements["cost_usd"] is not None, measurements
 
 
 @pytest.mark.live_agent

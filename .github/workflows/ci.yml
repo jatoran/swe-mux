@@ -46,7 +46,7 @@ jobs:
       - name: pytest (incl. ConPTY integration + harness adapter matrix)
         run: >-
           uv run pytest tests -q
-          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota"
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"
 
       - name: Set up Node
         uses: actions/setup-node@v4

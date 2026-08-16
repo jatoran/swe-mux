@@ -111,6 +111,14 @@ class HeadlessProbes:
     read_tool: tuple[str, ...] | None = None
     # One prompt permitted to spawn a subagent, for the subagent-signal canary.
     subagent: tuple[str, ...] | None = None
+    # One prompt permitted to write files, run shell commands, and run tests, so
+    # the run produces the file_write/file_read/test_result Tier 0 facts the
+    # automations canary replays through the deterministic detectors and the mux
+    # cross-session memory tools. Distinct from `read_tool`, which permits only a
+    # read: provenance and declared-vs-verified need a write and a test result,
+    # not just a tool_use. `None` is a capability statement — the harness keeps no
+    # transcript to replay (opencode), so the automations canary cannot drive it.
+    automations: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -694,6 +702,13 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             read_only=("--print", "--safe-mode", "--tools", ""),
             read_tool=("--print", "--permission-mode", "dontAsk", "--allowedTools", "Read"),
             subagent=("--print", "--allowedTools", "Agent", "--permission-mode", "dontAsk"),
+            # Read,Write,Bash as one comma-joined value so the trailing prompt is
+            # never swallowed as a tool name, and `--permission-mode dontAsk` keeps
+            # the run non-interactive.
+            automations=(
+                "--print", "--permission-mode", "dontAsk",
+                "--allowedTools", "Read,Write,Bash",
+            ),
         ),
         submission="terminal_line",
         root_completion="stop_or_transcript",
@@ -764,6 +779,15 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             read_only=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
             read_tool=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
             subagent=("exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"),
+            # workspace-write plus a never-ask approval policy so exec actually
+            # apply_patches the file inside the sandbox: under the default policy
+            # exec cannot ask a human, so it answers conversationally and writes
+            # nothing, and the automations canary records no file_write fact.
+            automations=(
+                "exec", "--sandbox", "workspace-write",
+                "-c", "approval_policy=never",
+                "--skip-git-repo-check", "--json",
+            ),
         ),
         submission="terminal_line",
         root_completion="task_complete",
@@ -836,6 +860,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             read_only=("-p", "--no-tools"),
             read_tool=("-p",),
             subagent=("-p",),
+            # `-p` keeps the full default tool set, which includes write and bash,
+            # so the automations canary run can produce write and command facts.
+            automations=("-p",),
         ),
         submission="terminal_line",
         root_completion="assistant_stop",
@@ -919,6 +946,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             read_only=("-p", "--no-tools"),
             read_tool=("-p",),
             subagent=None,
+            # pi runs a tool as soon as the model asks, with no approval gate, so
+            # `-p` alone permits the write and bash the automations canary needs.
+            automations=("-p",),
         ),
         submission="terminal_line",
         root_completion="assistant_stop",
@@ -1015,6 +1045,10 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             read_only=("run",),
             read_tool=("run",),
             subagent=("run",),
+            # No `automations` probe: opencode writes no transcript file to replay,
+            # so the in-process automations canary cannot drive it. Its live
+            # measurement is covered by the store canary (`live_store_harnesses`)
+            # instead, reading its `session` row after an `opencode run`.
         ),
         submission="terminal_line",
         root_completion="session_idle",
@@ -1284,21 +1318,74 @@ def branchable_harnesses() -> tuple[str, ...]:
 
 
 def live_canary_harnesses() -> tuple[str, ...]:
-    """Harnesses the live conformance canary can drive against a real CLI.
+    """Harnesses the live transcript-conformance canary can drive against a real CLI.
 
-    Two declarations have to hold. The harness must declare a headless probe, so
-    there is a non-interactive read-only invocation to run, and it must declare a
+    Three declarations have to hold. The harness must declare a headless probe, so
+    there is a non-interactive read-only invocation to run; it must declare a
     transcript dialect, because the canary's assertion is that the observer parses
-    what the real binary just wrote. A harness that keeps its conversation in its own
-    database (opencode) is excluded here by derivation rather than by a skip: there
-    is no transcript for this canary to replay, and pretending otherwise would make
-    the tier report a pass it never ran.
+    what the real binary just wrote; and it must *report a transcript path*, i.e.
+    keep its conversation as a file to replay. A harness that keeps its conversation
+    in its own database (opencode declares a dialect but ``reports_transcript_path``
+    is false) is excluded here by derivation rather than by a skip: there is no
+    transcript file for this canary to replay, and pretending otherwise would make
+    the tier report a pass it never ran. Its live measurement is covered by
+    :func:`live_store_harnesses` instead.
     """
     return tuple(
         name
         for name, harness in HARNESSES.items()
         if harness.headless_probes.read_only is not None
         and harness.transcript_dialect is not None
+        and harness.reports_transcript_path
+    )
+
+
+def live_store_harnesses() -> tuple[str, ...]:
+    """Harnesses whose live canary reads a store row instead of replaying a file.
+
+    The database-measured counterpart to :func:`live_canary_harnesses`. A harness
+    that keeps its conversation in its own store (``measurement_source == "database"``)
+    writes no transcript file, so the transcript canary cannot see it; its live
+    proof is a real ``opencode run`` followed by one indexed read of the ``session``
+    row through the adapter. Excluded from the transcript canary and included here
+    by the same declared capability, so a store-backed harness is covered rather
+    than silently skipped.
+    """
+    return tuple(
+        name
+        for name, harness in HARNESSES.items()
+        if harness.headless_probes.read_only is not None
+        and harness.measurement_source == "database"
+    )
+
+
+def live_automation_harnesses() -> tuple[str, ...]:
+    """Harnesses whose live run can feed the automations pipeline real Tier 0 facts.
+
+    A subset of the transcript canary: the harness must additionally declare an
+    ``automations`` probe (one that permits writing a file, running a command, and
+    running a test), because provenance and declared-vs-verified read the
+    file_write/file_read/test_result facts such a run produces. A harness with no
+    automations probe is excluded by derivation, never skipped.
+    """
+    return tuple(
+        name
+        for name in live_canary_harnesses()
+        if HARNESSES[name].headless_probes.automations is not None
+    )
+
+
+def live_control_harnesses() -> tuple[str, ...]:
+    """Agent harnesses whose live sessions can be driven through the mux MCP wire.
+
+    Every registered harness is an agent, so the one real filter is the MCP client:
+    pi ships none (``adapter_family == "pi"``) and so cannot register the mux server
+    or call a tool through it. pi is therefore excluded here by its declared
+    capability rather than by a skip, exactly as the frontend gates its per-harness
+    MCP toggle on the same fact (``public_harness_registry`` capability ``mcp``).
+    """
+    return tuple(
+        name for name, harness in HARNESSES.items() if harness.adapter_family != "pi"
     )
 
 

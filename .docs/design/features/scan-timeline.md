@@ -142,6 +142,11 @@ Dead-end memory has its own Project opt-in.
 It writes a `dead-end` annotation only when one valid same-run record explicitly classifies an approach as `abandoned` and supplies a non-empty reason.
 A rollover never creates a dead end.
 
+The scan timeline has no deterministic path: every record comes from the OpenRouter model call.
+So the `mux.dead_ends` reader (which reads these records) and `mux.prior_resolutions` (which reads the model-scored experience corpus) have no offline producer.
+The live automations tier (`tests/test_live_automations.py`) proves those two readers against a real store round-trip, seeding a scan record and an experience row and asserting the tools read them with run attribution and the confidence gate.
+The real semantic producer is exercised by hand with an OpenRouter key, because an isolated test daemon has none.
+
 ## API
 
 ```text
