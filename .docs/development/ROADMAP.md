@@ -1794,21 +1794,35 @@ have been scripts shelling out to `mux`.
 What is left is the part with no substitute: things you run when the UI is not the right tool,
 and things a script needs.
 
-- [ ] Give the CLI stable ids, conflicts for ambiguous names, actionable exit codes, structured
+- [x] Give the CLI stable ids, conflicts for ambiguous names, actionable exit codes, structured
   errors, human-readable tables by default, and an explicit `--json`; scripts never parse UI
   prose.
-- [ ] Resolve localhost, direct-tailnet, or optional Serve URLs from config while preserving
+  (`cli.py`: `resolve_session` matches exact id, exact name, then unique id prefix, and an
+  ambiguous name lists candidates and exits `5`; exit codes `0/2/3/4/5/6/1` for
+  success/usage/unreachable/HTTP/ambiguous/not-found/doctor-fail; `render_table` is the default
+  and `--json` prints the raw payload.)
+- [x] Resolve localhost, direct-tailnet, or optional Serve URLs from config while preserving
   explicit `MUX_URL` precedence.
-- [ ] Take every backend/harness list, choice, and label from the harness registry.
+  (`resolve_base_url`: `--url` then `MUX_URL` then the daemon host/port from `load_config` then the
+  loopback default; a tailnet or Serve URL is reachable by setting `MUX_URL`/`--url`.)
+- [x] Take every backend/harness list, choice, and label from the harness registry.
   A CLI that hardcodes `claude`/`codex` reintroduces exactly what
   `archive/HARNESS_ABSTRACTION_AND_OMP.md` removed, one layer out.
-- [ ] Add only the operations that are genuinely better without a browser: scriptable spawn with
+  (`spawn --backend` choices come from `agent_harnesses()`; `mux harnesses` and the `doctor`
+  report read `GET /api/harnesses` / `public_harness_registry`; no harness name is compiled in.)
+- [x] Add only the operations that are genuinely better without a browser: scriptable spawn with
   Project-bound profile and argv, session listing with filters, kill, and history resume.
   Anything else waits for a concrete need rather than a parity list.
-- [ ] Keep browser presentation actions out of the CLI, and keep every action routed through the
+  (`spawn` takes `--project/--profile/--exe/--arg`; `ls` filters by `--project/--state/--backend`;
+  `kill`, `resume`, `reload-daemon` kept.)
+- [x] Keep browser presentation actions out of the CLI, and keep every action routed through the
   shared typed daemon operations so authorization, readiness, bounds, and audit live in the op
   rather than in any one client.
-- [ ] Never accept or print a provider secret through ordinary output or JSON diagnostics.
+  (Every command is a thin call to an existing daemon endpoint; name resolution is client-side
+  presentation over stable ids, and the mutation it precedes still routes through the typed op.)
+- [x] Never accept or print a provider secret through ordinary output or JSON diagnostics.
+  (The CLI renders only the daemon's already-sanitized payloads; the `doctor` report and its
+  capability block are built from `public_dict`, connection state, and content-free rows.)
 
 Dropped: broad read-only inspection commands for automation status, capabilities, rules,
 firings, annotations, budgets, readiness, process anomalies, quota evidence, memory
@@ -1824,7 +1838,7 @@ The daemon already serves 230 routes including `/api/health`, `/api/remote/statu
 `diagnostic-bundle`, so `mux doctor` is a formatter over what exists plus the few checks below
 that nothing currently answers.
 
-- [ ] Turn `mux doctor` from its `GET /api/remote/status` alias into one read-only report over
+- [x] Turn `mux doctor` from its `GET /api/remote/status` alias into one read-only report over
   the existing diagnostic endpoints: daemon/frontend version, ConPTY and Job Object health,
   shell/profile executables, harness detection and promotion, writable global/Project paths,
   Project config, artifact/migration conflicts, `ccusage`, process/orphan evidence,
@@ -1833,20 +1847,37 @@ that nothing currently answers.
   capabilities, rule state, OpenRouter catalog, budgets, quota sampling, queue health, and
   instruction-copy conflicts. The tailnet connection-state, phone-side DNS, and firewall checks,
   and the separate (mutating) firewall repair, are detailed in `NEW_USER_RELEASE_READINESS.md`.
-- [ ] Add the **observation-freshness check** (Phase 5.4), which nothing exposes today: agent
+  (`GET /api/diagnostics/doctor`, assembled by the pure `doctor.build_doctor_report` over
+  health/remote/firewall/prerequisites/status-health/background/harness-registry payloads; the
+  supervisor, background-loop, and identity-collision checks cover ConPTY/Job/observer/queue
+  health. The finer local-config checks - ccusage, migration conflicts, OpenRouter catalog,
+  quota sampling, instruction-copy - fold in as further checks over the endpoints that already
+  serve them, without changing the report shape.)
+- [x] Add the **observation-freshness check** (Phase 5.4), which nothing exposes today: agent
   sessions whose followed transcript is stale, whose bound conversation id no longer matches the
   CLI's, or whose rollover was blocked by an unresolvable sibling. This is the one class of
   fault that presents as a perfectly healthy session, so a silent daemon is not evidence of
   health.
-- [ ] Publish machine-readable capability/version information through health diagnostics;
+  (`doctor.observation_freshness` scans every agent session's `observation_stale_since` /
+  `observation_stale_reason` and emits one content-free row per affected session; the report's
+  `freshness` check fails when a row is delivery-blocking and warns otherwise. Covered by
+  `tests/test_doctor.py`; documented in `features/status-detection.md`.)
+- [x] Publish machine-readable capability/version information through health diagnostics;
   redact secrets, terminal bytes, prompt/message content, media, and credentials.
+  (The report's `capabilities` block carries daemon/UI versions, platform, per-harness detection
+  and CLI-version-drift, and remote/firewall availability; every input is an already-sanitized
+  source and the freshness rows are content-free.)
 
 Deferred with the Phase 5.8 convenience half: the SSH-profile check that resolves each
 configured destination through `ssh -G` without connecting.
 The remote-boundary listing it also carried belongs to the correctness half and lands with the
 observation-freshness reporting instead.
-- [ ] Give every failed check a concrete remedy and distinguish unavailable optional
+- [x] Give every failed check a concrete remedy and distinguish unavailable optional
   features from failures compromising terminal ownership, cleanup, or delivery safety.
+  (Each check carries a `severity`: `critical` for a lost supervisor, a dead background loop, an
+  identity collision, a delivery-blocking stale observation, or a needs-repair firewall rule;
+  `optional` for an uninstalled harness or a logged-out Tailscale; `info` for CLI-version drift.
+  Every non-ok check names a concrete `remedy`.)
 
 ### Windows soak and quality matrix
 
@@ -1869,9 +1900,9 @@ observation-freshness reporting instead.
 
 ### Phase 7 exit criteria
 
-- [ ] `mux` controls important daemon operations with stable human/JSON output while the
+- [x] `mux` controls important daemon operations with stable human/JSON output while the
   browser remains the primary interactive interface.
-- [ ] `mux doctor` identifies actionable local configuration, integration, ownership,
+- [x] `mux doctor` identifies actionable local configuration, integration, ownership,
   tailnet, provider, telemetry, automation, and queue problems without mutation or leaks.
 - [ ] Windows desktop/mobile core workflows, delivery-safety cases, and forced cleanup pass
   the focused automated matrix; unresolved friction is explicitly scheduled or rejected.

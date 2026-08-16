@@ -11,11 +11,11 @@ from swe_mux import cli
 def test_cli_profiles_lists_profile_capabilities(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["mux", "profiles"])
+    monkeypatch.setattr(sys, "argv", ["mux", "profiles", "--json"])
     monkeypatch.setattr(
         cli,
         "request",
-        lambda method, path, body=None: {"default_profile_id": "pwsh"},
+        lambda method, path, body=None, *, base=None: {"default_profile_id": "pwsh"},
     )
 
     cli.main()
@@ -43,7 +43,8 @@ def test_cli_spawn_sends_profile_and_structured_raw_arguments(
     monkeypatch.setattr(
         cli,
         "request",
-        lambda method, path, body=None: captured.append((method, path, body)) or {"ok": True},
+        lambda method, path, body=None, *, base=None: captured.append((method, path, body))
+        or {"ok": True},
     )
 
     cli.main()

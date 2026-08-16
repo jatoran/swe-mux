@@ -796,6 +796,7 @@ def create_app(
             web.get("/api/diagnostics/network", get_network_usage),
             web.delete("/api/diagnostics/network", reset_network_usage),
             web.get("/api/diagnostics/export", diagnostics_export),
+            web.get("/api/diagnostics/doctor", get_doctor_report),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
             web.get("/api/sessions/{sid}/transcript", session_transcript),
             web.get("/api/sessions/{sid}/scan-timeline", session_scan_timeline),
@@ -5019,6 +5020,77 @@ async def diagnostics_export(request: web.Request) -> web.Response:
         },
     }
     response = json_response(export)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def get_doctor_report(request: web.Request) -> web.Response:
+    """Consolidated read-only diagnostics: `mux doctor` without --export.
+
+    One structured report over the diagnostics the daemon already serves plus the
+    observation-freshness check that nothing else exposes. Assembly is pure and
+    lives in `doctor.py`; this handler only gathers the payloads. Everything here
+    is already sanitized (public config, connection state, firewall, status
+    health) and the freshness rows are content-free, so no secret, terminal byte,
+    or message body is ever included.
+    """
+    from .doctor import build_doctor_report, observation_freshness
+    from .session import fleet_status_health
+
+    config: Config = request.app["config"]
+    sessions: SessionManager = request.app["sessions"]
+    supervisor = request.app.get("supervisor")
+
+    live = sum(session.pty.isalive() for session in sessions.sessions.values())
+    supervisor_state = (
+        "connected"
+        if supervisor is not None and supervisor.connected
+        else "lost"
+        if supervisor is not None and getattr(supervisor, "lost", False)
+        else "absent"
+    )
+    health = {
+        "ok": True,
+        "version": "0.1.0",
+        "live_sessions": live,
+        "ui_build_id": read_ui_build_id(request.app["frontend_dir"]),
+        "supervisor_state": supervisor_state,
+        "supervisor_unadopted": int(
+            getattr(sessions, "unadopted_supervisor_sessions", 0) or 0
+        ),
+    }
+    remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
+    firewall: dict[str, Any] = {"supported": False}
+    if firewall_supported():
+        serve_active = bool(
+            remote.get("serve_configured") or remote.get("mobile_voice_configured")
+        )
+        firewall = await inspect_firewall(
+            config.port, await tailscale_ipv4(), serve_active=serve_active
+        )
+    prerequisites = await asyncio.to_thread(detect_prerequisites)
+    installations = await asyncio.to_thread(
+        detect_installations_with_versions, dict(config.harness_exe)
+    )
+    now = time.time()
+    report = build_doctor_report(
+        health=health,
+        remote=remote,
+        firewall=firewall,
+        prerequisites=prerequisites,
+        status_health=fleet_status_health(sessions.sessions.values()),
+        background=background.health(),
+        harnesses=public_harness_registry(installations),
+        freshness=observation_freshness(sessions.sessions.values(), now=now),
+        platform={
+            "system": sys.platform,
+            "python": sys.version.split()[0],
+            "frozen": bool(getattr(sys, "frozen", False)),
+        },
+        daemon={"host": config.host, "port": config.port},
+        now=now,
+    )
+    response = json_response(report)
     response.headers["Cache-Control"] = "no-store"
     return response
 

@@ -53,6 +53,7 @@ P1 and P2:
 - Done: first-run chaining copy (harnesses -> project -> account login -> session) in the first-run panel.
 - Done: CLI-version-drift signal (best-effort `probe_cli_version`, `version_untested` against a maintainer-armed `TESTED_CLI_VERSIONS`, shown in Settings -> Agents).
 - Done: confirmed `ProcessPanel.tsx`'s `127.0.0.1:3000` was a seeded example; changed it to a placeholder so it no longer reads as an assumed dev-server port.
+- Done (Phase 7): the diagnostics export, prerequisites, connection-state, and firewall pieces are now consumed by the consolidated `mux doctor` report (`GET /api/diagnostics/doctor`, assembled by `doctor.build_doctor_report`), which adds per-check severity/remedy, a machine-readable capability block, and the observation-freshness check. This document owns the fresh-machine detail; the aggregation lives in `ROADMAP.md` Phase 7.
 
 Still open (deliberately not code): ship the frozen `dist/` app for external testers; code-signing and SmartScreen decision; foreign-PATH shim/detection testing across npm, bun, and native installers; CLI-on-PATH packaging verification; arming `TESTED_CLI_VERSIONS` with verified bounds.
 

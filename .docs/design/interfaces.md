@@ -1026,6 +1026,7 @@ GET /api/diagnostics/network
 DELETE /api/diagnostics/network
 GET /api/diagnostics/export
 GET /api/diagnostics/prerequisites
+GET /api/diagnostics/doctor
 ```
 
 `status-health` reports the fleet's transition ledger: proven/inferred counts, bounds, alarm.
@@ -1098,6 +1099,14 @@ It never includes terminal bytes or message content; the two logs are command-fr
 `diagnostics/prerequisites` reports the presence of Git, Node, npm, and Tailscale, each with `id`, `label`, `purpose`, `present`, `path`, `download_url`, and `install_command`.
 It backs the onboarding checklist so a feature that needs an absent tool reads as unconfigured rather than broken.
 Both forms are excluded from the counters so observing a window does not change it.
+
+`diagnostics/doctor` is the consolidated read-only report behind `mux doctor` (no `--export`).
+It is aggregation, not new capability: the handler gathers the payloads the diagnostics above already produce (health, remote status, firewall, prerequisites, status-health, background loops, the harness registry) plus the one class of fault nothing else exposes, the **observation-freshness** check, and the assembly is a pure function in `doctor.py`.
+The response carries `version`, `generated_at`, `ok` (false when any check failed), a `summary` count of `ok`/`warn`/`fail`/`unavailable`, a machine-readable `capabilities` block (versions, platform, per-harness detection, remote and firewall availability), a flat `checks[]` list, and `observation_freshness[]`.
+Each check is `{id, category, title, status, severity, detail, remedy}`; `status` is `ok`/`warn`/`fail`/`unavailable` and `severity` separates a `critical` fault (a lost supervisor, a dead background loop, a stale observation that blocks delivery, a needs-repair firewall rule) from an `optional` unavailable feature (a harness not installed, Tailscale logged out) and pure `info`.
+Every failed check carries a concrete `remedy`.
+Each `observation_freshness[]` row is one agent session whose observation the daemon can no longer trust - `{id, name, backend, reason, since, seconds_stale, diagnostic, delivery_blocking}` - drawn from the same `observation_stale_since`/`observation_stale_reason` fields the per-session state-log exposes (`features/status-detection.md`).
+Like `export`, the report is built from already-sanitized sources and content-free rows, so it never includes a secret, terminal bytes, prompt or message content, or a credential.
 
 ## History and reviews
 
@@ -1455,13 +1464,40 @@ counters are under `attention_ranking` and `attention_narration` in
 ## CLI
 
 ```text
-mux ls
+mux ls [--project ID] [--state STATE] [--backend BACKEND]
 mux projects
 mux profiles
-mux spawn --project ID [--backend shell|claude|codex] [--profile ID] [--arg VALUE]
+mux harnesses
+mux spawn --project ID [--backend BACKEND] [--name NAME] [--profile ID] [--exe PATH] [--arg VALUE]
 mux resume HISTORY_ID --project ID
-mux send SESSION TEXT
+mux send SESSION TEXT | mux send --all-broadcast TEXT
 mux kill SESSION
 mux history
-mux doctor
+mux history-duplicates [report|repair]
+mux accounts [list|verify|audit] [--limit N]
+mux reload-daemon [--force]
+mux doctor [--export]
 ```
+
+`mux` is the scriptable control surface; the browser and mobile clients remain the interactive
+interface and MCP serves structured reads to agents, so the CLI carries only the operations with
+no substitute.
+Every subcommand accepts `--json` (raw daemon payload) and `--url` (daemon base URL); without
+`--json` the output is a human table.
+
+`SESSION` is a stable session id, an exact session name, or a unique id prefix.
+An ambiguous name or prefix lists the candidates and exits `5`; no match exits `6`.
+
+Backend and harness choices come from the harness registry, not a hardcoded list; `mux harnesses`
+prints the registry with per-harness detection (installed, resolved path, CLI version, and whether
+that version is newer than the tested bound).
+
+URL resolution is `--url`, then `MUX_URL`, then the daemon host/port from config, then the loopback
+default; the CLI never accepts or prints a provider secret.
+
+Exit codes: `0` success, `2` usage, `3` daemon unreachable, `4` daemon HTTP error, `5` ambiguous
+name, `6` not found, `1` a `doctor` report with a failing check.
+
+`mux doctor` prints the consolidated diagnostics report from `GET /api/diagnostics/doctor` (see
+Delivery diagnostics); `mux doctor --export` prints the full `GET /api/diagnostics/export` bundle
+as JSON.

@@ -28,7 +28,13 @@ from swe_mux.harness import (
     version_is_untested,
 )
 from swe_mux.prerequisites import detect_prerequisites
-from swe_mux.server import diagnostics_export, error_middleware, firewall_repair, firewall_status
+from swe_mux.server import (
+    diagnostics_export,
+    error_middleware,
+    firewall_repair,
+    firewall_status,
+    get_doctor_report,
+)
 
 # --------------------------------------------------------------------------- #
 # Tailscale connection-state classifier
@@ -350,6 +356,44 @@ async def test_diagnostics_export_config_is_the_public_shape(
         body = await response.json()
     assert set(body["config"]) == set(config.public_dict())
     assert "token" not in body["config"]
+
+
+async def test_doctor_endpoint_assembles_a_report(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_status(port: int, *, tailnet_enabled: bool = True) -> dict[str, object]:
+        return {
+            "tailnet_enabled": True,
+            "connection_state": "connected",
+            "device_name": "host.ts.net",
+            "connection_detail": "Connected.",
+            "serve_configured": False,
+        }
+
+    monkeypatch.setattr(server, "tailscale_status", fake_status)
+    # Keep the wiring test hermetic: no real PATH detection or background singleton.
+    monkeypatch.setattr(server, "detect_prerequisites", lambda: [])
+    monkeypatch.setattr(server, "detect_installations_with_versions", lambda exe: {})
+    monkeypatch.setattr(
+        server, "background", SimpleNamespace(health=lambda: {"degraded": [], "total_faults": 0})
+    )
+    app = web.Application(middlewares=[error_middleware])
+    app["config"] = Config(data_dir=tmp_path, port=8765)
+    app["sessions"] = SimpleNamespace(sessions={}, unadopted_supervisor_sessions=0)
+    app["supervisor"] = None
+    app["frontend_dir"] = tmp_path
+    app.router.add_get("/api/diagnostics/doctor", get_doctor_report)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/api/diagnostics/doctor")
+        assert response.status == 200
+        body = await response.json()
+    assert body["version"] >= 1
+    assert "checks" in body and body["checks"]
+    assert body["capabilities"]["remote"]["connection_state"] == "connected"
+    assert set(body["summary"]) == {"ok", "warn", "fail", "unavailable"}
+    # No supervisor attached in a source run: that is a critical warn, not a leak.
+    supervisor = next(c for c in body["checks"] if c["id"] == "daemon.supervisor")
+    assert supervisor["status"] == "warn"
 
 
 async def test_firewall_repair_requires_gesture(

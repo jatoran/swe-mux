@@ -855,6 +855,28 @@ fact, including for sessions that no longer exist.
   transcript records into one artifact. The investigation procedure lives in
   `development/STATUS_INCIDENT_RUNBOOK.md`.
 
+### Observation-freshness check (the healthy-looking silent fault)
+
+A stale observation is the one fault class that presents as a perfectly healthy session:
+the daemon is silent, the dot is green, and delivery is nonetheless blocked because the
+followed transcript went quiet (`transcript_stale`), moved or vanished
+(`transcript_missing`), or the CLI rolled onto a conversation a live sibling already owns
+(`conversation_owned_elsewhere` / `explicit_conversation_mismatch` /
+`rollover_adoption_failed`). Because the per-session state-log answers one session at a
+time, nothing surfaced this across the fleet, so a silent daemon read as evidence of health.
+
+`doctor.observation_freshness(sessions, now)` closes that: it scans every agent session for a
+set `observation_stale_since`, and emits one content-free row per affected session -
+`{id, name, backend, reason, since, seconds_stale, diagnostic, delivery_blocking}` - reading
+the same `record.observation_stale_since`, `session.observation_stale_reason`, and
+`record.observation_diagnostic` fields the state-log exposes (`session.py`
+`_note_transcript_staleness`, the rollover-refusal path, and the reason initialization at
+construct time). It is a read-only projection, never a new authority: the delivery block and
+the transition ledger are unchanged. The consolidated `GET /api/diagnostics/doctor` report
+(`mux doctor`) folds it into a `freshness` check that fails when any row is delivery-blocking
+and warns otherwise, so `mux doctor` answers "is any session quietly reporting a dead
+conversation" without reading each session's state-log by hand.
+
 ## Regression defense
 
 - **Golden corpus** (`tests/fixtures/detection/v1/`): every fixture pins `expected.states`
