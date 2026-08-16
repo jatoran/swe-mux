@@ -1022,15 +1022,26 @@ export function App() {
     showDropSlot({left:box.left,width:box.width,gap:side==='before'?box.top:box.bottom,height,label})
   }
 
+  // How long a stationary mobile hold must last before lifting opens the release-in-place
+  // menu. Above the 250ms drag arm (a quick rest-then-drag never arms the menu) and near the
+  // old on-hold delay, so the felt threshold barely moves.
+  const MENU_HOLD_MS=500
   const beginPointerDrag=(
     event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
     onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
     activation:PointerDragActivation=POINTER_MOVE_DRAG,
+    // `hold-move` only: a stationary hold that matures (past `MENU_HOLD_MS`) and is then
+    // lifted without ever becoming a drag opens the context menu here, on release. The menu
+    // deliberately does NOT open while the finger is down: on a vertical list it would land
+    // on the drag path and block the very drag the hold might become (the "hold too long and
+    // it won't drag" bug). A hold that turns into a drag never reaches this.
+    onInertRelease?:()=>void,
   )=>{
     if(event.button!==0||!event.isPrimary)return
     const source=event.currentTarget
     const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
     let active=false,done=false,ghost:HTMLDivElement|null=null,activationTimer:number|null=null
+    let menuReady=false,menuTimer:number|null=null
     // `hold-move` only: set once the hold has settled, so the next move past slop drags
     // rather than scrolls. `hold` and `movement` never read it.
     let armed=false
@@ -1081,6 +1092,8 @@ export function App() {
       if(source.hasPointerCapture(pointerId))source.releasePointerCapture(pointerId)
       if(activationTimer!==null)window.clearTimeout(activationTimer)
       activationTimer=null
+      if(menuTimer!==null)window.clearTimeout(menuTimer)
+      menuTimer=null
       document.body.classList.remove('workspace-pointer-dragging')
       source.classList.remove('dragging')
       showPointerDropIndicator(null)
@@ -1089,10 +1102,23 @@ export function App() {
     }
     const finish=(commit:boolean)=>{
       if(done)return
-      done=true;cleanup()
-      if(!active)return
-      window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
-      if(commit)onDrop();else onCancel()
+      done=true
+      // Read before cleanup nulls the timers: an inert release is a lift with no active drag,
+      // after the hold matured into menu-readiness and the finger never moved into a drag.
+      const inertMenu=!active&&commit&&menuReady&&!!onInertRelease
+      cleanup()
+      if(active){
+        window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
+        if(commit)onDrop();else onCancel()
+        return
+      }
+      if(inertMenu){
+        // Swallow the click this lift is followed by, the same way an activated drag does,
+        // so opening the menu does not also select/activate the row underneath it.
+        suppressDragClickRef.current=identity
+        window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
+        onInertRelease?.()
+      }
     }
     const activate=(clientX:number,clientY:number)=>{
       if(active||done)return
@@ -1143,7 +1169,14 @@ export function App() {
     if(activation.mode==='hold')activationTimer=window.setTimeout(()=>activate(latestX,latestY),activation.delayMs)
     // `hold-move` arms rather than activates: it waits for the move that follows, which
     // is what leaves the still-hold to the long-press menu that shares this pointer.
-    else if(activation.mode==='hold-move')activationTimer=window.setTimeout(()=>{armed=true;activationTimer=null},activation.delayMs)
+    else if(activation.mode==='hold-move'){
+      activationTimer=window.setTimeout(()=>{armed=true;activationTimer=null},activation.delayMs)
+      // A longer still hold arms the release-in-place menu, with the same buzz the menu
+      // used to give when it opened mid-hold. A move past slop before now would have
+      // already unwound this drag (scroll) or activated it (drag), so a live menu timer
+      // only survives on a genuinely stationary hold.
+      if(onInertRelease)menuTimer=window.setTimeout(()=>{menuReady=true;menuTimer=null;navigator.vibrate?.(20)},MENU_HOLD_MS)
+    }
   }
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawn>>({})
@@ -1203,21 +1236,6 @@ export function App() {
     const origin=longPressOrigin.current
     if(!origin||origin.pointerId!==event.pointerId)return
     if(Math.hypot(event.clientX-origin.x,event.clientY-origin.y)>8)cancelLongPress()
-  }
-
-  // A touch long-press is commonly followed by a synthetic click when the same
-  // pointer lifts. Keep suppression through that release/click turn, then clear
-  // it so a later deliberate tap activates normally even if no click was emitted.
-  const suppressLongPressClick = (identity:string,pointerId:number) => {
-    suppressDragClickRef.current=identity
-    const release=(pointer:PointerEvent)=>{
-      if(pointer.pointerId!==pointerId)return
-      window.removeEventListener('pointerup',release)
-      window.removeEventListener('pointercancel',release)
-      window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
-    }
-    window.addEventListener('pointerup',release)
-    window.addEventListener('pointercancel',release)
   }
 
   const setDesktopSidebarCollapsed=(next:boolean)=>{
@@ -2293,6 +2311,7 @@ export function App() {
       ()=>{stopAutoScroll();const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
       ()=>{stopAutoScroll();setDragProject(null)},
       mobileWorkspace?MOBILE_HOLD_MOVE_DRAG:POINTER_MOVE_DRAG,
+      ()=>openProjectMenuAt(project,event.clientX,event.clientY),
     )
   }
   /** Reorder the sidebar's Groups. Root Projects stay before them and Group order
@@ -2426,6 +2445,7 @@ export function App() {
       },
       ()=>{stopAutoScroll();dragSessionTargetRef.current=null},
       mobileWorkspace?MOBILE_HOLD_MOVE_DRAG:POINTER_MOVE_DRAG,
+      session.pending?undefined:()=>openSessionMenu(session,event.clientX,event.clientY,'sidebar'),
     )
   }
 
@@ -4919,7 +4939,7 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,ackedTurns)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending){const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`session:${session.id}`,pointerId);openSessionMenu(session,x,y,'sidebar')});beginSessionPointerDrag(event,session)}}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
       <SessionRowBody session={session} tokens={rowTokens(session)} config={rowConfig}/>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -4997,7 +5017,7 @@ export function App() {
     const next=reorderStack(moved,targetStack.id,ids)
     if(next!==latest)void updateLayout(projectId,next)
   }
-  const beginMobileTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,leaf:PaneLeaf,label:string)=>{
+  const beginMobileTabDrag=(event:JSX.TargetedPointerEvent<HTMLElement>,leaf:PaneLeaf,label:string,openMenu:(x:number,y:number)=>void)=>{
     const strip=event.currentTarget.closest<HTMLElement>('.stack-tabs')
     let target:ReorderTarget|null=null,latestPointer:{clientX:number;clientY:number}|null=null,scrollFrame:number|null=null
     const preview=(pointer:{clientX:number;clientY:number})=>{
@@ -5017,13 +5037,12 @@ export function App() {
       scrollFrame=window.requestAnimationFrame(autoScroll)
     }
     beginPointerDrag(event,label,`mobiletab:${leaf.id}`,
-      // Close the menu, not just its pending timer: a still-hold may have already opened the
-      // session or resource menu by the time the drag starts, and the drag must dismiss it.
-      ()=>{cancelLongPress();setContextMenu(null);setTabMenu(null);mobileTabHeldRef.current=false;if(mobileWorkspace)navigator.vibrate?.(15)},
+      ()=>{mobileTabHeldRef.current=false;if(mobileWorkspace)navigator.vibrate?.(15)},
       pointer=>{latestPointer={clientX:pointer.clientX,clientY:pointer.clientY};preview(pointer);if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)},
       ()=>{stopAutoScroll();const chosen=target;target=null;showPointerDropIndicator(null);if(chosen&&chosen.id!==leaf.id)commitMobileTabOrder(leaf,chosen)},
       ()=>{stopAutoScroll();target=null;showPointerDropIndicator(null)},
       mobileWorkspace?MOBILE_HOLD_MOVE_DRAG:POINTER_MOVE_DRAG,
+      ()=>openMenu(event.clientX,event.clientY),
     )
   }
   const mobileTab=(leaf:PaneLeaf):ComponentChildren=>{
@@ -5043,7 +5062,7 @@ export function App() {
       else if(leaf.kind!=='terminal')openTabMenu(leaf,label,x,y,'mobile')
     }
     return <div key={`${leaf.kind}:${leaf.id}`} data-reorder-id={leaf.id} class="stack-tab-shell mobile-unified-tab">
-      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginLongPress(event,openMobileTabMenu);beginMobileTabDrag(event,leaf,label)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event=>{event.preventDefault();event.stopPropagation();cancelLongPress();openMobileTabMenu(event.clientX,event.clientY)}}>{glyph}{visibleLabel}</button>
+      <button role="tab" aria-label={`${label} ${leaf.kind} tab`} title={label} aria-selected={selected} class={`tab-main ${selected?'active':''} ${session?.state||''}`} onClick={()=>{if(suppressDragClickRef.current===`mobiletab:${leaf.id}`){suppressDragClickRef.current=null;return}if(mobileTabHeldRef.current){mobileTabHeldRef.current=false;return}activateMobileTab(leaf)}} onPointerDown={event=>{mobileTabHeldRef.current=false;beginMobileTabDrag(event,leaf,label,openMobileTabMenu)}} onContextMenu={event=>{event.preventDefault();event.stopPropagation()}}>{glyph}{visibleLabel}</button>
     </div>
   }
   // With no new-tab button left in the rail, an empty projection would render a
@@ -5067,7 +5086,7 @@ export function App() {
     const liveCount=children.filter(session=>!session.pending&&!['exited','crashed'].includes(session.state)).length
     const hasSessions=children.length>0
     return <section key={project.id} data-reorder-id={project.id} style={{order:projectPreviewIds.indexOf(project.id)}} class={`project-group ${project.id === projectId ? 'active' : ''} ${collapsed?'collapsed':''} ${dropClass}`}>
-      <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace?'Hold for actions, hold and drag to reorder':'Drag to reorder Project'} onPointerDown={event=>{const pointerId=event.pointerId;beginLongPress(event,(x,y)=>{suppressLongPressClick(`project:${project.id}`,pointerId);openProjectMenuAt(project,x,y)});beginProjectPointerDrag(event,project,peerIds)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
+      <div class={`project-row draggable-project ${dragProject?.id===project.id?'dragging':''}`} title={mobileWorkspace?'Hold for actions, hold and drag to reorder':'Drag to reorder Project'} onPointerDown={event=>beginProjectPointerDrag(event,project,peerIds)} onContextMenu={event => { event.preventDefault();if(!mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY) }} onClick={()=>{if(suppressDragClickRef.current===`project:${project.id}`){suppressDragClickRef.current=null;return}selectProject(project.id)}}>
         {hasSessions?<button class="project-chevron project-collapse-toggle" aria-expanded={!collapsed} aria-label={`${collapsed?'Expand':'Collapse'} ${project.name}`} title={collapsed?'Expand project':'Collapse project'} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleProjectCollapsed(project.id)}}>{collapsed?'▸':'▾'}</button>:<span class="project-chevron project-collapse-spacer" aria-hidden="true"/>}<strong class="project-name-cell"><span class="project-name-text">{project.name}</span>{collapsed&&liveCount>0&&<span class="project-collapsed-badge" title={`${liveCount} active session${liveCount===1?'':'s'}`}>{liveCount}</span>}</strong><button data-menu-toggle class="project-row-menu" title={`Project actions for ${project.name}`} aria-label={`Project actions for ${project.name}`} aria-haspopup="menu" aria-expanded={projectMenu?.project.id===project.id} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();if(projectMenu?.project.id===project.id){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(project,rect.left,rect.bottom+4)}}>⋮</button><button data-tutorial="project-run" class="project-row-run" title={`Run in ${project.name}`} aria-label={`Run in ${project.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();openRunMenu(project,event.currentTarget)}}>▶</button>
       </div>
       {!collapsed&&<div class="session-list">
