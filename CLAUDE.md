@@ -127,3 +127,13 @@ live_telemetry and not live_quota"`, `uv run ruff check src/swe_mux tests packag
 `uv run mypy`. Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
+
+The pytest run above includes the real-ConPTY integration tests (`-m conpty`,
+Windows-only, `tests/test_conpty_integration.py`) and the harness-adapter coverage
+matrix (`tests/test_harness_adapter_matrix.py`, which fails when a harness is added to
+the registry with no adapter/spawn coverage) — the `not live_*` filter does not deselect
+them. `.github/workflows/ci.yml` mirrors this gate on `windows-latest` and adds the
+production frontend build and the focused `workspace-smoke` Playwright renderer suite
+(`npm --prefix frontend exec playwright test -- --config playwright.renderer.config.ts
+workspace-smoke`); the broader renderer suite has pre-existing voice-UI rot and is not
+gated yet (see ROADMAP Phase 7 friction notes).

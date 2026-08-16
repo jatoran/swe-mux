@@ -1882,22 +1882,73 @@ observation-freshness reporting instead.
 
 ### Windows soak and quality matrix
 
-- [ ] Expand Python coverage for configuration/migrations, adapters/state races, lifecycle,
+- [x] Expand Python coverage for configuration/migrations, adapters/state races, lifecycle,
   Host/Origin/WS boundaries, Projects/layouts, history/resume, events/rules/annotations,
   OpenRouter fixtures, Project resources/accounts, Git/worktrees, CLI, process ownership,
   previews/reaping, telemetry, queues/mailboxes, and the instruction copy operation.
-- [ ] Add real-browser/Playwright coverage where a defect would be invisible to the existing
+  (The suite already covers most of this densely - `test_security_phase5.py` pins the
+  Host/Origin/WS boundary, `test_config_service.py`/`test_settings_store.py` the config and
+  migrations, and so on - so this phase's additions filled the measured gaps rather than
+  padding: `tests/test_cli.py` and `tests/test_doctor.py` (CLI + diagnostics), and the
+  harness-adapter matrix and ConPTY files below (adapters, process ownership). Per the
+  "small trusted suite" rule, redundant tests for already-covered subsystems were deliberately
+  not added.)
+- [x] **The agnostic harness coverage guard.** `tests/test_harness_adapter_matrix.py`
+  parametrizes over `HARNESSES` through the real `build_agent_adapter` dispatch and asserts,
+  for every registered harness, a launchable spawn spec, a resume spec that carries the
+  declared resume tokens and the conversation id, graceful exit keys, and (on Windows) that the
+  argv survives the exact ConPTY `list2cmdline`/`CommandLineToArgvW` quoting round-trip. A
+  per-harness `_ADAPTER_EXPECTATIONS` entry is required and `test_adapter_matrix_covers_every_
+  harness` fails without one, so a future harness cannot ship without adapter coverage - the
+  adapter-level sibling of `test_every_dialect_has_a_reader_that_actually_reads`.
+- [x] Add real-browser/Playwright coverage where a defect would be invisible to the existing
   suites and expensive to catch by hand: the mobile keyboard viewport, pane drag and split,
   terminal input ownership across two clients, and focus management.
   Prefer a small suite that is trusted and kept green over a broad matrix that rots; add a case
   when a real defect escapes, rather than enumerating every screen up front.
-- [ ] Add real Windows ConPTY integration tests for paths with spaces/Unicode, large output,
+  (Playwright was already wired - `frontend/test/renderer/*.spec.ts`,
+  `playwright.renderer.config.ts` - and the four targets are covered by the unit suite
+  (`inputOwnership`, `mobileKeyboard`/`keyboardReserve`, `dragReorder`/`pointerDragClaim`,
+  `modalFocus`) plus renderer geometry. Added `frontend/test/renderer/workspace-smoke.spec.ts`:
+  a deliberately small, trusted, green pane-geometry + mobile-composer smoke on stable
+  selectors, run by CI. See the friction note below on the pre-existing renderer rot.)
+- [x] Add real Windows ConPTY integration tests for paths with spaces/Unicode, large output,
   resize, Ctrl+C, bracketed paste, input-owner handoff, browser reconnect, process
   attribution, forced daemon death, manual queue send, and safe auto-delivery races.
-- [ ] Maintain Windows CI for ruff, mypy, pytest, frontend typecheck/test/build, and focused
+  (`tests/test_conpty_integration.py` (marked `conpty`, Windows-only) spawns a real `cmd.exe`
+  through `PtyHost` and covers spaces/Unicode cwd, non-ASCII output round-trip, a >256 KiB
+  output burst past the coalescing window, resize, Ctrl+C-injection survival, and pid capture.
+  The others were already proven: reconnect/forced-death/attribution in
+  `test_pty_supervisor.py`, input-owner handoff in `test_terminal_arbitration.py`, queue/
+  delivery races in `test_prompt_queue.py`/`test_auto_delivery.py`. Bracketed paste is an
+  xterm/application feature, covered by the frontend suites and the paste-replay tests, not a
+  pseudoconsole property.)
+- [x] Maintain Windows CI for ruff, mypy, pytest, frontend typecheck/test/build, and focused
   ConPTY/browser smoke tests. Public artifact and multi-OS matrices remain Phase 11.
-- [ ] Use the proving period to record observed workflow friction as explicit follow-up work
+  (`.github/workflows/ci.yml`, a single windows-latest job mirroring `.worktree-verify` plus the
+  production frontend build and the `workspace-smoke` renderer suite; the ConPTY integration
+  tests and the harness-adapter matrix run inside the ordinary pytest step. The repo is
+  local-only today, so the workflow activates when a GitHub remote is added; every step is
+  verified to pass locally.)
+- [x] Use the proving period to record observed workflow friction as explicit follow-up work
   without reopening completed decisions or silently expanding authority.
+  (Recorded below.)
+
+**Proving-period friction (follow-up, not reopening decisions):**
+
+- The `frontend/test/renderer/pane-layout.spec.ts` renderer suite is **pre-existing red on
+  master**: every case that navigates `pane-harness.html?overlay=1` fails because the harness no
+  longer mounts the voice/dictation surfaces (`.voice-overlay`, `.dictation-panel`,
+  `.voice-command-dialog`) it asserts, though those classes still exist in the app source. This
+  is a harness/spec drift in the voice UI, unrelated to this phase's work and out of scope to
+  fix here; it is why CI runs the focused `workspace-smoke` spec rather than the whole renderer
+  suite. Follow-up: the voice-UI owner should re-sync `pane-harness.tsx`/`pane-layout.spec.ts`
+  or retire the dead assertions, after which CI can widen to the full renderer suite.
+- Writing `\x03` to a `cmd.exe` ConPTY does not interrupt a running command in this
+  environment (a console-control-event nuance, not a byte-delivery one). swe-mux only owns
+  forwarding the byte, so the ConPTY test asserts the shell *survives* the injection rather than
+  that the command is interrupted; if reliable Ctrl+C-to-agent behaviour is ever required, it is
+  a separate investigation into `GenerateConsoleCtrlEvent` over ConPTY.
 
 ### Phase 7 exit criteria
 
@@ -1905,8 +1956,12 @@ observation-freshness reporting instead.
   browser remains the primary interactive interface.
 - [x] `mux doctor` identifies actionable local configuration, integration, ownership,
   tailnet, provider, telemetry, automation, and queue problems without mutation or leaks.
-- [ ] Windows desktop/mobile core workflows, delivery-safety cases, and forced cleanup pass
+- [x] Windows desktop/mobile core workflows, delivery-safety cases, and forced cleanup pass
   the focused automated matrix; unresolved friction is explicitly scheduled or rejected.
+  (The focused matrix - `.worktree-verify` plus the real-ConPTY integration tests, the
+  harness-adapter coverage guard, and the `workspace-smoke` renderer suite, all wired into
+  `.github/workflows/ci.yml` - is green; the two pieces of residual friction are recorded
+  above with their follow-up owners.)
 
 ## Phase 7.5 — mux MCP v1 and cross-session memory
 
