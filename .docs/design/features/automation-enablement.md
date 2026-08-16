@@ -22,7 +22,9 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
 - **Consumer**: a feature assembled from substrate (`provenance_graph`,
   `declared_vs_verified`, `loop_detection`, `doc_debt`, `dead_end_memory`, `prior_resolutions`,
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
-  `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`).
+  `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`,
+  `phase_transitions`, `timeline_handoff`, `catch_me_up`, `live_blockers`,
+  `semantic_history_search`).
   `observation_inbox` is a persisted compatibility id whose current label and surface are
   spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
 - **Memory-read opt-ins (Phase 7.5)**: each cross-session memory MCP read is gated by the
@@ -39,9 +41,15 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
   The same automation gates the Project's `spawn_grant`, which does the identical draft/granted
   split for agent-initiated `mux.requestSpawn` into that Project.
-- **Consumer that spends**: `model_narration` is the only consumer that costs model calls.
-  It depends on `attention_ranking`, so with ranking off there is nothing to narrate and no
-  path to a call (`attention-ranking.md`).
+- **Consumer that spends**: `model_narration` and `continuous_title` are the consumers that cost
+  model calls. `model_narration` depends on `attention_ranking`, so with ranking off there is
+  nothing to narrate and no path to a call (`attention-ranking.md`). `continuous_title` (Phase 7.7
+  adaptive titling) depends on `scan_timeline` and fires one cheap-model synthesis only on a genuine
+  scope pivot, off by default (`automation.md`, `scan-timeline.md`).
+- **Phase 7.7 scan-timeline consumers**: `phase_transitions` (a durable annotation on a work_phase
+  pivot or a flat-novelty stall, feeding attention), `timeline_handoff`, `catch_me_up`,
+  `live_blockers`, and `semantic_history_search` each `requires ("scan_timeline",)` and is
+  model-free; they are cheap derivations over the scan spine (`scan-timeline.md`).
 - **Enablement DAG**: `requires` edges. Import-time validation rejects cycles, dangling
   deps, and substrate depending on a consumer.
 - **Resolution**: a requested opt-in set → `enabled` (deps satisfied) + `blocked`

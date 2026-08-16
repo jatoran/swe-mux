@@ -46,7 +46,7 @@ and the declared minimum observation capability.
 - Routing may fall back between providers for the exact requested model when the provider
   supports the required schema parameters.
 - Settings provides write-only set/replace/test/clear key controls, exact cheap/standard model IDs, explicit model refresh, global/per-rule token and dollar budgets, hourly caps, concurrency, input/output limits, retention, and advanced rule configuration.
-- The Automation dashboard is the single enablement surface for the automation engine, Scan timeline, built-in titler and summarizer, the shared attention-observer group, and custom rules.
+- The Automation dashboard is the single enablement surface for the automation engine, Scan timeline, the built-in titler, the shared attention-observer group, and custom rules. The turn summarizer was retired in Phase 7.7; the scan timeline is the single behavioral-summary producer.
 - Cheap and standard model controls are searchable comboboxes whose result popovers have a
   bounded scroll height on desktop and mobile.
 - Windows persistent keys use current-user DPAPI in `automation.secrets.json`;
@@ -95,7 +95,7 @@ and the declared minimum observation capability.
 - Configure is the complete effective inventory: global controls, built-in system observers, and canonical `rules.toml` rules, with an at-a-glance status strip for automation state, observer counts, and daily spend.
   Disabled controls and built-ins remain visible.
 - Each built-in row exposes trigger, bounded input slice, model tier, result destination, and
-  owning config setting. Titler and summarizer toggle independently; stall, approval, and
+  owning config setting. The titler toggles on `observer_titler_enabled`; stall, approval, and
   context observers share the `phase7_observers_enabled` attention setting.
 - `Run notes` is the user-facing label for persisted annotations. `Attention` contains
   notification records that may require user action.
@@ -115,9 +115,18 @@ and the declared minimum observation capability.
 
 ## Built-ins and safety
 
-Built-ins are an explicit-name-preserving session titler, one-line turn summarizer, stalled-run
-triage, approval-request triage, and context-handoff suggestion. Duplicate hook/transcript
-completion evidence is coalesced before completion-triggered calls.
+Built-ins are an explicit-name-preserving session titler, stalled-run triage, approval-request
+triage, and context-handoff suggestion. Duplicate hook/transcript completion evidence is coalesced
+before completion-triggered calls.
+
+The one-line turn summarizer (`builtin.turn-summarizer`, `observer_summarizer_enabled`) was retired
+in Phase 7.7. The scan timeline already carries every completed turn's `work_phase`, `intent`,
+`summary`, `blockers`, and targets plus a deterministic novelty score, so it is the single
+behavioral-summary producer now. Its former consumers - the stalled-triage `summary_chain` input,
+the run-notes view, the away report, the handoff export, and the second-opinion prompt - read the
+scan spine instead, and the `observer_summarizer_enabled` config field is gone (a config predating
+its removal still loads, because `load_config` copies only known fields). Historical `turn-summary`
+run notes stay readable; they are simply no longer produced.
 
 The scan timeline shares the OpenRouter transport, observer-call audit, and spend ledger but is
 not a user-authored rule.
@@ -246,6 +255,29 @@ narrow enough that a longer-but-equally-accurate title only buys an ellipsis.
 The bounded provisional pass is deliberately not a continuous “track the current work” titler.
 After a concrete title settles, later turns do not move it automatically. This keeps the title a
 stable navigation handle while fixing the specific setup-command failure.
+
+**Adaptive titling (Phase 7.7, opt-in and off by default)** builds on that floor rather than
+replacing it. When a Project opts into the `continuous_title` automation and the current run's scan
+timeline is enabled, the title may *broaden* on a genuine scope pivot - a novelty spike coinciding
+with a `work_phase`/`target` transition or a new `user_ask`, with debounce and hysteresis so it
+never rewrites twice in quick succession and routine progress never moves it. The synthesis is one
+cheap-model call written to under-do it: it is handed the current title and the recent scan records
+and told to keep the current title unless the subject materially changed, so "no change" is the
+common, cheap outcome and writes nothing. It is `auto_named`-only (an explicit rename still wins and
+survives a rollover), `agent_run_id`-scoped, budget-guarded under `builtin:adaptive-title`, and
+runs off a freshly saved scan record via `BehavioralConsumerService` (`behavioral_consumers.py`) -
+never in the scan path's budget or latency, and a fault in it never breaks scanning. It shares one
+pivot definition (`evaluate_pivot`) with the phase-transition signals below, so the two can never
+disagree about what a pivot is. Its re-title count is surfaced in the scan snapshot's
+`adaptive_title` field; a stable-subject run reads zero. With the consumer off (or the scan timeline
+off), titling is exactly the one-shot behaviour above.
+
+**Phase-transition signals (Phase 7.7, `phase_transitions`, off by default)** ride the same scan
+record and the same pivot gate. On a genuine `work_phase` pivot they write a non-blocking
+`phase-pivot` annotation ("session changed direction"); on a prolonged flat-novelty stall within one
+phase they write a cheap-blocking `phase-stall` annotation ("stuck in debug for ~40 min"). Both feed
+the attention pipeline through the ordinary annotation-ranking path (`attention-ranking.md`),
+expressing states deterministic status detection cannot.
 Provider failure, invalid output, cancellation, queue pressure, or budget failure cannot block
 or change the agent/PTY lifecycle. Canonical observers have no PTY write, approval,
 worker/spawn, script, arbitrary HTTP, project-write, or relay path.

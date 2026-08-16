@@ -28,7 +28,6 @@ const DASHBOARD = {
     built_in_rules: [
       builtin('builtin.session-titler-initial', 'Session titler', 'observer_titler_enabled', 'Session titler', true, 'Names a pane once, from the request that started the run.'),
       builtin('builtin.session-titler', 'Session titler (no prompt)', 'observer_titler_enabled', 'Session titler', true, 'Fallback for runs with no captured request, such as Codex.'),
-      builtin('builtin.turn-summarizer', 'Turn summarizer', 'observer_summarizer_enabled', 'Turn summarizer', false, 'Records a one-line factual summary after each completed turn.'),
       builtin('builtin.stalled-triage', 'Stalled run triage', 'phase7_observers_enabled', 'Attention observers', false, 'Explains whether a detected stall appears to need user attention.'),
     ],
     queue: { size: 0, capacity: 256, dropped: 0, loop_rejections: 0 },

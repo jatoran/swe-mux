@@ -23,12 +23,17 @@ Findings are classified onto an incident class before ranking:
 
 | Incident class | Fed by | Cost to resolve |
 |---|---|---|
-| `stuck` | `loop-detected`, `stalled`, `runaway` | expensive-blocking |
+| `stuck` | `loop-detected`, `stalled`, `runaway`, `phase-stall` | expensive-blocking (`phase-stall` cheap-blocking) |
 | `unverified` | `declared-vs-verified`, `claim_unverified` | expensive-blocking |
 | `context` | `context_pressure` | expensive-blocking |
 | `blocked_on_human` | `unattended_attention` | cheap-blocking |
 | `environment` | `port_collision` | cheap-blocking |
-| `docs`, `provenance`, `knowledge` | `doc-debt`, `provenance`, `prior-resolution` | non-blocking |
+| `docs`, `provenance`, `knowledge`, `phase` | `doc-debt`, `provenance`, `prior-resolution`, `phase-pivot` | non-blocking |
+
+`phase-stall` and `phase-pivot` are the Phase 7.7 phase-transition signals (`automation.md`,
+`scan-timeline.md`): a semantic flat-novelty stall inside one work phase, and a genuine work_phase
+pivot. `phase-stall` is cheap-blocking (it complements the deterministic `stalled` detector without
+spending an interrupt on its own); `phase-pivot` is informational and never interrupts.
 
 A kind absent from the table is unclassified and routes to the digest.
 A detector added later must never be able to interrupt by default.

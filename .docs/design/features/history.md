@@ -134,6 +134,12 @@
   The reader keeps conversational prose as its default projection.
   Both transcript views can additionally disclose native tool names and input arguments behind a default-off toggle.
   Tool results, operational telemetry, and extra transcript persistence are excluded from that disclosure.
+- **Phase 7.7 scan-timeline surfaces.** The history transcript payload carries the run's
+  `scan_records` alongside its annotations, so the Run-notes view renders the behavioral spine; the
+  handoff export (`GET /history/{id}/handoff`) is regenerated phase-structured from that spine when
+  the run's Project opts into `timeline_handoff`, falling back to annotation summaries otherwise; and
+  the second-opinion prompt sources its prior-run summaries from the spine. The turn summarizer that
+  used to write those summaries is retired (`automation.md`, `scan-timeline.md`).
 - Index deletion never deletes or edits the native transcript.
 - Removing a Project registration never deletes its History rows.
   The tombstoned Project row retains the stable name and canonical root used by History grouping, and the History UI marks that group as removed.

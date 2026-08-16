@@ -681,7 +681,11 @@ class Config:
     openrouter_standard_model: str = ""
     openrouter_request_timeout_seconds: float = 30.0
     observer_titler_enabled: bool = False
-    observer_summarizer_enabled: bool = False
+    # Phase 7.7 retired the turn summarizer; the scan timeline is the single
+    # behavioral-summary producer. A config predating the removal still carries
+    # `observer_summarizer_enabled`; `load_config` copies only known dataclass
+    # fields, so the stale key is dropped on load and on the next write rather
+    # than erroring.
     phase7_observers_enabled: bool = False
     tts_enabled: bool = False
     tts_default_mode: str = "off"

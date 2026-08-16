@@ -1519,15 +1519,28 @@ async def test_phase7_observers_are_bounded_on_both_backend_fixtures(
     session = SimpleNamespace(record=item, transcript_path=transcript)
     provider = Phase7FixtureProvider()
     store = AutomationStore(tmp_path / "mux.db")
-    await store.create_annotation(
-        agent_run_id=item.agent_run_id or "run-1",
+    # Phase 7.7: the stalled-triage `summary_chain` input reads the scan spine
+    # (the single behavioral-summary producer), not the retired turn-summary note.
+    await store.save_scan_record(
         session_id=item.id,
-        tag="turn-summary",
-        content="The agent has repeated the same failed parser repair.",
-        source_event_seq=1,
-        rule_id="builtin.turn-summarizer",
-        rule_revision="r1",
-        provenance="fixture",
+        agent_run_id=item.agent_run_id or "run-1",
+        project_id=item.project_id or "default",
+        t0=1.0,
+        t1=2.0,
+        trigger="turn_ended",
+        record={
+            "summary": "The agent has repeated the same failed parser repair.",
+            "intent": "repair the parser",
+            "work_phase": "debug",
+            "user_ask": "",
+        },
+        input_hash="scan-hash-1",
+        requested_model="vendor/cheap",
+        resolved_model="vendor/cheap",
+        generation_id=None,
+        input_tokens=0,
+        output_tokens=0,
+        cost_usd=0.0,
     )
     engine = AutomationEngine(
         tmp_path / "rules.toml",
@@ -1637,7 +1650,6 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
         Config(
             data_dir=tmp_path,
             observer_titler_enabled=True,
-            observer_summarizer_enabled=False,
             phase7_observers_enabled=False,
         ),
         FakeProvider(),  # type: ignore[arg-type]
@@ -1645,16 +1657,16 @@ def test_status_lists_enabled_and_disabled_builtin_observers(tmp_path: Path) -> 
 
     builtins = {item["id"]: item for item in engine.status()["built_in_rules"]}
 
+    # Phase 7.7 retired builtin.turn-summarizer; the scan timeline is the single
+    # behavioral-summary producer.
     assert set(builtins) == {
         "builtin.session-titler-initial",
         "builtin.session-titler",
-        "builtin.turn-summarizer",
         "builtin.stalled-triage",
         "builtin.approval_needed-triage",
         "builtin.context-handoff",
     }
     assert builtins["builtin.session-titler"]["enabled"] is True
-    assert builtins["builtin.turn-summarizer"]["enabled"] is False
     assert builtins["builtin.stalled-triage"]["setting_key"] == "phase7_observers_enabled"
     assert builtins["builtin.context-handoff"]["model"] == "Standard model"
     engine.store.close()

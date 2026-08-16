@@ -55,12 +55,15 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # its own consumer id rather than a read over another automation's output. It
     # needs Tier 0 as the base fact record the experience corpus is derived from.
     Automation("prior_resolutions", CONSUMER, "Prior resolutions", ("tier0",)),
+    # Phase 7.7: adaptive session title. It broadens an auto-named run's title
+    # only on a genuine scope pivot detected over that run's scan records, so it
+    # reads the scan timeline. Off by default and independently toggleable; with
+    # it off, titling stays the one-shot behaviour.
     Automation(
         "continuous_title",
         CONSUMER,
-        "Continuous session title",
+        "Adaptive session title",
         ("scan_timeline",),
-        implemented=False,
     ),
     Automation(
         "cross_session_interlocks",
@@ -73,6 +76,31 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "absence_report",
         CONSUMER,
         "Absence report / digest",
+        ("scan_timeline",),
+    ),
+    # Phase 7.7 near-term scan-timeline consumers. Each is a cheap derivation over
+    # the per-record behavioral spine, independently toggleable, and reads the
+    # scan timeline it is assembled from.
+    #
+    # Phase-transition signals emit an event on a genuine work_phase pivot or a
+    # prolonged flat-novelty stall, feeding the attention channels. It shares the
+    # adaptive titler's one pivot definition, so the two never disagree.
+    Automation("phase_transitions", CONSUMER, "Phase-transition signals", ("scan_timeline",)),
+    # Timeline-based handoff regenerates the handoff export from a run's scan
+    # spine rather than from raw annotations, so it is phase-structured.
+    Automation("timeline_handoff", CONSUMER, "Timeline-based handoff", ("scan_timeline",)),
+    # Catch-me-up is an on-demand per-session / per-Project rollup of the scan
+    # spine: phases gone through, claims, and what is blocking.
+    Automation("catch_me_up", CONSUMER, "Catch-me-up digest", ("scan_timeline",)),
+    # Live blockers aggregates the `blockers` field across active sessions into a
+    # fleet glance without opening any of them.
+    Automation("live_blockers", CONSUMER, "Live blockers view", ("scan_timeline",)),
+    # Semantic history search resolves a query against distilled scan
+    # summary/intent/target records rather than a raw transcript grep.
+    Automation(
+        "semantic_history_search",
+        CONSUMER,
+        "Semantic history search",
         ("scan_timeline",),
     ),
     # "← everything" in the design: ranking has nothing to rank without the

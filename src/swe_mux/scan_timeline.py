@@ -19,6 +19,7 @@ from .automation import (
     tool_input_digest,
 )
 from .background_tasks import background
+from .behavioral_consumers import ADAPTIVE_TITLE_CHECKPOINT_PREFIX
 from .event_bus import EventBus
 from .models import MuxEvent
 from .openrouter import OpenRouterError
@@ -153,6 +154,10 @@ class ScanContext:
     agent_run_id: str
     dead_end_memory_enabled: bool = False
     auto_enable: bool = False
+    # Phase 7.7 consumers that ride a freshly saved scan record. Both are
+    # per-Project opt-ins resolved from the same enablement DAG as the timeline.
+    continuous_title_enabled: bool = False
+    phase_transitions_enabled: bool = False
 
 
 def _lifecycle(record: Any) -> str:
@@ -316,6 +321,7 @@ class ScanTimelineService:
         project_contexts: Any,
         resolve_context: Callable[[str], Awaitable[ScanContext | None]],
         history: Any | None = None,
+        on_record_saved: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self.store = store
         self.tier0 = tier0
@@ -326,6 +332,11 @@ class ScanTimelineService:
         self.project_contexts = project_contexts
         self.resolve_context = resolve_context
         self.history = history
+        # Phase 7.7: called with the live session, scan context, the freshly
+        # saved record, and the run's prior records so the behavioral consumers
+        # (adaptive title, phase-transition signals) can act on it. A fault here
+        # never breaks scanning.
+        self.on_record_saved = on_record_saved
         self.slices = TranscriptSliceService()
         self._queue: asyncio.Queue[MuxEvent] | None = None
         self._event_task: asyncio.Task[None] | None = None
@@ -569,6 +580,14 @@ class ScanTimelineService:
                 else None
             ),
             "last_scan_at": (run or {}).get("last_scan_at"),
+            # Phase 7.7: the adaptive-titler's own measurement. A stable-subject
+            # run must read zero re-titles here; a rising count on a run whose
+            # subject never changed is a gate to tune, not a vibe.
+            "adaptive_title": await self.store.checkpoint(
+                f"{ADAPTIVE_TITLE_CHECKPOINT_PREFIX}{run_id}"
+            )
+            if run_id
+            else None,
             "metrics": await self.store.scan_metrics(),
             "records": await self.store.scan_records(session_id=session_id),
             "boundaries": await self.store.scan_boundaries(session_id),
@@ -1373,6 +1392,21 @@ class ScanTimelineService:
                 completion.resolved_model or model,
                 self.last_repair,
             )
+        # Phase 7.7 behavioral consumers ride the live scan record only. A
+        # full-session backfill replays historical windows out of the run's live
+        # order, so titling or signalling from it would be wrong; skip it there.
+        if self.on_record_saved is not None and transcript_override is None:
+            try:
+                await self.on_record_saved(
+                    session=session,
+                    context=context,
+                    record=saved,
+                    prior_records=prior_records,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a consumer fault never breaks scanning
+                self._fault(exc)
         return cast(dict[str, Any], saved)
 
     async def _complete_with_retry(
