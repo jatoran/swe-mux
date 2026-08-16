@@ -55,6 +55,7 @@ markers = [
   "live_subagent: extended live canary that asks the provider to spawn a subagent",
   "live_telemetry: authenticated provider CLI telemetry-to-store conformance canary",
   "live_quota: non-mutating authenticated provider quota schema canary",
+  "conpty: real Windows ConPTY integration test; spawns a live shell (Windows-only)",
 ]
 
 [tool.ruff]

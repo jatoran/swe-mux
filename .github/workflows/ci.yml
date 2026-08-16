@@ -1,0 +1,76 @@
+# Windows CI gate for swe-mux.
+#
+# swe-mux is a Windows-first, tailnet-only app; its runtime contracts (ConPTY,
+# Job Objects, the PTY supervisor) only mean anything on Windows, so the matrix is
+# a single windows-latest runner rather than a broad multi-OS grid (public
+# artifacts and a multi-OS matrix are Phase 11). This mirrors the local
+# `.worktree-verify` gate and adds the two things that gate does not run: the
+# production frontend build, and a focused browser smoke.
+#
+# The suite is the canonical verification: ruff, mypy, pytest (live-provider
+# canaries excluded - they need an authenticated CLI and quota), the frontend
+# typecheck and unit suite, the production build, and a small trusted Playwright
+# renderer smoke. The real-ConPTY integration tests (`-m conpty`) and the
+# harness-adapter coverage matrix run inside the ordinary pytest step on the
+# Windows runner.
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync backend
+        run: uv sync
+
+      - name: ruff
+        run: uv run ruff check src/swe_mux tests packaging
+
+      - name: mypy
+        run: uv run mypy
+
+      - name: pytest (incl. ConPTY integration + harness adapter matrix)
+        run: >-
+          uv run pytest tests -q
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend
+        run: npm --prefix frontend ci
+
+      - name: Frontend typecheck
+        run: npm --prefix frontend exec tsc -- --noEmit
+
+      - name: Frontend unit tests
+        run: npm --prefix frontend test
+
+      - name: Frontend production build
+        run: npm --prefix frontend run build
+
+      - name: Install Playwright Chromium
+        run: npm --prefix frontend exec playwright install chromium
+
+      - name: Browser smoke (focused renderer suite)
+        run: >-
+          npm --prefix frontend exec playwright test --
+          --config playwright.renderer.config.ts workspace-smoke
