@@ -166,6 +166,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                   -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [open, needs 5.5]
                                     -> Phase 7.8  Git provenance re-attribution: committer + contributors [open]
                                       -> Phase 7.9  Code-structure graph: blast radius + per-session change map [open, needs 7.8]
+                                      -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [open, ships before 7.9]
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [open]
@@ -2318,7 +2319,7 @@ It depends on Phase 7.8 because the change map colors nodes by contributor.
 
 ### Surface 2 — human passive annotations
 
-- [ ] A `turn_ended` detector emits a blast-radius annotation for an edit with large or unexamined reach, written as an annotation only, never a PTY write, feeding the Phase 6.5 attention channels which decide whether it interrupts.
+- [ ] A `turn_ended` detector emits a blast-radius annotation for an edit with large or unexamined reach, written as an annotation only, never a PTY write, feeding the Phase 6.5 attention channels which decide whether it interrupts. These annotations render in the Phase 7.10 Findings pane, which is the human surface for this signal; Phase 7.10 ships first for that reason.
 - [ ] Compute the mux-unique "callers edited but not examined" signal by intersecting an edited symbol's reverse callers with the session's own Tier 0 `file_read` facts. This flags callers whose behavior the session may have broken without opening them, a signal no standalone code-graph tool can produce because none observe the agent's reads.
 
 ### Surface 3 — the per-session change map
@@ -2340,6 +2341,59 @@ It depends on Phase 7.8 because the change map colors nodes by contributor.
 - [ ] `blast_radius` and the navigation, context, and test-gap tools are pull-only mux MCP tools, per-Project gated, token-budgeted, and return empty rather than a low-confidence guess. No signal is pushed into an agent.
 - [ ] The per-session change map renders red/yellow/blue from `session_id`-attributed facts, excludes concurrent sessions by construction, ships only bounded server-side subgraphs, renders in WebGL with worker-side layout, and does not lag on a large codebase.
 - [ ] The "callers edited but not examined" signal is produced from reverse callers intersected with the session's `file_read` facts, and static results are labeled a lower bound with blind spots named throughout.
+
+## Phase 7.10 — Findings surface: annotation filters, the doc_debt tool, and the Insight tab
+
+The deterministic consumers (Phase 3.7) already produce findings as `automation_annotations` — loop, declared-vs-verified, doc-debt, provenance — but nothing surfaces them scoped and readable to the human, and only some are reachable by an agent.
+This phase exposes those findings two ways: a filtered read for the human Findings pane, and a `doc_debt` mux MCP tool for agents.
+It depends only on shipped substrate (Phase 3.7 deterministic consumers, Phase 7.5 mux MCP), is independent of Phase 7.8 and Phase 7.9, and ships before Phase 7.9 because Phase 7.9's human-passive blast-radius annotations render in the pane this phase builds.
+
+### Backend — annotation filters
+
+- [ ] Extend the existing `GET /api/annotations` (`server.py`, `list_annotations`), do not add a parallel `/api/automation/annotations`. Add `project_id`, `session_id`, and `since` alongside the current `tag`, `agent_run_id`, and `limit`. A second near-identical endpoint would fork the read surface.
+- [ ] Extend `AutomationStore.annotations()` (`automation_store.py`) to support `since` and a session filter. `session_id` is not a column: annotations are anchored to `agent_run_id` (nullable) and `project_id`, so a session filter resolves the session's run ids and matches that set. A project-anchored finding with a null run (doc-debt, provenance) is therefore structurally absent from session scope — that is correct behavior, not a gap, and it is what the exclusion notice below exists to explain.
+- [ ] Add `tag_counts` to the response: per-tag totals within the current scope (project/session/since honored, the tag chip ignored), so "no findings" is distinguishable from "buried under provenance edges" and the chips show true in-scope counts.
+- [ ] Leave the dashboard payload's `recent_annotations` key untouched for compatibility; point the new UI at the extended endpoint.
+
+### Backend — the doc_debt mux MCP tool
+
+- [ ] Add `doc_debt` as the 21st mux MCP tool, same shape as `prior_resolutions`: Project-scoped read, a `project` argument, gated on the `doc_debt` automation, returning empty when unpermitted rather than a fake result (`design/features/mux-mcp.md`).
+- [ ] Return `{doc, changed_files}` pairs an agent can act on, re-derived from `build_doc_ownership` inverted to `doc -> changed files` over the project's changed-file facts. Do not scrape the annotation: `DocDebtFinding.content` is a human sentence and `.dirty`/`.changed` are two flat lists, not the per-doc mapping. Re-deriving from substrate matches how `provenance` and `prior_resolutions` already work.
+- [ ] State the known blind spot in the tool description: a file no doc lists in a `Key files` section produces no debt, so an empty result is not proof the docs are current.
+- [ ] Add no generic `read_annotations` table-dump tool. Every mux MCP tool stays a question, not a table.
+
+### Frontend — the Insight tab
+
+- [ ] Replace the `timeline` drawer tab with an `insight` tab holding a segmented control: Timeline and Findings. The Timeline pane is unchanged (`frontend/src/ScanTimelineTab.tsx`, `frontend/src/UtilityDrawer.tsx`).
+- [ ] Preserve or migrate the persisted tab id so saved workspaces do not lose the tab (`technical/frontend/workspace-state.md`).
+
+### Frontend — the Findings pane
+
+- [ ] Scope toggle: this session and this Project, defaulting to session.
+- [ ] Always state what the current scope excludes — project-scoped tags hidden in session scope, and the inverse — so silence reads as scope, not as absence. This is the "off vs quiet" rule and it is required, not optional, because doc-debt and provenance are invisible in session scope by construction.
+- [ ] Tag filter chips driven by `tag_counts`, with provenance off by default given its volume.
+- [ ] Rows show tag, content, timestamp, provenance (`deterministic` vs model), and the run id when run-scoped.
+- [ ] Read-only: no dismiss and no mutation, keeping the pane out of the actuation gate.
+- [ ] A footer button opens the full Automation dashboard, mirroring the Timeline pane's Project-settings button.
+
+### Docs, tests, and ship
+
+- [ ] Update `design/features/deterministic-consumers.md` (where findings surface and the two scopes), `design/features/mux-mcp.md` and `design/interfaces.md` (the new tool and the extended endpoint), and `technical/frontend/packages.md` (the Insight tab's two panes and their boundary).
+- [ ] Backend tests: the new filter predicates including the session run-set resolution, `tag_counts` scoping, and the `doc_debt` tool including the empty and unpermitted cases.
+- [ ] Frontend contract tests: the scope toggle, the exclusion notice, the dashboard link, and read-only (no mutation calls).
+- [ ] Verify on the isolated daemon (findings visible in both scopes, the `doc_debt` tool called from a live agent), then commit and redeploy.
+
+### Deferred
+
+- [ ] Dismissal / acknowledged state for a finding.
+- [ ] An undocumented-file detector for source paths absent from every `Key files` section — the mirror of doc-debt, and the completeness half of the same "off vs quiet" rule.
+
+### Phase 7.10 exit criteria
+
+- [ ] `GET /api/annotations` serves findings filtered by tag, project, session, run, and `since`, with `tag_counts` in scope, and the store resolves a session filter through its run ids without a session column.
+- [ ] The `doc_debt` mux MCP tool returns re-derived `{doc, changed_files}` pairs, is gated on the `doc_debt` automation, returns empty rather than a guess when unpermitted, and names its blind spot.
+- [ ] The Insight tab exposes Timeline and Findings without losing a saved-workspace tab, and the Findings pane is read-only, scope-toggled, and always states what the scope excludes.
+- [ ] The surface is verified on the isolated daemon in both scopes and from a live agent before redeploy.
 
 ## Phase 8 - Telegram multi-session control (descoped)
 
