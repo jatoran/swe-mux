@@ -137,6 +137,39 @@ Each record shows the count of deterministic evidence targets and keeps their pa
 The rehydration rate is a Tier 2 metric with no Tier 2 consumer yet, and the only caller hard-codes `rehydrate=1`, so it is structurally 1.0 and is no longer given a headline slot.
 There is no scan button or scan-spend control in the application topbar.
 
+## Behavioral consumers (Phase 7.7)
+
+The scan timeline is the single behavioral-summary substrate, and several consumers are cheap
+derivations over its per-record spine rather than new transcript reads.
+Each is independently toggleable through the same per-Project enablement DAG as the timeline it
+reads (`automation-enablement.md`), obeys "empty beats plausible-but-wrong", and attributes every
+derived result to the `agent_run_id` it came from.
+
+Two consumers ride a *freshly saved* live scan record.
+When a record is saved on the live path (never a full-session backfill, whose chunks replay out of
+order), the scan service calls `on_record_saved` with the session, context, new record, and the
+run's prior records.
+`BehavioralConsumerService` (`behavioral_consumers.py`) evaluates one shared pivot definition
+(`evaluate_pivot`: a novelty spike plus a `work_phase`/`target`/`user_ask` transition, with debounce
+and hysteresis) and drives **adaptive titling** (`continuous_title`) and **phase-transition signals**
+(`phase_transitions`).
+A fault in either is contained by the scan service and never breaks scanning.
+Adaptive titling's re-title count is surfaced in the snapshot's `adaptive_title` field, so a
+stable-subject run's zero re-titles is a measured number.
+Design detail for both lives in `automation.md`.
+
+Three consumers are pull-only reads over stored records:
+
+- **Timeline-based handoff** (`timeline_handoff`) regenerates `GET /api/history/{sid}/handoff`
+  phase-structured from the run's scan spine when the Project opts in, falling back to annotation
+  summaries otherwise (`history.md`).
+- **Catch-me-up digest** (`catch_me_up`) is `GET /api/sessions/{sid}/catch-me-up`: an on-demand
+  rollup of one run's phases, claims, and current blocker.
+- **Live blockers** (`live_blockers`) is `GET /api/attention/blockers`: a fleet glance aggregating
+  each active session's current `blocked_on` across opted-in Projects.
+- **Semantic history search** (`semantic_history_search`) is `GET /api/history/scan-search`:
+  a query over distilled `summary`/`intent`/`target` records scoped to one run or Project.
+
 ## Dead-end memory
 
 Dead-end memory has its own Project opt-in.
@@ -157,11 +190,19 @@ PUT  /api/sessions/{session_id}/scan-timeline/project  {enabled: boolean}
 POST /api/sessions/{session_id}/scan-timeline/scan
 POST /api/sessions/{session_id}/scan-timeline/backfill
 GET  /api/sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
+GET  /api/sessions/{session_id}/catch-me-up
+GET  /api/attention/blockers
+GET  /api/history/scan-search?q=&run_id=|project_id=
 ```
+
+The last three are the Phase 7.7 pull consumers; each returns `enabled: false` rather than a fake
+empty when its Project opt-in is off.
 
 ## Key files
 
 - `src/swe_mux/scan_timeline.py`
+- `src/swe_mux/behavioral_consumers.py` (Phase 7.7 adaptive title + phase-transition signals)
+- `src/swe_mux/scan_consumers.py` (Phase 7.7 handoff/catch-me-up/live-blockers/search derivations)
 - `src/swe_mux/automation.py` (`TranscriptSliceService.build_forward`, `tool_input_digest`)
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/server.py`

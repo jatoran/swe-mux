@@ -61,6 +61,7 @@ from .automation_registry import dependency_closure
 from .automation_registry import resolve_config as resolve_automation_config
 from .automation_store import AutomationStore
 from .background_tasks import background
+from .behavioral_consumers import BehavioralConsumerService
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
 from .composer_input import note_composer_write
@@ -218,6 +219,7 @@ from .provider_accounts import (
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
+from .scan_consumers import catch_me_up, handoff_progress, live_blocker, search_scan_records
 from .scan_timeline import SCAN_RULE_ID, ScanContext, ScanTimelineService
 from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
@@ -823,6 +825,10 @@ def create_app(
                 "/api/sessions/{sid}/scan-timeline/{record_id}",
                 session_scan_timeline_record,
             ),
+            # Phase 7.7 near-term scan-timeline consumers.
+            web.get("/api/sessions/{sid}/catch-me-up", session_catch_me_up),
+            web.get("/api/attention/blockers", fleet_live_blockers),
+            web.get("/api/history/scan-search", scan_timeline_search),
             web.get("/api/sessions/{sid}/skills", session_skills),
             web.get("/api/sessions/{sid}/agent-environment", session_agent_environment),
             web.patch("/api/sessions/{sid}", patch_session),
@@ -1235,6 +1241,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         automation_gate_cache[root] = (now, enabled)
         return enabled
 
+    # Exposed so module-level endpoints (Phase 7.7 scan-timeline consumers) can
+    # resolve a Project's opt-in closure the same way the in-loop consumers do.
+    app["automation_gate"] = _enabled_automations
+
     # Phase 7.6 session control. Every bound lives here in the daemon operation;
     # the MCP tools are thin callers. The interrupt and graceful-end operations
     # are the shared daemon ops the browser and CLI would call too, bound to this
@@ -1340,9 +1350,22 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             agent_run_id=record.agent_run_id,
             dead_end_memory_enabled="dead_end_memory" in enabled,
             auto_enable=bool(values.get("scan_timeline_auto_enable", False)),
+            continuous_title_enabled="continuous_title" in enabled,
+            phase_transitions_enabled="phase_transitions" in enabled,
         )
 
     project_contexts = ProjectContextService(resolve_session=project_context)
+    # Phase 7.7: adaptive titling + phase-transition signals ride a freshly saved
+    # scan record. It never enters the scan path's budget or latency; a fault in
+    # it is contained by the scan service.
+    behavioral_consumers = BehavioralConsumerService(
+        store=automation_store,
+        sessions=sessions,
+        config=config,
+        provider=openrouter,
+        events=events,
+    )
+    app["behavioral_consumers"] = behavioral_consumers
     scan_timeline = ScanTimelineService(
         store=automation_store,
         tier0=tier0,
@@ -1353,6 +1376,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         project_contexts=project_contexts,
         resolve_context=scan_context,
         history=history,
+        on_record_saved=behavioral_consumers.on_scan_record,
     )
     tier0.start(events, resolve_context=tier0_context)
     # Phase 3.7: model-free detectors over the facts Tier 0 just captured. Same
@@ -2929,14 +2953,27 @@ async def second_opinion(request: web.Request) -> web.Response:
     backend = str(body.get("backend") or (alternatives[0] if alternatives else ""))
     if not has_observable_transcript(backend) or backend == source["backend"]:
         raise ValueError("second opinion backend must be a different observed harness")
-    annotations = await request.app["automation_store"].annotations(
-        agent_run_id=source_id, limit=50
+    # Phase 7.7: the scan timeline is the behavioral-summary substrate, so prior
+    # run summaries come from its spine; fall back to `summary` annotations for a
+    # run with no scan records.
+    scan_records = await request.app["automation_store"].scan_records(
+        agent_run_id=source_id, limit=500
     )
     summaries = [
-        str(item["content"])
-        for item in reversed(annotations)
-        if item["tag"] in {"turn-summary", "summary"}
+        text
+        for record in scan_records
+        if (text := (str(record.get("summary") or "").strip()
+                     or str(record.get("intent") or "").strip()))
     ][-12:]
+    if not summaries:
+        annotations = await request.app["automation_store"].annotations(
+            agent_run_id=source_id, limit=50
+        )
+        summaries = [
+            str(item["content"])
+            for item in reversed(annotations)
+            if item["tag"] in {"turn-summary", "summary"}
+        ][-12:]
     worktree_context = await _review_worktree_context(str(source["cwd"]))
     prompt = (
         f"Review the work from a {source['backend']} agent run in {source['cwd']}.\n"
@@ -3029,17 +3066,43 @@ async def _review_worktree_context(cwd: str) -> str:
     return "\n\n".join(sections)[:10_000]
 
 
+def _project_root_for(app: web.Application, project_id: str, cwd: Any) -> str:
+    """Resolve a Project's checkout root from its id, falling back to the run cwd."""
+    projects = app.get("projects")
+    if project_id and projects is not None:
+        project = projects.projects.get(project_id)
+        root = getattr(project, "root", None) if project else None
+        if root:
+            return str(root)
+    return str(cwd or "")
+
+
 async def export_handoff(request: web.Request) -> web.Response:
     run_id = request.match_info["sid"]
     row = await request.app["history"].history_entry(run_id)
     if not row or not has_observable_transcript(row.get("backend")):
         raise KeyError(run_id)
     annotations = await request.app["automation_store"].annotations(agent_run_id=run_id, limit=200)
+    # Historical `turn-summary` notes stay readable (the producer is retired, not
+    # the records); the scan spine below is the primary source when available.
     summaries = [
         item
         for item in reversed(annotations)
         if item["tag"] in {"turn-summary", "summary", "handoff-suggestion"}
     ]
+    # Phase 7.7 timeline-based handoff: when the Project opts into it, the
+    # handoff is regenerated phase-structured from the run's scan spine rather
+    # than from flat annotations. Falls back to annotation summaries when the
+    # consumer is off or the run has no scan records.
+    project_root = _project_root_for(request.app, str(row.get("project_id") or ""), row.get("cwd"))
+    gate = request.app.get("automation_gate")
+    enabled = await gate(project_root) if (gate and project_root) else frozenset()
+    scan_progress: list[str] = []
+    if "timeline_handoff" in enabled:
+        scan_records = await request.app["automation_store"].scan_records(
+            agent_run_id=run_id, limit=2000
+        )
+        scan_progress = handoff_progress(scan_records)
     history_id = str(row["id"])
     native_id = str(row.get("native_id") or "").strip()
     transcript_path = str(row.get("transcript_path") or "").strip()
@@ -3076,17 +3139,20 @@ async def export_handoff(request: web.Request) -> web.Response:
         "## Progress",
         "",
     ]
-    lines.extend(f"- {item['content']}" for item in summaries)
-    if not summaries:
-        lines.append("- No observer summaries are available yet.")
-    lines.extend(
-        [
-            "",
-            "## Provenance",
-            "",
-            "Generated from read-only swe-mux annotations. Review before using it as context.",
-        ]
-    )
+    if scan_progress:
+        lines.extend(f"- {item}" for item in scan_progress)
+        provenance = (
+            "Generated phase-structured from the read-only swe-mux scan timeline for this "
+            "run. Review before using it as context."
+        )
+    else:
+        lines.extend(f"- {item['content']}" for item in summaries)
+        if not summaries:
+            lines.append("- No observer summaries are available yet.")
+        provenance = (
+            "Generated from read-only swe-mux annotations. Review before using it as context."
+        )
+    lines.extend(["", "## Provenance", "", provenance])
     return json_response({"run_id": history_id, "markdown": "\n".join(lines) + "\n"})
 
 
@@ -7821,10 +7887,22 @@ async def history_transcript(request: web.Request) -> web.Response:
     annotations = await request.app["automation_store"].annotations(
         agent_run_id=str(row["id"]), limit=200
     )
+    # Phase 7.7: the scan timeline is the single behavioral-summary producer, so
+    # the Run-notes view reads its per-record spine for this run alongside the
+    # annotations. Historical `turn-summary` notes stay in `annotations`.
+    scan_records = await request.app["automation_store"].scan_records(
+        agent_run_id=str(row["id"]), limit=500
+    )
     await _decorate_generated_titles(request.app, [row])
     _decorate_conversation_holders(request.app, [row])
     return json_response(
-        {"entry": row, "messages": messages, "annotations": annotations, "matches": matches}
+        {
+            "entry": row,
+            "messages": messages,
+            "annotations": annotations,
+            "matches": matches,
+            "scan_records": scan_records,
+        }
     )
 
 
@@ -8623,6 +8701,100 @@ async def session_scan_timeline_record(request: web.Request) -> web.Response:
             rehydrate=request.query.get("rehydrate") == "1",
         )
     )
+
+
+def _record_project_root(request: web.Request, record: Any) -> str:
+    """The checkout root for a live session record."""
+    root = getattr(record, "project_root", None) or getattr(record, "spawn_project_root", None)
+    if root:
+        return str(root)
+    return _project_root_for(request.app, str(record.project_id or ""), getattr(record, "cwd", ""))
+
+
+async def session_catch_me_up(request: web.Request) -> web.Response:
+    """An on-demand rollup of one run's scan spine: phases, claims, current blocker.
+
+    Gated on the Project opting into `catch_me_up`; returns `enabled: false` (never a
+    fake empty digest) when it is off. Attributed to the run it came from.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    record = session.record
+    run_id = str(record.agent_run_id or "")
+    root = _record_project_root(request, record)
+    enabled = await request.app["automation_gate"](root) if root else frozenset()
+    if "catch_me_up" not in enabled or not run_id:
+        return json_response(
+            {"enabled": False, "agent_run_id": run_id or None, "digest": None}
+        )
+    records = await request.app["automation_store"].scan_records(
+        agent_run_id=run_id, limit=2000
+    )
+    return json_response({"enabled": True, "digest": catch_me_up(records, run_id)})
+
+
+async def fleet_live_blockers(request: web.Request) -> web.Response:
+    """A fleet glance of sessions currently waiting on something, without opening any.
+
+    Aggregates the scan spine's `blocked_on` across active sessions whose Project
+    opted into `live_blockers`. A session whose latest record is not blocked
+    contributes nothing.
+    """
+    store = request.app["automation_store"]
+    gate = request.app["automation_gate"]
+    blockers: list[dict[str, Any]] = []
+    gate_cache: dict[str, frozenset[str]] = {}
+    for session in request.app["sessions"].sessions.values():
+        record = session.record
+        if record.state in {"exited", "crashed"}:
+            continue
+        run_id = str(record.agent_run_id or "")
+        if not run_id:
+            continue
+        root = _record_project_root(request, record)
+        if not root:
+            continue
+        if root not in gate_cache:
+            gate_cache[root] = await gate(root)
+        if "live_blockers" not in gate_cache[root]:
+            continue
+        records = await store.scan_records(agent_run_id=run_id, limit=500)
+        blocker = live_blocker(records, run_id)
+        if blocker is not None:
+            blocker["session_id"] = record.id
+            blocker["name"] = record.name
+            blocker["project_id"] = record.project_id
+            blockers.append(blocker)
+    blockers.sort(key=lambda item: float(item.get("since") or 0.0))
+    return json_response({"blockers": blockers, "generated_at": time.time()})
+
+
+async def scan_timeline_search(request: web.Request) -> web.Response:
+    """Semantic history search over distilled scan `summary`/`intent`/`target` records.
+
+    Scoped to one `run_id` or one `project_id` and gated on that Project opting into
+    `semantic_history_search`. Resolves against the behavioral spine, not a raw
+    transcript grep, and every result names the `agent_run_id` it came from.
+    """
+    query = request.query.get("q", "").strip()
+    run_id = request.query.get("run_id", "").strip()
+    project_id = request.query.get("project_id", "").strip()
+    store = request.app["automation_store"]
+    if run_id:
+        records = await store.scan_records(agent_run_id=run_id, limit=2000)
+    elif project_id:
+        records = await store.scan_records(project_id=project_id, limit=2000)
+    else:
+        raise ValueError("scan-timeline search requires a run_id or project_id scope")
+    scope_project = project_id or (str(records[0].get("project_id") or "") if records else "")
+    root = _project_root_for(request.app, scope_project, "") if scope_project else ""
+    enabled = await request.app["automation_gate"](root) if root else frozenset()
+    if "semantic_history_search" not in enabled:
+        return json_response({"enabled": False, "query": query, "results": []})
+    if not query:
+        return json_response({"enabled": True, "query": query, "results": []})
+    limit = max(1, min(int(request.query.get("limit", 50) or 50), 200))
+    results = search_scan_records(records, query, limit=limit)
+    return json_response({"enabled": True, "query": query, "results": results})
 
 
 async def session_transcript(request: web.Request) -> web.Response:

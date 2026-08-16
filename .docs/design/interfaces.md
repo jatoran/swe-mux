@@ -242,7 +242,15 @@ POST    /sessions/{session_id}/scan-timeline/scan
 POST    /sessions/{session_id}/scan-timeline/backfill
 DELETE  /sessions/{session_id}/scan-timeline/backfill
 GET     /sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
+GET     /sessions/{session_id}/catch-me-up
+GET     /attention/blockers
+GET     /history/scan-search?q=&run_id=|project_id=
 ```
+
+The last three are the Phase 7.7 scan-timeline pull consumers (`catch_me_up`, `live_blockers`,
+`semantic_history_search`). Each returns `enabled: false` rather than a fabricated empty when its
+Project opt-in is off, and every result names the `agent_run_id` it came from
+(`features/scan-timeline.md`).
 
 The old observation endpoints and `.swe-mux/observations.json` remain compatibility storage.
 The current frontend has no Observation Inbox command or mounted view.
@@ -1156,6 +1164,10 @@ It exists because a first import can be expensive on a machine with a large hist
 Handoff Markdown exposes the swe-mux history ID, provider-native session ID, and recorded native
 transcript path; transcript bytes remain in the provider-owned file and are never copied into the
 export. A missing or stale transcript pointer is reported explicitly.
+When the run's Project opts into `timeline_handoff` (Phase 7.7), the Progress section is regenerated
+phase-structured from the run's scan spine; otherwise it falls back to annotation summaries.
+The `GET /history/{id}/transcript` payload also carries the run's `scan_records` alongside its
+annotations, so the Run-notes view renders the behavioral spine (`features/scan-timeline.md`).
 History rows expose lifecycle `spawned_at`, nullable conversational `native_started_at`, nullable
 `last_message_at`, and nullable `last_message_role: user|assistant`. Start/last are chronological
 bounds of valid provider-native user/assistant timestamps, even when native records are written
@@ -1485,7 +1497,9 @@ and returns as proposed, which is the periodic forced re-judgment.
 `GET /api/attention/absence[?since=<epoch>]` is the away report. Its original keys
 (`sessions`, `annotations`, `notifications`, `since`) are unchanged; it additionally carries
 `items`, `boundaries` (each rollover rendered as an explicit boundary rather than smoothed
-over), `suppressed`, `fanout`, and `resumption_lag`.
+over), `suppressed`, `fanout`, and `resumption_lag`. Since Phase 7.7 it also carries
+`scan_records` - the behavioral spine written since the absence began, attributed by run - because
+the retired turn summarizer no longer feeds it.
 
 Ranking emits `attention_item_ranked` and `attention_breakpoint`; a shell pane whose command
 finished emits `shell_command_finished` with its exit status. Loop health and narration

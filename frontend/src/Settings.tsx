@@ -96,7 +96,7 @@ type Config = {
   attention_narration_enabled:boolean;attention_narration_model:string
   attention_narration_daily_budget_usd:number
   openrouter_standard_model:string;openrouter_request_timeout_seconds:number
-  observer_titler_enabled:boolean;observer_summarizer_enabled:boolean
+  observer_titler_enabled:boolean
   phase7_observers_enabled:boolean
   tts_enabled:boolean;tts_default_mode:'off'|'on_demand'|'auto';tts_content:'summary'|'verbatim'
   tts_engine:'edge'|'sapi';tts_edge_voice:string;tts_edge_rate:string;tts_edge_pitch:string

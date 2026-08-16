@@ -163,7 +163,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                             -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
                               -> Phase 7.5  mux MCP v1 semantic memory      [done: CP step 8]
                                 -> Phase 7.6  mux MCP session control       [done: CP step 9]
-                                  -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [open, needs 5.5]
+                                  -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [done: not yet redeployed]
                                     -> Phase 7.8  Git provenance re-attribution: committer + contributors [open]
                                       -> Phase 7.9  Code-structure graph: blast radius + per-session change map [open, needs 7.8]
                                       -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [open, ships before 7.9]
@@ -2196,6 +2196,14 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
 
 ## Phase 7.7 — Consolidate behavioral summary: retire the turn summarizer, adaptive titling, and near-term scan-timeline consumers
 
+**Status: implemented in-tree (not yet landed or redeployed).** The turn summarizer is retired and the
+scan timeline is the single behavioral-summary producer; adaptive titling (`continuous_title`) and
+phase-transition signals (`phase_transitions`) ride a freshly saved scan record through
+`behavioral_consumers.py` on one shared pivot definition; and the near-term consumers
+(`timeline_handoff`, `catch_me_up`, `live_blockers`, `semantic_history_search`) are model-free
+derivations over the scan spine in `scan_consumers.py`. Design: `design/features/automation.md`,
+`design/features/scan-timeline.md`.
+
 The scan timeline (Phase 5.5) is a run-scoped semantic index over transcript deltas and Tier 0 facts, per-Project and per-run gated, with backfill.
 The turn summarizer (`observer_summarizer_enabled`) is the older, cheaper observer: one `turn-summary` run note per completed turn, a single global bool, no per-Project or per-run gate, and no backfill.
 The scan timeline subsumes it: a scan record already carries a turn's `work_phase`, `intent`, `summary`, `blockers`, and target paths, plus a deterministic novelty score the summarizer never produced.
@@ -2205,9 +2213,9 @@ This phase depends only on shipped substrate (the Phase 5.5 scan timeline and it
 
 ### Retire the turn summarizer
 
-- [ ] Identify every consumer that reads `turn-summary` run notes — the run-notes view, the away report (`/api/attention/absence`), and any attention input — and repoint it at the scan timeline, because a scan record is not a run note and the feed would otherwise silently go empty.
-- [ ] Remove the `builtin.turn-summarizer` observer and the `observer_summarizer_enabled` config field once no consumer depends on the tag. Migrate an existing `true` value to nothing rather than leaving a dead toggle; a config predating the removal must load without error.
-- [ ] Keep the historical `turn-summary` run notes already written; they stay readable, they are just no longer produced. Do not delete durable records to retire a producer.
+- [x] Identify every consumer that reads `turn-summary` run notes — the run-notes view, the away report (`/api/attention/absence`), and any attention input — and repoint it at the scan timeline, because a scan record is not a run note and the feed would otherwise silently go empty. (Run-notes view carries `scan_records`; away report carries `scan_records`; the stalled-triage `summary_chain` input, the handoff export, and the second-opinion prompt read the scan spine.)
+- [x] Remove the `builtin.turn-summarizer` observer and the `observer_summarizer_enabled` config field once no consumer depends on the tag. Migrate an existing `true` value to nothing rather than leaving a dead toggle; a config predating the removal must load without error.
+- [x] Keep the historical `turn-summary` run notes already written; they stay readable, they are just no longer produced. Do not delete durable records to retire a producer. (Handoff/second-opinion fallbacks still read the `turn-summary` tag.)
 
 ### Adaptive titling driven by the scan timeline
 
@@ -2218,31 +2226,38 @@ This deliberately revisits `CONTROL_PLANE_ROADMAP.md` §6.11, which abandoned co
 That objection is retained here as the **binding design constraint**, not overridden: the failure it recorded was a `turn_ended` titler that renamed the pane from its most recent turn every turn, producing `OK` / `FrozenClaude` for runs whose subject never changed.
 The bet this phase makes is that a scan-timeline-driven titler, gated on real pivots and biased hard toward stability, can broaden on the rare material shift without becoming that thrashing handle — and it is user-toggleable, so a user who dislikes any movement turns it off and keeps the one-shot title.
 
-- [ ] **Stability is the default; a re-title is the exception.** The gate fires only on a genuine pivot: a `novelty` spike combined with a `work_phase`/`target` transition or a new `user_ask`, with debounce and hysteresis so a brief detour does not move the title and a title never rewrites twice in quick succession. Routine progress, tool chatter, and same-subject turns never re-title. Per-turn re-titling is explicitly forbidden.
-- [ ] **The model prompt is written to under-do it, not over-do it.** The synthesis call is given the current title and the recent scan records and instructed to *keep the current title unchanged unless the run's subject has materially changed*, to return the existing title verbatim when in doubt, to prefer broadening the existing handle over inventing a new one, and to emit a compact task label (no backend or "session" prefixes). "No change" is a first-class, common, cheap outcome — the prompt must make returning the current title the easy answer, and a no-change result writes nothing.
-- [ ] Synthesize from the accumulated same-run scan records (their `work_phase`, `intent`, `user_ask`, and `summary`), on the cheap model, through the existing `title_regenerate_requested` / `force_title` path so browser, CLI, and this observer all write titles the same way.
-- [ ] Stay `auto_named`-only: an adaptive re-title never overwrites a title the user set by hand, and an explicit manual regenerate still wins. The pin is a property of the session and survives a rollover, per §6.11.
-- [ ] Stay `agent_run_id`-scoped, inheriting Phase 5.4's run boundary: a title broadens within one conversation, and a `/clear` starts a fresh run that retitles from its own opening request rather than carrying the old one across the boundary (a rollover is the one always-material shift).
-- [ ] Gate it per-Project and per-run through the same enablement surface as the scan timeline it consumes, and make it independently toggleable and **off by default**, so enabling the scan timeline does not force moving titles on anyone; a Project or run without it simply keeps the one-shot title.
-- [ ] Measure it before trusting it: count re-titles per run and surface the rate, so "it re-titles too often" is a number to tune the gate against rather than a vibe. A titler that moves on anything but a real pivot is a defect to fix, exactly as §6.11 warned.
+- [x] **Stability is the default; a re-title is the exception.** The gate fires only on a genuine pivot: a `novelty` spike combined with a `work_phase`/`target` transition or a new `user_ask`, with debounce and hysteresis so a brief detour does not move the title and a title never rewrites twice in quick succession. Routine progress, tool chatter, and same-subject turns never re-title. Per-turn re-titling is explicitly forbidden. (`evaluate_pivot` + the titler's cooldown in `behavioral_consumers.py`.)
+- [x] **The model prompt is written to under-do it, not over-do it.** The synthesis call is given the current title and the recent scan records and instructed to *keep the current title unchanged unless the run's subject has materially changed*, to return the existing title verbatim when in doubt, to prefer broadening the existing handle over inventing a new one, and to emit a compact task label (no backend or "session" prefixes). "No change" is a first-class, common, cheap outcome — the prompt must make returning the current title the easy answer, and a no-change result writes nothing.
+- [x] Synthesize from the accumulated same-run scan records (their `work_phase`, `intent`, `user_ask`, and `summary`), on the cheap model, and write the title the same way every producer does — a new `title` annotation that becomes the run's `generated_title`. (Deviation from the sketch: the write goes through the shared `title`-annotation → `generated_title` path directly rather than re-entering the prompt-titler's `title_regenerate_requested` state machine, which is coupled to prompt input and the provisional/settled ladder; a dedicated `BehavioralConsumerService` keeps the anti-thrash discipline testable and off the scan path's budget/latency. Manual `title/regenerate` and the one-shot prompt titler are unchanged.)
+- [x] Stay `auto_named`-only: an adaptive re-title never overwrites a title the user set by hand, and an explicit manual regenerate still wins. The pin is a property of the session and survives a rollover, per §6.11.
+- [x] Stay `agent_run_id`-scoped, inheriting Phase 5.4's run boundary: a title broadens within one conversation, and a `/clear` starts a fresh run that retitles from its own opening request rather than carrying the old one across the boundary (a rollover is the one always-material shift). (Pivot state is keyed per `agent_run_id`; a rollover disables the old run's scan grant, so no adaptive record crosses the boundary.)
+- [x] Gate it per-Project and per-run through the same enablement surface as the scan timeline it consumes, and make it independently toggleable and **off by default**, so enabling the scan timeline does not force moving titles on anyone; a Project or run without it simply keeps the one-shot title. (`continuous_title` opt-in per Project; per-run inherited because the consumer only fires on a live scan record, which needs the run's scan grant.)
+- [x] Measure it before trusting it: count re-titles per run and surface the rate, so "it re-titles too often" is a number to tune the gate against rather than a vibe. A titler that moves on anything but a real pivot is a defect to fix, exactly as §6.11 warned. (Re-title count in the scan snapshot's `adaptive_title` field; the in-tree suite asserts a stable-subject run measures zero.)
 
 ### Near-term scan-timeline consumers
 
 Once the scan timeline is the single behavioral-summary substrate, these are cheap derivations over the per-record spine (`work_phase`, `intent`, `claim`, `user_ask`, `blockers`, `target_paths`, `summary`, `novelty`), not new transcript reads.
 Each is independently toggleable through the same per-Project/per-run enablement as the timeline it reads, and each obeys the shared discipline: **empty beats plausible-but-wrong, and every derived result names the `agent_run_id` it came from** so a sibling run's work is never blended into the present.
 
-- [ ] **Timeline-based handoff.** Regenerate the handoff export from a run's scan records rather than from annotations, so the handoff is phase-structured ("was in X, hit blocker Y, next step Z"). The run's scan spine is the best handoff prompt there is (`design/features/history.md` owns the export surface).
-- [ ] **Catch-me-up digest.** An on-demand per-session and per-Project rollup of the run's scan spine — what phases it went through, what it claims done, what is blocking it — the same derivation as the absence report but scoped and pulled rather than time-bounded.
-- [ ] **Live blockers view.** Aggregate the `blockers` field across active sessions into a fleet glance of "these sessions are waiting on something," without opening any of them. A blocker with no matching Tier 0 progress since is the signal.
-- [ ] **Phase-transition signals.** Emit an event on a genuine `work_phase` pivot, and on a prolonged flat-`novelty` stall within one phase, feeding the Phase 6.5 attention channels and the notification planner. This expresses "session pivoted" / "stuck in debugging for 40 min" — states today's status detection cannot. It reuses the same pivot gate as adaptive titling, so the two never disagree about what a pivot is.
-- [ ] **Semantic history search.** Search over scan `summary`/`intent`/`target` records so "find the run where I fixed the CRLF thing" resolves against distilled subjects rather than a raw transcript grep.
+- [x] **Timeline-based handoff.** Regenerate the handoff export from a run's scan records rather than from annotations, so the handoff is phase-structured ("was in X, hit blocker Y, next step Z"). The run's scan spine is the best handoff prompt there is (`design/features/history.md` owns the export surface). (`timeline_handoff` opt-in; falls back to annotation summaries when off or the run has no scan records.)
+- [x] **Catch-me-up digest.** An on-demand rollup of the run's scan spine — what phases it went through, what it claims done, what is blocking it — the same derivation as the absence report but scoped and pulled rather than time-bounded. (`GET /api/sessions/{sid}/catch-me-up`, gated `catch_me_up`. Shipped per-session; a per-Project rollup endpoint is a thin follow-up over the same `catch_me_up` derivation and is not yet added.)
+- [x] **Live blockers view.** Aggregate the `blocked_on` field across active sessions into a fleet glance of "these sessions are waiting on something," without opening any of them. (`GET /api/attention/blockers`, gated `live_blockers`. v1 signal is the latest scan record's live `blocked_on`; the "no matching Tier 0 progress since" tightening is a noted refinement, not yet wired.)
+- [x] **Phase-transition signals.** Emit a durable annotation on a genuine `work_phase` pivot (`phase-pivot`, informational) and on a prolonged flat-`novelty` stall within one phase (`phase-stall`, cheap-blocking), feeding the Phase 6.5 attention channels through the ordinary annotation-ranking path. This expresses "session pivoted" / "stuck in debugging for 40 min" — states today's status detection cannot. It reuses the same pivot gate (`evaluate_pivot`) as adaptive titling, so the two never disagree about what a pivot is.
+- [x] **Semantic history search.** Search over scan `summary`/`intent`/`target` records so "find the run where I fixed the CRLF thing" resolves against distilled subjects rather than a raw transcript grep. (`GET /api/history/scan-search`, gated `semantic_history_search`, scoped to one run or Project.)
 
 ### Phase 7.7 exit criteria
 
-- [ ] Exactly one behavioral-summary producer runs (the scan timeline); no consumer of the former `turn-summary` notes silently loses its feed, and a config predating the summarizer's removal still loads.
-- [ ] An auto-named run's title changes only on a material pivot and stays stable through routine progress, drawing only on that run's scan records, and never overwrites a human-set title. The measured re-title rate for a stable-subject run is zero.
-- [ ] Adaptive titling is off by default and independently toggleable; with it off (or the scan timeline off) titling is exactly the current one-shot behavior.
-- [ ] Each near-term consumer is independently toggleable, returns empty rather than a low-confidence guess, attributes every result to its `agent_run_id`, and never merges two runs. Adaptive titling and phase-transition signals share one pivot definition.
+- [x] Exactly one behavioral-summary producer runs (the scan timeline); no consumer of the former `turn-summary` notes silently loses its feed, and a config predating the summarizer's removal still loads.
+- [x] An auto-named run's title changes only on a material pivot and stays stable through routine progress, drawing only on that run's scan records, and never overwrites a human-set title. The measured re-title rate for a stable-subject run is zero.
+- [x] Adaptive titling is off by default and independently toggleable; with it off (or the scan timeline off) titling is exactly the current one-shot behavior.
+- [x] Each near-term consumer is independently toggleable, returns empty rather than a low-confidence guess, attributes every result to its `agent_run_id`, and never merges two runs. Adaptive titling and phase-transition signals share one pivot definition.
+
+**Live-verification note (open):** the adaptive-titler synthesis call and the phase-transition
+signals exercise the real OpenRouter scan producer, which an isolated test daemon cannot reach; the
+in-tree suite proves the pivot gate, the derivations, the endpoints (gating + attribution), the
+summarizer retirement, and the config-load tolerance deterministically. Semantic re-title behavior
+is to be confirmed live on the frozen app after landing, matching the scan-timeline verification
+stance.
 
 ## Phase 7.8 — Git provenance re-attribution: committer and contributors, not shared-head ambiguity
 

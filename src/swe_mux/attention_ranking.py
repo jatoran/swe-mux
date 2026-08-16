@@ -164,10 +164,22 @@ KIND_POLICY: dict[str, KindPolicy] = {
         0.4,
         "Two sessions are bound to one port; move one of them.",
     ),
+    # Phase 7.7: a prolonged flat-novelty stall inside one work phase. Semantic,
+    # complementary to the deterministic `stalled` detector; cheap-blocking so it
+    # surfaces without spending an interrupt slot on its own.
+    "phase-stall": KindPolicy(
+        "stuck",
+        CHEAP_BLOCKING,
+        True,
+        0.5,
+        "Check the session: it has been in one phase a long time with no new progress.",
+    ),
     # Non-blocking: a fact worth keeping, never worth an interruption.
     "doc-debt": KindPolicy("docs", NON_BLOCKING, False, 0.2, None),
     "provenance": KindPolicy("provenance", NON_BLOCKING, False, 0.1, None),
     "prior-resolution": KindPolicy("knowledge", NON_BLOCKING, False, 0.2, None),
+    # A genuine work_phase pivot: informational, never an interruption.
+    "phase-pivot": KindPolicy("phase", NON_BLOCKING, False, 0.15, None),
 }
 
 # Fleet events that carry a fault. `cross_session_dev_server` is deliberately
@@ -178,7 +190,16 @@ FLEET_EVENT_KINDS = frozenset(
 )
 INTERLOCK_FAULT_KINDS = frozenset({"port_collision"})
 ANNOTATION_TAGS = frozenset(
-    {"loop-detected", "declared-vs-verified", "doc-debt", "provenance", "prior-resolution"}
+    {
+        "loop-detected",
+        "declared-vs-verified",
+        "doc-debt",
+        "provenance",
+        "prior-resolution",
+        # Phase 7.7 phase-transition signals.
+        "phase-pivot",
+        "phase-stall",
+    }
 )
 
 TITLES: dict[str, str] = {
@@ -190,6 +211,7 @@ TITLES: dict[str, str] = {
     "docs": "Documentation owes an update",
     "provenance": "Cross-session file provenance",
     "knowledge": "A prior run hit this before",
+    "phase": "Session changed direction",
     "unclassified": "Unclassified finding",
 }
 

@@ -194,17 +194,6 @@ BUILTIN_OBSERVER_CATALOG: tuple[dict[str, str], ...] = (
         "description": "Fallback for runs with no captured request, such as Codex.",
     },
     {
-        "id": "builtin.turn-summarizer",
-        "name": "Turn summarizer",
-        "setting_key": "observer_summarizer_enabled",
-        "setting_label": "Turn summarizer",
-        "trigger": "turn_ended",
-        "input": "Last completed turn",
-        "model": "Cheap model",
-        "result": "Run note tagged turn-summary",
-        "description": "Records a one-line factual summary after each completed turn.",
-    },
-    {
         "id": "builtin.stalled-triage",
         "name": "Stalled run triage",
         "setting_key": "phase7_observers_enabled",
@@ -971,7 +960,7 @@ class AutomationEngine:
         self.config = config
         self.provider = provider
         self.rules: list[Rule] = []
-        self._builtin_rule_cache: dict[tuple[str, bool, bool, bool], list[Rule]] = {}
+        self._builtin_rule_cache: dict[tuple[str, bool, bool], list[Rule]] = {}
         self.diagnostic: str | None = None
         self.last_loaded_at: float | None = None
         self.queue: asyncio.Queue[NormalizedEvent] = asyncio.Queue(
@@ -2009,9 +1998,24 @@ class AutomationEngine:
                 )
             transcript = self.slices.from_prompt(prompt_text)
         elif slice_kind == "summary_chain":
-            summaries = await self.store.annotations(
-                agent_run_id=event.agent_run_id, tag="turn-summary", limit=24
+            # Phase 7.7: the scan timeline is the single behavioral-summary
+            # producer now, so the chain reads its per-record spine rather than
+            # the retired `turn-summary` notes. `scan_records` is oldest-first;
+            # `from_annotations` expects newest-first and reverses back to
+            # chronological, so hand it the reversed sequence.
+            records = await self.store.scan_records(
+                agent_run_id=event.agent_run_id, limit=500
             )
+            summaries = [
+                {"created_at": item.get("t1") or item.get("created_at"), "content": text}
+                for item in reversed(records)
+                if (
+                    text := (
+                        str(item.get("summary") or "").strip()
+                        or str(item.get("intent") or "").strip()
+                    )
+                )
+            ][:24]
             if not summaries:
                 raise ValueError("summary chain is unavailable")
             transcript = self.slices.from_annotations(summaries)
@@ -2342,11 +2346,10 @@ class AutomationEngine:
         # byte-identical every time. Memoise it (loop-thread only, no lock) to skip
         # re-parsing+validating+hashing on every event. A flipped flag yields a new
         # key and a fresh build; the stale entry is harmless. Tracked inputs:
-        # event.type + observer_titler / observer_summarizer / phase7 flags.
+        # event.type + observer_titler / phase7 flags.
         cache_key = (
             event.type,
             self.config.observer_titler_enabled,
-            self.config.observer_summarizer_enabled,
             self.config.phase7_observers_enabled,
         )
         cached = self._builtin_rule_cache.get(cache_key)
@@ -2438,34 +2441,6 @@ class AutomationEngine:
                                 "kind": "annotate",
                                 "tag": "title",
                                 "content": "{result.title}",
-                            },
-                        }
-                    ],
-                }
-            )
-        if event.type == "turn_ended" and self.config.observer_summarizer_enabled:
-            raw.append(
-                {
-                    "id": "builtin.turn-summarizer",
-                    "name": "Turn summarizer",
-                    "enabled": True,
-                    "shadow": False,
-                    "on": {"trigger": "turn_ended", "debounce_s": 1.0},
-                    "when": [],
-                    "do": [
-                        {
-                            "kind": "llm",
-                            "model": "cheap",
-                            "input": {"slice": "last_turn"},
-                            "prompt": (
-                                "Summarize the completed turn in one factual line. "
-                                "Return only the schema."
-                            ),
-                            "schema": "summary_v1",
-                            "on_result": {
-                                "kind": "annotate",
-                                "tag": "turn-summary",
-                                "content": "{result.summary}",
                             },
                         }
                     ],

@@ -653,10 +653,15 @@ has memory. These require seeing *all agents, all time, one machine* at once:
 
 ### 6.11 Continuous session title  ← REVISITED (now planned as ROADMAP Phase 7.7)
 
-**Revisited 2026-08-15.** Originally abandoned; now planned as `ROADMAP.md` Phase 7.7,
-but under the constraints below, which are kept as the binding guardrail rather than
-overridden. This section is retained because the *premise* it rejected is still the thing
-the new design must not repeat.
+**Revisited 2026-08-15; implemented in-tree as Phase 7.7 (not yet landed/redeployed).** Originally
+abandoned; now shipped as adaptive titling under the constraints below, which were kept as the
+binding guardrail rather than overridden. This section is retained because the *premise* it rejected
+is still the thing the design must not repeat. The one deviation from the sketch: the re-title is
+written through the shared `title`-annotation → `generated_title` path directly by a dedicated
+`BehavioralConsumerService`, not by re-entering the prompt titler's `title_regenerate_requested`
+state machine (which is coupled to prompt input); this keeps the anti-thrash discipline decoupled
+and testable, and off the scan path's budget and latency. Design: `design/features/automation.md`,
+`design/features/scan-timeline.md`.
 
 The original premise was that a title should track the work. Field behaviour showed the
 opposite requirement: a title's job is to be a *handle* — the thing a user finds a

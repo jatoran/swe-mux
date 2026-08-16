@@ -610,6 +610,26 @@ class FleetIntelligence:
             for item in await self.store.notifications(limit=500)
             if item["created_at"] >= start
         ]
+        # Phase 7.7: the scan timeline is the behavioral-summary substrate the
+        # retired turn summarizer used to feed. Surface the spine written since
+        # the absence began, attributed by run, so the away view is not left
+        # blank where per-turn summaries used to be.
+        scan_records = [
+            {
+                "id": item.get("id"),
+                "agent_run_id": item.get("agent_run_id"),
+                "session_id": item.get("session_id"),
+                "project_id": item.get("project_id"),
+                "t0": item.get("t0"),
+                "t1": item.get("t1"),
+                "work_phase": item.get("work_phase"),
+                "summary": item.get("summary"),
+                "intent": item.get("intent"),
+                "blocked_on": item.get("blocked_on"),
+            }
+            for item in await self.store.scan_records(limit=500)
+            if float(item.get("created_at") or 0.0) >= start
+        ]
         sessions = []
         for session in self.sessions.sessions.values():
             if session.record.last_activity_ts >= start:
@@ -629,6 +649,7 @@ class FleetIntelligence:
             "sessions": sessions,
             "annotations": annotations,
             "notifications": notifications,
+            "scan_records": scan_records,
         }
 
     def injection_safety(self) -> dict[str, Any]:
