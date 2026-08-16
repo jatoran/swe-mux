@@ -1026,19 +1026,12 @@ export function App() {
   // reorder rather than a hand settling on the menu. Small enough to feel immediate, past the
   // idle jitter of a finger resting on a phone.
   const DRAG_BEGIN=12
-  // Temporary diagnostics: mirror the pointer-drag lifecycle to the daemon so a real phone's
-  // gesture can be read back with `GET /api/diag/drag`. Fire-and-forget, never throws into a
-  // drag. Remove once the mobile reorder gesture is settled.
-  const dragTrace=(identity:string,phase:string,extra:Record<string,unknown>={})=>{
-    try{void fetch('/api/diag/drag',{method:'POST',headers:{'content-type':'application/json'},keepalive:true,body:JSON.stringify({t:Math.round(performance.now()),phase,identity,mobile:mobileWorkspace,...extra})}).catch(()=>{})}catch{/* diagnostics must never break a drag */}
-  }
   const beginPointerDrag=(
     event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
     onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
     activation:PointerDragActivation=POINTER_MOVE_DRAG,
   )=>{
     if(event.button!==0||!event.isPrimary)return
-    dragTrace(identity,'down',{mode:activation.mode})
     const source=event.currentTarget
     const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
     let active=false,done=false,ghost:HTMLDivElement|null=null,activationTimer:number|null=null
@@ -1115,13 +1108,11 @@ export function App() {
       document.body.classList.add('workspace-pointer-dragging');source.classList.add('dragging')
       ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
       ghost.style.transform=`translate3d(${clientX+14}px,${clientY+12}px,0)`
-      dragTrace(identity,'drag')
     }
-    const finish=(commit:boolean,cause:string)=>{
+    const finish=(commit:boolean)=>{
       if(done)return
       done=true
       const wasDragging=dragging
-      dragTrace(identity,'finish',{active,dragging:wasDragging,commit,cause})
       cleanup()
       if(!active)return
       window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
@@ -1145,7 +1136,6 @@ export function App() {
       // best effort — the real event routing is the window listeners keyed by pointerId —
       // but holding it keeps the stream off whatever lands under the finger, menu included.
       try{document.body.setPointerCapture(pointerId)}catch{/* window listeners still track the pointer */}
-      dragTrace(identity,'activate',{mode:activation.mode})
       // A `hold` opens its menu here (via onStart) and shows no ghost yet — the drag begins
       // only once the finger travels past DRAG_BEGIN, which dismisses that menu. Every other
       // mode is a drag from the first instant it activates.
@@ -1161,12 +1151,12 @@ export function App() {
           // Inside slop: still the hold settling. Past slop before the hold armed: a
           // scroll this drag never owned. Past slop once armed: the drag begins.
           if(distance<=activation.slop)return
-          if(!armed){finish(false,'unarmed-move');return}
+          if(!armed){finish(false);return}
           activate(pointer.clientX,pointer.clientY)
         }else{
           const decision=pointerDragMoveDecision(activation,distance)
           if(decision==='wait')return
-          if(decision==='cancel'){finish(false,'move-cancel');return}
+          if(decision==='cancel'){finish(false);return}
           activate(pointer.clientX,pointer.clientY)
         }
       }
@@ -1180,21 +1170,20 @@ export function App() {
       if(ghost)ghost.style.transform=`translate3d(${pointer.clientX+14}px,${pointer.clientY+12}px,0)`
       onMove(pointer)
     }
-    const up=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(true,'up')}
-    const cancelPointer=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false,'pointercancel')}
+    const up=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(true)}
+    const cancelPointer=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false)}
     // `lostpointercapture` BUBBLES, and on touch the row holds implicit capture from
     // pointerdown — so the very transfer to the body fires it at the row and it arrives
     // here one frame after activation, which read as a cancel and killed every mobile
     // hold. Only the body losing ITS capture is fatal; the row losing the capture we just
     // took from it is the transfer working.
     const lostCapture=(pointer:PointerEvent)=>{
-      if(pointer.pointerId!==pointerId)return
-      if(pointer.target!==document.body){dragTrace(identity,'capture-transfer');return}
-      finish(false,'lostcapture')
+      if(pointer.pointerId!==pointerId||pointer.target!==document.body)return
+      finish(false)
     }
-    const blurCancel=()=>finish(false,'blur')
-    const cancel=()=>finish(false,'external')
-    const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false,'escape')}}
+    const blurCancel=()=>finish(false)
+    const cancel=()=>finish(false)
+    const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
     window.addEventListener('pointermove',move,{passive:false})
     window.addEventListener('pointerup',up)
     window.addEventListener('pointercancel',cancelPointer)
