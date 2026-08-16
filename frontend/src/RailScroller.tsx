@@ -2,6 +2,7 @@ import type { ComponentChildren, JSX } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { holdSoftKeyboard, restoreSoftKeyboard, softKeyboardDismissals, softKeyboardHolder } from './mobileKeyboard'
 import { horizontalWheelDelta } from './wheelScroll'
+import { pointerDragOwnsPointer } from './pointerDragClaim'
 import {
   railFocusTarget,
   railOverflowState,
@@ -199,6 +200,10 @@ export function OverflowRail({
       const state = touchDragRef.current
       const strip = stripRef.current
       if (!state || !strip || state.pointerId !== event.pointerId || state.cancelled) return
+      // A hold-then-drag reorder (drawer tabs on mobile) shares this pointer and this same
+      // horizontal motion. The instant it claims the pointer, this pan stands down and hands
+      // the gesture over, rather than scrolling the strip out from under the drag.
+      if (pointerDragOwnsPointer()) { state.cancelled = true; return }
       const dx = event.clientX - state.startX
       const dy = event.clientY - state.startY
       if (!state.dragging) {

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  edgeAutoScrollDelta, insertionEdge, listDropTargetForPoint, MOBILE_PROJECT_HOLD_DRAG,
-  POINTER_MOVE_DRAG, pointerDragMoveDecision, reorderForHover, reorderTargetForPoint,
+  edgeAutoScrollDelta, insertionEdge, listDropTargetForPoint, MOBILE_HOLD_MOVE_DRAG,
+  MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision, reorderForHover,
+  reorderTargetForPoint,
 } from '../src/dragReorder.ts'
 
 test('movement drag activates only after its threshold', () => {
@@ -14,6 +15,16 @@ test('mobile Project hold tolerates jitter but yields to scrolling movement', ()
   assert.equal(MOBILE_PROJECT_HOLD_DRAG.delayMs, 325)
   assert.equal(pointerDragMoveDecision(MOBILE_PROJECT_HOLD_DRAG, 8), 'wait')
   assert.equal(pointerDragMoveDecision(MOBILE_PROJECT_HOLD_DRAG, 8.01), 'cancel')
+})
+
+test('mobile hold-move arms before the menu and shares the hold slop', () => {
+  // Must settle well before the 550ms long-press menu, or the menu could never win a
+  // still hold. The pure decision only reports the slop gate; the driver time-gates the
+  // actual activate, so a past-slop distance still reads as `cancel` here.
+  assert.equal(MOBILE_HOLD_MOVE_DRAG.mode, 'hold-move')
+  if (MOBILE_HOLD_MOVE_DRAG.mode === 'hold-move') assert.ok(MOBILE_HOLD_MOVE_DRAG.delayMs < 550)
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_MOVE_DRAG, 8), 'wait')
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_MOVE_DRAG, 8.01), 'cancel')
 })
 
 test('edge auto-scroll accelerates toward either edge and stops in the middle', () => {

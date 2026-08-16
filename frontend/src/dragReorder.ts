@@ -5,13 +5,23 @@ export type ReorderTarget={id:string;side:DropSide}
 export type PointerDragActivation=
   | {mode:'movement';threshold:number}
   | {mode:'hold';delayMs:number;slop:number}
+  // Hold, *then* drag: a still finger for `delayMs` arms the drag, and the first move
+  // past `slop` after that starts it. A move past `slop` before then is a scroll this
+  // gesture never owned. Unlike `hold`, it never activates on stillness alone, which is
+  // what lets a long-press context menu keep the still-hold and the drag keep the move.
+  | {mode:'hold-move';delayMs:number;slop:number}
 export type PointerDragMoveDecision='wait'|'activate'|'cancel'
 
 export const POINTER_MOVE_DRAG:PointerDragActivation={mode:'movement',threshold:5}
 export const MOBILE_PROJECT_HOLD_DRAG:PointerDragActivation={mode:'hold',delayMs:325,slop:8}
+// The mobile reorder activation for every surface that also carries a long-press menu.
+export const MOBILE_HOLD_MOVE_DRAG:PointerDragActivation={mode:'hold-move',delayMs:250,slop:8}
 
 export function pointerDragMoveDecision(activation:PointerDragActivation,distance:number):PointerDragMoveDecision{
   if(activation.mode==='movement')return distance<activation.threshold?'wait':'activate'
+  // `hold` and `hold-move` share the slop gate; `hold-move`'s time-gated `activate`
+  // transition lives in the drag driver, not this pure function, which is why a caller
+  // must not route a `hold-move` activation through here expecting an `activate`.
   return distance<=activation.slop?'wait':'cancel'
 }
 
