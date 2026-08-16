@@ -122,6 +122,13 @@ DEAD_END_MIN_CONFIDENCE = 0.4
 #: file's lineage lives in the file_read/file_write facts, so this bounds the
 #: read the way every other tool is bounded rather than walking a run's history.
 PROVENANCE_FACT_SCAN_LIMIT = 5000
+#: The Tier 0 kinds that carry a file touch. The bare `file_write`/`file_read`
+#: facts record the *intent* and carry no target; the `_result` variants carry
+#: the path and the content hash, so both sets are consulted and the target
+#: filter drops the null-target intents. These mirror `_WRITE_KINDS`/`_READ_KINDS`
+#: in `deterministic_consumers`, which `build_provenance_edges` already uses.
+PROVENANCE_WRITE_KINDS = frozenset({"file_write", "file_write_result"})
+PROVENANCE_READ_KINDS = frozenset({"file_read", "file_read_result"})
 #: The maps the enablement DAG resolves a Phase 7.5 tool against. A tool is a
 #: read over the output an already-shipped consumer produces, so it is available
 #: only where that consumer's per-Project opt-in is on (ROADMAP 7.5 exit
@@ -2748,14 +2755,16 @@ class McpService:
                 if normalize_target(fact.get("target"), root) != normalized:
                     continue
                 kind = str(fact.get("kind") or "")
-                if kind not in {"file_write", "file_read"}:
+                is_write = kind in PROVENANCE_WRITE_KINDS
+                is_read = kind in PROVENANCE_READ_KINDS
+                if not (is_write or is_read):
                     continue
                 run = str(fact.get("agent_run_id") or "")
-                if kind == "file_write":
+                if is_write:
                     writer_runs.add(run)
                 touches.append(
                     {
-                        "action": "write" if kind == "file_write" else "read",
+                        "action": "write" if is_write else "read",
                         "session_id": str(fact.get("session_id") or ""),
                         "run": self._run_attribution(run, current_run, owned),
                         "content_hash": fact.get("content_hash"),

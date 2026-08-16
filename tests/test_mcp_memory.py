@@ -240,6 +240,32 @@ async def test_provenance_returns_attributed_cross_session_edge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provenance_reads_result_kind_facts() -> None:
+    # Real capture puts the path and hash on the `_result` variants: the bare
+    # file_write/file_read facts carry the intent and a null target. The tool must
+    # read the `_result` kinds or it finds nothing on live data (caught 2026-08-16).
+    caller = _caller()
+    facts = [
+        _fact("wi", kind="file_write", target=None, session_id="s2", run="rb",
+              created_at=1.0),
+        _fact("wr", kind="file_write_result", target="calc.py", session_id="s2",
+              run="rb", content_hash="47946e285e", created_at=1.1),
+        _fact("ri", kind="file_read", target=None, session_id="s1", run="s1",
+              created_at=2.0),
+        _fact("rr", kind="file_read_result", target="calc.py", session_id="s1",
+              run="s1", content_hash="47946e285e", created_at=2.1),
+    ]
+    service = _service(caller, tier0=Tier0Stub(project_facts={"p1": facts}))
+    result = await service.provenance(caller, {"file": "calc.py"})
+    assert {t["action"] for t in result["touches"]} == {"write", "read"}
+    write = next(t for t in result["touches"] if t["action"] == "write")
+    assert write["content_hash"] == "47946e285e"
+    assert write["run"]["run_relation"] == "sibling_run"
+    # And the cross-session edge is still built from the same result facts.
+    assert len(result["cross_session_edges"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_provenance_labels_the_callers_own_earlier_run() -> None:
     # A write from the caller's own superseded run must be labelled, not blended:
     # after a /clear the agent has no memory of that run's work.
