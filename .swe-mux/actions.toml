@@ -59,6 +59,29 @@ cwd = "frontend"
 timeout_seconds = 600
 
 [[actions]]
+id = "serve-site"
+label = "Serve landing page"
+description = "Static server for site/ on 127.0.0.1:8123. Its listener registers as a Preview."
+# Deliberately loopback-only: swe-mux detects the listener, registers a Preview, and
+# proxies it to remote browsers through its own URL. Binding 0.0.0.0 would expose the
+# port and buy nothing the Preview does not already give you.
+type = "process"
+command = "uv"
+args = [
+  "run",
+  "python",
+  "-m",
+  "http.server",
+  "8123",
+  "--bind",
+  "127.0.0.1",
+  "--directory",
+  "site",
+]
+# No timeout. A server that stops on its own halfway through a review is worse than one
+# you close when you are done reading.
+
+[[actions]]
 id = "checks"
 label = "Lint and types"
 description = "Ruff and mypy together, without waiting for the test suite."
