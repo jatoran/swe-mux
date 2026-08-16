@@ -252,6 +252,7 @@ from .spawn_contract import (
 )
 from .spawn_probe import SpawnFailure, spawn_settled
 from .status_timeline import StatusTimelineStore
+from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor_client import SupervisorClient
 from .tailscale import (
@@ -798,6 +799,7 @@ def create_app(
             web.get("/api/diagnostics/notifications", get_notification_diagnostics),
             web.get("/api/diagnostics/network", get_network_usage),
             web.delete("/api/diagnostics/network", reset_network_usage),
+            web.get("/api/diagnostics/storage", get_storage_usage),
             web.get("/api/diagnostics/export", diagnostics_export),
             web.get("/api/diagnostics/doctor", get_doctor_report),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
@@ -1475,6 +1477,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         usage=usage,
         telemetry=telemetry,
         status_timeline=status_timeline,
+        storage_usage=StorageUsage(
+            config.data_dir,
+            lambda: [
+                ProjectFootprintTarget(id=project.id, label=project.name, root=project.root)
+                for project in projects.ordered_projects()
+            ],
+        ),
         tier0=tier0,
         deterministic_consumers=consumers,
         attention_ranking=attention_ranking,
@@ -5067,6 +5076,21 @@ async def reset_network_usage(request: web.Request) -> web.Response:
     )
     meter.reset()
     return json_response({"reset": True, "previous": previous})
+
+
+async def get_storage_usage(request: web.Request) -> web.Response:
+    """swe-mux's on-disk footprint: data-dir buckets plus per-Project `.swe-mux`.
+
+    Read-only measurement of the bytes swe-mux stores, never the host drive's
+    capacity. The walk is I/O-heavy (the WebView2 cache dominates), so it runs
+    off the event loop and behind a TTL cache; `?refresh=1` forces a re-measure.
+    """
+    storage: StorageUsage = request.app["storage_usage"]
+    force = request.query.get("refresh", "").lower() in {"1", "true", "yes"}
+    report = await asyncio.to_thread(storage.snapshot, force=force)
+    response = json_response(report)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # Log tails are bounded so the copyable blob stays pasteable and the read is
