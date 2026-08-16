@@ -46,6 +46,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 const migratedTabId = (value: unknown): DrawerTabId | null => {
   if (value === 'commands' || value === 'prompts') return 'actions'
+  // Phase 7.10 folded the standalone Timeline tab into the Insight tab (Timeline
+  // is now a segment of it), so a persisted `timeline` selection maps forward.
+  if (value === 'timeline') return 'insight'
   return typeof value === 'string' && DRAWER_TABS.some(tab => tab.id === value)
     ? value as DrawerTabId
     : null

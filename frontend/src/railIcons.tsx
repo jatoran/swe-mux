@@ -109,15 +109,11 @@ export const TranscriptIcon = () => <svg {...stroke}>
   <path d="M21 14.5A1.5 1.5 0 0 0 19.5 13h-9A1.5 1.5 0 0 0 9 14.5v4A1.5 1.5 0 0 0 10.5 20H17l4 3z" />
 </svg>
 
-/** A time axis with semantic checkpoints. */
-export const TimelineIcon = () => <svg {...stroke}>
-  <line x1="5" y1="3" x2="5" y2="21" />
-  <circle cx="5" cy="6" r="2" />
-  <circle cx="5" cy="13" r="2" />
-  <circle cx="5" cy="20" r="2" />
-  <line x1="9" y1="6" x2="20" y2="6" />
-  <line x1="9" y1="13" x2="17" y2="13" />
-  <line x1="9" y1="20" x2="14" y2="20" />
+/** A lightbulb: the Insight tab (scan timeline plus deterministic findings). */
+export const InsightIcon = () => <svg {...stroke}>
+  <path d="M9 18h6" />
+  <path d="M10 21h4" />
+  <path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3Z" />
 </svg>
 
 /** A hexagonal agent core with three capability ports. */
@@ -200,7 +196,7 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   actions: ActionsIcon,
   queue: QueueIcon,
   transcript: TranscriptIcon,
-  timeline: TimelineIcon,
+  insight: InsightIcon,
   agent: AgentIcon,
   files: FilesIcon,
   notes: NotesIcon,

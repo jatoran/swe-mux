@@ -7,7 +7,7 @@ import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
@@ -550,31 +550,115 @@ class AutomationStore:
             "created_at": created,
         }
 
-    async def annotations(
-        self,
+    @staticmethod
+    def _annotation_filter(
         *,
-        agent_run_id: str | None = None,
-        project_id: str | None = None,
-        tag: str | None = None,
-        limit: int = 200,
-    ) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM automation_annotations WHERE 1=1"
+        agent_run_id: str | None,
+        agent_run_ids: Sequence[str] | None,
+        project_id: str | None,
+        tag: str | None,
+        since: float | None,
+    ) -> tuple[str, list[Any]] | None:
+        """Build the shared WHERE clause the Findings reads filter on.
+
+        Returns ``None`` when the filter can match nothing by construction — an
+        empty ``agent_run_ids`` set, which is a session scope resolved to zero
+        runs. That is a genuine "no findings", distinct from an unfiltered read,
+        so both callers short-circuit to an empty result rather than emitting a
+        malformed ``IN ()``.
+
+        ``session_id`` is deliberately not a predicate here even though the
+        column exists: only the declared-vs-verified detector populates it, so a
+        session scope is resolved to the session's run ids by the caller and
+        matched through ``agent_run_ids``. A project-anchored finding with a null
+        run (doc-debt, provenance) is therefore absent from session scope by
+        construction, which is the behaviour the UI exclusion notice explains.
+        """
+        if agent_run_ids is not None and not agent_run_ids:
+            return None
+        sql = ""
         args: list[Any] = []
         if agent_run_id:
             sql += " AND agent_run_id=?"
             args.append(agent_run_id)
+        if agent_run_ids is not None:
+            placeholders = ",".join("?" for _ in agent_run_ids)
+            sql += f" AND agent_run_id IN ({placeholders})"
+            args.extend(agent_run_ids)
         if project_id:
             sql += " AND project_id=?"
             args.append(project_id)
         if tag:
             sql += " AND tag=?"
             args.append(tag)
+        if since is not None:
+            sql += " AND created_at>=?"
+            args.append(since)
+        return sql, args
+
+    async def annotations(
+        self,
+        *,
+        agent_run_id: str | None = None,
+        agent_run_ids: Sequence[str] | None = None,
+        project_id: str | None = None,
+        tag: str | None = None,
+        since: float | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        built = self._annotation_filter(
+            agent_run_id=agent_run_id,
+            agent_run_ids=agent_run_ids,
+            project_id=project_id,
+            tag=tag,
+            since=since,
+        )
+        if built is None:
+            return []
+        clause, args = built
+        sql = "SELECT * FROM automation_annotations WHERE 1=1" + clause
         sql += " ORDER BY created_at DESC LIMIT ?"
-        args.append(max(1, min(limit, 1000)))
+        args = [*args, max(1, min(limit, 1000))]
 
         def op() -> list[dict[str, Any]]:
             rows = self._db.execute(sql, args).fetchall()
             return [dict(row) for row in rows]
+
+        return await self._run(op)
+
+    async def annotation_tag_counts(
+        self,
+        *,
+        agent_run_id: str | None = None,
+        agent_run_ids: Sequence[str] | None = None,
+        project_id: str | None = None,
+        since: float | None = None,
+    ) -> dict[str, int]:
+        """Per-tag totals in the current scope, ignoring the tag chip itself.
+
+        The Findings pane draws its chips from this so "no findings" reads apart
+        from "buried under provenance edges": the counts honour project, session
+        (via ``agent_run_ids``), and ``since``, but never the selected tag, which
+        would otherwise collapse every chip to its own count.
+        """
+        built = self._annotation_filter(
+            agent_run_id=agent_run_id,
+            agent_run_ids=agent_run_ids,
+            project_id=project_id,
+            tag=None,
+            since=since,
+        )
+        if built is None:
+            return {}
+        clause, args = built
+        sql = (
+            "SELECT tag, COUNT(*) AS total FROM automation_annotations "
+            "WHERE 1=1" + clause + " GROUP BY tag"
+        )
+
+        def op() -> dict[str, int]:
+            rows = self._db.execute(sql, args).fetchall()
+            return {str(row["tag"]): int(row["total"]) for row in rows}
 
         return await self._run(op)
 

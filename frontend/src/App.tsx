@@ -801,7 +801,11 @@ export function App() {
       let updated=current
       if(projectId&&legacyDrawerTab.current&&!current[projectId]){
         const base=drawerProjectPresentationFor(current,projectId,drawerLayoutRef.current)
-        const legacyValue=legacyDrawerTab.current==='commands'||legacyDrawerTab.current==='prompts'?'actions':legacyDrawerTab.current
+        // Mirrors `migratedTabId` in drawerLayout: this legacy `mux.drawer.tab.v1`
+        // seed bypasses that helper, so the same forward-maps apply here — the
+        // retired `commands`/`prompts` (→ actions) and Phase 7.10's `timeline` (→ insight).
+        const legacyRaw=legacyDrawerTab.current
+        const legacyValue=legacyRaw==='commands'||legacyRaw==='prompts'?'actions':legacyRaw==='timeline'?'insight':legacyRaw
         const legacy=DRAWER_TABS.some(tab=>tab.id===legacyValue)?legacyValue as DrawerTabId:null
         if(legacy)updated=setDrawerProjectPresentation(current,projectId,activateDrawerTab(base,drawerLayoutRef.current,legacy),drawerLayoutRef.current)
       }
@@ -5144,6 +5148,7 @@ export function App() {
         }}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target,tab:'settings'})}}
+        onOpenAutomationDashboard={()=>setAutomationOpen(true)}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
@@ -5191,7 +5196,7 @@ export function App() {
           them would only repeat the same icons and spend a column doing it. Mobile reaches the
           same tabs through the drawer's own tab strip after a two-finger swipe. */}
       {!mobileWorkspace&&!clipboardOpen&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
-        {drawerLauncherTabs.filter(tab=>!['transcript','timeline'].includes(tab.id)||hasHarnessTranscript(active?.backend)).map(tab=>{
+        {drawerLauncherTabs.filter(tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
           // No selected state to draw: the rail is only rendered while the drawer is closed,
           // so no tab it lists is showing anywhere.
