@@ -77,7 +77,8 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - Mobile Project rows expose `⋮` immediately left of Run for the Project context menu.
   Project long-press is reserved for reorder; desktop right-click remains the pointer context-menu route.
   Mobile session long-press remains context-menu-only and never starts sidebar grouping or reorder.
-- A Group header's only button is `✎` (rename). It carried a `×` that deleted the Group and
+- A Group header's only button is `✎` (rename), revealed on hover over that header (and on
+  keyboard focus; touch always shows it, having no hover). It carried a `×` that deleted the Group and
   ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
   click, so the sidebar no longer deletes Groups at all. Emptying one has the same visible effect,
   since a Group with no Projects in it is not rendered as a section.

@@ -43,6 +43,7 @@ responsive controls.
   On desktop, a Group header reorders on press-and-move and folds on press-and-release; the drag swallows its ending click.
   On mobile, a Group header only folds because Project rows are the sidebar's sole reorder target.
   The Group header's only button is `✎`, which renames the Group.
+  It appears on hover over its own header, and on keyboard focus, so the resting sidebar is a list of names rather than a column of glyphs; a coarse pointer has no hover and always shows it.
 - **The `PROJECTS` header owns sort and fold-everything**, because both act on the whole tree and must remain outside the scrolling list.
   It holds two buttons:
   - `⊟`/`⊞` folds or unfolds **every Project row and every Group** in one click.
