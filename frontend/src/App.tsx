@@ -1056,12 +1056,16 @@ export function App() {
       // scroll off the finger's micro-jitter: once a scroll latches, it ignores every
       // later `preventDefault` and cancels the pointer, so the drag would do nothing
       // unless yanked — the exact "I feel the buzz but it won't drag unless I go fast"
-      // failure. Cancel touchmoves inside the hold slop; once the finger clearly moves
-      // past it this was a scroll after all, so release it and let the pointer-move
-      // decision unwind the drag. Movement-mode drags keep the old "only when active".
+      // failure. Cancel touchmoves inside the hold slop always. For `hold-move`, once the
+      // hold has armed, keep cancelling PAST the slop too: that first past-slop move is
+      // the drag itself starting, and if the browser latches a scroll on it before the
+      // pointer handler captures, the drag dies on `pointercancel` — the residual sidebar
+      // failure after the within-slop fix. Only a `hold-move` that has not armed yet, or a
+      // plain `hold`, treats past-slop as the scroll it releases to.
       if(activation.mode==='movement'||touch.touches.length!==1)return
       const point=touch.touches[0]
-      if(Math.hypot(point.clientX-startX,point.clientY-startY)<=activation.slop)touch.preventDefault()
+      const within=Math.hypot(point.clientX-startX,point.clientY-startY)<=activation.slop
+      if(within||(activation.mode==='hold-move'&&armed))touch.preventDefault()
     }
     if(event.pointerType==='touch')window.addEventListener('touchmove',blockTouchScroll,{passive:false})
     const cleanup=()=>{
@@ -5013,7 +5017,9 @@ export function App() {
       scrollFrame=window.requestAnimationFrame(autoScroll)
     }
     beginPointerDrag(event,label,`mobiletab:${leaf.id}`,
-      ()=>{cancelLongPress();mobileTabHeldRef.current=false;if(mobileWorkspace)navigator.vibrate?.(15)},
+      // Close the menu, not just its pending timer: a still-hold may have already opened the
+      // session or resource menu by the time the drag starts, and the drag must dismiss it.
+      ()=>{cancelLongPress();setContextMenu(null);setTabMenu(null);mobileTabHeldRef.current=false;if(mobileWorkspace)navigator.vibrate?.(15)},
       pointer=>{latestPointer={clientX:pointer.clientX,clientY:pointer.clientY};preview(pointer);if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)},
       ()=>{stopAutoScroll();const chosen=target;target=null;showPointerDropIndicator(null);if(chosen&&chosen.id!==leaf.id)commitMobileTabOrder(leaf,chosen)},
       ()=>{stopAutoScroll();target=null;showPointerDropIndicator(null)},
