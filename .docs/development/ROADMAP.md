@@ -2144,19 +2144,25 @@ This phase depends only on shipped substrate (the Phase 5.5 scan timeline and it
 ### Adaptive titling driven by the scan timeline
 
 The titler today names a pane once from the run's opening request, then freezes the title until a manual `title/regenerate`.
-An adaptive titler broadens the name as the work moves — a run that opened on "Phase 7" becomes "Phase 7 + 7.5 diagnostics/MCP" once the scope actually widens — by consuming the scan timeline the phase above makes canonical.
+An adaptive titler broadens the name only when the work genuinely pivots — a run that opened on "Phase 7" becomes "Phase 7 + 7.5 diagnostics/MCP" once the scope actually widens — by consuming the scan timeline the phase above makes canonical.
 
-- [ ] Re-title on the scan timeline's **novelty / work-phase change**, never per turn. A title that rewrites every turn thrashes and costs tokens; the point is to broaden on real drift and settle otherwise. When the scan timeline is disabled for a run, the titler falls back to its current one-shot behavior with no adaptation.
-- [ ] Synthesize the broadened title from the accumulated same-run scan records (their `work_phase`, `intent`, and `summary`), on the cheap model, through the existing `title_regenerate_requested` / `force_title` path so browser, CLI, and this observer all write titles the same way.
-- [ ] Stay `auto_named`-only: an adaptive re-title never overwrites a title the user set by hand, and an explicit manual regenerate still wins.
-- [ ] Stay `agent_run_id`-scoped, inheriting Phase 5.4's run boundary: a title broadens within one conversation, and a `/clear` starts a fresh run with its own title rather than carrying the old one across the boundary.
-- [ ] Gate it per-Project and per-run through the same enablement surface as the scan timeline it consumes, so a Project or run without the timeline simply keeps the one-shot title.
+This deliberately revisits `CONTROL_PLANE_ROADMAP.md` §6.11, which abandoned continuous titling because a title is a *handle* a user finds a tab by, and a handle that moves is not one.
+That objection is retained here as the **binding design constraint**, not overridden: the failure it recorded was a `turn_ended` titler that renamed the pane from its most recent turn every turn, producing `OK` / `FrozenClaude` for runs whose subject never changed.
+The bet this phase makes is that a scan-timeline-driven titler, gated on real pivots and biased hard toward stability, can broaden on the rare material shift without becoming that thrashing handle — and it is user-toggleable, so a user who dislikes any movement turns it off and keeps the one-shot title.
+
+- [ ] **Stability is the default; a re-title is the exception.** The gate fires only on a genuine pivot: a `novelty` spike combined with a `work_phase`/`target` transition or a new `user_ask`, with debounce and hysteresis so a brief detour does not move the title and a title never rewrites twice in quick succession. Routine progress, tool chatter, and same-subject turns never re-title. Per-turn re-titling is explicitly forbidden.
+- [ ] **The model prompt is written to under-do it, not over-do it.** The synthesis call is given the current title and the recent scan records and instructed to *keep the current title unchanged unless the run's subject has materially changed*, to return the existing title verbatim when in doubt, to prefer broadening the existing handle over inventing a new one, and to emit a compact task label (no backend or "session" prefixes). "No change" is a first-class, common, cheap outcome — the prompt must make returning the current title the easy answer, and a no-change result writes nothing.
+- [ ] Synthesize from the accumulated same-run scan records (their `work_phase`, `intent`, `user_ask`, and `summary`), on the cheap model, through the existing `title_regenerate_requested` / `force_title` path so browser, CLI, and this observer all write titles the same way.
+- [ ] Stay `auto_named`-only: an adaptive re-title never overwrites a title the user set by hand, and an explicit manual regenerate still wins. The pin is a property of the session and survives a rollover, per §6.11.
+- [ ] Stay `agent_run_id`-scoped, inheriting Phase 5.4's run boundary: a title broadens within one conversation, and a `/clear` starts a fresh run that retitles from its own opening request rather than carrying the old one across the boundary (a rollover is the one always-material shift).
+- [ ] Gate it per-Project and per-run through the same enablement surface as the scan timeline it consumes, and make it independently toggleable and **off by default**, so enabling the scan timeline does not force moving titles on anyone; a Project or run without it simply keeps the one-shot title.
+- [ ] Measure it before trusting it: count re-titles per run and surface the rate, so "it re-titles too often" is a number to tune the gate against rather than a vibe. A titler that moves on anything but a real pivot is a defect to fix, exactly as §6.11 warned.
 
 ### Phase 7.7 exit criteria
 
 - [ ] Exactly one behavioral-summary producer runs (the scan timeline); no consumer of the former `turn-summary` notes silently loses its feed, and a config predating the summarizer's removal still loads.
-- [ ] An auto-named run's title broadens on genuine scope drift and stays stable otherwise, drawing only on that run's scan records, and never overwrites a human-set title.
-- [ ] With the scan timeline off for a run, titling is exactly the current one-shot behavior.
+- [ ] An auto-named run's title changes only on a material pivot and stays stable through routine progress, drawing only on that run's scan records, and never overwrites a human-set title. The measured re-title rate for a stable-subject run is zero.
+- [ ] Adaptive titling is off by default and independently toggleable; with it off (or the scan timeline off) titling is exactly the current one-shot behavior.
 
 ## Phase 8 - Telegram multi-session control (descoped)
 

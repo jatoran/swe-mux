@@ -651,12 +651,14 @@ has memory. These require seeing *all agents, all time, one machine* at once:
   *work items* continuity across sessions and backends. The CLIs have sessions; the
   mux can have threads of work.
 
-### 6.11 Continuous session title  ← ABANDONED
+### 6.11 Continuous session title  ← REVISITED (now planned as ROADMAP Phase 7.7)
 
-**Not being built.** Retained as a record of why, because the idea is an easy one to
-have twice.
+**Revisited 2026-08-15.** Originally abandoned; now planned as `ROADMAP.md` Phase 7.7,
+but under the constraints below, which are kept as the binding guardrail rather than
+overridden. This section is retained because the *premise* it rejected is still the thing
+the new design must not repeat.
 
-The premise was that a title should track the work. Field behaviour showed the
+The original premise was that a title should track the work. Field behaviour showed the
 opposite requirement: a title's job is to be a *handle* — the thing a user finds a
 tab by after not looking at it for an hour — and a handle that moves is not one. The
 shipped `turn_ended` stage was already a weak version of "adapt as the session
@@ -665,15 +667,28 @@ something not clear": naming a run from its most recent turn produced `OK`,
 `FrozenClaude`, `Reply FROZENCODEX` for runs whose actual subject was stable and
 obvious from the opening request.
 
-What ships instead (`design/features/automation.md`): one title per `agent_run_id`,
+What changed the decision: the objection is specifically to a title that moves on *routine
+progress*. A scan-timeline-driven titler gated on genuine pivots (a novelty spike plus a
+`work_phase`/`target` or `user_ask` shift, with debounce and hysteresis), prompted to keep
+the current title unless the subject materially changed, `auto_named`-only, and **off by
+default and independently toggleable**, is a bet that the rare material-pivot re-title is
+worth having without becoming the thrashing handle above. The failure mode is measured (a
+re-title rate per run) so an over-eager gate is a number to fix, and the one-shot titler
+stays exactly as-is whenever the feature is off. The "how it would have stayed efficient
+and safe" design below is now the specification Phase 7.7 implements, not a rejected
+sketch.
+
+What ships today (`design/features/automation.md`): one title per `agent_run_id`,
 taken from the request the run opened with and pinned durably so retries and daemon
 restarts reproduce it; the `turn_ended` reading demoted to a fallback for runs whose
 request was never captured (Codex); background retry on provider failure. A rollover
 still retitles, since that mints a new run.
+This remains the behaviour whenever Phase 7.7's adaptive titling is off (its default),
+so it is the floor the adaptive titler builds on, not something it replaces.
 
-The rest of this section is the abandoned design.
+The rest of this section is the adaptive design, now the Phase 7.7 specification.
 
-How it would have stayed efficient and safe:
+How it stays efficient and safe:
 
 - **Derive from the scan timeline, don't re-read transcripts.** The records already
   capture `user_ask`, `intent`, `claim`, `work_phase`, and `target` (§5.5). A title
