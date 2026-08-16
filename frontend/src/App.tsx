@@ -1182,7 +1182,16 @@ export function App() {
     }
     const up=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(true,'up')}
     const cancelPointer=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false,'pointercancel')}
-    const lostCapture=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false,'lostcapture')}
+    // `lostpointercapture` BUBBLES, and on touch the row holds implicit capture from
+    // pointerdown — so the very transfer to the body fires it at the row and it arrives
+    // here one frame after activation, which read as a cancel and killed every mobile
+    // hold. Only the body losing ITS capture is fatal; the row losing the capture we just
+    // took from it is the transfer working.
+    const lostCapture=(pointer:PointerEvent)=>{
+      if(pointer.pointerId!==pointerId)return
+      if(pointer.target!==document.body){dragTrace(identity,'capture-transfer');return}
+      finish(false,'lostcapture')
+    }
     const blurCancel=()=>finish(false,'blur')
     const cancel=()=>finish(false,'external')
     const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false,'escape')}}
