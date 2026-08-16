@@ -26,7 +26,7 @@ import {
 } from './projectCreate'
 import { ProcessPanel, type FleetSnapshot, type Preview } from './ProcessPanel'
 import { ResourceUsageSummary } from './ResourceUsage'
-import { ProjectsManager, type ProjectPatch, type ProjectsManagerTab } from './ProjectsManager'
+import { ProjectsManager, type ProjectPatch } from './ProjectsManager'
 import { MenuGroup } from './MenuGroup'
 import { PreviewPane } from './PreviewPane'
 import type { NotificationData, UiNotification } from './Notifications'
@@ -497,7 +497,7 @@ export function App() {
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
   // entry point is a preselection of it rather than a second surface.
-  const [projectsManagerFocus,setProjectsManagerFocus]=useState<{projectId:string;tab:ProjectsManagerTab}|null>(null)
+  const [projectsManagerFocus,setProjectsManagerFocus]=useState<{projectId:string}|null>(null)
   // null closed; a string scopes the browser to one project, '' shows every project.
   // The Notes drawer tab lists the active Project by default; the app menu's unscoped
   // entry point flips it to every Project. Device-local UI state, not a modal.
@@ -2703,8 +2703,8 @@ export function App() {
     }catch{/* the dialog still registers a Project without its optional setup commands */}
   }
 
-  const openProjectsManager=(focus?:{project:Project;tab?:ProjectsManagerTab})=>{
-    setProjectsManagerFocus(focus?{projectId:focus.project.id,tab:focus.tab||'details'}:null)
+  const openProjectsManager=(focus?:{project:Project})=>{
+    setProjectsManagerFocus(focus?{projectId:focus.project.id}:null)
     setProjectsManagerOpen(true);setMainMenuOpen(false);setSidebarMenu(null);setProjectMenu(null)
   }
 
@@ -4203,8 +4203,8 @@ export function App() {
     // active they disagree, and the enabled state has to describe what is on screen.
     { id:'project.moveUp',label:'Move selected Project up',category:'project',available:!!commandProject&&displayProjects.filter(item=>groupIdFor(item)===groupIdFor(commandProject))[0]?.id!==commandProject.id,disabledReason:'Project is already first here',run:()=>commandProject&&moveProjectRelative(commandProject,-1) },
     { id:'project.moveDown',label:'Move selected Project down',category:'project',available:!!commandProject&&displayProjects.filter(item=>groupIdFor(item)===groupIdFor(commandProject)).at(-1)?.id!==commandProject.id,disabledReason:'Project is already last here',run:()=>commandProject&&moveProjectRelative(commandProject,1) },
-    { id: 'project.settings', label: 'Open selected project settings', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openProjectsManager({ project: commandProject, tab: 'settings' }) },
-    { id: 'project.delete', label: 'Remove selected Project from swe-mux…', category: 'project', available: !!commandProject, disabledReason: 'No Project selected', run: () => commandProject&&openProjectsManager({project:commandProject,tab:'details'}) },
+    { id: 'project.settings', label: 'Open selected project settings', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openProjectsManager({ project: commandProject }) },
+    { id: 'project.delete', label: 'Remove selected Project from swe-mux…', category: 'project', available: !!commandProject, disabledReason: 'No Project selected', run: () => commandProject&&openProjectsManager({project:commandProject}) },
     ...unpanned.map((session): Command => ({
       id: `session.attach(${session.id})`, label: `Attach live session: ${sessionName(session)}`, category: 'pane', available: true,
       run: () => { setActiveId(session.id); setEmptyMenu(null); void updateLayout(projectId, replaceTerminal(activeLayout, activeId, session.id)) },
@@ -5283,7 +5283,7 @@ export function App() {
           if(owner)void openDetectedServer({url},owner)
         }}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
-        onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target,tab:'settings'})}}
+        onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
         onOpenAutomationDashboard={()=>setAutomationOpen(true)}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
@@ -5613,7 +5613,7 @@ export function App() {
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
-    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNotes={project=>{setProjectsManagerOpen(false);openNotesBrowser(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
+    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 
     {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
       <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>

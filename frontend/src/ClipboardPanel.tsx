@@ -170,6 +170,18 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
     else if (event.key === 'ArrowLeft' && expanded) { event.preventDefault(); setExpanded('') }
   }
 
+  // One definition per action, shared by the row's inline bar and the expanded
+  // footer so the two surfaces never drift. Insert and Copy are `cb-primary` (kept
+  // one tap away everywhere); Pin and Delete are `cb-secondary` — revealed on hover
+  // on desktop and folded into the expanded footer on mobile, so a collapsed row is
+  // pure preview rather than a persistent button row.
+  const actionButton = (entry: ClipboardEntry, kind: 'insert' | 'copy' | 'pin' | 'delete') => {
+    if (kind === 'insert') return <button key="insert" class="cb-act cb-primary" disabled={busy} title="Insert into the last focused terminal or note" aria-label="Insert into the last focused terminal or note" onClick={() => void insert(entry)}><span aria-hidden="true">↵</span><b>Insert</b></button>
+    if (kind === 'copy') return <button key="copy" class="cb-act cb-primary" disabled={busy} title="Copy to the system clipboard" aria-label="Copy to system clipboard" onClick={() => void copy(entry)}><span aria-hidden="true">⧉</span><b>Copy</b></button>
+    if (kind === 'pin') return <button key="pin" class="cb-act cb-secondary" title={entry.pinned ? 'Unpin (pinned entries survive eviction and clear)' : 'Pin (survives eviction and clear)'} aria-label={entry.pinned ? 'Unpin entry' : 'Pin entry'} onClick={() => void pin(entry)}><span aria-hidden="true">{entry.pinned ? '★' : '☆'}</span><b>{entry.pinned ? 'Unpin' : 'Pin'}</b></button>
+    return <button key="delete" class="cb-act cb-secondary" title="Forget this entry" aria-label="Delete entry" onClick={() => void remove(entry)}><span aria-hidden="true">×</span><b>Delete</b></button>
+  }
+
   const retention = history?.retention_hours ? `${history.retention_hours}h` : 'until evicted'
   return <>
       <p class="drawer-status">{history ? `${history.count} kept · ${history.persist ? 'saved to disk' : 'memory only'} · ${retention}` : 'loading…'}</p>
@@ -203,10 +215,10 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
                 <small>{entry.pinned ? '★ ' : ''}{sourceLabel(entry.source)} · {relativeAge(entry.updated_at)} · {entry.char_count.toLocaleString()} chars{entry.line_count > 1 ? ` · ${entry.line_count} lines` : ''}{entry.device ? ` · ${entry.device}` : ''}</small>
               </button>
               <div class="clipboard-entry-actions">
-                <button disabled={busy} title="Insert into the last focused terminal or note" aria-label="Insert into the last focused terminal or note" onClick={() => void insert(entry)}><span aria-hidden="true">↵</span><b>Insert</b></button>
-                <button disabled={busy} title="Copy to the system clipboard" aria-label="Copy to system clipboard" onClick={() => void copy(entry)}><span aria-hidden="true">⧉</span><b>Copy</b></button>
-                <button title={entry.pinned ? 'Unpin (pinned entries survive eviction and clear)' : 'Pin (survives eviction and clear)'} aria-label={entry.pinned ? 'Unpin entry' : 'Pin entry'} onClick={() => void pin(entry)}><span aria-hidden="true">{entry.pinned ? '★' : '☆'}</span><b>{entry.pinned ? 'Unpin' : 'Pin'}</b></button>
-                <button title="Forget this entry" aria-label="Delete entry" onClick={() => void remove(entry)}><span aria-hidden="true">×</span><b>Delete</b></button>
+                {actionButton(entry, 'insert')}
+                {actionButton(entry, 'copy')}
+                {actionButton(entry, 'pin')}
+                {actionButton(entry, 'delete')}
               </div>
             </header>
             {open && <>
@@ -214,7 +226,9 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
                   out of the history surface is transport, not a new copy, and
                   capturing it would reorder the list under the reader. */}
               <pre class="clipboard-entry-text" data-clipboard-capture="ignore">{text === undefined ? 'Loading…' : text}</pre>
-              <footer class="clipboard-entry-foot"><button onClick={() => setExpanded('')}>Collapse</button></footer>
+              {/* Full toolbar for the open entry: Pin/Delete live here on mobile
+                  (where the collapsed row hides them), with Collapse to exit. */}
+              <footer class="clipboard-entry-foot">{actionButton(entry, 'pin')}{actionButton(entry, 'delete')}<button class="cb-collapse" onClick={() => setExpanded('')}>Collapse</button></footer>
             </>}
           </article>
         })}
