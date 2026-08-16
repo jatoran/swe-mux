@@ -216,7 +216,12 @@ from .provider_accounts import (
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
-from .scan_timeline import SCAN_RULE_ID, ScanContext, ScanTimelineService
+from .scan_timeline import (
+    DEFAULT_SCAN_DAILY_BUDGET_USD,
+    SCAN_RULE_ID,
+    ScanContext,
+    ScanTimelineService,
+)
 from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
@@ -810,6 +815,10 @@ def create_app(
                 "/api/sessions/{sid}/scan-timeline/backfill",
                 backfill_session_scan_timeline,
             ),
+            web.delete(
+                "/api/sessions/{sid}/scan-timeline/backfill",
+                cancel_session_scan_timeline_backfill,
+            ),
             web.get(
                 "/api/sessions/{sid}/scan-timeline/{record_id}",
                 session_scan_timeline_record,
@@ -1298,7 +1307,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             project_id=record.project_id,
             project_root=root,
             agent_run_id=record.agent_run_id,
-            daily_budget_usd=float(values.get("scan_timeline_daily_budget_usd", 0.10)),
+            daily_budget_usd=float(
+                values.get("scan_timeline_daily_budget_usd", DEFAULT_SCAN_DAILY_BUDGET_USD)
+            ),
             dead_end_memory_enabled="dead_end_memory" in enabled,
         )
 
@@ -1334,6 +1345,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     await attention_ranking.restore()
     attention_ranking.start()
+    await scan_timeline.restore()
     scan_timeline.start()
     git_provenance_service.start()
     git_monitor.start()
@@ -3850,7 +3862,7 @@ async def get_project_automations(request: web.Request) -> web.Response:
             "enabled": sorted(resolution.enabled),
             "blocked": {key: list(value) for key, value in resolution.blocked.items()},
             "scan_timeline_daily_budget_usd": float(
-                values.get("scan_timeline_daily_budget_usd", 0.10)
+                values.get("scan_timeline_daily_budget_usd", DEFAULT_SCAN_DAILY_BUDGET_USD)
             ),
             "automations": [
                 {
@@ -3895,7 +3907,7 @@ async def put_project_automations(request: web.Request) -> web.Response:
             },
             409,
         )
-    budget = body.get("scan_timeline_daily_budget_usd", 0.10)
+    budget = body.get("scan_timeline_daily_budget_usd", DEFAULT_SCAN_DAILY_BUDGET_USD)
     if isinstance(budget, bool) or not isinstance(budget, int | float) or not 0 <= budget <= 100:
         raise ValueError("scan_timeline_daily_budget_usd must be between 0 and 100")
     current = await read_project_config(project.root, project=identity)
@@ -8291,6 +8303,12 @@ async def scan_session_now(request: web.Request) -> web.Response:
 async def backfill_session_scan_timeline(request: web.Request) -> web.Response:
     service: ScanTimelineService = request.app["scan_timeline"]
     return json_response(await service.start_backfill(request.match_info["sid"]), 202)
+
+
+async def cancel_session_scan_timeline_backfill(request: web.Request) -> web.Response:
+    """Stop a running full-session scan. Records already written stay readable."""
+    service: ScanTimelineService = request.app["scan_timeline"]
+    return json_response(await service.cancel_backfill(request.match_info["sid"]))
 
 
 async def session_scan_timeline_record(request: web.Request) -> web.Response:

@@ -13,7 +13,7 @@ from typing import Any
 from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
 from .keybindings import is_command
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -592,12 +592,18 @@ class Config:
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
     automation_max_output_tokens: int = 256
-    automation_daily_token_budget: int = 200_000
-    automation_daily_budget_usd: float = 2.0
-    automation_rule_daily_token_budget: int = 50_000
-    automation_rule_daily_budget_usd: float = 0.5
-    automation_hourly_call_cap: int = 60
-    automation_rule_hourly_call_cap: int = 20
+    # These are the shared ceilings over *every* automation. They were sized for
+    # episodic observers that fire once per session, and a continuous sampler
+    # (scan timeline) exhausted the per-rule token cap after ten calls costing
+    # under half a cent. The token axis must never be the binding constraint
+    # while the dollar axis sits at 0.2% - the dollar figures are the ones that
+    # describe real cost, so the token caps are now headroom rather than policy.
+    automation_daily_token_budget: int = 10_000_000
+    automation_daily_budget_usd: float = 20.0
+    automation_rule_daily_token_budget: int = 4_000_000
+    automation_rule_daily_budget_usd: float = 10.0
+    automation_hourly_call_cap: int = 1_200
+    automation_rule_hourly_call_cap: int = 600
     # Control-plane project card (CP §5.4). Per-project opt-in gates whether it
     # runs at all; these bound what one build may cost. Empty model falls back
     # to the automation cheap model; with neither set there is simply no card.
@@ -611,7 +617,22 @@ class Config:
     # Flash revision without silently changing model family.
     scan_timeline_enabled: bool = False
     scan_timeline_model: str = "deepseek/deepseek-v4-flash"
-    scan_timeline_run_token_budget: int = 100_000
+    # Scan timeline samples continuously: an event debounce plus a three-minute
+    # heartbeat, per session, for as long as a run is enabled. Charging that to
+    # the shared `automation_rule_*` caps put it in the same envelope as the
+    # session titler, which fires once. It now carries its own daily token
+    # budget and hourly call cap and is exempt from the per-rule caps; the
+    # global automation ceilings above still apply as an emergency bound, and
+    # the dollar budgets (global, per-rule, and the Project's own) are the real
+    # ceiling. At the observed ~$0.08 per million tokens the daily budget below
+    # is about a quarter of a dollar.
+    scan_timeline_daily_token_budget: int = 3_000_000
+    scan_timeline_hourly_call_cap: int = 600
+    scan_timeline_run_token_budget: int = 500_000
+    # The schema permits ~2,600 characters of prose across five fields. 420
+    # output tokens could not hold its own worst case, and a truncated strict
+    # JSON body is an unparseable response that costs a record.
+    scan_timeline_max_output_tokens: int = 900
     # Phase 6.5 attention ranking. The daily budget is the hard bound on how many
     # times ranking may decide something is worth interrupting for; the hourly cap
     # is only a burst limiter beneath it. Cheap-blocking work (a permission
@@ -993,8 +1014,14 @@ def _validate(config: Config) -> None:
         errors["project_card_max_output_tokens"] = "must be between 128 and 4096"
     if not config.scan_timeline_model.strip() or len(config.scan_timeline_model) > 200:
         errors["scan_timeline_model"] = "must be an exact OpenRouter model id"
-    if not 512 <= config.scan_timeline_run_token_budget <= 1_000_000:
-        errors["scan_timeline_run_token_budget"] = "must be between 512 and 1000000"
+    if not 512 <= config.scan_timeline_run_token_budget <= 20_000_000:
+        errors["scan_timeline_run_token_budget"] = "must be between 512 and 20000000"
+    if not 512 <= config.scan_timeline_daily_token_budget <= 100_000_000:
+        errors["scan_timeline_daily_token_budget"] = "must be between 512 and 100000000"
+    if not 1 <= config.scan_timeline_hourly_call_cap <= 100_000:
+        errors["scan_timeline_hourly_call_cap"] = "must be between 1 and 100000"
+    if not 256 <= config.scan_timeline_max_output_tokens <= 8_192:
+        errors["scan_timeline_max_output_tokens"] = "must be between 256 and 8192"
     if not 0 <= config.attention_daily_interrupt_budget <= 100:
         errors["attention_daily_interrupt_budget"] = "must be between 0 and 100"
     if not 0 <= config.attention_hourly_interrupt_cap <= 100:
@@ -1358,6 +1385,25 @@ def load_config(path: Path | None = None) -> Config:
                     voice_command["phrases"] = ["mute", "stop", *old_mute_phrases[1:]]
                     migrated = True
                     break
+        if source_schema < 23:
+            # The automation token caps and the scan-timeline run budget were
+            # sized for episodic observers and made the token axis bind at a
+            # fraction of a cent, which silently stopped the scan timeline
+            # mid-session. Lift only values that are still the untouched
+            # schema-22 defaults, so a deliberately lowered cap survives.
+            legacy_caps = {
+                "automation_daily_token_budget": 200_000,
+                "automation_daily_budget_usd": 2.0,
+                "automation_rule_daily_token_budget": 50_000,
+                "automation_rule_daily_budget_usd": 0.5,
+                "automation_hourly_call_cap": 60,
+                "automation_rule_hourly_call_cap": 20,
+                "scan_timeline_run_token_budget": 100_000,
+            }
+            for key, legacy in legacy_caps.items():
+                if key not in raw or raw[key] == legacy:
+                    setattr(cfg, key, Config.__dataclass_fields__[key].default)
+                    migrated = True
         if source_schema < 22 and "harness_setup_complete" not in raw:
             # The first-run harness panel is new. An existing config is by definition
             # not a first run, so mark setup complete on upgrade; only a brand-new

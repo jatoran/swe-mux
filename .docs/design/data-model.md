@@ -125,9 +125,23 @@
   session, including rollover reason and time.
 - `scan_timeline_metrics`: one bounded aggregate row measuring record reads, source rehydrations,
   and their derived rate.
+  It is a Tier 2 instrument with no Tier 2 consumer yet, and its only caller always rehydrates,
+  so the rate is structurally 1.0 and is diagnostic rather than a headline.
+- `scan_timeline_backfills`: one row per full-session scan job, keyed by `agent_run_id`, holding
+  its state, chunk counts (processed, total, created, failed, skipped), reason, and timestamps.
+  A job is multi-minute and its outcome is the only record of which parts of a conversation were
+  reached, so it cannot live in daemon memory: a restart reported `idle` for a job that had
+  actually stopped half way.
+  Rows left at `running` by a dead daemon are closed out as `partial` at startup.
+- `automation_observer_calls.response_excerpt`: a bounded copy of what the model returned, written
+  only when a response is refused or repaired.
+  Without it, "the model returned something invalid" could never be turned into "*this* is what it
+  returned".
 - `automation_budget_ledger` additionally carries nullable `project_id` and `agent_run_id` so a
   continuously costing substrate can enforce and display Project and run budgets even when a
   failed provider call creates no semantic record.
+  A call the provider billed for reaches the ledger even when local validation refused its output;
+  the scan path previously discarded that usage entirely.
 - `clipboard_entries`: the clipboard-history ring — copied text with a unique `content_hash`
   (re-copying promotes rather than duplicates), character/line counts, provenance
   (`source`, `session_id`, `project_id`, `device`), and `pinned`. **Unlike every other table here

@@ -13,16 +13,38 @@ test('scan timeline is explicitly gated per current run and resets at conversati
   assert.ok(timeline.includes("event.kind==='boundary'"))
 })
 
-test('scan timeline exposes cost, run tokens, source expansion, and the changeable model', () => {
+test('scan timeline shows every cap and names whichever one is closest to binding', () => {
   const timeline = source('ScanTimelineTab.tsx')
   const settings = source('Settings.tsx')
   const app = source('App.tsx')
-  assert.ok(timeline.includes('spend_today.cost_usd'))
-  assert.ok(timeline.includes('run_token_budget'))
+  // The reported failure was a timeline that stopped for three hours while the
+  // drawer showed only budgets that had headroom. The cap doing the stopping
+  // has to be on screen, and the scanner's own reason has to be readable.
+  assert.ok(timeline.includes('bindingGate'))
+  assert.ok(timeline.includes('scan-gate-binding'))
+  assert.ok(timeline.includes('state.skip_reason'))
+  assert.ok(timeline.includes('Not scanning:'))
   assert.ok(timeline.includes('?rehydrate=1'))
   // The scan-timeline model is a changeable default, not a fixed one.
   assert.ok(settings.includes('Changeable default'))
   assert.ok(!app.includes('ScanSpendStatus'))
+})
+
+test('a full-session scan reports its chunk arithmetic and can be stopped', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  assert.ok(timeline.includes('Stop full scan'))
+  assert.ok(timeline.includes("api('DELETE',`/api/sessions/${sid}/scan-timeline/backfill`)"))
+  assert.ok(timeline.includes('completed_with_gaps'))
+  assert.ok(timeline.includes('failed_chunks'))
+  // Terminal states used to drop the chunk counts, so the size of the hole a
+  // stopped job left behind was invisible.
+  assert.ok(timeline.includes('${state.backfill.processed_chunks}/${state.backfill.total_chunks}'))
+})
+
+test('a record admits when it was written behind the transcript or repaired', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  assert.ok(timeline.includes('record.coverage?.remaining'))
+  assert.ok(timeline.includes('Model output repaired'))
 })
 
 test('timeline drawer owns project context, project permission, and full-session scans', () => {

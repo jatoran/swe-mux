@@ -33,23 +33,51 @@ Triggers debounce per session and a per-session lock prevents overlapping scans.
 Each request contains only:
 
 - the bounded transcript delta since the prior same-run record;
-- the prior two or three records from the same run;
+- the prior six records from the same run;
 - bounded Tier 0 fact identifiers and targets;
 - the current user-authored Project context Markdown, when non-empty.
 
+The delta is a **forward window**: the oldest unscanned messages, not the newest.
+The distinction is the difference between a bounded window and a lossy one.
+A newest-first window trims from its front and then advances the transcript cursor past what it trimmed, so a busy stretch is skipped permanently and nothing reports it.
+The forward window walks oldest first, so the cursor only ever moves to the end of what was actually scanned, and it reports the count of in-scope messages it did not reach.
+A record whose window left a remainder schedules an immediate catch-up scan, bounded per trigger, and carries `coverage.remaining` so a timeline that is behind the transcript says so.
+The read budget and the window size are separate: the window is 40 messages and 40 KiB, read out of the whole transcript rather than only its trailing bytes.
+
+A tool call is rendered as its name plus a bounded digest of its arguments.
+Tool *results* are not available: the shared transcript parser keeps conversation text and tool inputs and drops results by design.
+Arguments are therefore the only evidence of what a call touched, and discarding them left the summariser guessing which file was read or which command ran.
+
 The fixed default model is the OpenRouter latest alias `deepseek/deepseek-v4-flash`.
 The call requests strict JSON schema, disables reasoning, and locally validates every semantic field.
-Provider failure, missing output, or invalid output produces no scan record.
+
+Validation **repairs** rather than rejects.
+Every field is descriptive or has a defined "we do not know" value, so a response wrong in one field is still most of a timeline entry, and discarding it costs a window of the conversation that nothing revisits.
+Unknown behaviour labels are dropped, repeats are removed, off-enum values fall back to `unknown`/`none`, overlong text is truncated, and confidence is clamped.
+`maxItems` and `uniqueItems` are the two schema keywords structured-output backends most often ignore, so an unclean value is expected rather than exceptional.
+Every coercion is recorded in the record's `repairs` list and shown in the drawer.
+Only a response with no usable semantic content at all is refused, because storing that would put a blank row on the timeline and still move the cursor past real transcript.
+
+A refused response is retried exactly once, as is a retryable provider fault.
+Every attempt closes its own observer-call row with the provider's usage, model, generation id, finish reason, and a bounded excerpt of what it returned.
+Any attempt the provider billed for enters the spend ledger whether or not it produced a record.
 
 ### Full-session scan
 
 **Scan full session** is an explicit drawer action that scans uncovered messages from the beginning of the current run to a fixed current watermark.
-It parses the authoritative transcript once, removes intervals already represented by stored records, chunks the remaining messages oldest first under the ordinary 32-message and 24 KiB input limits, and uses only earlier records for continuity and novelty.
-Chunking strips native tool arguments because the scan representation carries tool names only, and bounds oversized text while recording truncated coverage instead of aborting the job.
-The operation runs in a background task under the same per-session lock as live scans.
-The drawer polls its in-process job state and shows running progress plus `completed`, `partial`, or `failed` outcomes.
-Budgets, provider availability, observation health, all three gates, and strict output validation remain in force.
-If one stops the job, the result is `partial` with the exact reason and all already completed records remain readable.
+It parses the authoritative transcript once, removes intervals already represented by stored records, chunks the remaining messages oldest first under the ordinary input limits, and uses only earlier records for continuity and novelty.
+Chunking bounds native tool arguments to the same digest the live path renders, and bounds oversized text while recording truncated coverage instead of aborting the job.
+
+**One bad chunk is not the job.**
+A chunk that fails validation, or throws, increments `failed_chunks` and the job continues; abandoning the remaining chunks over one bad sample left a permanent hole that only another manual scan could fill.
+A chunk skipped because its interval is already covered increments `skipped_chunks` and the job continues.
+Only a skip that no later chunk could survive either - a closed gate, an exhausted budget, a degraded parser - stops the job, and then the state is `partial` with that exact reason.
+The terminal states are `completed`, `completed_with_gaps` (finished, with failed or skipped chunks), `partial` (stopped early), and `failed` (the job itself threw).
+
+The job takes the per-session lock **per chunk**, not for its whole life, so a multi-minute full scan does not freeze live scanning.
+Its state is persisted, not held in daemon memory: a restart used to report `idle` for a job that had actually stopped half way, and any row left at `running` by a dead daemon is closed out as `partial` at startup.
+`DELETE .../backfill` stops a running job; the result is `partial` naming the operator, and every record already written stays readable.
+Budgets, provider availability, observation health, all three gates, and output validation remain in force.
 Backfilled writes never move the live transcript cursor backwards.
 Later live events or the heartbeat capture messages appended after the fixed watermark.
 
@@ -66,14 +94,31 @@ Changing the algorithm later does not change the persisted field or its rollover
 
 ## Budgets and visibility
 
-The scanner enforces the shared global and per-rule daily token and dollar budgets, shared hourly call caps, the Project's `scan_timeline_daily_budget_usd`, and `scan_timeline_run_token_budget`.
-The per-run token budget defaults to 100,000 so ordinary full-session scans can backfill substantial conversations while the independent daily, hourly, and dollar gates remain effective.
-Successful calls and provider failures that report billable usage enter the shared spend ledger with Project and run attribution.
+**Scan timeline is a continuous sampler, and it is budgeted as one.**
+It is deliberately exempt from `automation_rule_daily_token_budget`, `automation_rule_daily_budget_usd`, and `automation_rule_hourly_call_cap`.
+Those bound an observer that fires once per session, such as the session titler.
+Sharing that envelope with an event-triggered, three-minute-heartbeat sampler capped the whole feature at roughly ten scans a day across the entire fleet, and it stopped at 0.2% of the dollar budget that was supposed to be the real ceiling.
+The token axis must never be the binding constraint while the dollar axis is untouched.
+
+The caps that do apply are:
+
+- `scan_timeline_daily_token_budget` (3,000,000), the feature's own daily token budget;
+- `scan_timeline_hourly_call_cap` (600), its own burst limiter;
+- `scan_timeline_run_token_budget` (500,000), one conversation's share;
+- the Project's `scan_timeline_daily_budget_usd` (default $5.00);
+- `automation_daily_token_budget` and `automation_daily_budget_usd`, the global emergency ceiling over every automation.
+
+The global ceiling must stay above the scan's own daily budget, or it silently becomes the new invisible binding cap.
+Successful calls, provider failures that report billable usage, and locally refused responses all enter the shared spend ledger with Project and run attribution.
 An unpriced billable call reserves the conservative preflight estimate so missing provider accounting cannot weaken a budget.
+The ledger day is UTC.
 
 The Timeline tab is the only scan control and status surface.
-It shows Project permission and context, current-run permission, daily spend, daily tokens, current-run tokens and budget, record-source reads, source rehydrations, and the measured rehydration rate.
-Each record shows the count of deterministic evidence targets and keeps their paths, symbols, and command strings inside a collapsed, scroll-bounded disclosure.
+It lists **every** cap with its current usage and puts whichever is closest to binding first, because a drawer that shows only the caps with headroom makes a stopped timeline look healthy.
+When scanning is actually stopped, the drawer states the scanner's own reason; a merely idle run says nothing.
+It also shows Project permission and context, current-run permission, and full-session chunk arithmetic on every terminal state, not just while running.
+Each record shows the count of deterministic evidence targets and keeps their paths, symbols, and command strings inside a collapsed, scroll-bounded disclosure, plus any repairs applied to the model's output and any messages the window did not reach.
+The rehydration rate is a Tier 2 metric with no Tier 2 consumer yet, and the only caller hard-codes `rehydrate=1`, so it is structurally 1.0 and is no longer given a headline slot.
 There is no scan button or scan-spend control in the application topbar.
 
 ## Dead-end memory
@@ -96,11 +141,13 @@ GET  /api/sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 ## Key files
 
 - `src/swe_mux/scan_timeline.py`
+- `src/swe_mux/automation.py` (`TranscriptSliceService.build_forward`, `tool_input_digest`)
 - `src/swe_mux/automation_store.py`
 - `src/swe_mux/server.py`
 - `src/swe_mux/project_context.py`
 - `frontend/src/ScanTimelineTab.tsx`
 - `tests/test_scan_timeline.py`
+- `tests/test_transcript_forward_slice.py`
 
 ## Related design
 

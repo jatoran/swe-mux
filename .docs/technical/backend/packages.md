@@ -73,7 +73,7 @@ It should call domain packages rather than acquire their storage or process resp
 | `deterministic_consumers.py` | model-free detectors over Tier 0 (loop/stall, declared-vs-verified, doc debt, provenance edges) and the turn-boundary runner | model calls, spend, anything that writes toward a session |
 | `project_context.py` | fixed `.swe-mux/project-context.md` path, bounded UTF-8 Markdown read, blank-file initialization, atomic revision-checked writes, setup prompt, and scan prompt prefix | repository crawling, inferred context, model calls, arbitrary paths, UI rendering |
 | `project_card.py` | retained generated-card implementation for source compatibility only; no runtime construction or consumers | active Project context, scan input, automation enablement |
-| `scan_timeline.py` | three-gated, run-scoped Tier 1 scanner: event/heartbeat scheduling, bounded transcript deltas plus same-run continuity, user Project context and Tier 0 facts, explicit oldest-first uncovered full-session scans, strict DeepSeek V4 Flash extraction, rollover boundaries, run/Project budget enforcement, exact-interval source rehydration, progress state, and dead-end annotation candidates | PTY writes, attention ranking, cross-run continuity, guessed records when the provider fails |
+| `scan_timeline.py` | three-gated, run-scoped Tier 1 scanner: event/heartbeat scheduling, forward (oldest-first) transcript windows with catch-up chaining, same-run continuity, user Project context and Tier 0 facts, cancellable and durably tracked full-session scans, strict DeepSeek V4 Flash extraction with repair-and-retry, rollover boundaries, its own daily/run/hourly budget enforcement, exact-interval source rehydration, and dead-end annotation candidates | PTY writes, attention ranking, cross-run continuity, guessed records when the provider fails, the per-rule episodic-observer caps |
 | `attention_ranking.py` | incident grouping over detector findings and fleet fault events, the four cost-to-resolve channels, the hard daily interrupt budget and its hourly burst limiter, live-run-only ranking, suppression records, breakpoint draining, fan-out and resumption-lag telemetry, behaviour-mined demotion rules, and the absence digest | detection itself, any session write, push or device routing, model calls (`attention_narration.py`) |
 | `attention_narration.py` | one budgeted cheap-model "why" per ranked incident over a normalized single-run slice, with typed failure statuses | ranking, routing, evidence, anything that survives its own failure |
 | `mcp.py` | agent-facing MCP protocol + closed tool set: own-Project-by-default session/run briefs, compact filtered history hits and stale-safe hit-neighborhood reads, bidirectional run-bound transcript pages, Agent Context sources, Project notes, sender message status, caller spawn-request status, and two thin write callers (`notify`, `request_spawn`); token-derived identity, exact display-name resolution, cursors, output budgets, redaction, and content-free per-tool result diagnostics | history indexing/ranking (`history.py`), relay policy and queue/request storage (those live in `agent_messaging.py` and existing services), title generation (read from `automation_store.py`), delivery, PTY writes, spawn, aiohttp handlers (`server.py`) |
@@ -346,8 +346,14 @@ sqlite3.connect(data_dir / "mux.db").execute("UPDATE projects ...")
   one: global master, Project DAG permission, and an off-by-default grant on the exact current
   `agent_run_id`.
   Its event and heartbeat loops are supervised, its provider output is strict schema data, and a
-  provider or decode failure writes no semantic record.
+  response with no usable semantic content writes no record even after its one retry.
   Rollover ends the grant and every run-local comparison before a successor can scan.
+  Being continuous is also why it does **not** share the `automation_rule_*` caps: those bound an
+  observer that fires once per session, and charging a sampler to them stopped the feature after
+  ten calls costing under half a cent while its dollar budget sat at 0.2% used.
+  Its transcript window is forward (oldest unscanned first) rather than newest-first, because it
+  advances a cursor: a window that trims its own front and then moves the cursor past the trimmed
+  messages loses them permanently and reports nothing.
 - `attention_ranking.py` owns routing and nothing else. It reads findings that already exist
   (annotations from `deterministic_consumers.py`, fault events from `fleet_intelligence.py`)
   and never detects anything itself, so a detector change lands in one place and a routing

@@ -11,6 +11,7 @@ import tomllib
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, fields, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -450,8 +451,15 @@ class TranscriptSlice:
     estimated_tokens: int
     truncated: bool
     input_hash: str
+    # How many in-scope messages the window left behind, and where they sit.
+    # A reader whose cursor advances past the window it returned silently drops
+    # transcript forever unless it can see that something remained; a forward
+    # window reports the tail it did not reach so the caller can come back for
+    # it. Zero for every backward window, which by construction cannot resume.
+    remaining: int = 0
+    remaining_from_ts: float | None = None
 
-    def render(self) -> str:
+    def render(self, *, tool_input_chars: int = 0) -> str:
         rows: list[str] = []
         for message in self.messages:
             content: list[str] = []
@@ -459,9 +467,60 @@ class TranscriptSlice:
                 if block.get("type") == "text":
                     content.append(str(block.get("text") or ""))
                 elif block.get("type") == "tool_use":
-                    content.append(f"[tool {block.get('name') or 'unknown'}]")
+                    name = block.get("name") or "unknown"
+                    detail = tool_input_digest(block.get("input"), tool_input_chars)
+                    content.append(f"[tool {name}{f' {detail}' if detail else ''}]")
             rows.append(f"{message.get('role', 'unknown')}: {' '.join(content)}")
         return "\n".join(rows)
+
+
+def tool_input_digest(value: Any, limit: int) -> str:
+    """A bounded one-line rendering of a tool's arguments.
+
+    The parser keeps tool inputs and drops tool results by design, so arguments
+    are the only evidence a reader has of *what* a call touched. Rendering the
+    name alone threw that away and left a behavioural summariser guessing which
+    file was read or which command ran. Bounded hard, because a single native
+    input can be hundreds of kilobytes.
+    """
+    if limit <= 0 or value is None:
+        return ""
+    try:
+        text = (
+            value
+            if isinstance(value, str)
+            else json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str)
+        )
+    except (TypeError, ValueError):  # pragma: no cover - default=str makes this unreachable
+        return ""
+    text = " ".join(str(text).split())
+    return text[:limit] + "…" if len(text) > limit else text
+
+
+def slice_timestamp(value: Any) -> float | None:
+    """Epoch seconds from any transcript timestamp shape, milliseconds included.
+
+    Dialects disagree: some write ISO-8601, some epoch seconds, some epoch
+    milliseconds. A reader that compares a millisecond stamp against a
+    second-denominated cursor passes every message, which turns an incremental
+    window into "the last N messages" without failing anywhere.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        stamp = float(value)
+        return stamp / 1000 if stamp > 10_000_000_000 else stamp
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        try:
+            stamp = float(text)
+        except ValueError:
+            try:
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+        return stamp / 1000 if stamp > 10_000_000_000 else stamp
+    return None
 
 
 def normalize_event(
@@ -736,7 +795,7 @@ def _encodable_messages(
 
 
 def _read_bounded(
-    path: Path | None, backend: str, max_bytes: int, native_id: str | None
+    path: Path | None, backend: str, max_bytes: int | None, native_id: str | None
 ) -> list[dict[str, Any]]:
     """Positional `parse_transcript_cached`, since `asyncio.to_thread` takes no keywords."""
     return parse_transcript_cached(path, backend, max_bytes=max_bytes, native_id=native_id)
@@ -762,7 +821,7 @@ class TranscriptSliceService:
         if since_ts is not None:
             filtered: list[dict[str, Any]] = []
             for item in messages:
-                timestamp = _timestamp(item.get("ts"))
+                timestamp = slice_timestamp(item.get("ts"))
                 if timestamp is None or timestamp >= since_ts:
                     filtered.append(item)
             messages = filtered
@@ -789,6 +848,73 @@ class TranscriptSliceService:
             max(1, len(encoded) // 4),
             len(selected) < len(messages),
             hashlib.sha256(encoded).hexdigest(),
+        )
+
+    async def build_forward(
+        self,
+        path: Path | None,
+        backend: str,
+        *,
+        since_ts: float,
+        max_messages: int,
+        max_bytes: int,
+        read_bytes: int | None = None,
+        native_id: str | None = None,
+        read_timeout: float = 20.0,
+    ) -> TranscriptSlice:
+        """The OLDEST unread messages after ``since_ts``, plus what is left over.
+
+        ``build`` returns the newest window and trims from the front, which is
+        right for "summarise what just happened" and wrong for any caller that
+        advances a cursor: everything trimmed sits *before* the window, so a
+        cursor moved to its end skips it permanently. This walks forward
+        instead, so a caller consumes a busy stretch in consecutive chunks with
+        no hole, and ``remaining`` tells it whether to come straight back.
+        """
+        started = time.monotonic()
+        messages = await asyncio.wait_for(
+            asyncio.to_thread(_read_bounded, path, backend, read_bytes, native_id),
+            timeout=read_timeout,
+        )
+        pending = [
+            item
+            for item in messages
+            if (stamp := slice_timestamp(item.get("ts"))) is None or stamp > since_ts
+        ]
+        selected = pending[: max(1, max_messages)]
+        selected, encoded = _encodable_messages(selected)
+        while len(selected) > 1 and len(encoded) > max_bytes:
+            selected, encoded = _encodable_messages(selected[:-1])
+        leftover = pending[len(selected) :]
+        remaining_from = next(
+            (
+                stamp
+                for item in leftover
+                if (stamp := slice_timestamp(item.get("ts"))) is not None
+            ),
+            None,
+        )
+        log.debug(
+            "forward slice backend=%s since=%.3f read=%d in-scope=%d selected=%d "
+            "bytes=%d remaining=%d elapsed=%.3fs",
+            backend,
+            since_ts,
+            len(messages),
+            len(pending),
+            len(selected),
+            len(encoded),
+            len(leftover),
+            time.monotonic() - started,
+        )
+        return TranscriptSlice(
+            "since_event_forward",
+            tuple(selected),
+            len(encoded),
+            max(1, len(encoded) // 4),
+            bool(leftover),
+            hashlib.sha256(encoded).hexdigest(),
+            remaining=len(leftover),
+            remaining_from_ts=remaining_from,
         )
 
     @staticmethod
@@ -2565,19 +2691,6 @@ def _template(template: str, event: dict[str, Any], result: dict[str, Any] | Non
         return "" if value is None else str(value)
 
     return re.sub(r"\{([a-zA-Z0-9_.-]+)\}", replace, template)
-
-
-def _timestamp(value: Any) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            from datetime import datetime
-
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return None
-    return None
 
 
 def _validate_result(value: dict[str, Any], schema: dict[str, Any]) -> None:

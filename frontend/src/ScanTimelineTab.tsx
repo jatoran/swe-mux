@@ -2,26 +2,48 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import type { Session } from './types'
 
+type Coverage = {messages_seen:number;facts_seen:number;truncated:boolean;remaining?:number}
 type TimelineRecord = {
   id:string;agent_run_id:string;t0:number;t1:number;lifecycle_state:string
   behavior:string[];work_phase:string;target:string[];intent:string;claim:string
   user_ask:string;blocked_on:string;summary:string;approach_status:string
   dead_end:string;novelty:number;confidence:number;trigger:string;observer_model:string
+  coverage?:Coverage;repairs?:string[]
 }
 type Boundary = {id:string;previous_run_id:string;next_run_id:string;reason:string;created_at:number}
 type Metrics = {record_reads:number;rehydrations:number;rehydration_rate:number}
-type Backfill = {state:'idle'|'running'|'completed'|'partial'|'failed';processed_chunks:number;total_chunks:number;created_records:number;reason:string|null}
+type BackfillState = 'idle'|'running'|'completed'|'completed_with_gaps'|'partial'|'failed'
+type Backfill = {
+  state:BackfillState;processed_chunks:number;total_chunks:number;created_records:number
+  failed_chunks?:number;skipped_chunks?:number;reason:string|null;estimated_tokens?:number
+}
+type Gate = {id:string;label:string;unit:'tokens'|'usd'|'calls';used:number;limit:number}
 type ProjectContext = {project_id:string;path:string;exists:boolean;revision:string;markdown:string;max_bytes:number;generation_prompt:string}
 type TimelineState = {
   session_id:string;project_id:string|null;agent_run_id:string|null;global_enabled:boolean;project_enabled:boolean
   run_enabled:boolean;model:string;daily_budget_usd:number
   spend_today:{tokens:number;cost_usd:number};run_token_budget:number
-  run_spend:{tokens:number;cost_usd:number};metrics:Metrics
+  run_spend:{tokens:number;cost_usd:number};metrics:Metrics;gates:Gate[]
+  skip_reason:string|null;last_scan_at:number|null
   records:TimelineRecord[];boundaries:Boundary[];backfill:Backfill
 }
 
 const clock = (value:number) => new Date(value*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})
 const percent = (value:number) => `${Math.round(value*100)}%`
+const amount = (gate:Gate) => gate.unit==='usd'
+  ? `$${gate.used.toFixed(4)} / $${gate.limit.toFixed(2)}`
+  : `${Math.round(gate.used).toLocaleString()} / ${Math.round(gate.limit).toLocaleString()} ${gate.unit}`
+// Whichever cap is closest to stopping the timeline. Showing the run budget and
+// the project dollar figure while an invisible per-rule token cap did the
+// stopping is what made a dead timeline look like it had headroom to spare.
+const headroom = (gate:Gate) => gate.limit>0 ? gate.used/gate.limit : 0
+const bindingGate = (gates:Gate[]) => gates.length
+  ? gates.reduce((worst,gate)=>headroom(gate)>headroom(worst)?gate:worst)
+  : null
+const backfillLabel:Record<BackfillState,string> = {
+  idle:'idle', running:'running', completed:'complete',
+  completed_with_gaps:'complete with gaps', partial:'stopped early', failed:'failed',
+}
 
 export function ScanTimelineTab({session}:{session:Session|null}) {
   const [state,setState]=useState<TimelineState|null>(null)
@@ -101,6 +123,13 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
+  const stopBackfill=async()=>{
+    if(!sid)return
+    setBusy(true)
+    try{await api('DELETE',`/api/sessions/${sid}/scan-timeline/backfill`);await load()}
+    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
+    finally{setBusy(false)}
+  }
   const saveContext=async()=>{
     if(!state?.project_id||!context)return
     setBusy(true);setContextMessage('')
@@ -129,6 +158,8 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
   if(!session)return <p class="drawer-empty">Focus an agent session to view its scan timeline.</p>
   if(!state)return <div class="scan-timeline-panel"><p>{error||'Loading timeline…'}</p></div>
   const allowed=state.global_enabled&&state.project_enabled
+  const binding=bindingGate(state.gates||[])
+  const running=state.backfill.state==='running'
   const events=[
     ...state.records.map(record=>({kind:'record' as const,at:record.t1,record})),
     ...state.boundaries.map(boundary=>({kind:'boundary' as const,at:boundary.created_at,boundary})),
@@ -148,17 +179,20 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
       <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
       <label class="scan-run-toggle"><span>this run</span><input type="checkbox" checked={state.run_enabled} disabled={busy||!allowed||!state.agent_run_id} onChange={event=>void toggle(event.currentTarget.checked)}/></label>
     </header>
-    <div class="scan-spend-line" title="Timeline cost and compressed-record source expansion rate">
-      <span>${state.spend_today.cost_usd.toFixed(4)} / ${state.daily_budget_usd.toFixed(2)} today</span>
-      <span>{state.spend_today.tokens.toLocaleString()} tokens</span>
-      <span>run {state.run_spend.tokens.toLocaleString()} / {state.run_token_budget.toLocaleString()} tokens</span>
-      <span>rehydration {percent(state.metrics.rehydration_rate)} ({state.metrics.rehydrations}/{state.metrics.record_reads})</span>
+    <div class="scan-spend-line" title="Every cap that can stop the timeline. The first one is whichever is closest.">
+      {binding&&<span class={headroom(binding)>=0.9?'scan-gate-binding':undefined}>{binding.label} {amount(binding)}</span>}
+      {state.gates.filter(gate=>gate!==binding).map(gate=><span key={gate.id}>{gate.label} {amount(gate)}</span>)}
     </div>
     {!state.global_enabled&&<p class="scan-gate">The global Scan timeline switch is off in Automation.</p>}
     {state.global_enabled&&!state.project_enabled&&<p class="scan-gate">This Project has not permitted Scan timeline and its dependencies.</p>}
     {allowed&&!state.run_enabled&&<p class="scan-gate">Off for this conversation. Enable it here when you want a timeline. It resets on /clear, /new, or session end.</p>}
+    {allowed&&state.run_enabled&&state.skip_reason&&<p class="scan-gate scan-stopped">Not scanning: {state.skip_reason}.</p>}
     {error&&<p class="usage-error">{error}</p>}
-    {state.backfill.state!=='idle'&&<p class={`scan-backfill-status ${state.backfill.state}`}>{state.backfill.state==='running'?`Scanning full session · ${state.backfill.processed_chunks}/${state.backfill.total_chunks||'…'} chunks`:`Full-session scan ${state.backfill.state} · ${state.backfill.created_records} records${state.backfill.reason?` · ${state.backfill.reason}`:''}`}</p>}
+    {state.backfill.state!=='idle'&&<p class={`scan-backfill-status ${state.backfill.state}`}>
+      {state.backfill.state==='running'
+        ? `Scanning full session · ${state.backfill.processed_chunks}/${state.backfill.total_chunks||'…'} chunks · ${state.backfill.created_records} records`
+        : `Full-session scan ${backfillLabel[state.backfill.state]} · ${state.backfill.processed_chunks}/${state.backfill.total_chunks} chunks · ${state.backfill.created_records} records${state.backfill.failed_chunks?` · ${state.backfill.failed_chunks} chunks failed`:''}${state.backfill.skipped_chunks?` · ${state.backfill.skipped_chunks} already covered`:''}${state.backfill.reason?` · ${state.backfill.reason}`:''}`}
+    </p>}
     <div class="scan-timeline-list">
       {state.records.length===0&&<p class="drawer-empty">No scan records for this session.</p>}
       {events.map(event=>{
@@ -177,12 +211,25 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
               <summary>Evidence targets <span>{record.target.length}</span></summary>
               <ul>{record.target.map(target=><li key={target}><code>{target}</code></li>)}</ul>
             </details>}
+            {!!record.coverage?.remaining&&<p class="scan-record-lag">{record.coverage.remaining} later messages were still unscanned when this record was written; a catch-up scan follows.</p>}
+            {!!record.repairs?.length&&<details class="scan-record-targets scan-record-repairs">
+              <summary>Model output repaired <span>{record.repairs.length}</span></summary>
+              <ul>{record.repairs.map(repair=><li key={repair}>{repair}</li>)}</ul>
+            </details>}
             <footer><span>{record.behavior.join(' · ')} · confidence {percent(record.confidence)}</span><button disabled={busy} onClick={()=>void source(record)}>{expanded[record.id]!==undefined?'Hide source':'View source'}</button></footer>
             {expanded[record.id]!==undefined&&<pre class="scan-source">{JSON.stringify(expanded[record.id],null,2)}</pre>}
           </article>
         </div>
       })}
     </div>
-    <footer><div><button disabled={busy||!state.run_enabled||state.backfill.state==='running'} onClick={()=>void scan()}>Scan now</button><button disabled={busy||!state.run_enabled||state.backfill.state==='running'} onClick={()=>void backfill()}>Scan full session</button></div><span>Event-triggered · 3 minute heartbeat</span></footer>
+    <footer>
+      <div>
+        <button disabled={busy||!state.run_enabled||running} onClick={()=>void scan()}>Scan now</button>
+        {running
+          ? <button disabled={busy} onClick={()=>void stopBackfill()}>Stop full scan</button>
+          : <button disabled={busy||!state.run_enabled} onClick={()=>void backfill()}>Scan full session</button>}
+      </div>
+      <span title={`source expansions ${state.metrics.rehydrations}/${state.metrics.record_reads}`}>Event-triggered · 3 minute heartbeat</span>
+    </footer>
   </section>
 }

@@ -21,7 +21,7 @@ from .sqlite_store import (
 
 T = TypeVar("T")
 
-AUTOMATION_SCHEMA_VERSION = 7
+AUTOMATION_SCHEMA_VERSION = 8
 
 # Floor for the second retention window (see `AutomationStore.prune`). Derived
 # knowledge outlives the operational trail that produced it.
@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS automation_observer_calls (
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_usd REAL, latency_ms INTEGER, provider_name TEXT, finish_reason TEXT,
   response_content_type TEXT, response_content_length INTEGER,
-  http_status INTEGER, retryable INTEGER, error TEXT, created_at REAL NOT NULL,
+  http_status INTEGER, retryable INTEGER, error TEXT, response_excerpt TEXT,
+  created_at REAL NOT NULL,
   completed_at REAL
 );
 CREATE TABLE IF NOT EXISTS automation_checkpoints (
@@ -190,6 +191,19 @@ CREATE TABLE IF NOT EXISTS scan_timeline_metrics (
   rehydrations INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO scan_timeline_metrics(id,record_reads,rehydrations) VALUES(1,0,0);
+-- A full-session scan is a multi-minute job whose outcome is the only record of
+-- which parts of a conversation were reached. Holding it in process memory made
+-- a daemon restart report `idle` for a job that had actually stopped half way,
+-- with no reason and no chunk counts.
+CREATE TABLE IF NOT EXISTS scan_timeline_backfills (
+  agent_run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, project_id TEXT NOT NULL,
+  state TEXT NOT NULL, processed_chunks INTEGER NOT NULL DEFAULT 0,
+  total_chunks INTEGER NOT NULL DEFAULT 0, created_records INTEGER NOT NULL DEFAULT 0,
+  failed_chunks INTEGER NOT NULL DEFAULT 0, skipped_chunks INTEGER NOT NULL DEFAULT 0,
+  reason TEXT, started_at REAL NOT NULL, updated_at REAL NOT NULL, completed_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_scan_backfills_session
+  ON scan_timeline_backfills(session_id,updated_at DESC);
 CREATE TABLE IF NOT EXISTS session_lineage (
   id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL, child_run_id TEXT NOT NULL,
   relation TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at REAL NOT NULL,
@@ -310,6 +324,11 @@ class AutomationStore:
             "response_content_length": "INTEGER",
             "http_status": "INTEGER",
             "retryable": "INTEGER",
+            # A response the provider billed for but we refused to store used to
+            # leave only the exception text behind, so "the model returned
+            # something invalid" could never be turned into "*this* is what it
+            # returned". Bounded, and only written on a failure path.
+            "response_excerpt": "TEXT",
         }
         for column, sql_type in observer_diagnostics.items():
             if observer_calls and column not in observer_calls:
@@ -624,13 +643,14 @@ class AutomationStore:
         http_status: int | None = None,
         retryable: bool | None = None,
         error: str | None = None,
+        response_excerpt: str | None = None,
     ) -> None:
         def op() -> None:
             self._db.execute(
                 "UPDATE automation_observer_calls SET status=?,resolved_model=?,generation_id=?,"
                 "input_tokens=?,output_tokens=?,cost_usd=?,latency_ms=?,provider_name=?,"
                 "finish_reason=?,response_content_type=?,response_content_length=?,"
-                "http_status=?,retryable=?,error=?,completed_at=? "
+                "http_status=?,retryable=?,error=?,response_excerpt=?,completed_at=? "
                 "WHERE id=?",
                 (
                     status,
@@ -647,6 +667,7 @@ class AutomationStore:
                     http_status,
                     None if retryable is None else int(retryable),
                     error,
+                    response_excerpt,
                     time.time(),
                     call_id,
                 ),
@@ -922,6 +943,72 @@ class AutomationStore:
 
     async def scan_run_spend(self, agent_run_id: str) -> dict[str, float | int]:
         return await self.spend(rule_id="builtin:scan-timeline", agent_run_id=agent_run_id)
+
+    async def save_scan_backfill(self, state: dict[str, Any]) -> None:
+        """Upsert one full-session scan job, so its outcome survives a restart."""
+        now = time.time()
+
+        def op() -> None:
+            self._db.execute(
+                "INSERT INTO scan_timeline_backfills"
+                "(agent_run_id,session_id,project_id,state,processed_chunks,total_chunks,"
+                "created_records,failed_chunks,skipped_chunks,reason,started_at,updated_at,"
+                "completed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(agent_run_id) DO UPDATE SET "
+                "session_id=excluded.session_id,project_id=excluded.project_id,"
+                "state=excluded.state,processed_chunks=excluded.processed_chunks,"
+                "total_chunks=excluded.total_chunks,created_records=excluded.created_records,"
+                "failed_chunks=excluded.failed_chunks,skipped_chunks=excluded.skipped_chunks,"
+                "reason=excluded.reason,started_at=excluded.started_at,"
+                "updated_at=excluded.updated_at,completed_at=excluded.completed_at",
+                (
+                    str(state["agent_run_id"]),
+                    str(state["session_id"]),
+                    str(state["project_id"]),
+                    str(state["state"]),
+                    int(state.get("processed_chunks") or 0),
+                    int(state.get("total_chunks") or 0),
+                    int(state.get("created_records") or 0),
+                    int(state.get("failed_chunks") or 0),
+                    int(state.get("skipped_chunks") or 0),
+                    state.get("reason"),
+                    float(state.get("started_at") or now),
+                    now,
+                    state.get("completed_at"),
+                ),
+            )
+            self._db.commit()
+
+        await self._run(op)
+
+    async def scan_backfill(self, agent_run_id: str) -> dict[str, Any] | None:
+        def op() -> dict[str, Any] | None:
+            row = self._db.execute(
+                "SELECT * FROM scan_timeline_backfills WHERE agent_run_id=?", (agent_run_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(op)
+
+    async def interrupt_running_scan_backfills(self) -> int:
+        """Close out jobs whose daemon died mid-run.
+
+        Nothing else can, and a row left at `running` reads as a live job that
+        will never make progress, which is worse than an honest `partial`.
+        """
+        now = time.time()
+
+        def op() -> int:
+            cursor = self._db.execute(
+                "UPDATE scan_timeline_backfills SET state='partial',"
+                "reason=COALESCE(reason,'the daemon stopped before the scan finished'),"
+                "updated_at=?,completed_at=COALESCE(completed_at,?) WHERE state='running'",
+                (now, now),
+            )
+            self._db.commit()
+            return int(cursor.rowcount or 0)
+
+        return await self._run(op)
 
     async def note_scan_record_read(self, *, rehydrated: bool) -> dict[str, float | int]:
         def op() -> dict[str, float | int]:

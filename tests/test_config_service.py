@@ -50,10 +50,43 @@ def test_public_config_describes_the_host_pty_for_xterm(tmp_path: Path) -> None:
         assert descriptor is None
 
 
-def test_scan_timeline_run_budget_supports_substantial_backfills(tmp_path: Path) -> None:
+def test_scan_timeline_budgets_leave_the_token_axis_non_binding(tmp_path: Path) -> None:
+    """A continuous sampler needs headroom the episodic caps never gave it.
+
+    The run budget used to sit *above* the per-rule daily cap that also applied
+    to it, so it was unreachable by construction and the feature stopped after
+    ten calls costing under half a cent.
+    """
     config = load_config(tmp_path / "config.toml")
 
-    assert config.scan_timeline_run_token_budget == 100_000
+    assert config.scan_timeline_run_token_budget == 500_000
+    assert config.scan_timeline_daily_token_budget == 3_000_000
+    assert config.scan_timeline_hourly_call_cap == 600
+    assert config.scan_timeline_max_output_tokens == 900
+    # The global ceiling still applies to a scan, so it has to sit above the
+    # scan's own daily budget or it becomes the new invisible binding cap.
+    assert config.automation_daily_token_budget >= config.scan_timeline_daily_token_budget
+    assert config.automation_hourly_call_cap >= config.scan_timeline_hourly_call_cap
+    assert config.scan_timeline_daily_token_budget >= config.scan_timeline_run_token_budget
+
+
+def test_untouched_legacy_automation_caps_are_lifted_on_upgrade(tmp_path: Path) -> None:
+    legacy = tmp_path / "legacy" / "config.toml"
+    legacy.parent.mkdir()
+    legacy.write_text(
+        "schema_version = 22\n"
+        "automation_rule_daily_token_budget = 50000\n"
+        "automation_hourly_call_cap = 60\n"
+        "scan_timeline_run_token_budget = 100000\n"
+        "automation_daily_token_budget = 123456\n",
+        encoding="utf-8",
+    )
+    migrated = load_config(legacy)
+    assert migrated.automation_rule_daily_token_budget == 4_000_000
+    assert migrated.automation_hourly_call_cap == 1_200
+    assert migrated.scan_timeline_run_token_budget == 500_000
+    # Not a schema-22 default, so it was a deliberate choice and survives.
+    assert migrated.automation_daily_token_budget == 123_456
 
 
 def test_conversation_stt_defaults_and_untouched_sapi_pair_migrate_to_whisper(

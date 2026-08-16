@@ -240,6 +240,7 @@ PUT     /sessions/{session_id}/scan-timeline  {enabled}
 PUT     /sessions/{session_id}/scan-timeline/project {enabled}
 POST    /sessions/{session_id}/scan-timeline/scan
 POST    /sessions/{session_id}/scan-timeline/backfill
+DELETE  /sessions/{session_id}/scan-timeline/backfill
 GET     /sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 ```
 
@@ -268,7 +269,10 @@ The scan-timeline routes expose the readable records and boundaries for one pers
 `POST .../scan` requests one bounded scan and returns no record when there is no new input or a
 budget gate is closed.
 `POST .../backfill` starts an oldest-first background scan of uncovered messages in the current run and returns its initial state.
-The ordinary timeline snapshot carries progress and an honest completed, partial, or failed result.
+`DELETE .../backfill` stops a running job; every record it already wrote stays readable.
+The ordinary timeline snapshot carries chunk progress and an honest `completed`, `completed_with_gaps`, `partial`, or `failed` result, and that result is stored rather than held in daemon memory, so it survives a restart.
+The snapshot also carries `gates`, every quantitative cap that can stop a scan with its current usage, and `skip_reason`, the scanner's own words for why it is currently producing nothing.
+`skip_reason` is null while a run is merely idle; it names a cap or a closed gate only when scanning is actually stopped.
 The record route returns compressed metadata by default; `rehydrate=1` reparses the authoritative
 current or historical run transcript for the record's source interval and increments the measured
 rehydration rate (`features/scan-timeline.md`).

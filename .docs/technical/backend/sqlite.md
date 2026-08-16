@@ -144,5 +144,9 @@ regression is valuable because these user-visible paths historically exposed lea
   table are bounded by run count and construction.
   Backfill inserts use the same record table, record reads order by source time, and run-cursor updates take the maximum existing/source timestamp.
   The shared budget ledger's nullable Project/run dimensions let failed billable calls count
-  toward scan budgets without fabricating a semantic record.
+  toward scan budgets without fabricating a semantic record, including a call the provider billed
+  for whose output local validation refused.
+  `scan_timeline_backfills` holds one durable row per full-session job so a restart reports the
+  job's real outcome instead of `idle`; `interrupt_running_scan_backfills()` closes out rows a
+  dead daemon left at `running`.
 - `tests/test_automation_phase6.py`
