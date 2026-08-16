@@ -19,6 +19,7 @@ export type FirewallStatus = {
   supported:boolean;inspection_available?:boolean;needs_repair?:boolean
   blocking_rule_detected?:boolean;rule_allowed?:boolean;private_firewall_enabled?:boolean
   network_category?:string;detail?:string;port?:number
+  serve_active?:boolean;direct_path_blocked?:boolean
 }
 
 export const CONNECTION_LABEL:Record<TailscaleConnectionState,string>={
@@ -74,11 +75,15 @@ export function PhoneDnsChecklist(){
 // frozen Windows build (status.supported is false).
 export function FirewallPanel({status,busy,message,onRepair}:{status:FirewallStatus|null;busy:boolean;message:string;onRepair:()=>void}){
   if(!status||!status.supported)return null
+  // Only an alarm when the direct 100.x path is actually the phone's path (Serve
+  // down). With Serve up the phone arrives over loopback, so a missing rule is a
+  // quiet, optional note about the direct fallback rather than a red error.
   const needsRepair=status.needs_repair===true
+  const offerRepair=needsRepair||status.direct_path_blocked===true||status.inspection_available===false
   return <div class="remote-firewall">
     <strong>Windows Defender Firewall</strong>
-    <p class={needsRepair?'settings-inline-error':''} aria-live="polite">{status.detail}</p>
-    {(needsRepair||status.inspection_available===false)&&<div class="theme-actions"><button class="primary" disabled={busy} onClick={onRepair}>{busy?'Repairing…':'Repair firewall rule'}</button></div>}
+    <p class={needsRepair?'settings-inline-error':'profile-hint'} aria-live="polite">{status.detail}</p>
+    {offerRepair&&<div class="theme-actions"><button class={needsRepair?'primary':''} disabled={busy} onClick={onRepair}>{busy?'Repairing…':needsRepair?'Repair firewall rule':'Add rule for direct 100.x fallback'}</button></div>}
     {message&&<p class={/decline|did not|could not/i.test(message)?'settings-inline-error':''} aria-live="polite">{message}</p>}
   </div>
 }

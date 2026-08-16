@@ -186,6 +186,34 @@ def test_desktop_only_allow_scope_still_needs_repair() -> None:
     assert result["needs_repair"] is True
 
 
+def test_serve_active_suppresses_the_repair_alarm() -> None:
+    # A missing Allow rule blocks the direct 100.x path, but when Tailscale Serve
+    # proxies the port over loopback the phone never uses that path, so no alarm.
+    parsed = {
+        "blockingRuleDetected": False,
+        "privateFirewallEnabled": True,
+        "matchingRuleScopes": [],
+    }
+    serve_down = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed, serve_active=False)
+    assert serve_down["needs_repair"] is True
+    serve_up = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed, serve_active=True)
+    assert serve_up["needs_repair"] is False
+    assert serve_up["direct_path_blocked"] is True
+    assert "Serve" in str(serve_up["detail"])
+
+
+def test_serve_active_downgrades_a_blocking_rule_to_a_note() -> None:
+    parsed = {
+        "blockingRuleDetected": True,
+        "privateFirewallEnabled": True,
+        "matchingRuleScopes": [],
+    }
+    serve_up = firewall.interpret_inspection(8765, r"C:\swe-mux.exe", parsed, serve_active=True)
+    assert serve_up["needs_repair"] is False
+    assert serve_up["blocking_rule_detected"] is True
+    assert serve_up["direct_path_blocked"] is True
+
+
 def test_inspection_script_quotes_program_and_port() -> None:
     script = firewall.build_inspection_script(8765, r"C:\Program Files\swe-mux.exe")
     assert "'C:\\Program Files\\swe-mux.exe'" in script

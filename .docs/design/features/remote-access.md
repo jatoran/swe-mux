@@ -59,9 +59,15 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   automatic.
   A missing Tailscale DNS setting is the most common silent first-connect failure.
 - Windows only: swe-mux binds a real host socket on the `100.x` tailnet address, so Windows
-  Defender Firewall governs inbound to `swe-mux.exe` on the Private profile.
-  A blocking or absent inbound rule silently stops the first phone connect while the desktop keeps
-  working over loopback.
+  Defender Firewall governs inbound to `swe-mux.exe` on the Private profile for the direct
+  `100.x:<port>` HTTP path.
+  It does not govern the secure Tailscale Serve path: Serve terminates TLS in `tailscaled` on 443
+  and proxies to `127.0.0.1:<port>`, which is a loopback connection the firewall never blocks.
+  So when Serve is up (the normal case, auto-started at boot), the phone connects regardless of the
+  firewall, and a missing or blocking inbound rule only affects the direct `100.x` fallback.
+  The inspection therefore reads Serve state (`serve_active`) and only raises the repair alarm
+  (`needs_repair`) when Serve is down and the direct path is the phone's only route; with Serve up
+  it reports the direct-fallback rule state as a quiet note (`direct_path_blocked`) instead.
   `GET /api/remote/firewall` inspects for a blocking or missing rule, and `POST
   /api/remote/firewall/repair` (explicit-action header required) runs a one-click elevated
   PowerShell repair that removes conflicting Block rules and adds one scoped inbound Allow rule.

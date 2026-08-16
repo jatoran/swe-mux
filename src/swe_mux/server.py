@@ -2106,8 +2106,16 @@ async def firewall_status(request: web.Request) -> web.Response:
         return json_response(await inspect_firewall(None))
     # The tailnet adapter's network category decides which firewall profile
     # governs the inbound phone connection, so its address seeds the lookup.
+    # Serve state matters more: when Serve proxies the port over loopback, the
+    # phone never touches the direct 100.x socket the firewall governs, so a
+    # missing inbound rule is not a connect failure. Derive it so the panel does
+    # not cry wolf on the normal (Serve) path.
+    status = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
+    serve_active = bool(status.get("serve_configured") or status.get("mobile_voice_configured"))
     address = await tailscale_ipv4()
-    return json_response(await inspect_firewall(config.port, address))
+    return json_response(
+        await inspect_firewall(config.port, address, serve_active=serve_active)
+    )
 
 
 async def firewall_repair(request: web.Request) -> web.Response:
@@ -4970,7 +4978,12 @@ async def diagnostics_export(request: web.Request) -> web.Response:
     remote = await tailscale_status(config.port, tailnet_enabled=config.tailnet_enabled)
     firewall: dict[str, object] = {"supported": False}
     if firewall_supported():
-        firewall = await inspect_firewall(config.port, await tailscale_ipv4())
+        serve_active = bool(
+            remote.get("serve_configured") or remote.get("mobile_voice_configured")
+        )
+        firewall = await inspect_firewall(
+            config.port, await tailscale_ipv4(), serve_active=serve_active
+        )
 
     live = sum(session.pty.isalive() for session in sessions.sessions.values())
     export = {

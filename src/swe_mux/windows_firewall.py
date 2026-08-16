@@ -145,55 +145,90 @@ def _network_category(value: Any) -> str:
     }.get(str(value), "unknown")
 
 
-def _inspection_detail(*, blocking: bool, needs_repair: bool, private_enabled: bool) -> str:
+def _inspection_detail(
+    *, blocking: bool, direct_path_blocked: bool, private_enabled: bool, serve_active: bool
+) -> str:
+    # When Tailscale Serve is up, the phone reaches swe-mux over the loopback proxy
+    # (tailscaled terminates TLS on 443 and forwards to 127.0.0.1:<port>), which
+    # Windows Firewall never governs. The inbound rule only affects the direct
+    # 100.x HTTP fallback, so a missing or blocking rule is not a phone-connect
+    # failure here, only a latent issue for that fallback.
+    if serve_active:
+        if blocking:
+            return (
+                "Phone access works over the secure Tailscale Serve address (a loopback "
+                "proxy the firewall does not govern). A firewall rule blocks the direct "
+                "100.x HTTP fallback; repair it only if you use that fallback."
+            )
+        if direct_path_blocked:
+            return (
+                "Phone access works over the secure Tailscale Serve address (a loopback "
+                "proxy the firewall does not govern). The direct 100.x HTTP fallback has no "
+                "inbound Allow rule; repair it only if you use that fallback."
+            )
+        return (
+            "Phone access works over the secure Tailscale Serve address, and the direct "
+            "100.x HTTP fallback is also allowed."
+        )
     if blocking:
         return (
-            "A Windows Defender Firewall rule blocks inbound connections to swe-mux "
-            "on private networks. The first phone connect will silently fail. "
-            "Repair removes the block and adds a scoped Allow rule."
+            "A Windows Defender Firewall rule blocks inbound connections to swe-mux on "
+            "private networks, and Tailscale Serve is not up to route the phone over "
+            "loopback, so a phone using the direct 100.x address cannot connect. Repair "
+            "removes the block and adds a scoped Allow rule."
         )
     if not private_enabled:
         return (
-            "The private firewall profile is disabled, so inbound connections are "
-            "already allowed. No firewall rule is needed."
+            "The private firewall profile is disabled, so inbound connections are already "
+            "allowed. No firewall rule is needed."
         )
-    if needs_repair:
+    if direct_path_blocked:
         return (
-            "No inbound firewall rule admits phone connections to swe-mux on private "
-            "networks, so the first phone connect will silently fail while the "
-            "desktop keeps working. Repair adds a scoped Allow rule."
+            "Tailscale Serve is not up, so the phone would use the direct 100.x address, "
+            "but no inbound firewall rule admits it, so the connect will silently fail. "
+            "Repair adds a scoped Allow rule (or set up the secure mobile address instead)."
         )
-    return (
-        "Windows Defender Firewall allows inbound phone connections to swe-mux on "
-        "private networks."
-    )
+    return "Windows Defender Firewall allows inbound connections to swe-mux on private networks."
 
 
-def interpret_inspection(port: int, program_path: str, parsed: Any) -> dict[str, object]:
+def interpret_inspection(
+    port: int, program_path: str, parsed: Any, *, serve_active: bool = False
+) -> dict[str, object]:
     """Turn parsed PowerShell inspection output into the display status.
 
-    Pure and platform-independent, so the block/allow/scope logic is unit-tested
-    against fixtures without a Windows host or a real firewall.
+    ``serve_active`` is whether Tailscale Serve proxies this port over loopback. When
+    it does, the inbound firewall rule is irrelevant to phone connectivity (the
+    phone arrives via loopback), so a missing or blocking rule is reported without
+    raising the repair alarm. Pure and platform-independent, so the block/allow/
+    scope logic is unit-tested against fixtures without a Windows host.
     """
     if not isinstance(parsed, dict):
-        return _unavailable_status(port, program_path)
+        return _unavailable_status(port, program_path, serve_active=serve_active)
     blocking = parsed.get("blockingRuleDetected") is True
     private_enabled = parsed.get("privateFirewallEnabled") is not False
     has_scope = _has_sufficient_scope(parsed.get("matchingRuleScopes"))
-    # A disabled private profile already admits inbound, so nothing needs fixing.
-    needs_repair = blocking or (private_enabled and not has_scope)
+    # The direct 100.x inbound path is blocked when a Block rule exists, or the
+    # private profile is on with no scope-sufficient Allow rule.
+    direct_path_blocked = blocking or (private_enabled and not has_scope)
+    # But that only stops a phone connect when Serve is not routing over loopback.
+    needs_repair = direct_path_blocked and not serve_active
     return {
         "supported": True,
         "inspection_available": True,
         "port": port,
         "program": program_path,
+        "serve_active": serve_active,
         "rule_allowed": not blocking and has_scope,
         "blocking_rule_detected": blocking,
+        "direct_path_blocked": direct_path_blocked,
         "needs_repair": needs_repair,
         "private_firewall_enabled": private_enabled,
         "network_category": _network_category(parsed.get("networkCategory")),
         "detail": _inspection_detail(
-            blocking=blocking, needs_repair=needs_repair, private_enabled=private_enabled
+            blocking=blocking,
+            direct_path_blocked=direct_path_blocked,
+            private_enabled=private_enabled,
+            serve_active=serve_active,
         ),
     }
 
@@ -202,7 +237,9 @@ def _unsupported_status() -> dict[str, object]:
     return {"supported": False, "inspection_available": False, "needs_repair": False}
 
 
-def _unavailable_status(port: int, program_path: str) -> dict[str, object]:
+def _unavailable_status(
+    port: int, program_path: str, *, serve_active: bool = False
+) -> dict[str, object]:
     # Firewall inspection is advisory; an unavailable PowerShell or a managed
     # policy must not nag or hide the explicit repair option.
     return {
@@ -210,14 +247,17 @@ def _unavailable_status(port: int, program_path: str) -> dict[str, object]:
         "inspection_available": False,
         "port": port,
         "program": program_path,
+        "serve_active": serve_active,
         "rule_allowed": False,
         "blocking_rule_detected": False,
+        "direct_path_blocked": False,
         "needs_repair": False,
         "private_firewall_enabled": True,
         "network_category": "unknown",
         "detail": (
             "swe-mux could not inspect Windows Defender Firewall on this machine. "
-            "You can still run the repair to add an inbound Allow rule."
+            "You can still run the repair to add an inbound Allow rule for the direct "
+            "100.x fallback."
         ),
     }
 
@@ -336,11 +376,18 @@ async def inspect_firewall(
     port: int | None,
     address: str | None = None,
     *,
+    serve_active: bool = False,
     program_path: str | None = None,
     runner: PowerShellRunner | None = None,
     timeout: float = POWERSHELL_TIMEOUT_SECONDS,  # noqa: ASYNC109
 ) -> dict[str, object]:
-    """Report whether Defender Firewall admits phone connections to swe-mux."""
+    """Report whether Defender Firewall admits phone connections to swe-mux.
+
+    ``serve_active`` should be true when Tailscale Serve proxies this port over
+    loopback, so a missing or blocking inbound rule is not flagged as a phone-
+    connect failure (the phone arrives via loopback, which the firewall never
+    governs; the rule only affects the direct 100.x HTTP fallback).
+    """
     if not firewall_supported() or port is None:
         return _unsupported_status()
     program = program_path or firewall_program_path()
@@ -349,8 +396,8 @@ async def inspect_firewall(
         raw = await run(build_inspection_script(port, program, address), timeout)
         parsed = json.loads(raw.strip())
     except (OSError, TimeoutError, ValueError, RuntimeError):
-        return _unavailable_status(port, program)
-    return interpret_inspection(port, program, parsed)
+        return _unavailable_status(port, program, serve_active=serve_active)
+    return interpret_inspection(port, program, parsed, serve_active=serve_active)
 
 
 async def repair_firewall(
