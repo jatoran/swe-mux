@@ -1083,6 +1083,12 @@ export function App() {
       if(within||(activation.mode==='hold-move'&&armed))touch.preventDefault()
     }
     if(event.pointerType==='touch')window.addEventListener('touchmove',blockTouchScroll,{passive:false})
+    // Android long-press fires a native `contextmenu` ~500ms into a stationary touch and
+    // cancels the pointer with it, killing a hold that lingered before dragging. The rows
+    // gate their own onContextMenu to desktop, so nothing else wants this event while a
+    // touch drag candidate is down.
+    const suppressContextMenu=(menu:Event)=>menu.preventDefault()
+    if(event.pointerType==='touch')window.addEventListener('contextmenu',suppressContextMenu,true)
     const cleanup=()=>{
       if(activePointerDragCancelRef.current===cancel)activePointerDragCancelRef.current=null
       releaseDragClaim?.();releaseDragClaim=null
@@ -1090,10 +1096,11 @@ export function App() {
       window.removeEventListener('pointerup',up)
       window.removeEventListener('pointercancel',cancelPointer)
       window.removeEventListener('touchmove',blockTouchScroll)
-      window.removeEventListener('blur',cancel)
+      window.removeEventListener('contextmenu',suppressContextMenu,true)
+      window.removeEventListener('blur',blurCancel)
       window.removeEventListener('keydown',key,true)
-      source.removeEventListener('lostpointercapture',lostCapture)
-      if(source.hasPointerCapture(pointerId))source.releasePointerCapture(pointerId)
+      document.body.removeEventListener('lostpointercapture',lostCapture)
+      if(document.body.hasPointerCapture(pointerId))document.body.releasePointerCapture(pointerId)
       if(activationTimer!==null)window.clearTimeout(activationTimer)
       activationTimer=null
       document.body.classList.remove('workspace-pointer-dragging')
@@ -1110,11 +1117,11 @@ export function App() {
       ghost.style.transform=`translate3d(${clientX+14}px,${clientY+12}px,0)`
       dragTrace(identity,'drag')
     }
-    const finish=(commit:boolean)=>{
+    const finish=(commit:boolean,cause:string)=>{
       if(done)return
       done=true
       const wasDragging=dragging
-      dragTrace(identity,'finish',{active,dragging:wasDragging,commit})
+      dragTrace(identity,'finish',{active,dragging:wasDragging,commit,cause})
       cleanup()
       if(!active)return
       window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
@@ -1130,7 +1137,14 @@ export function App() {
       if(activationTimer!==null)window.clearTimeout(activationTimer)
       activationTimer=null
       releaseDragClaim=claimPointerDrag();suppressDragClickRef.current=identity
-      try{source.setPointerCapture(pointerId)}catch{finish(false);return}
+      // Capture on the body, never on the row: a `hold` opens its menu from onStart, and
+      // that render can move the row node — a captured element that leaves the document
+      // (even for the instant of an insertBefore) drops the capture, and the resulting
+      // `lostpointercapture` killed the gesture one frame after it activated. The body
+      // never moves (RailEditor learned the same lesson with its chip preview). Capture is
+      // best effort — the real event routing is the window listeners keyed by pointerId —
+      // but holding it keeps the stream off whatever lands under the finger, menu included.
+      try{document.body.setPointerCapture(pointerId)}catch{/* window listeners still track the pointer */}
       dragTrace(identity,'activate',{mode:activation.mode})
       // A `hold` opens its menu here (via onStart) and shows no ghost yet — the drag begins
       // only once the finger travels past DRAG_BEGIN, which dismisses that menu. Every other
@@ -1147,12 +1161,12 @@ export function App() {
           // Inside slop: still the hold settling. Past slop before the hold armed: a
           // scroll this drag never owned. Past slop once armed: the drag begins.
           if(distance<=activation.slop)return
-          if(!armed){finish(false);return}
+          if(!armed){finish(false,'unarmed-move');return}
           activate(pointer.clientX,pointer.clientY)
         }else{
           const decision=pointerDragMoveDecision(activation,distance)
           if(decision==='wait')return
-          if(decision==='cancel'){finish(false);return}
+          if(decision==='cancel'){finish(false,'move-cancel');return}
           activate(pointer.clientX,pointer.clientY)
         }
       }
@@ -1166,17 +1180,18 @@ export function App() {
       if(ghost)ghost.style.transform=`translate3d(${pointer.clientX+14}px,${pointer.clientY+12}px,0)`
       onMove(pointer)
     }
-    const up=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(true)}
-    const cancelPointer=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false)}
-    const lostCapture=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false)}
-    const cancel=()=>finish(false)
-    const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false)}}
+    const up=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(true,'up')}
+    const cancelPointer=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false,'pointercancel')}
+    const lostCapture=(pointer:PointerEvent)=>{if(pointer.pointerId===pointerId)finish(false,'lostcapture')}
+    const blurCancel=()=>finish(false,'blur')
+    const cancel=()=>finish(false,'external')
+    const key=(keyboard:KeyboardEvent)=>{if(keyboard.key==='Escape'){keyboard.preventDefault();finish(false,'escape')}}
     window.addEventListener('pointermove',move,{passive:false})
     window.addEventListener('pointerup',up)
     window.addEventListener('pointercancel',cancelPointer)
-    window.addEventListener('blur',cancel)
+    window.addEventListener('blur',blurCancel)
     window.addEventListener('keydown',key,true)
-    source.addEventListener('lostpointercapture',lostCapture)
+    document.body.addEventListener('lostpointercapture',lostCapture)
     activePointerDragCancelRef.current=cancel
     // `hold` lifts the row on a stationary hold (the mobile reorder model): one buzz, no move
     // to time, and because it claims the pointer before any movement exists, the swipe
