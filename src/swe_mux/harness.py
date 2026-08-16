@@ -190,7 +190,6 @@ class HarnessDescriptor:
     # How mux finds this harness's past conversations. See :class:`ConversationDiscovery`.
     conversation_discovery: ConversationDiscovery | None
     reports_transcript_path: bool
-    external_usage_command: bool
     provider_account_management: bool
     hook_ordering_guarantee: bool
     # Whether the harness's TUI repaints or reflows content that already sits in
@@ -673,7 +672,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             subdirectory=("projects",), pattern="*.jsonl", cwd_scoped=True
         ),
         reports_transcript_path=True,
-        external_usage_command=True,
         provider_account_management=True,
         hook_ordering_guarantee=False,
         repaints_scrollback=False,
@@ -756,7 +754,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             subdirectory=("sessions",), pattern="rollout-*.jsonl"
         ),
         reports_transcript_path=True,
-        external_usage_command=True,
         provider_account_management=True,
         hook_ordering_guarantee=False,
         repaints_scrollback=True,
@@ -839,7 +836,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             subdirectory=("sessions",), pattern="*.jsonl"
         ),
         reports_transcript_path=True,
-        external_usage_command=False,
         provider_account_management=False,
         hook_ordering_guarantee=True,
         repaints_scrollback=True,
@@ -918,7 +914,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # breadcrumb (measured 2026-08-10 — its data home holds only auth.json,
         # extensions/, and sessions/, and upstream pi-tui ships no ttyid.ts).
         reports_transcript_path=True,
-        external_usage_command=False,
         provider_account_management=False,
         # In-process extension, ordered against its own transcript writes, as omp.
         hook_ordering_guarantee=True,
@@ -1001,7 +996,6 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # There is no transcript file to report; conversations live as rows in
         # `opencode.db`, addressed by session id.
         reports_transcript_path=False,
-        external_usage_command=False,
         provider_account_management=False,
         # The plugin posts over loopback HTTP while the server writes the store
         # on its own schedule; nothing measured guarantees the POST lands after
@@ -1668,10 +1662,6 @@ def enabled_backends(
     return tuple(result)
 
 
-def external_usage_harnesses() -> tuple[str, ...]:
-    return tuple(name for name, harness in HARNESSES.items() if harness.external_usage_command)
-
-
 def provider_account_harnesses() -> tuple[str, ...]:
     return tuple(
         name for name, harness in HARNESSES.items() if harness.provider_account_management
@@ -1716,9 +1706,9 @@ def public_harness_registry(
     payload is one the frontend has to hardcode, which is how a harness name ends up
     compiled into a terminal module and drifts from the descriptor that owns it.
 
-    `version` stays at 1 while fields are only added: consumers read the keys they
+    `version` stays stable while fields are only added: consumers read the keys they
     know and default the rest, so a browser older than the daemon keeps working.
-    Removing or re-typing a field is what would require a bump.
+    Version 2 removed the obsolete harness-scoped external usage capability.
 
     ``installations`` is the machine's live detection, added per harness as
     ``installed`` and ``resolved_path`` when the daemon supplies it. It is
@@ -1744,7 +1734,7 @@ def public_harness_registry(
         return payload
 
     return {
-        "version": 1,
+        "version": 2,
         "harnesses": [
             {
                 "name": harness.name,
@@ -1775,7 +1765,6 @@ def public_harness_registry(
                     # client, so its toggle is not offered.
                     "mcp": harness.adapter_family != "pi",
                     "pty_delivery": harness.submission == "terminal_line",
-                    "external_usage": harness.external_usage_command,
                     "provider_accounts": harness.provider_account_management,
                     "repaints_scrollback": harness.repaints_scrollback,
                     "assigns_conversation_id": harness.assigns_conversation_id,

@@ -8,7 +8,13 @@ import pytest
 
 from swe_mux.config import CCUSAGE_PACKAGE, Config, default_ccusage_command
 from swe_mux.event_bus import EventBus
-from swe_mux.usage import UsageAdapterError, UsageManager, normalize_usage, prepare_usage_command
+from swe_mux.usage import (
+    UsageAdapterError,
+    UsageManager,
+    normalize_usage,
+    normalize_usage_sources,
+    prepare_usage_command,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "usage"
 
@@ -26,7 +32,8 @@ def test_versioned_usage_fixtures_normalize_without_live_cli(
 ) -> None:
     payload = json.loads((FIXTURES / filename).read_text(encoding="utf-8"))
     normalized = normalize_usage(payload, provider, {"adapter": "fixture", "package": filename})
-    assert normalized["provider"] == provider
+    assert normalized["source_id"] == provider
+    assert normalized["collector_id"] == "ccusage"
     assert normalized["models"][0]["model"] == model
     assert normalized["totals"]["total_tokens"] == total
     assert normalized["totals"]["cost_is_estimate"] is True
@@ -38,7 +45,7 @@ async def test_refresh_is_cached_and_failure_keeps_last_known_good(tmp_path: Pat
     config = Config(
         data_dir=tmp_path,
         ccusage_enabled=True,
-        usage_commands={"claude": ["fixture-claude"], "codex": ["fixture-codex"]},
+        usage_command=["fixture-ccusage"],
     )
     manager = UsageManager(config, EventBus())
     calls = 0
@@ -48,15 +55,16 @@ async def test_refresh_is_cached_and_failure_keeps_last_known_good(tmp_path: Pat
         calls += 1
         if calls > 1:
             return "not-json"
-        return (FIXTURES / "claude-v17.json").read_text(encoding="utf-8")
+        return (FIXTURES / "ccusage-by-agent-v20.json").read_text(encoding="utf-8")
 
     manager._invoke = MethodType(invoke, manager)  # type: ignore[method-assign]
-    first = await manager.refresh("claude")
-    assert first["states"]["claude"]["status"] == "ready"
-    cached = first["cache"]["providers"]["claude"]
-    second = await manager.refresh("claude")
-    assert second["states"]["claude"]["status"] == "stale"
-    assert second["cache"]["providers"]["claude"] == cached
+    first = await manager.refresh()
+    assert first["collector"]["status"] == "ready"
+    cached = first["cache"]["sources"]
+    assert set(cached) == {"claude", "opencode"}
+    second = await manager.refresh()
+    assert second["collector"]["status"] == "stale"
+    assert second["cache"]["sources"] == cached
     assert (tmp_path / "usage-cache.json").exists()
 
 
@@ -68,6 +76,28 @@ def test_usage_cache_clear_is_explicit(tmp_path: Path) -> None:
     snapshot = manager.clear()
     assert snapshot["cache"] == {}
     assert not (tmp_path / "usage-cache.json").exists()
+
+
+def test_version_two_provider_cache_migrates_to_dynamic_sources(tmp_path: Path) -> None:
+    cache_path = tmp_path / "usage-cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "updated_at": 123.0,
+                "providers": {"codex": {"provider": "codex", "daily": []}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = UsageManager(Config(data_dir=tmp_path, ccusage_enabled=True), EventBus())
+
+    assert manager.cache["version"] == 3
+    assert manager.cache["sources"]["codex"]["source_id"] == "codex"
+    assert manager.cache["sources"]["codex"]["source_label"] == "Codex"
+    assert "provider" not in manager.cache["sources"]["codex"]
+    assert manager.snapshot()["collector"]["refreshed_at"] == 123.0
 
 
 def test_usage_snapshot_exposes_the_latest_unified_install_command(tmp_path: Path) -> None:
@@ -101,11 +131,22 @@ def test_current_codex_model_map_is_aggregated_with_proportional_cost() -> None:
     assert normalized["model_daily"][0]["cost_method"] == "proportional"
 
 
-def test_unified_defaults_select_each_provider_from_one_ccusage_executable() -> None:
+def test_unified_default_discovers_sources_in_one_ccusage_process() -> None:
     config = Config()
-    assert config.usage_commands["claude"] == default_ccusage_command("claude")
-    assert config.usage_commands["codex"] == default_ccusage_command("codex")
-    assert config.usage_commands["claude"][0] == config.usage_commands["codex"][0] == "ccusage"
+    assert config.usage_command == ["ccusage", "daily", "--json", "--by-agent"]
+    assert config.usage_commands == {}
+
+
+def test_by_agent_payload_splits_managed_and_external_sources() -> None:
+    payload = json.loads((FIXTURES / "ccusage-by-agent-v20.json").read_text(encoding="utf-8"))
+
+    sources = normalize_usage_sources(payload, {"adapter": "fixture"})
+
+    assert set(sources) == {"claude", "opencode"}
+    assert sources["claude"]["source_label"] == "Claude Code"
+    assert sources["opencode"]["source_label"] == "OpenCode"
+    assert sources["opencode"]["totals"]["total_tokens"] == 120
+    assert sources["opencode"]["models"][0]["model"] == "gemini-2.5-pro"
 
 
 def test_usage_command_resolves_windows_batch_shim_through_comspec(
@@ -116,16 +157,16 @@ def test_usage_command_resolves_windows_batch_shim_through_comspec(
     )
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
 
-    prepared = prepare_usage_command(default_ccusage_command("codex"), windows=True)
+    prepared = prepare_usage_command(default_ccusage_command(), windows=True)
 
     assert prepared == [
         r"C:\Windows\System32\cmd.exe",
         "/d",
         "/c",
         r"C:\Users\me\AppData\Roaming\npm\ccusage.cmd",
-        "codex",
         "daily",
         "--json",
+        "--by-agent",
     ]
 
 
@@ -134,4 +175,4 @@ def test_missing_unified_usage_command_has_exact_install_instruction(
 ) -> None:
     monkeypatch.setattr("swe_mux.usage.shutil.which", lambda _: None)
     with pytest.raises(UsageAdapterError, match=f"npm install -g {CCUSAGE_PACKAGE}"):
-        prepare_usage_command(default_ccusage_command("claude"))
+        prepare_usage_command(default_ccusage_command())

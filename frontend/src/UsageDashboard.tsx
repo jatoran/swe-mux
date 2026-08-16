@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
-import { harnesses } from './harnessRegistry'
 import { useModalFocus } from './modalFocus'
 
 type UsageRow = {
@@ -90,7 +89,7 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
   useEffect(()=>{if(!confirmClear)return;const timer=window.setTimeout(()=>setConfirmClear(false),2000);return()=>clearTimeout(timer)},[confirmClear])
 
   const providers=usage?.cache?.providers||{}
-  const usageProviders=harnesses().filter(harness=>harness.capabilities.external_usage).map(harness=>harness.name)
+  const usageProviders=Object.keys(providers)
   const visibleProviders=useMemo(()=>selected==='all'?usageProviders.map(provider=>providers[provider]).filter((item):item is ProviderUsage=>!!item):providers[selected]?[providers[selected]!]:[],[providers,selected,usageProviders.join('\0')])
   const allDaily=mergeDaily(visibleProviders)
   const daily=range==='all'?allDaily:allDaily.slice(0,Number(range))
