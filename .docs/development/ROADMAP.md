@@ -163,7 +163,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                             -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
                               -> Phase 7.5  mux MCP v1 semantic memory      [open, gated on 5.5: CP step 8]
                                 -> Phase 7.6  mux MCP session control       [open: CP step 9]
-                                  -> Phase 8  Telegram control              [descoped to decision-gated]
+                                  -> Phase 7.7  Adaptive titling; retire turn summarizer [open, needs 5.5]
+                                    -> Phase 8  Telegram control            [descoped to decision-gated]
                                     -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                       -> Phase 10  WSL bridge + Linux/macOS [open]
                                         -> Phase 11  Public packaging and release    [open]
@@ -2069,6 +2070,38 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
   in an approval prompt or a menu in the proving corpus.
 - [ ] Disabling the grant leaves every earlier MCP phase working unchanged, and the browser's
   own stop/interrupt controls are unaffected by any setting here.
+
+## Phase 7.7 — Consolidate behavioral summary: adaptive titling, retire the turn summarizer
+
+The scan timeline (Phase 5.5) is a run-scoped semantic index over transcript deltas and Tier 0 facts, per-Project and per-run gated, with backfill.
+The turn summarizer (`observer_summarizer_enabled`) is the older, cheaper observer: one `turn-summary` run note per completed turn, a single global bool, no per-Project or per-run gate, and no backfill.
+The scan timeline subsumes it: a scan record already carries a turn's `work_phase`, `intent`, `summary`, `blockers`, and target paths, plus a deterministic novelty score the summarizer never produced.
+So this phase makes the scan timeline the single behavioral-summary substrate and spends the freed surface on a title that adapts as a run's scope widens, rather than maintaining two overlapping summarizers.
+
+This phase depends only on shipped substrate (the Phase 5.5 scan timeline and its novelty signal) and the existing one-shot titler; it needs neither Phase 7.5 nor Phase 7.6.
+
+### Retire the turn summarizer
+
+- [ ] Identify every consumer that reads `turn-summary` run notes — the run-notes view, the away report (`/api/attention/absence`), and any attention input — and repoint it at the scan timeline, because a scan record is not a run note and the feed would otherwise silently go empty.
+- [ ] Remove the `builtin.turn-summarizer` observer and the `observer_summarizer_enabled` config field once no consumer depends on the tag. Migrate an existing `true` value to nothing rather than leaving a dead toggle; a config predating the removal must load without error.
+- [ ] Keep the historical `turn-summary` run notes already written; they stay readable, they are just no longer produced. Do not delete durable records to retire a producer.
+
+### Adaptive titling driven by the scan timeline
+
+The titler today names a pane once from the run's opening request, then freezes the title until a manual `title/regenerate`.
+An adaptive titler broadens the name as the work moves — a run that opened on "Phase 7" becomes "Phase 7 + 7.5 diagnostics/MCP" once the scope actually widens — by consuming the scan timeline the phase above makes canonical.
+
+- [ ] Re-title on the scan timeline's **novelty / work-phase change**, never per turn. A title that rewrites every turn thrashes and costs tokens; the point is to broaden on real drift and settle otherwise. When the scan timeline is disabled for a run, the titler falls back to its current one-shot behavior with no adaptation.
+- [ ] Synthesize the broadened title from the accumulated same-run scan records (their `work_phase`, `intent`, and `summary`), on the cheap model, through the existing `title_regenerate_requested` / `force_title` path so browser, CLI, and this observer all write titles the same way.
+- [ ] Stay `auto_named`-only: an adaptive re-title never overwrites a title the user set by hand, and an explicit manual regenerate still wins.
+- [ ] Stay `agent_run_id`-scoped, inheriting Phase 5.4's run boundary: a title broadens within one conversation, and a `/clear` starts a fresh run with its own title rather than carrying the old one across the boundary.
+- [ ] Gate it per-Project and per-run through the same enablement surface as the scan timeline it consumes, so a Project or run without the timeline simply keeps the one-shot title.
+
+### Phase 7.7 exit criteria
+
+- [ ] Exactly one behavioral-summary producer runs (the scan timeline); no consumer of the former `turn-summary` notes silently loses its feed, and a config predating the summarizer's removal still loads.
+- [ ] An auto-named run's title broadens on genuine scope drift and stays stable otherwise, drawing only on that run's scan records, and never overwrites a human-set title.
+- [ ] With the scan timeline off for a run, titling is exactly the current one-shot behavior.
 
 ## Phase 8 - Telegram multi-session control (descoped)
 
