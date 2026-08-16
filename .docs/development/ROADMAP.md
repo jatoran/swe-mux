@@ -164,10 +164,12 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                               -> Phase 7.5  mux MCP v1 semantic memory      [done: CP step 8]
                                 -> Phase 7.6  mux MCP session control       [done: CP step 9]
                                   -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [open, needs 5.5]
-                                    -> Phase 8  Telegram control            [descoped to decision-gated]
-                                    -> Phase 9  SSH/native attach           [descoped to decision-gated]
-                                      -> Phase 10  WSL bridge + Linux/macOS [open]
-                                        -> Phase 11  Public packaging and release    [open]
+                                    -> Phase 7.8  Git provenance re-attribution: committer + contributors [open]
+                                      -> Phase 7.9  Code-structure graph: blast radius + per-session change map [open, needs 7.8]
+                                        -> Phase 8  Telegram control            [descoped to decision-gated]
+                                        -> Phase 9  SSH/native attach           [descoped to decision-gated]
+                                          -> Phase 10  WSL bridge + Linux/macOS [open]
+                                            -> Phase 11  Public packaging and release    [open]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -2240,6 +2242,104 @@ Each is independently toggleable through the same per-Project/per-run enablement
 - [ ] An auto-named run's title changes only on a material pivot and stays stable through routine progress, drawing only on that run's scan records, and never overwrites a human-set title. The measured re-title rate for a stable-subject run is zero.
 - [ ] Adaptive titling is off by default and independently toggleable; with it off (or the scan timeline off) titling is exactly the current one-shot behavior.
 - [ ] Each near-term consumer is independently toggleable, returns empty rather than a low-confidence guess, attributes every result to its `agent_run_id`, and never merges two runs. Adaptive titling and phase-transition signals share one pivot definition.
+
+## Phase 7.8 — Git provenance re-attribution: committer and contributors, not shared-head ambiguity
+
+Git provenance today marks almost every commit `ambiguous`, and the cause is one rule, not a fundamental limitation.
+`GitProvenanceService` sets `ambiguous` whenever `_checkout_session_count(root) > 1` — that is, whenever more than one live session shares the checkout directory (`src/swe_mux/git_provenance.py`).
+A shared `HEAD` is a fact about the starting point, not about the commit event, so this measures the wrong thing.
+The swe-mux primary checkout is the canonical multi-session shared checkout, so `_checkout_session_count` is nearly always greater than one there and nearly every commit is stamped `ambiguous`, even on the path that saw the exact session run `git commit`.
+
+The design conflates two distinct, separately answerable questions, and this phase separates them.
+The **committer** is the one session whose process ran `git commit`.
+The **contributors** are the one or more sessions whose file writes went into the commit.
+Neither is unknowable, and the shared-checkout heuristic throws away attribution mux already holds.
+
+This phase depends on shipped substrate only (Tier 0 `file_write` facts with adapter-boundary content hashes, `git_monitor` commit metadata, the existing `git_provenance` table).
+It runs before Phase 7.9 because that phase colors the change map by contributor and leans on the same commit-to-write-fact join.
+
+### Committer attribution: command-anchored, matched to the commit OID
+
+- [ ] On an observed `git commit` tool call, attribute the **specific new commit** to the running session by walking `git rev-list <pending_head>..<new_head>` and selecting the commit whose parent chain roots at the head the session started on (`pending.position.head`), rather than reading `HEAD` after the command and trusting the read-back. The exact-OID match is what survives a concurrent sibling commit that the bare read-back mis-correlates.
+- [ ] Drop the `shared -> ambiguous` downgrade on the command path in `_note_tool_result` (`git_provenance.py`). A commit whose OID was isolated by parent-walk is `exact` regardless of how many sessions share the checkout. Shared-head count no longer influences committer confidence.
+- [ ] Handle `--amend` explicitly: the amended commit replaces the prior head, so `<pending_head>..<new_head>` is empty. Detect the amend (the classifier already emits `rewrote`) and attribute the amending session directly, taking the diff against the new commit's own parent.
+- [ ] Reserve `ambiguous` for the genuinely undecidable committer: two observed commit commands from different sessions collapsing to one OID, or a merge/rebase that moves many commits at once. These are rare and named, not the default.
+
+### Contributor attribution: content-anchored to Tier 0 write facts
+
+- [ ] Read each commit's changed files and blob hashes at record time (one `git diff-tree` / `git show` read) and match them against recent per-session Tier 0 `file_write` facts on that checkout. The session(s) whose write set appears in the commit are its contributors. The write-side Tier 0 hash is the exact bytes the agent wrote and a committed blob is real file bytes, so this is a legitimate hash equality join, unlike the write-vs-read case the Tier 0 doc warns against.
+- [ ] Record `contributors[]` as a set, not a single author. The shared-index case — session A stages files, session B runs `git commit` sweeping A's staged changes plus B's own — resolves to committer B and contributors {A, B}, and that plural answer is a feature, no git tool records it because git keeps only one configured author.
+- [ ] Fall back to `ambiguous` only when a commit matches no session's write facts and had no observed command — a human editing in an external editor and committing in the terminal is work mux never observed, and honest ambiguity is correct there.
+
+### Data model, backfill, and the observer stance
+
+- [ ] Extend the `git_provenance` record and `record_git_provenance` upsert (`src/swe_mux/history.py`, `_GIT_PROVENANCE_UPSERT`) to carry the committer session and the contributor set, keeping the evidence-rank promotion contract so stronger evidence still wins in place. Do not delete or rewrite historical rows destructively.
+- [ ] Do not inject a per-session git identity (`GIT_AUTHOR_*`, commit trailers) to make attribution trivial. That mutates the agent's committed bytes and breaks the observer stance (design law 2, `CONTROL_PLANE_ROADMAP.md` §1). Attribution stays observational.
+- [ ] Rewrite the git-provenance backfill (`src/swe_mux/git_provenance_backfill.py`) to re-derive committer and contributors for existing commits across all projects using the same parent-walk and diff-to-write-fact join, so historical rows are attributed rather than left with the old shared-head `ambiguous`. Bound the pass and make it idempotent, matching the existing backfill's retention and batching.
+
+### Live verification across harnesses
+
+- [ ] Redeploy the frozen desktop app with the re-attribution and backfill (`uv run python packaging/redeploy_desktop.py`), since git provenance runs in the daemon and a source-only change never reaches the running frozen app.
+- [ ] Verify live through mux MCP, not by assertion: spawn a session (`request_spawn`, human-approved), have it make one granular commit on the swe-mux checkout while other sessions are live on the same checkout, and confirm the commit records an `exact` committer and the correct contributor while sibling sessions share the head.
+- [ ] Repeat the test with a second and third session under different harnesses (Claude Code and Codex; avoid opencode, whose tool-call surface differs), including a shared-index case where one session stages and another commits, and confirm committer and contributors are correct in each. Only when all harness cases pass is git provenance considered attributed.
+
+### Phase 7.8 exit criteria
+
+- [ ] A commit made by one session on a checkout shared by other live sessions records an `exact` committer, not `ambiguous`. Shared-head count no longer forces ambiguity on any path that identified the commit.
+- [ ] Every commit records the contributor session(s) whose Tier 0 writes it contains, including the multi-contributor shared-index case, and `ambiguous` survives only for commits mux never observed the work for.
+- [ ] The backfill re-attributes existing `git_provenance` rows across all projects idempotently, and no historical row is destructively lost.
+- [ ] Committer and contributor attribution is confirmed live on the frozen app across Claude Code and Codex sessions on the swe-mux checkout, including a shared-index commit.
+
+## Phase 7.9 — Code-structure graph: blast radius, structural context, and the per-session change map
+
+swe-mux captures a behavioral graph (Tier 0 facts, the provenance edges, doc-debt ownership, git provenance) but has no code-structure graph: it knows what agents touched, not how the code connects.
+This phase adds a deterministic, always-fresh code-structure graph, maintained off the Tier 0 `file_write` stream, and exposes it as pull-only agent tools and a per-session change map.
+Blast radius is the flagship query; structural context, navigation, and test-gap ride the same graph.
+
+The graph is deterministic and model-free, so it costs no tokens and registers as one consumer in the automation registry (`src/swe_mux/automation_registry.py`) requiring `tier0`, gated per-Project through the existing enablement DAG (`design/features/automation-enablement.md`).
+It depends on Phase 7.8 because the change map colors nodes by contributor.
+
+### The engine
+
+- [ ] Build the code graph with tree-sitter (the `tree-sitter` binding plus `tree-sitter-language-pack`, whose prebuilt grammar wheels avoid per-platform grammar compilation). Do not use LSP: it buys type-accurate rename precision this feature does not need, does not close the dynamic-dispatch recall gap, and imposes a per-language, per-OS, venv-coupled server burden a frozen Windows app should not carry.
+- [ ] Resolve references to definitions with import-aware name resolution over the tag queries, not bare syntactic name matching, so a same-named symbol in another module is not a false caller. Treat every static reverse-caller set as a lower bound and label the known blind spots (`getattr`, dict dispatch, decorators, DI, dynamic imports).
+- [ ] Store nodes and edges as tables in `mux.db`, keyed on the same `normalize_target()` path identity the other consumers use, so the graph joins cleanly with provenance, doc-debt, and git facts. Nodes are file-level by default with symbol detail resolved on demand; edges are `imports`, `calls`, `references`, `defines`.
+- [ ] Maintain the graph incrementally off the normalized event stream that already feeds `tier0_facts`: on a `file_write` fact, re-parse that one file and update its edges. No separate file watcher and no full rebuild — mux already observes every edit with a race-free content hash, which is the freshness advantage a standalone index lacks.
+- [ ] Answer the reverse-dependency query with a bounded SQLite recursive CTE (who imports and who calls, N hops), and back it with a git co-change net mined from `git_provenance` / `history` as the recall safety net for the dynamic edges tree-sitter misses. The co-change net is required, not decorative.
+- [ ] Package the tree-sitter grammar binaries into the frozen bundle: the PyInstaller spec must include the grammar shared libraries as data or the frozen app parses nothing. This is a named acceptance check, not an afterthought.
+
+### Surface 1 — agent pull tools (no push)
+
+- [ ] Expose the graph as pull-only mux MCP tools, each gated on the consumer's per-Project opt-in and returning a disabled note when off, mirroring the `provenance` / `dead_ends` pattern (`design/features/mux-mcp.md`). No notification is ever injected into an agent; the agent consults the tools on its own initiative.
+- [ ] `blast_radius(file_or_symbol)` returns the reverse callers, co-changed files, covering tests, and owning docs, hop-ordered, token-budgeted, with static results labeled a lower bound and blind spots named.
+- [ ] Navigation tools (`find_definition`, `find_callers`, `find_references`) return the precise structural neighborhood instead of the agent reconstructing it by grep, which is the token-efficiency win — it removes the expensive who-calls-this traversals, not the cheap exact-string greps.
+- [ ] `code_context(files_or_task)` returns a ranked, compact structural neighborhood (key symbol signatures and the specific callers, not whole files) for context packing.
+- [ ] A test-gap read intersects the reachable set with covering tests, surfacing changed code whose blast radius contains no test.
+
+### Surface 2 — human passive annotations
+
+- [ ] A `turn_ended` detector emits a blast-radius annotation for an edit with large or unexamined reach, written as an annotation only, never a PTY write, feeding the Phase 6.5 attention channels which decide whether it interrupts.
+- [ ] Compute the mux-unique "callers edited but not examined" signal by intersecting an edited symbol's reverse callers with the session's own Tier 0 `file_read` facts. This flags callers whose behavior the session may have broken without opening them, a signal no standalone code-graph tool can produce because none observe the agent's reads.
+
+### Surface 3 — the per-session change map
+
+- [ ] Render a per-session diff graph: red for this session's edits, yellow for their blast radius, blue for immediate context. Red nodes come from `file_write` facts filtered by `session_id`, so concurrent other-session edits are excluded by construction, and the baseline is the git head captured when the session started.
+- [ ] Compute each view server-side and ship only the bounded subgraph the view needs (changed nodes plus blast radius plus one hop), never the whole codebase graph, with symbol detail expanded on demand. Frontend performance is then independent of codebase size, and there is no path to lag on a large codebase.
+- [ ] Render with a WebGL graph renderer (Sigma.js with graphology), running the ForceAtlas2 layout in a Web Worker so layout never blocks the UI thread. Match the app's existing WebGL usage (the xterm WebGL addon) and its self-contained, CSP-safe serving; use no external host.
+- [ ] Provide a unify-from-baseline toggle that switches from the session-scoped view to the union of all sessions' edits since a chosen commit, coloring each session's changes a distinct hue, which is the multi-session and multi-worktree change map the fact attribution makes possible.
+
+### Additional derivations (same substrate)
+
+- [ ] Dead-code and orphan detection over nodes with no inbound references, guarded against entry points and dynamic callers.
+- [ ] Import-cycle and god-node (high fan-in) detection, surfaced as ordinary annotations.
+- [ ] A doc-debt precision upgrade: refine which docs an edit affects by dependency reach, not only direct ownership, feeding the existing doc-debt ledger.
+
+### Phase 7.9 exit criteria
+
+- [ ] The code graph is built with tree-sitter and no LSP, keyed on `normalize_target`, kept fresh incrementally off the Tier 0 `file_write` stream, and its grammar binaries load in the frozen app.
+- [ ] `blast_radius` and the navigation, context, and test-gap tools are pull-only mux MCP tools, per-Project gated, token-budgeted, and return empty rather than a low-confidence guess. No signal is pushed into an agent.
+- [ ] The per-session change map renders red/yellow/blue from `session_id`-attributed facts, excludes concurrent sessions by construction, ships only bounded server-side subgraphs, renders in WebGL with worker-side layout, and does not lag on a large codebase.
+- [ ] The "callers edited but not examined" signal is produced from reverse callers intersected with the session's `file_read` facts, and static results are labeled a lower bound with blind spots named throughout.
 
 ## Phase 8 - Telegram multi-session control (descoped)
 
