@@ -8820,8 +8820,7 @@ async def get_usage(request: web.Request) -> web.Response:
 
 async def refresh_usage(request: web.Request) -> web.Response:
     usage: UsageManager = request.app["usage"]
-    body = await request.json() if request.can_read_body else {}
-    return json_response(await usage.refresh(body.get("provider")))
+    return json_response(await usage.refresh())
 
 
 async def clear_usage_cache(request: web.Request) -> web.Response:

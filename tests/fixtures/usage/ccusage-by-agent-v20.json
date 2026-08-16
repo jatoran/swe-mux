@@ -1,0 +1,56 @@
+{
+  "daily": [
+    {
+      "date": "2026-08-14",
+      "agent": "all",
+      "agents": [
+        {
+          "agent": "claude",
+          "inputTokens": 100,
+          "outputTokens": 40,
+          "cacheReadTokens": 10,
+          "cacheCreationTokens": 5,
+          "totalTokens": 155,
+          "totalCost": 0.31,
+          "modelBreakdowns": [
+            {
+              "modelName": "claude-opus-4-1",
+              "inputTokens": 100,
+              "outputTokens": 40,
+              "cacheReadTokens": 10,
+              "cacheCreationTokens": 5,
+              "totalTokens": 155,
+              "totalCost": 0.31
+            }
+          ]
+        },
+        {
+          "agent": "opencode",
+          "inputTokens": 75,
+          "outputTokens": 25,
+          "cacheReadTokens": 20,
+          "cacheCreationTokens": 0,
+          "totalTokens": 120,
+          "totalCost": 0.12,
+          "modelBreakdowns": [
+            {
+              "modelName": "gemini-2.5-pro",
+              "inputTokens": 75,
+              "outputTokens": 25,
+              "cacheReadTokens": 20,
+              "cacheCreationTokens": 0,
+              "totalTokens": 120,
+              "totalCost": 0.12
+            }
+          ]
+        }
+      ],
+      "totalTokens": 275,
+      "totalCost": 0.43
+    }
+  ],
+  "totals": {
+    "totalTokens": 275,
+    "totalCost": 0.43
+  }
+}

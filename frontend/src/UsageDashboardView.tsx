@@ -5,7 +5,7 @@ import { ModelName } from './ModelName'
 import { useModalFocus } from './modalFocus'
 import { QuotaAnalytics } from './QuotaAnalytics'
 import { UsageModelBreakdown } from './UsageModelBreakdown'
-import { sumUsageRows, type ProviderUsage, type UsageRow } from './usageAnalytics'
+import { sumUsageRows, type UsageRow, type UsageSource } from './usageAnalytics'
 
 export type UsageStatus = {
   enabled:boolean
@@ -13,8 +13,8 @@ export type UsageStatus = {
   refresh_minutes:number
   package:string
   install_command:string
-  states:Record<string,{status:string;error?:string;refreshed_at?:number}>
-  cache?:{version?:number;updated_at?:number;providers?:Partial<Record<string,ProviderUsage>>}
+  collector:{id:string;status:string;error?:string;refreshed_at?:number}
+  cache?:{version?:number;updated_at?:number;sources?:Partial<Record<string,UsageSource>>}
 }
 type Attribution={sample_id:number;window:string;provider:string;account_id:string;interval_start:number;interval_end:number;quota_delta:number;correlated_estimate:number;correlated_low:number;correlated_high:number;external_estimate:number;external_low:number;external_high:number;confidence:string;sample_gap_seconds:number;concurrent_sessions:number;provider_lag_seconds:number;allocations:Array<{session_id:string;project_id?:string;model?:string;native_tokens?:number;quota_percent_estimate:number}>;caveats:string[]}
 type OperationalStatus={schema_version:number;interpretation:string;quota:{samples:unknown[];resets:unknown[];attributions:Attribution[];rollups:unknown[]};tools:{metrics:Array<{backend:string;model:string;project_id:string;session_id:string;taxonomy:string;raw_tool:string;events:number;uses:number;errors:number;average_duration_ms?:number|null}>;skills:Array<{explicit_skill:string;backend:string;project_id:string;uses:number;last_used_at:number}>;unknown_or_unmapped:number;parser_version:string;parser_versions:Record<string,string>;coverage:Array<{session_id:string;backend:string;parser_version:string;status:string;recognized_records:number;unknown_records:number;tool_events:number;skill_events:number;compaction_events:number;reconciled_at:number;diagnostic?:string}>};compactions:Array<{session_id:string;backend:string;project_id:string;count:number;last_compaction_at:number;capability:string;confidence:string}>}
@@ -23,9 +23,9 @@ const compact = new Intl.NumberFormat(undefined,{notation:'compact',maximumFract
 const integer = new Intl.NumberFormat()
 const money = new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2})
 
-function mergeDaily(providers:ProviderUsage[]):UsageRow[] {
+function mergeDaily(sources:UsageSource[]):UsageRow[] {
   const grouped=new Map<string,UsageRow[]>()
-  for(const provider of providers)for(const row of provider.daily){
+  for(const source of sources)for(const row of source.daily){
     if(!row.date)continue
     const items=grouped.get(row.date)||[]
     items.push(row)
@@ -36,7 +36,7 @@ function mergeDaily(providers:ProviderUsage[]):UsageRow[] {
   )
 }
 
-function aggregateRows(rows:UsageRow[],key:'month'|'provider',value:(row:UsageRow)=>string):UsageRow[] {
+function aggregateRows(rows:UsageRow[],key:'month'|'source_id',value:(row:UsageRow)=>string):UsageRow[] {
   const grouped=new Map<string,UsageRow[]>()
   for(const row of rows){
     const label=value(row)
@@ -61,7 +61,7 @@ function Summary({totals}:{totals:UsageRow}) {
   </div>
 }
 
-function UsageTable({title,rows,label}:{title:string;rows:UsageRow[];label:'date'|'month'|'provider'}) {
+function UsageTable({title,rows,label}:{title:string;rows:UsageRow[];label:'date'|'month'|'source_id'}) {
   return <section class="usage-table"><h3>{title}</h3>{rows.length?<div class="usage-table-scroll"><table>
     <thead><tr><th>{label}</th><th>tokens</th><th>input</th><th>output</th><th>cache</th><th>cost est.</th></tr></thead>
     <tbody>{rows.map(row=><tr key={row[label]}><td>{row[label]||'unknown'}</td>
@@ -127,12 +127,13 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
   const [usage,setUsage]=useState<UsageStatus|null>(null)
   const [operational,setOperational]=useState<OperationalStatus|null>(null)
   const [domain,setDomain]=useState<'historical'|'quota'|'tools'|'context'>('historical')
-  const [selected,setSelected]=useState<'all'|string>('all')
+  const [hiddenSources,setHiddenSources]=useState<string[]>([])
+  const [quotaProvider,setQuotaProvider]=useState<'all'|string>('all')
   const [view,setView]=useState<'overview'|'timeline'|'models'>('overview')
   const [resolution,setResolution]=useState<'daily'|'monthly'>('daily')
   const [range,setRange]=useState<'7'|'30'|'90'|'all'>('30')
   const [metric,setMetric]=useState<'tokens'|'cost'>('tokens')
-  const [refreshing,setRefreshing]=useState<string|null>(null)
+  const [refreshing,setRefreshing]=useState(false)
   const [message,setMessage]=useState('Loading usage cache...')
   const [error,setError]=useState('')
   const [confirmClear,setConfirmClear]=useState(false)
@@ -157,36 +158,38 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
     return()=>clearTimeout(timer)
   },[confirmClear])
 
-  const providers=usage?.cache?.providers||{}
-  const usageProviders=harnesses().filter(item=>item.capabilities.external_usage).map(item=>item.name)
-  const visibleProviders=useMemo(()=>selected==='all'
-    ?usageProviders.map(provider=>providers[provider]).filter((item):item is ProviderUsage=>!!item)
-    :providers[selected]?[providers[selected]!]:[],[providers,selected,usageProviders.join('\0')])
-  const allDaily=mergeDaily(visibleProviders)
+  const sources=usage?.cache?.sources||{}
+  const sourceList=useMemo(()=>Object.values(sources).filter((item):item is UsageSource=>!!item).sort(
+    (a,b)=>a.source_label.localeCompare(b.source_label),
+  ),[sources])
+  const visibleSources=useMemo(()=>sourceList.filter(source=>!hiddenSources.includes(source.source_id)),[sourceList,hiddenSources])
+  const quotaProviders=harnesses().filter(item=>item.capabilities.provider_accounts).map(item=>item.name)
+  const allDaily=mergeDaily(visibleSources)
   const daily=range==='all'?allDaily:allDaily.slice(0,Number(range))
   const monthly=aggregateRows(daily,'month',row=>(row.date||'').slice(0,7))
   const timeline=resolution==='daily'?daily:monthly
   const visibleDates=new Set(daily.map(row=>row.date).filter((date):date is string=>!!date))
-  const providerTotals=visibleProviders.map(provider=>({
-    ...sumUsageRows(provider.daily.filter(row=>!!row.date&&visibleDates.has(row.date))),
-    provider:provider.provider,
+  const sourceTotals=visibleSources.map(source=>({
+    ...sumUsageRows(source.daily.filter(row=>!!row.date&&visibleDates.has(row.date))),
+    source_id:source.source_label,
   }))
 
-  const refreshProvider=async(provider:string)=>{
-    setRefreshing(provider)
+  const refreshAll=async()=>{
+    setRefreshing(true)
     setError('')
-    setMessage(`Refreshing ${provider} usage... ccusage may take up to 30 seconds.`)
+    setMessage('Refreshing historical sources... ccusage may take up to 30 seconds.')
     try{
-      const next=await api<UsageStatus>('POST','/api/usage/refresh',{provider})
+      const next=await api<UsageStatus>('POST','/api/usage/refresh',{})
       setUsage(next)
-      const state=next.states[provider]
-      setMessage(state.error?`${provider} refresh failed; existing cache was preserved.`:`${provider} usage refreshed ${new Date().toLocaleTimeString()}.`)
+      setMessage(next.collector.error?'Refresh failed; existing cache was preserved.':`Historical sources refreshed ${new Date().toLocaleTimeString()}.`)
     }catch(cause){
       setError(cause instanceof Error?cause.message:String(cause))
-      setMessage(`${provider} refresh failed.`)
-    }finally{setRefreshing(null)}
+      setMessage('Historical source refresh failed.')
+    }finally{setRefreshing(false)}
   }
-  const refreshAll=async()=>{for(const provider of usageProviders)await refreshProvider(provider)}
+  const toggleSource=(source:string)=>setHiddenSources(current=>current.includes(source)
+    ?current.filter(item=>item!==source)
+    :[...current,source])
   const clear=async()=>{
     if(!confirmClear){setConfirmClear(true);return}
     try{
@@ -200,9 +203,11 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
   const historical=!usage?.enabled?<div class="usage-empty"><strong>Usage analytics is disabled.</strong>
     <p>Enable ccusage in Settings, save, then refresh this dashboard.</p>
     <button onClick={onConfigure}>Configure usage analytics</button>
-  </div>:visibleProviders.length===0?<div class="usage-empty"><strong>No usage has been cached.</strong>
-    <p>Refresh a provider to run its configured ccusage command.</p>
+  </div>:sourceList.length===0?<div class="usage-empty"><strong>No usage sources have been detected.</strong>
+    <p>Refresh to scan every source supported by the installed ccusage version.</p>
     <button disabled={!!refreshing} onClick={()=>void refreshAll()}>Refresh agent usage</button>
+  </div>:visibleSources.length===0?<div class="usage-empty"><strong>Every historical source is hidden.</strong>
+    <p>Select at least one source from the source filter.</p>
   </div>:<>
     <div class="usage-view-tabs" role="tablist" aria-label="Analytics view">
       {(['overview','timeline','models'] as const).map(item=><button role="tab" key={item} aria-selected={view===item} class={view===item?'active':''} onClick={()=>setView(item)}>{item==='timeline'?'time series':item==='models'?'model breakdown':item}</button>)}
@@ -221,35 +226,37 @@ export function UsageDashboard({onClose,onConfigure}:{onClose:()=>void;onConfigu
         </select></label>
       </>}
     </div>
-    {view==='overview'&&<><p class="telemetry-caveat historical-caveat">Historical ccusage totals are provider and model aggregates. Native transcripts do not identify saved Claude or Codex account slots.</p>
-      <Summary totals={sumUsageRows(daily)}/><div class="usage-tables"><UsageTable title="Daily aggregate" rows={daily} label="date"/><UsageTable title="Provider aggregate" rows={providerTotals} label="provider"/></div>
+    {view==='overview'&&<><p class="telemetry-caveat historical-caveat">Historical ccusage totals are source and model aggregates. Transcript history does not identify saved provider account slots.</p>
+      <Summary totals={sumUsageRows(daily)}/><div class="usage-tables"><UsageTable title="Daily aggregate" rows={daily} label="date"/><UsageTable title="Source aggregate" rows={sourceTotals} label="source_id"/></div>
     </>}
     {view==='timeline'&&<><UsageSeries rows={timeline} label={resolution==='daily'?'date':'month'} metric={metric}/><UsageTable title={`${resolution} detail`} rows={timeline} label={resolution==='daily'?'date':'month'}/></>}
-    {view==='models'&&<UsageModelBreakdown providers={visibleProviders} visibleDates={visibleDates} resolution={resolution} metric={metric}/>}
+    {view==='models'&&<UsageModelBreakdown sources={visibleSources} visibleDates={visibleDates} resolution={resolution} metric={metric}/>}
   </>
 
   return <div class="usage-layer" role="dialog" aria-modal="true" aria-label="Usage analytics" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
     <section class="usage-panel" ref={panel}>
       <header><div><span>USAGE::TELEMETRY</span><strong>Historical model usage and account-specific quota evidence</strong></div>
-        <div class="usage-header-actions"><button onClick={onConfigure}>configure</button><button aria-label="Close usage analytics" onClick={onClose}>×</button></div>
+        <div class="usage-header-actions"><button aria-label="Close usage analytics" onClick={onClose}>×</button></div>
       </header>
-      <div class="usage-actions"><div role="tablist" aria-label="Usage provider">
-        <button role="tab" aria-selected={selected==='all'} class={selected==='all'?'active':''} onClick={()=>setSelected('all')}>all</button>
-        {usageProviders.map(provider=><button role="tab" key={provider} aria-selected={selected===provider} class={selected===provider?'active':''} onClick={()=>setSelected(provider)}>{provider}</button>)}
-      </div><button disabled={!usage?.enabled||!!refreshing} onClick={()=>void refreshAll()}>{refreshing?`refreshing ${refreshing}...`:'refresh all'}</button>
-        <button class={confirmClear?'confirming':''} disabled={!!refreshing} onClick={()=>void clear()}>{confirmClear?'confirm clear cache':'clear cache'}</button>
-      </div>
-      <div class={`usage-progress ${refreshing?'running':''}`} role="status" aria-live="polite"><span>{refreshing?'◌':'·'}</span><strong>{message}</strong></div>
-      {error&&<div class="usage-error" role="alert">{error}</div>}
-      <div class="usage-provider-status">{usageProviders.map(provider=>{const state=usage?.states[provider];return <article key={provider}>
-        <span class={`state-dot ${state?.status==='ready'?'idle':state?.status==='refreshing'?'working':state?.error?'crashed':'running'}`}/>
-        <div><strong>{provider}</strong><small>{refreshing===provider?'refreshing now':state?.status||'loading'}{state?.refreshed_at?` · ${new Date(state.refreshed_at*1000).toLocaleString()}`:''}</small>{state?.error&&<em>{state.error}</em>}</div>
-        <button disabled={!usage?.enabled||!!refreshing} onClick={()=>void refreshProvider(provider)}>refresh</button>
-      </article>})}</div>
       <div class="usage-domain-tabs" role="tablist" aria-label="Telemetry category">
         {([['historical','historical cost + tokens'],['quota','quota + resets'],['tools','tools + skills'],['context','context + compaction']] as const).map(([item,label])=><button role="tab" key={item} aria-selected={domain===item} class={domain===item?'active':''} onClick={()=>setDomain(item)}>{label}</button>)}
       </div>
-      <main>{domain==='quota'?<QuotaAnalytics provider={selected} attribution={operational?.quota.attributions||[]}/>:domain==='tools'?<ToolsView status={operational}/>:domain==='context'?<ContextView status={operational}/>:historical}</main>
+      <div class="usage-actions">
+        {domain==='historical'?<details class="usage-source-picker"><summary>{hiddenSources.length?`${visibleSources.length}/${sourceList.length} sources`:sourceList.length?`all ${sourceList.length} sources`:'sources'}</summary>
+          <div><header><strong>Historical sources</strong><small>{usage?.collector.status||'loading'}{usage?.collector.refreshed_at?` · ${new Date(usage.collector.refreshed_at*1000).toLocaleString()}`:''}</small></header>
+            <button onClick={()=>setHiddenSources([])}>select all</button>
+            {sourceList.map(source=><label key={source.source_id}><input type="checkbox" checked={!hiddenSources.includes(source.source_id)} onChange={()=>toggleSource(source.source_id)}/><span>{source.source_label}</span><small>{source.source_id}</small></label>)}
+            {usage?.collector.error&&<p>{usage.collector.error}</p>}
+          </div>
+        </details>:domain==='quota'?<label>provider<select value={quotaProvider} onChange={event=>setQuotaProvider(event.currentTarget.value)}><option value="all">all providers</option>{quotaProviders.map(provider=><option key={provider} value={provider}>{provider}</option>)}</select></label>:<span>Cross-source operational telemetry</span>}
+        <div>{domain==='historical'&&<button disabled={!usage?.enabled||refreshing} onClick={()=>void refreshAll()}>{refreshing?'refreshing...':'refresh'}</button>}
+          <details class="usage-overflow"><summary aria-label="Usage actions">•••</summary><div><button onClick={onConfigure}>configure</button><button class={confirmClear?'confirming':''} disabled={refreshing} onClick={()=>void clear()}>{confirmClear?'confirm clear cache':'clear cache'}</button></div></details>
+        </div>
+      </div>
+      <div class="usage-status-stack"><div class={`usage-progress ${refreshing?'running':''}`} role="status" aria-live="polite"><span>{refreshing?'◌':'·'}</span><strong>{domain==='historical'?message:'Filters below apply only to this telemetry category.'}</strong></div>
+        {error&&<div class="usage-error" role="alert">{error}</div>}
+      </div>
+      <main>{domain==='quota'?<QuotaAnalytics provider={quotaProvider} attribution={operational?.quota.attributions||[]}/>:domain==='tools'?<ToolsView status={operational}/>:domain==='context'?<ContextView status={operational}/>:historical}</main>
       <footer><span>Durable local telemetry · bounded retention · historical model data is not account-specific</span></footer>
     </section>
   </div>

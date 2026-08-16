@@ -1324,6 +1324,13 @@ GET    /telemetry/quota-series[?provider=&account=&since=&until=&resolution=raw|
 POST   /telemetry/quota-resets/review {ids: [reset_id], resolution: seen|manual_usage|discarded}
 ```
 
+`GET /usage` returns one ccusage `collector` state and cache version 3 with a dynamic `sources` map.
+Each source carries `source_id`, `source_label`, `collector_id`, daily, monthly, session, and model aggregates, totals, and provenance.
+`POST /usage` runs the configured unified `ccusage daily --json --by-agent` collector once and atomically replaces the cache after complete validation.
+The historical source list is not derived from the harness registry and may include tools swe-mux does not launch.
+`DELETE /usage/cache` clears only historical ccusage data.
+Quota provider and account telemetry is independent and remains under `/telemetry/*`.
+
 Auth file contents never appear in API responses. `GET /provider-accounts` reports each live
 system auth state as `saved | external | signed_out | unreadable`; saved selection is derived
 from the system auth file rather than restored from registry memory. Explicit selection changes

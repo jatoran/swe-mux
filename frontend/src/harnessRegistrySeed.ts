@@ -5,7 +5,7 @@
 import type { HarnessRegistryPayload } from './harnessRegistry.ts'
 
 export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
-  "version": 1,
+  "version": 2,
   "harnesses": [
     {
       "name": "claude",
@@ -41,7 +41,6 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "lifecycle_hooks": true,
         "mcp": true,
         "pty_delivery": true,
-        "external_usage": true,
         "provider_accounts": true,
         "repaints_scrollback": false,
         "assigns_conversation_id": true,
@@ -83,7 +82,6 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "lifecycle_hooks": true,
         "mcp": true,
         "pty_delivery": true,
-        "external_usage": true,
         "provider_accounts": true,
         "repaints_scrollback": true,
         "assigns_conversation_id": false,
@@ -123,7 +121,6 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "lifecycle_hooks": true,
         "mcp": true,
         "pty_delivery": true,
-        "external_usage": false,
         "provider_accounts": false,
         "repaints_scrollback": true,
         "assigns_conversation_id": false,
@@ -164,7 +161,6 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "lifecycle_hooks": true,
         "mcp": false,
         "pty_delivery": true,
-        "external_usage": false,
         "provider_accounts": false,
         "repaints_scrollback": true,
         "assigns_conversation_id": false,
@@ -202,7 +198,6 @@ export const HARNESS_REGISTRY_SEED: HarnessRegistryPayload = {
         "lifecycle_hooks": true,
         "mcp": true,
         "pty_delivery": true,
-        "external_usage": false,
         "provider_accounts": false,
         "repaints_scrollback": false,
         "assigns_conversation_id": false,
