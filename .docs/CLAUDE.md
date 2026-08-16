@@ -6,7 +6,7 @@
 - Changing the harness registry, descriptors, capability levels, adapter families, or adding a
   harness: `design/features/backends.md`; completed abstraction record:
   `development/archive/HARNESS_ABSTRACTION_AND_OMP.md`; per-surface parity classification and
-  the open enforcement gaps: `development/HARNESS_PARITY_AUDIT_2026-08-11.md`
+  the open enforcement gaps: `development/archive/HARNESS_PARITY_AUDIT_2026-08-11.md`
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project notes, the global Scratchpad, files, ignores, or watches:
