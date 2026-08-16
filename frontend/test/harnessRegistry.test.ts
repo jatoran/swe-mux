@@ -12,7 +12,6 @@ import {
   harnessEnabled,
   hasHarnessMeasurement,
   hasHarnessTranscript,
-  hasExternalUsage,
   hasProviderAccounts,
   installHarnessRegistry,
   isAgentBackend,
@@ -46,7 +45,7 @@ test('a launchable harness gets terminal affordances without invented observatio
       level: 'launchable',
       state_sources: [],
       measurement_source: 'none',
-      capabilities: { observed: false, transcript: false, measurement: false, lifecycle_hooks: false, pty_delivery: true, external_usage: false, provider_accounts: false },
+      capabilities: { observed: false, transcript: false, measurement: false, lifecycle_hooks: false, pty_delivery: true, provider_accounts: false },
     }],
   })
 
@@ -55,15 +54,12 @@ test('a launchable harness gets terminal affordances without invented observatio
   assert.equal(isObservedHarness('future-agent'), false)
   assert.equal(hasHarnessTranscript('future-agent'), false)
   assert.equal(hasHarnessMeasurement('future-agent'), false)
-  assert.equal(hasExternalUsage('future-agent'), false)
   assert.equal(hasProviderAccounts('future-agent'), false)
   assert.deepEqual(allBackendNames(), ['shell', 'future-agent'])
   assert.equal(sessionStatus({ backend: 'future-agent', state: 'running' } as Session), 'not observed by mux')
 
   seed()
-  assert.equal(hasExternalUsage('claude'), true)
   assert.equal(hasProviderAccounts('codex'), true)
-  assert.equal(hasExternalUsage('omp'), false)
   assert.equal(hasProviderAccounts('omp'), false)
 })
 
@@ -78,7 +74,7 @@ test('an unknown harness defaults every terminal trait to the conservative answe
       level: 'observed',
       state_sources: ['hook'],
       measurement_source: 'none',
-      capabilities: { observed: true, transcript: false, measurement: false, lifecycle_hooks: true, pty_delivery: true, external_usage: false, provider_accounts: false },
+      capabilities: { observed: true, transcript: false, measurement: false, lifecycle_hooks: true, pty_delivery: true, provider_accounts: false },
     }],
   })
 
@@ -144,7 +140,7 @@ test('the generated seed carries the daemon capabilities the browser gates on', 
 test('enablement is a launcher filter that never reaches display, transcript, or history surfaces', () => {
   const caps = (extra: Record<string, boolean> = {}) => ({
     observed: true, transcript: true, measurement: true, lifecycle_hooks: true,
-    pty_delivery: true, external_usage: false, provider_accounts: false, ...extra,
+    pty_delivery: true, provider_accounts: false, ...extra,
   })
   // codex is genuinely absent from this machine; claude and omp are present.
   installHarnessRegistry({

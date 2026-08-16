@@ -24,7 +24,6 @@ export interface HarnessCapabilities {
    *  to true for agent harnesses. */
   mcp?: boolean
   pty_delivery: boolean
-  external_usage: boolean
   provider_accounts: boolean
   /** The TUI rewrites content already in xterm scrollback (Codex reflows its
    *  transcript on resize; OMP repaints its tail continuously). Such harnesses
@@ -125,7 +124,7 @@ const LEVEL: Record<HarnessLevel, number> = {
 let installed: readonly HarnessDescriptor[] = HARNESS_REGISTRY_SEED.harnesses
 
 export function installHarnessRegistry(payload: HarnessRegistryPayload): void {
-  if (payload.version !== 1 || !Array.isArray(payload.harnesses)) throw new Error('unsupported harness registry payload')
+  if (![1,2].includes(payload.version) || !Array.isArray(payload.harnesses)) throw new Error('unsupported harness registry payload')
   installed = payload.harnesses.map(harness => ({
     ...harness,
     state_sources: [...harness.state_sources],
@@ -182,7 +181,6 @@ export const isObservedHarness = (name: string | undefined): boolean => harnessA
 export const hasHarnessTranscript = (name: string | undefined): boolean => Boolean(harnessDescriptor(name)?.capabilities.transcript)
 export const hasHarnessMeasurement = (name: string | undefined): boolean => Boolean(harnessDescriptor(name)?.capabilities.measurement)
 export const deliversHarnessPrompts = (name: string | undefined): boolean => Boolean(harnessDescriptor(name)?.capabilities.pty_delivery)
-export const hasExternalUsage = (name: string | undefined): boolean => Boolean(harnessDescriptor(name)?.capabilities.external_usage)
 export const hasProviderAccounts = (name: string | undefined): boolean => Boolean(harnessDescriptor(name)?.capabilities.provider_accounts)
 /**
  * Whether this backend's TUI rewrites content already in scrollback, which is

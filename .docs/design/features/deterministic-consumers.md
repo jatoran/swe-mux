@@ -126,12 +126,33 @@ cross-session graph") belongs to the reader, grouping rows by target.
 
 ## API surface
 
-- No dedicated route. Findings appear as ordinary annotations (`GET /api/automation/...`,
-  the History transcript view) with `provenance: "deterministic_consumer"` and tags
+- Findings are ordinary annotations with `provenance: "deterministic_consumer"` and tags
   `loop-detected`, `declared-vs-verified`, `doc-debt`, `provenance`.
+- The human Findings read is `GET /api/annotations` (Phase 7.10), filtered by `tag`,
+  `project_id`, `session_id`, `agent_run_id`, and `since`, and carrying `tag_counts` for the
+  current scope so a quiet scope reads apart from one buried under provenance edges
+  (`interfaces.md`).
+- The `doc_debt` mux MCP tool exposes the doc-debt finding to an agent as re-derived
+  `{doc, changed_files}` pairs, gated on the same `doc_debt` automation (`mux-mcp.md`).
 - Health under `deterministic_consumers` in `GET /api/diagnostics/background`.
 - Per-project opt-in is edited through `GET|PUT /api/projects/{project_id}/automations`
   (see `automation-enablement.md`).
+
+## Where findings surface, and the two scopes
+
+The human surface is the Findings pane, a segment of the Insight drawer tab beside the scan
+Timeline (`technical/frontend/packages.md`).
+It is read-only by construction: no dismiss and no mutation, so the pane never enters the
+actuation gate.
+It scopes to this session or this Project, defaulting to session.
+A session scope resolves to the session's run-id set and matches `agent_run_id`, so a
+Project-anchored finding with no run — doc-debt and cross-session provenance — is absent from
+session scope by construction.
+That absence is correct, not a gap, so the pane always states what the current scope excludes:
+silence must read as scope, never as absence, which is the same "off vs quiet" rule the memory
+tools follow.
+Provenance is the one high-volume tag, so the default view hides it and its chip count reveals
+it, rather than letting it bury the sparse findings.
 
 ## Configuration
 

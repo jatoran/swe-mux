@@ -13,7 +13,7 @@ from typing import Any
 from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
 from .keybindings import is_command
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -273,8 +273,10 @@ def default_mobile_gestures() -> dict[str, str]:
     }
 
 
-def default_ccusage_command(provider: str) -> list[str]:
-    return ["ccusage", provider, "daily", "--json"]
+def default_ccusage_command(source: str | None = None) -> list[str]:
+    if source:
+        return ["ccusage", source, "daily", "--json"]
+    return ["ccusage", "daily", "--json", "--by-agent"]
 
 
 def default_harness_executables() -> dict[str, str]:
@@ -286,11 +288,8 @@ def default_harness_args() -> dict[str, list[str]]:
 
 
 def default_usage_commands() -> dict[str, list[str]]:
-    return {
-        name: default_ccusage_command(name)
-        for name, harness in HARNESSES.items()
-        if harness.external_usage_command
-    }
+    """Legacy per-source overrides retained for custom existing configurations."""
+    return {}
 
 
 _LEGACY_CCUSAGE_COMMANDS = {
@@ -524,6 +523,7 @@ class Config:
     )
     ccusage_enabled: bool = False
     ccusage_refresh_minutes: int = 0
+    usage_command: list[str] = field(default_factory=default_ccusage_command)
     usage_commands: dict[str, list[str]] = field(default_factory=default_usage_commands)
     default_shell_profile: str = "default"
     shell_profiles: list[LaunchProfile] = field(default_factory=list)
@@ -888,15 +888,26 @@ def _validate(config: Config) -> None:
             )
             if bad:
                 errors["mobile_gestures"] = "unknown command for gestures: " + ", ".join(bad)
+    if (
+        not isinstance(config.usage_command, list)
+        or not config.usage_command
+        or not all(isinstance(item, str) and item for item in config.usage_command)
+    ):
+        errors["usage_command"] = "must be a non-empty array of strings"
     for field_name in ("harness_args", "usage_commands"):
         value = getattr(config, field_name)
         if not isinstance(value, dict) or any(
             not isinstance(name, str)
             or not isinstance(command, list)
-            or not all(isinstance(item, str) for item in command)
+            or (field_name == "usage_commands" and not command)
+            or not all(isinstance(item, str) and item for item in command)
             for name, command in value.items()
         ):
-            errors[field_name] = "must map harness names to arrays of strings"
+            errors[field_name] = (
+                "must map source names to non-empty arrays of strings"
+                if field_name == "usage_commands"
+                else "must map harness names to arrays of non-empty strings"
+            )
     if not isinstance(config.harness_exe, dict) or any(
         not isinstance(name, str) or not isinstance(executable, str) or not executable.strip()
         for name, executable in config.harness_exe.items()
@@ -911,7 +922,6 @@ def _validate(config: Config) -> None:
     for field_name in (
         "harness_exe",
         "harness_args",
-        "usage_commands",
         "harness_enabled",
         "harness_mcp_enabled",
         "harness_instrument_enabled",
@@ -935,12 +945,8 @@ def _validate(config: Config) -> None:
         errors["project_ignore_patterns"] = (
             "must contain at most 256 non-empty patterns of 200 characters or fewer"
         )
-    if config.ccusage_enabled:
-        for name, harness in HARNESSES.items():
-            if harness.external_usage_command and not config.usage_commands.get(name):
-                errors[f"usage_commands.{name}"] = (
-                    "must not be empty while usage analytics is enabled"
-                )
+    if config.ccusage_enabled and not config.usage_command:
+        errors["usage_command"] = "must not be empty while usage analytics is enabled"
     if not 0 <= config.ccusage_refresh_minutes <= 24 * 60:
         errors["ccusage_refresh_minutes"] = "must be between 0 and 1440 minutes"
     if not 1024 <= config.scrollback_bytes <= 1024 * 1024 * 1024:
@@ -1255,14 +1261,21 @@ def save_config(config: Config, *, backup: bool = False) -> None:
 
 
 def _migrate_legacy_ccusage_commands(config: Config) -> bool:
-    changed = False
-    for provider, legacy_tail in _LEGACY_CCUSAGE_COMMANDS.items():
-        command = config.usage_commands.get(provider, [])
+    if not config.usage_commands:
+        return False
+    defaults_only = True
+    for source, command in config.usage_commands.items():
         executable = Path(command[0]).stem.casefold() if command else ""
-        if executable == "npx" and command[1:] == legacy_tail:
-            config.usage_commands[provider] = default_ccusage_command(provider)
-            changed = True
-    return changed
+        legacy = _LEGACY_CCUSAGE_COMMANDS.get(source)
+        if command != default_ccusage_command(source) and not (
+            legacy and executable == "npx" and command[1:] == legacy
+        ):
+            defaults_only = False
+            break
+    if not defaults_only:
+        return False
+    config.usage_commands = {}
+    return True
 
 
 def _default_shell_profile(executable: str) -> LaunchProfile:
@@ -1341,7 +1354,7 @@ def load_config(path: Path | None = None) -> Config:
                 migrated = True
         cfg.harness_exe = {**default_harness_executables(), **configured_exe}
         cfg.harness_args = {**default_harness_args(), **configured_args}
-        cfg.usage_commands = {**default_usage_commands(), **configured_usage}
+        cfg.usage_commands = configured_usage
         # Unknown *top-level* keys are deliberately tolerated above; profile keys
         # get the same treatment. Without it a mistyped key — or a profile field
         # added by a newer build, which the redeploy rollback path makes real —

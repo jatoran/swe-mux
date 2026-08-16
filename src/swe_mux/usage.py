@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import time
@@ -9,17 +10,37 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .background_tasks import background
 from .config import CCUSAGE_PACKAGE, Config
 from .event_bus import EventBus
-from .harness import external_usage_harnesses
 from .subprocess_flags import background_creation_flags, reap_process_tree
 
 USAGE_REFRESH_LOOP = "usage-refresh"
 MAX_USAGE_OUTPUT_BYTES = 10 * 1024 * 1024
 USAGE_TIMEOUT_SECONDS = 30.0
-CACHE_VERSION = 2
+CACHE_VERSION = 3
+
+logger = logging.getLogger(__name__)
+
+CCUSAGE_SOURCE_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "opencode": "OpenCode",
+    "amp": "Amp",
+    "droid": "Droid",
+    "codebuff": "CodeBuff",
+    "hermes": "Hermes",
+    "pi": "Pi",
+    "goose": "Goose",
+    "openclaw": "OpenClaw",
+    "kilo": "Kilo Code",
+    "kimi": "Kimi",
+    "qwen": "Qwen Code",
+    "copilot": "GitHub Copilot",
+    "gemini": "Gemini CLI",
+}
 
 
 class UsageAdapterError(ValueError):
@@ -157,7 +178,7 @@ def _daily_model_items(item: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def normalize_usage(payload: object, provider: str, provenance: dict[str, Any]) -> dict[str, Any]:
+def normalize_usage(payload: object, source: str, provenance: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise UsageAdapterError("ccusage output must be a JSON object")
     daily = [
@@ -212,7 +233,9 @@ def normalize_usage(payload: object, provider: str, provenance: dict[str, Any]) 
         else _sum_rows(source_rows, "scope", "all")
     )
     return {
-        "provider": provider,
+        "source_id": source,
+        "source_label": CCUSAGE_SOURCE_LABELS.get(source, source.replace("-", " ").title()),
+        "collector_id": "ccusage",
         "daily": daily,
         "monthly": monthly,
         "sessions": sessions,
@@ -220,6 +243,39 @@ def normalize_usage(payload: object, provider: str, provenance: dict[str, Any]) 
         "models": models,
         "totals": totals,
         "provenance": provenance,
+    }
+
+
+def normalize_usage_sources(
+    payload: object, provenance: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Split ccusage ``--by-agent`` rows into independently filterable sources."""
+    if not isinstance(payload, dict):
+        raise UsageAdapterError("ccusage output must be a JSON object")
+    source_days: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for day in _items(payload, "daily", "days"):
+        date = str(day.get("date") or day.get("period") or "")
+        agents = day.get("agents")
+        if isinstance(agents, dict):
+            agent_rows = [
+                {**metrics, "agent": source}
+                for source, metrics in agents.items()
+                if isinstance(metrics, dict)
+            ]
+        elif isinstance(agents, list):
+            agent_rows = [item for item in agents if isinstance(item, dict)]
+        else:
+            agent_rows = []
+        for item in agent_rows:
+            source = str(item.get("agent") or item.get("source") or "").strip().casefold()
+            if not source or not date:
+                continue
+            source_days[source].append({**item, "date": date})
+    if not source_days:
+        raise UsageAdapterError("ccusage JSON contains no per-source --by-agent rows")
+    return {
+        source: normalize_usage({"daily": days}, source, provenance)
+        for source, days in sorted(source_days.items())
     }
 
 
@@ -236,19 +292,49 @@ class UsageManager:
         self.events = events
         self.cache_path = config.data_dir / "usage-cache.json"
         self.cache: dict[str, Any] = self._load_cache()
-        self.states = {
-            provider: RefreshState() for provider in external_usage_harnesses()
-        }
+        self.state = RefreshState()
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         if config.ccusage_enabled:
-            for state in self.states.values():
-                state.status = "stale" if self.cache else "ready"
+            self.state.status = "stale" if self.cache else "ready"
+            self.state.refreshed_at = self.cache.get("updated_at")
 
     def _load_cache(self) -> dict[str, Any]:
         try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            return payload if payload.get("version") == CACHE_VERSION else {}
+            raw: object = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return {}
+            payload: dict[str, Any] = raw
+            if payload.get("version") == CACHE_VERSION:
+                return payload
+            if payload.get("version") == 2 and isinstance(payload.get("providers"), dict):
+                sources = {}
+                for source, item in payload["providers"].items():
+                    if not isinstance(item, dict):
+                        continue
+                    migrated = dict(item)
+                    migrated.pop("provider", None)
+                    migrated.update(
+                        source_id=source,
+                        source_label=CCUSAGE_SOURCE_LABELS.get(source, source.title()),
+                        collector_id="ccusage",
+                    )
+                    sources[source] = migrated
+                migrated_cache = {
+                    "version": CACHE_VERSION,
+                    "updated_at": payload.get("updated_at"),
+                    "sources": sources,
+                }
+                logger.info(
+                    "usage cache migrated",
+                    extra={
+                        "from_version": 2,
+                        "to_version": CACHE_VERSION,
+                        "source_count": len(sources),
+                    },
+                )
+                return migrated_cache
+            return {}
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return {}
 
@@ -266,65 +352,88 @@ class UsageManager:
             "install_command": f"npm install -g {CCUSAGE_PACKAGE}",
             "refresh_minutes": self.config.ccusage_refresh_minutes,
             "refreshing": self._lock.locked(),
-            "states": {
-                key: {
-                    "status": value.status,
-                    "error": value.error,
-                    "refreshed_at": value.refreshed_at,
-                }
-                for key, value in self.states.items()
+            "collector": {
+                "id": "ccusage",
+                "status": self.state.status,
+                "error": self.state.error,
+                "refreshed_at": self.state.refreshed_at,
             },
             "cache": self.cache,
         }
 
-    async def refresh(self, provider: str | None = None) -> dict[str, Any]:
+    async def refresh(self) -> dict[str, Any]:
         if not self.config.ccusage_enabled:
             raise UsageAdapterError("usage analytics is disabled")
-        if provider and provider not in self.states:
-            supported = ", ".join(external_usage_harnesses())
-            raise UsageAdapterError(f"provider must be one of: {supported}")
         if self._lock.locked():
             raise UsageAdapterError("a usage refresh is already running")
-        targets = [provider] if provider else list(external_usage_harnesses())
         async with self._lock:
-            for target in targets:
-                await self._refresh_one(target)
+            await self._refresh()
         return self.snapshot()
 
-    async def _refresh_one(self, provider: str) -> None:
-        state = self.states[provider]
-        state.status = "refreshing"
-        state.error = None
-        command = self.config.usage_commands[provider]
+    async def _refresh(self) -> None:
+        self.state.status = "refreshing"
+        self.state.error = None
+        command = self.config.usage_command
+        started = time.monotonic()
+        refresh_id = uuid4().hex
+        logger.info(
+            "ccusage refresh started",
+            extra={
+                "operation_id": refresh_id,
+                "legacy_override_count": len(self.config.usage_commands),
+            },
+        )
         try:
             output = await self._invoke(command)
             payload = json.loads(output)
-            normalized = normalize_usage(
-                payload,
-                provider,
-                {
-                    "adapter": "ccusage-json-v1",
-                    "command": command,
-                    "package": (
-                        CCUSAGE_PACKAGE
-                        if Path(command[0]).stem.casefold() == "ccusage"
-                        else next((part for part in command if "ccusage" in part), command[0])
-                    ),
+            provenance = {
+                "adapter": "ccusage-by-agent-json-v1",
+                "package": CCUSAGE_PACKAGE,
+            }
+            sources = normalize_usage_sources(payload, provenance)
+            for source, override in sorted(self.config.usage_commands.items()):
+                focused_payload = json.loads(await self._invoke(override))
+                sources[source] = normalize_usage(
+                    focused_payload,
+                    source,
+                    {"adapter": "ccusage-source-json-v1", "package": CCUSAGE_PACKAGE},
+                )
+            now = time.time()
+            self.cache = {"version": CACHE_VERSION, "updated_at": now, "sources": sources}
+            self._write_cache()
+            self.state.status = "ready"
+            self.state.refreshed_at = now
+            logger.info(
+                "ccusage refresh completed",
+                extra={
+                    "usage_source_count": len(sources),
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                    "operation_id": refresh_id,
                 },
             )
-            now = time.time()
-            providers = dict(self.cache.get("providers") or {})
-            providers[provider] = normalized
-            self.cache = {"version": CACHE_VERSION, "updated_at": now, "providers": providers}
-            self._write_cache()
-            state.status = "ready"
-            state.refreshed_at = now
-            await self.events.emit("usage_refreshed", source="ccusage", provider=provider)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError, UsageAdapterError) as exc:
-            state.status = "stale" if self.cache.get("providers", {}).get(provider) else "error"
-            state.error = str(exc)
             await self.events.emit(
-                "usage_refresh_failed", source="ccusage", provider=provider, error=str(exc)
+                "usage_refreshed",
+                source="ccusage",
+                usage_sources=sorted(sources),
+                operation_id=refresh_id,
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, UsageAdapterError) as exc:
+            self.state.status = "stale" if self.cache.get("sources") else "error"
+            self.state.error = str(exc)
+            logger.warning(
+                "ccusage refresh failed: %s",
+                exc,
+                extra={
+                    "duration_ms": round((time.monotonic() - started) * 1000),
+                    "error_type": type(exc).__name__,
+                    "operation_id": refresh_id,
+                },
+            )
+            await self.events.emit(
+                "usage_refresh_failed",
+                source="ccusage",
+                error=str(exc),
+                operation_id=refresh_id,
             )
 
     async def _invoke(self, command: list[str]) -> str:
@@ -363,15 +472,16 @@ class UsageManager:
         os.replace(temporary, self.cache_path)
 
     def clear(self) -> dict[str, Any]:
+        source_count = len(self.cache.get("sources") or {})
         self.cache = {}
         try:
             self.cache_path.unlink()
         except FileNotFoundError:
             pass
-        for state in self.states.values():
-            state.status = "ready" if self.config.ccusage_enabled else "disabled"
-            state.error = None
-            state.refreshed_at = None
+        self.state.status = "ready" if self.config.ccusage_enabled else "disabled"
+        self.state.error = None
+        self.state.refreshed_at = None
+        logger.info("usage cache cleared", extra={"usage_source_count": source_count})
         return self.snapshot()
 
     async def _background(self) -> None:

@@ -33,6 +33,7 @@ import type { NotificationData, UiNotification } from './Notifications'
 import { alertPreferences, setAlertPreferencesFor } from './alertPrefs'
 import { UsageDashboard } from './UsageDashboardView'
 import { NetworkUsageModal } from './NetworkUsageModal'
+import { StorageUsageModal } from './StorageUsageModal'
 import { HistoryBrowser } from './HistoryBrowser'
 import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
@@ -542,6 +543,7 @@ export function App() {
   const [railVoiceRevision,setRailVoiceRevision]=useState(0)
   const [usageOpen, setUsageOpen] = useState(false)
   const [networkUsageOpen,setNetworkUsageOpen]=useState(false)
+  const [storageUsageOpen,setStorageUsageOpen]=useState(false)
   // The fleet queue overlay, and the Project it opens filtered to (the Project menu scopes
   // it to its own row; everywhere else opens it unfiltered). `null` is closed.
   const [fleetQueue, setFleetQueue] = useState<{ projectId: string } | null>(null)
@@ -801,7 +803,11 @@ export function App() {
       let updated=current
       if(projectId&&legacyDrawerTab.current&&!current[projectId]){
         const base=drawerProjectPresentationFor(current,projectId,drawerLayoutRef.current)
-        const legacyValue=legacyDrawerTab.current==='commands'||legacyDrawerTab.current==='prompts'?'actions':legacyDrawerTab.current
+        // Mirrors `migratedTabId` in drawerLayout: this legacy `mux.drawer.tab.v1`
+        // seed bypasses that helper, so the same forward-maps apply here — the
+        // retired `commands`/`prompts` (→ actions) and Phase 7.10's `timeline` (→ insight).
+        const legacyRaw=legacyDrawerTab.current
+        const legacyValue=legacyRaw==='commands'||legacyRaw==='prompts'?'actions':legacyRaw==='timeline'?'insight':legacyRaw
         const legacy=DRAWER_TABS.some(tab=>tab.id===legacyValue)?legacyValue as DrawerTabId:null
         if(legacy)updated=setDrawerProjectPresentation(current,projectId,activateDrawerTab(base,drawerLayoutRef.current,legacy),drawerLayoutRef.current)
       }
@@ -3948,6 +3954,7 @@ export function App() {
     { id: 'actions.configure', label: 'Configure Actions', category: 'view', available: true, run: openActionEditor },
     { id: 'usage.open', label: 'Open usage analytics', category: 'view', available: true, run: () => {setUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'networkUsage.open', label: 'Open bandwidth usage', category: 'view', available: true, run: () => {setNetworkUsageOpen(true);setMainMenuOpen(false)} },
+    { id: 'storageUsage.open', label: 'Open storage usage', category: 'view', available: true, run: () => {setStorageUsageOpen(true);setMainMenuOpen(false)} },
     { id: 'hooks.open', label: 'Open Automation', category: 'view', available: true, run: () => {setAutomationOpen(true);setMainMenuOpen(false)} },
     { id: 'notifications.open', label: `Open notifications${notificationUnread?` (${notificationUnread} new)`:''}`, category: 'view', available: true, run: openNotifications },
     { id: 'notes.scratchpad', label: 'Open global Scratchpad', category: 'view', available: !!activeProject, disabledReason: 'No project workspace available', run: () => openScratchpad('drawer') },
@@ -5258,6 +5265,7 @@ export function App() {
         }}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target,tab:'settings'})}}
+        onOpenAutomationDashboard={()=>setAutomationOpen(true)}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}
@@ -5306,7 +5314,7 @@ export function App() {
           them would only repeat the same icons and spend a column doing it. Mobile reaches the
           same tabs through the drawer's own tab strip after a two-finger swipe. */}
       {!mobileWorkspace&&!clipboardOpen&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
-        {drawerLauncherTabs.filter(tab=>!['transcript','timeline'].includes(tab.id)||hasHarnessTranscript(active?.backend)).map(tab=>{
+        {drawerLauncherTabs.filter(tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
           // No selected state to draw: the rail is only rendered while the drawer is closed,
           // so no tab it lists is showing anywhere.
@@ -5548,6 +5556,7 @@ export function App() {
       <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
       <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
       <button onClick={() => runNamedCommand('networkUsage.open')}>Bandwidth usage…</button>
+      <button onClick={() => runNamedCommand('storageUsage.open')}>Storage usage…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       <div class="context-subtitle">CONFIGURATION</div>
       {/* Adding a Project lives in the registry and the empty-sidebar menu; this
@@ -5637,6 +5646,7 @@ export function App() {
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}
     {networkUsageOpen&&<NetworkUsageModal onClose={()=>setNetworkUsageOpen(false)}/>}
+    {storageUsageOpen&&<StorageUsageModal onClose={()=>setStorageUsageOpen(false)}/>}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 

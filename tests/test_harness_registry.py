@@ -12,7 +12,6 @@ from swe_mux.harness import (
     agent_harnesses,
     delivers_prompts_through_pty,
     descriptor,
-    external_usage_harnesses,
     harnesses_at_least,
     has_observable_transcript,
     is_agent_harness,
@@ -267,7 +266,7 @@ def test_capability_queries_fail_closed_for_non_harnesses() -> None:
     assert not reports_lifecycle_hooks("shell")
 
 
-def test_agent_and_managed_provider_consumers_share_the_registry(tmp_path: Path) -> None:
+def test_provider_accounts_use_registry_but_usage_sources_do_not(tmp_path: Path) -> None:
     from swe_mux import session, voice
     from swe_mux.config import Config
     from swe_mux.event_bus import EventBus
@@ -278,7 +277,7 @@ def test_agent_and_managed_provider_consumers_share_the_registry(tmp_path: Path)
     assert voice.has_observable_transcript is has_observable_transcript
     assert PROVIDERS == provider_account_harnesses() == ("claude", "codex")
     usage = UsageManager(Config(data_dir=tmp_path), EventBus())
-    assert tuple(usage.states) == external_usage_harnesses() == ("claude", "codex")
+    assert usage.snapshot()["collector"]["id"] == "ccusage"
 
 
 def test_agent_shims_cover_the_registry_and_keep_the_content_guard(tmp_path: Path) -> None:
@@ -469,7 +468,6 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         "lifecycle_hooks",
         "mcp",
         "pty_delivery",
-        "external_usage",
         "provider_accounts",
         "repaints_scrollback",
         "assigns_conversation_id",
@@ -674,7 +672,7 @@ def test_detection_rides_the_payload_only_when_supplied_and_never_the_seed() -> 
 
 def test_public_registry_exposes_frontend_capability_gates() -> None:
     payload = public_harness_registry()
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     items = {item["name"]: item for item in payload["harnesses"]}  # type: ignore[index]
     assert set(items) == set(HARNESSES)
     assert items["claude"]["display_name"] == "Claude Code"

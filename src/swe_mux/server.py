@@ -252,6 +252,7 @@ from .spawn_contract import (
 )
 from .spawn_probe import SpawnFailure, spawn_settled
 from .status_timeline import StatusTimelineStore
+from .storage_usage import ProjectFootprintTarget, StorageUsage
 from .subprocess_flags import background_creation_flags, popen_outside_job
 from .supervisor_client import SupervisorClient
 from .tailscale import (
@@ -798,6 +799,7 @@ def create_app(
             web.get("/api/diagnostics/notifications", get_notification_diagnostics),
             web.get("/api/diagnostics/network", get_network_usage),
             web.delete("/api/diagnostics/network", reset_network_usage),
+            web.get("/api/diagnostics/storage", get_storage_usage),
             web.get("/api/diagnostics/export", diagnostics_export),
             web.get("/api/diagnostics/doctor", get_doctor_report),
             web.get("/api/sessions/{sid}/last-reply", session_last_reply),
@@ -1475,6 +1477,13 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         usage=usage,
         telemetry=telemetry,
         status_timeline=status_timeline,
+        storage_usage=StorageUsage(
+            config.data_dir,
+            lambda: [
+                ProjectFootprintTarget(id=project.id, label=project.name, root=project.root)
+                for project in projects.ordered_projects()
+            ],
+        ),
         tier0=tier0,
         deterministic_consumers=consumers,
         attention_ranking=attention_ranking,
@@ -2677,14 +2686,66 @@ async def automation_firings(request: web.Request) -> web.Response:
     )
 
 
+async def _annotation_session_run_ids(app: web.Application, session_id: str) -> list[str]:
+    """Every agent-run id belonging to one session, live run plus its history.
+
+    A session filter on the Findings surface matches these ids against the
+    annotations' ``agent_run_id`` column, because that column is the only anchor
+    every run-scoped detector writes (the ``session_id`` column is populated by
+    one detector alone). The live record carries the current run; superseded runs
+    (a ``/clear`` mints a fresh one) live in history, so both are unioned.
+    """
+    run_ids: set[str] = set()
+    live = app["sessions"].sessions.get(session_id)
+    if live is not None:
+        current = str(getattr(live.record, "agent_run_id", "") or "")
+        if current:
+            run_ids.add(current)
+    for row in await app["history"].agent_runs_for_session(session_id):
+        run_id = str(row.get("agent_run_id") or "")
+        if run_id:
+            run_ids.add(run_id)
+    return sorted(run_ids)
+
+
 async def list_annotations(request: web.Request) -> web.Response:
+    """Findings read: annotations filtered by tag, project, session, run, and time.
+
+    Extends the original run/tag read rather than forking a second endpoint. A
+    ``session_id`` is resolved to the session's run-id set (see
+    ``_annotation_session_run_ids``); ``tag_counts`` reports per-tag totals in the
+    same scope but ignores the tag chip, so the human surface can tell a quiet
+    scope from a filtered one.
+    """
+    store = request.app["automation_store"]
+    query = request.query
+    agent_run_id = query.get("agent_run_id")
+    project_id = query.get("project_id")
+    tag = query.get("tag")
+    raw_since = query.get("since")
+    since = float(raw_since) if raw_since not in (None, "") else None
+    session_id = query.get("session_id")
+    agent_run_ids = (
+        await _annotation_session_run_ids(request.app, session_id)
+        if session_id
+        else None
+    )
     return json_response(
         {
-            "items": await request.app["automation_store"].annotations(
-                agent_run_id=request.query.get("agent_run_id"),
-                tag=request.query.get("tag"),
-                limit=int(request.query.get("limit", 200)),
-            )
+            "items": await store.annotations(
+                agent_run_id=agent_run_id,
+                agent_run_ids=agent_run_ids,
+                project_id=project_id,
+                tag=tag,
+                since=since,
+                limit=int(query.get("limit", 200)),
+            ),
+            "tag_counts": await store.annotation_tag_counts(
+                agent_run_id=agent_run_id,
+                agent_run_ids=agent_run_ids,
+                project_id=project_id,
+                since=since,
+            ),
         }
     )
 
@@ -5067,6 +5128,21 @@ async def reset_network_usage(request: web.Request) -> web.Response:
     )
     meter.reset()
     return json_response({"reset": True, "previous": previous})
+
+
+async def get_storage_usage(request: web.Request) -> web.Response:
+    """swe-mux's on-disk footprint: data-dir buckets plus per-Project `.swe-mux`.
+
+    Read-only measurement of the bytes swe-mux stores, never the host drive's
+    capacity. The walk is I/O-heavy (the WebView2 cache dominates), so it runs
+    off the event loop and behind a TTL cache; `?refresh=1` forces a re-measure.
+    """
+    storage: StorageUsage = request.app["storage_usage"]
+    force = request.query.get("refresh", "").lower() in {"1", "true", "yes"}
+    report = await asyncio.to_thread(storage.snapshot, force=force)
+    response = json_response(report)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # Log tails are bounded so the copyable blob stays pasteable and the read is
@@ -8820,8 +8896,7 @@ async def get_usage(request: web.Request) -> web.Response:
 
 async def refresh_usage(request: web.Request) -> web.Response:
     usage: UsageManager = request.app["usage"]
-    body = await request.json() if request.can_read_body else {}
-    return json_response(await usage.refresh(body.get("provider")))
+    return json_response(await usage.refresh())
 
 
 async def clear_usage_cache(request: web.Request) -> web.Response:

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
 import {
   isAbsolutePath,
+  graphDecorations,
+  graphNodeLane,
   localMeasurement,
   normalizePath,
   parseGitGraph,
@@ -52,10 +54,12 @@ function committedLabel(timestamp: number): string {
     .format(new Date(timestamp * 1000))
 }
 
-function GraphGlyph({ value }: { value: string }) {
+function GraphGlyph({ value, commit=false }: { value: string; commit?: boolean }) {
   return <span class="git-graph-glyph" aria-hidden="true">
-    {[...value].map((character, index) =>
-      <i class={`lane-${Math.floor(index / 2) % 5}`} key={`${index}:${character}`}>{character}</i>)}
+    {[...value].map((character, index) => {
+      const node=commit&&character==='*'
+      return <i class={`lane-${Math.floor(index / 2) % 5}${node?' node':character.trim()?' edge':''}`} key={`${index}:${character}`}>{node?'●':character}</i>
+    })}
   </span>
 }
 
@@ -166,6 +170,10 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
 
   if(!project)return <><p class="drawer-status">no Project selected</p><p class="drawer-empty">Select a Project to inspect its repository.</p></>
 
+  const mainTree=overview?.worktrees.find(tree=>tree.main)
+  const linkedWorktrees=overview?.worktrees.filter(tree=>!tree.main)||[]
+  const comparisonLabel=overview?.comparison.available?(overview.comparison.display||overview.comparison.ref):null
+
   const saveComparison=async(value:string)=>{
     setBusy(true)
     try{const updated=await api<Project>('PATCH',`/api/projects/${project.id}`,{git_compare_ref:value||null});onProjectUpdated(updated);setCompareOverride(value);setReview(null);await refresh()}
@@ -231,7 +239,7 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
           <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
             <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
             <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
-            <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em>{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{attached.length>0&&<em class="live">{attached.length} live</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
+            <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{attached.length>0&&<em class="live">{attached.length} live</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
             <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
           </button>
           {expanded&&<div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
@@ -245,17 +253,23 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
         </article>
       })}
     </>}
-    {view==='log'&&<>{!graph&&!error&&<p class="git-state">Reading commit graph…</p>}{graph&&<section class="git-graph" aria-label="Commit graph">{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
-        const parent=parentByCommit[line.oid]??line.parents[0]??'',key=`${line.oid}:${parent}`,changes=commitCache.get(key),expanded=expandedCommit===line.oid
-        const commitProvenance=provenanceByCommit.get(line.oid)||[]
-        return <article class="git-graph-row git-review-commit" key={line.oid}><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph}/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span><small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}{commitProvenance.length?` · ${commitProvenance.length} session link${commitProvenance.length===1?'':'s'}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
+    {view==='log'&&<>{!graph&&!error&&<p class="git-state">Reading commit graph…</p>}{graph&&<><div class="git-graph-context" aria-label="Commit graph context">
+      <span><b>MAIN TREE</b><strong>{mainTree?.branch||mainTree&&`detached @ ${shortSha(mainTree.head)}`||'unavailable'}</strong>{mainTree?.head&&<code>@ {shortSha(mainTree.head)}</code>}</span>
+      <span><b>COMPARE</b><strong>{comparisonLabel||'unavailable'}</strong></span>
+      <span><b>WORKTREES</b><strong>{linkedWorktrees.length} linked</strong></span>
+      <span><b>SCOPE</b><strong>all refs</strong></span>
+    </div><section class="git-graph" aria-label="Commit graph">{graph.lines.map((line,index)=>line.kind==='connector'?<div class="git-graph-connector" key={`c:${index}`}><GraphGlyph value={line.graph}/></div>:(()=>{
+         const parent=parentByCommit[line.oid]??line.parents[0]??'',key=`${line.oid}:${parent}`,changes=commitCache.get(key),expanded=expandedCommit===line.oid
+         const commitProvenance=provenanceByCommit.get(line.oid)||[]
+         const lane=graphNodeLane(line.graph),decorations=graphDecorations(line,overview)
+         return <article class="git-graph-row git-review-commit" key={line.oid}><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph} commit/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span>{decorations.length>0&&<span class="git-commit-refs">{decorations.map((item,refIndex)=><em class={`${item.kind} lane-${lane}`} title={item.title} key={`${item.kind}:${item.label}:${refIndex}`}>{item.label}</em>)}</span>}<small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}{commitProvenance.length?` · ${commitProvenance.length} session link${commitProvenance.length===1?'':'s'}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
           {/* The summary row can only ever show one elided line of the subject, so the whole
               message - subject, blank line, body - is reproduced here. `pre-wrap` because a
               commit message is pre-formatted prose: its own hard wraps and paragraph breaks
               are part of what was written, and only the over-long line needs the browser. */}
           {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}><strong>{item.sessionName}</strong><span class={`git-provenance-confidence ${item.confidence}`}>{item.relationship} · {item.confidence}</span></p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
-    })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section>}</>}
+    })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section></>}</>}
     {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">{provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}{!provenanceError&&provenance.length===0?<p class="git-state">No session-to-commit associations recorded yet.</p>:provenance.map(item=><article key={item.id}><div><strong>{shortSha(item.commitOid)}</strong><span>{item.subject||'Commit observed without readable metadata'}</span></div><p><strong>{item.sessionName}</strong>{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-confidence ${item.confidence}`}>{item.relationship} · {item.confidence}</span></p><small>{item.worktreeRoot} · observed {new Date(item.observedAt*1000).toLocaleString()}</small>{item.ambiguous&&<em>Several live sessions shared this checkout, so swe-mux cannot identify the author.</em>}</article>)}</section>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
   </div>

@@ -2,63 +2,66 @@
 
 ## What it is
 
-- Optional cached summaries for registry harnesses that declare an external usage command.
-- Claude Code and Codex currently use one unified, locally installed `ccusage` CLI.
-- Refresh state and all-provider iteration use the independent `external_usage_command` harness capability.
-  OMP is managed but excluded because its native transcript already reports exact tokens, cache traffic, and cost.
-- This is historical cost/token analytics, not live context-window truth or quota failover.
-- `ccusage` scans provider transcript roots and does not expose a trustworthy saved-account identity for each historical row.
-- Historical totals and model rows must never be presented as belonging to a saved Claude or Codex account slot.
-- Provider subscription windows and account switching belong to
-  `provider-accounts.md`; the two caches and refresh workers are independent.
-- Durable quota/reset/correlation, explicit tool/skill metrics, and compaction history belong
-  to `operational-telemetry.md`; they share the dashboard but not the `ccusage` cache.
+- Optional cached historical token and cost summaries collected by the locally installed `ccusage` CLI.
+- One `ccusage daily --json --by-agent` process discovers every source for which ccusage finds data.
+- ccusage 20 currently supports Claude Code, Codex, OpenCode, Amp, Droid, CodeBuff, Hermes, Pi, Goose, OpenClaw, Kilo Code, Kimi, Qwen Code, GitHub Copilot, and Gemini CLI.
+- Historical source discovery is independent of the swe-mux harness registry.
+- A source may appear even when swe-mux cannot launch or manage that tool.
+- A managed harness may exist without appearing in historical usage when ccusage finds no compatible transcript data.
+- Historical sources and quota providers are different concepts.
+- Historical rows carry `source_id`, `source_label`, and `collector_id`; quota rows retain provider and account identity.
+- This is historical cost and token analytics, not live context-window truth or quota failover.
+- ccusage scans tool transcript roots and does not expose a trustworthy saved-account identity for each historical row.
+- Historical totals and model rows must never be presented as belonging to a saved provider account slot.
+- Provider subscription windows and account switching belong to `provider-accounts.md`.
+- Durable quota, reset, correlation, tool, skill, and compaction telemetry belongs to `operational-telemetry.md`.
 
 ## Operations and invariants
 
-- Disabled by default. Refresh runs only manually or on a configured low-priority cadence;
-  startup and PTY input never wait for it.
-- At most one refresh runs at a time. Each command has a timeout and output cap.
-- Configured defaults invoke `ccusage claude daily --json` and
-  `ccusage codex daily --json`. Settings installs or updates the unified CLI explicitly
-  with `npm install -g ccusage@latest`; the npm tag resolves only during that operator
-  action. Refreshes use the installed executable and never download or update code.
-- Per-harness command overrides live in `usage_commands`; descriptors that measure usage from
-  their own transcripts can opt out of an external command.
-- OMP usage is aggregated across assistant messages on the active transcript branch.
-  `message.usage.input`, `output`, `cacheRead`, and `cacheWrite` populate the four token counters,
-  while `message.usage.cost.total` is summed into `cost_usd`.
-  This cost is provider-reported native cost, not a mux price-table estimate.
-  The latest assistant message supplies provider and model, and OMP's cached model catalog supplies
-  the context window used for final and peak context percentages.
-  A packaged Anthropic probe measured all four token counters, exact cost, model, provider, context,
-  and credential pin in the live session and the same finalized values in history after exit.
-- Exact legacy defaults using `npx --no-install` and the deprecated separate Codex package
-  migrate automatically. Custom commands remain untouched.
-- Executables are resolved before launch. On Windows, npm `.cmd`/`.bat` shims run through
-  `COMSPEC`, while Linux and macOS execute the resolved native command directly.
-- Each supported command's JSON is validated and normalized to daily, monthly, session, model,
-  token, and cost aggregates with source/version provenance. The current adapter accepts legacy
-  `modelBreakdowns` arrays and current Codex `models` maps; model rows retain their daily
-  key so range-scoped breakdowns can be derived.
-  Tokens in those rows are exact transcript aggregates.
-  Source-provided costs are marked `source_estimate`; when a Codex model map omits cost, the adapter allocates the daily cost in proportion to model tokens and marks it `proportional`.
-- Read-only model labels use the frontend's compact display mapping, but grouping, sorting, cache rows, tooltips, accessibility labels, and configuration preserve exact model identifiers.
-- A successful refresh atomically replaces the last-known-good cache. Failure preserves
-  cached data and exposes stale/error state.
-- `: menu` and the command palette open the dedicated Usage dashboard. Provider selection
-  composes with Overview, Time series, and Model breakdown views; daily/monthly interval,
-  cached-day range, and token/cost metric controls derive views from daily cache rows.
-  The model view renders a stacked per-period series and a per-provider, per-model detail table without collapsing the date dimension.
-  Provider freshness/errors and refresh progress remain visible. Settings owns enablement,
-  cadence, advanced command overrides, and a shortcut back to the dashboard.
+- Historical collection is disabled by default.
+- Refresh runs only manually or on a configured low-priority cadence.
+- Startup and PTY input never wait for it.
+- At most one refresh runs at a time.
+- Each command has a timeout and output cap.
+- The default collector command is `ccusage daily --json --by-agent`.
+- Settings installs or updates the CLI explicitly with `npm install -g ccusage@latest`.
+- Refresh uses the installed executable and never downloads or updates code.
+- The primary override is the single `usage_command` array.
+- Migrated custom per-source commands remain in `usage_commands` as legacy overrides and replace that source after the unified scan.
+- Exact old Claude and Codex defaults, including the former `npx --no-install` commands, migrate to the unified collector command.
+- Executables are resolved before launch.
+- On Windows, npm `.cmd` and `.bat` shims run through `COMSPEC`.
+- Linux and macOS execute the resolved native command directly.
+- The adapter validates the unified payload, splits nested `agents` rows by source, and normalizes daily, monthly, model, token, and cost aggregates.
+- The adapter accepts legacy `modelBreakdowns` arrays and current `models` maps.
+- Tokens are transcript aggregates reported by ccusage.
+- Source-provided costs are marked `source_estimate`.
+- When a model map omits cost, the adapter allocates daily cost in proportion to model tokens and marks it `proportional`.
+- Read-only model labels may use the frontend compact display mapping.
+- Grouping, sorting, cache rows, tooltips, accessibility labels, and configuration preserve exact model identifiers.
+- Cache version 3 stores a dynamic `sources` map and one `collector` refresh state.
+- Cache version 2 provider rows migrate in memory to source rows.
+- A successful refresh atomically replaces the last-known-good cache.
+- Failure preserves cached data and exposes stale or error state.
 - Tests consume version-labelled JSON fixtures and never invoke external tools.
+
+## Dashboard behavior
+
+- Historical, quota, tools, and context remain separate top-level telemetry categories.
+- Historical usage has a scalable multi-select source popover derived from cached source metadata.
+- Source freshness and collector errors live in that popover instead of one fixed card per source.
+- Range, interval, metric, and overview or series controls apply only to historical data.
+- Quota keeps a separate provider and account filter because those values have verified account semantics.
+- Configure and clear-cache actions live in the overflow menu.
+- Refresh is one API request and one unified collector run.
+- The model view renders a stacked per-period series and per-source, per-model detail without collapsing the date dimension.
 
 ## Key files
 
-- Adapter/cache: `src/swe_mux/usage.py`
+- Adapter and cache: `src/swe_mux/usage.py`
 - Config: `src/swe_mux/config.py`
 - Settings UI: `frontend/src/Settings.tsx`
 - Dashboard UI: `frontend/src/UsageDashboardView.tsx`, `frontend/src/UsageModelBreakdown.tsx`
+- Historical analytics helpers: `frontend/src/usageAnalytics.ts`
 - Operational store: `src/swe_mux/operational_telemetry.py`
-- Fixtures/tests: `tests/fixtures/usage/`, `tests/test_usage_phase4.py`
+- Fixtures and tests: `tests/fixtures/usage/`, `tests/test_usage_phase4.py`

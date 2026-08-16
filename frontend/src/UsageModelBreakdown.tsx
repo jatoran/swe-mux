@@ -1,6 +1,6 @@
 import { useMemo } from 'preact/hooks'
 import { ModelName } from './ModelName'
-import { modelPeriodRows, type ProviderUsage, type UsageRow } from './usageAnalytics'
+import { modelPeriodRows, type UsageRow, type UsageSource } from './usageAnalytics'
 
 const integer = new Intl.NumberFormat()
 const money = new Intl.NumberFormat(undefined,{
@@ -18,21 +18,22 @@ function costText(row:UsageRow):string {
 }
 
 export function UsageModelBreakdown({
-  providers,
+  sources,
   visibleDates,
   resolution,
   metric,
 }:{
-  providers:ProviderUsage[]
+  sources:UsageSource[]
   visibleDates:Set<string>
   resolution:'daily'|'monthly'
   metric:'tokens'|'cost'
 }) {
   const rows = useMemo(
-    ()=>modelPeriodRows(providers,visibleDates,resolution),
-    [providers,visibleDates,resolution],
+    ()=>modelPeriodRows(sources,visibleDates,resolution),
+    [sources,visibleDates,resolution],
   )
-  const models = [...new Set(rows.map(row=>`${row.provider}\0${row.model}`))]
+  const labels = new Map(sources.map(source=>[source.source_id,source.source_label]))
+  const models = [...new Set(rows.map(row=>`${row.source_id}\0${row.model}`))]
   const colors = new Map(models.map((model,index)=>[model,palette[index%palette.length]]))
   const periods = [...new Set(rows.map(row=>row.period))].sort()
   const maximum = Math.max(...periods.map(period=>rows.filter(row=>row.period===period).reduce(
@@ -46,15 +47,14 @@ export function UsageModelBreakdown({
 
   return <div class="usage-model-breakdown">
     <p class="telemetry-caveat historical-caveat">
-      Tokens are exact ccusage transcript aggregates. Codex model costs marked allocated are
-      proportional shares of the daily estimate, because ccusage does not report per-model cost.
-      These rows are not account-specific.
+      Tokens are ccusage transcript aggregates. Costs retain the method reported by each source.
+      Allocated costs are proportional shares of a daily estimate. These rows are not account-specific.
     </p>
     <section class="model-stack" aria-label={`Per-model ${resolution} ${metric} breakdown`}>
       <div class="model-legend">
         {models.map(model=>{
-          const [provider,name]=model.split('\0')
-          return <span key={model}><i style={{background:colors.get(model)}}/>{provider} · <ModelName model={name}/></span>
+          const [source,name]=model.split('\0')
+          return <span key={model}><i style={{background:colors.get(model)}}/>{labels.get(source)||source} · <ModelName model={name}/></span>
         })}
       </div>
       {[...periods].reverse().map(period=>{
@@ -66,11 +66,11 @@ export function UsageModelBreakdown({
             {periodRows.map(row=>{
               const value=metric==='tokens'?row.total_tokens:row.cost_usd
               const width=total?value/total*100:0
-              const identity=`${row.provider}\0${row.model}`
+              const identity=`${row.source_id}\0${row.model}`
               return <i
                 key={identity}
                 style={{width:`${width}%`,background:colors.get(identity)}}
-                title={`${row.provider} · ${row.model}: ${metric==='tokens'?integer.format(value):money.format(value)}`}
+                title={`${labels.get(row.source_id)||row.source_id} · ${row.model}: ${metric==='tokens'?integer.format(value):money.format(value)}`}
               />
             })}
           </div>
@@ -81,10 +81,10 @@ export function UsageModelBreakdown({
     <section class="usage-table">
       <h3>{resolution==='daily'?'Daily':'Monthly'} model detail</h3>
       <div class="usage-table-scroll"><table><thead><tr>
-        <th>{resolution==='daily'?'date':'month'}</th><th>provider/model</th><th>tokens</th>
+        <th>{resolution==='daily'?'date':'month'}</th><th>source/model</th><th>tokens</th>
         <th>input</th><th>output</th><th>cache</th><th>cost</th>
-      </tr></thead><tbody>{rows.map(row=><tr key={`${row.period}-${row.provider}-${row.model}`}>
-        <td>{row.period}</td><td>{row.provider} · <ModelName model={row.model}/></td>
+      </tr></thead><tbody>{rows.map(row=><tr key={`${row.period}-${row.source_id}-${row.model}`}>
+        <td>{row.period}</td><td>{labels.get(row.source_id)||row.source_id} · <ModelName model={row.model}/></td>
         <td>{integer.format(row.total_tokens)}</td><td>{integer.format(row.input_tokens)}</td>
         <td>{integer.format(row.output_tokens)}</td>
         <td>{integer.format(row.cache_read_tokens+row.cache_creation_tokens)}</td>

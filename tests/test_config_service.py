@@ -292,22 +292,30 @@ def test_legacy_separate_ccusage_commands_migrate_to_one_unified_cli(
 
     config = load_config(path)
 
-    assert config.usage_commands["claude"] == default_ccusage_command("claude")
-    assert config.usage_commands["codex"] == default_ccusage_command("codex")
+    assert config.usage_command == default_ccusage_command()
+    assert config.usage_commands == {}
     assert path.with_suffix(".toml.bak").is_file()
     persisted = tomllib.loads(path.read_text(encoding="utf-8"))
-    assert persisted["usage_commands"]["claude"] == [
-        "ccusage",
-        "claude",
-        "daily",
-        "--json",
-    ]
-    assert persisted["usage_commands"]["codex"] == [
-        "ccusage",
-        "codex",
-        "daily",
-        "--json",
-    ]
+    assert persisted["usage_command"] == ["ccusage", "daily", "--json", "--by-agent"]
+    assert persisted["usage_commands"] == {}
+
+
+def test_custom_usage_source_override_survives_unified_command_migration(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "schema_version = 24\n"
+        'usage_command = ["custom-collector", "--json"]\n'
+        '[usage_commands]\n'
+        'opencode = ["custom-opencode", "--json"]\n',
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.usage_command == ["custom-collector", "--json"]
+    assert config.usage_commands == {"opencode": ["custom-opencode", "--json"]}
 
 
 def test_legacy_harness_executable_and_argument_keys_migrate_to_registry_maps(
