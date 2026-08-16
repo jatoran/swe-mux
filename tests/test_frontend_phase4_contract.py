@@ -503,7 +503,8 @@ def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
     assert "event.key !== 'ArrowLeft' && event.key !== 'ArrowRight'" in drawer
     assert "aria-valuenow={Math.round(node.ratio * 100)}" in drawer
     assert "onDblClick={() => updateRatio(0.5)}" in drawer
-    assert "onPointerDown={projection ? beginTabLongPress" in drawer
+    assert "onPointerDown={projection" in drawer
+    assert "beginTabLongPress(event); props.onProjectionTabReorder?.(event, id)" in drawer
     assert "mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)" in drawer
     assert 'aria-live="polite"' in drawer
 
