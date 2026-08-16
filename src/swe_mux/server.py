@@ -1322,11 +1322,19 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         enabled = await _enabled_automations(root)
         if "scan_timeline" not in enabled:
             return None
+        portable = await read_project_config(
+            root,
+            project=_registered_identity(projects.projects[record.project_id])
+            if record.project_id in projects.projects
+            else None,
+        )
+        values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
         return ScanContext(
             project_id=record.project_id,
             project_root=root,
             agent_run_id=record.agent_run_id,
             dead_end_memory_enabled="dead_end_memory" in enabled,
+            auto_enable=bool(values.get("scan_timeline_auto_enable", False)),
         )
 
     project_contexts = ProjectContextService(resolve_session=project_context)
@@ -3971,6 +3979,7 @@ async def get_project_automations(request: web.Request) -> web.Response:
             "requested": requested,
             "enabled": sorted(resolution.enabled),
             "blocked": {key: list(value) for key, value in resolution.blocked.items()},
+            "scan_timeline_auto_enable": bool(values.get("scan_timeline_auto_enable", False)),
             "automations": [
                 {
                     "id": automation.id,
@@ -4014,6 +4023,9 @@ async def put_project_automations(request: web.Request) -> web.Response:
             },
             409,
         )
+    auto_enable = body.get("scan_timeline_auto_enable")
+    if auto_enable is not None and not isinstance(auto_enable, bool):
+        raise ValueError("scan_timeline_auto_enable must be a boolean")
     # `scan_timeline_daily_budget_usd` is deliberately not accepted here any
     # more: it is one global setting in Settings -> Automation. A body that
     # still sends it is ignored rather than refused, and the retired key is
@@ -4021,6 +4033,13 @@ async def put_project_automations(request: web.Request) -> web.Response:
     current = await read_project_config(project.root, project=identity)
     values = dict(current["values"]) if current["status"] != "malformed" else {}
     values["automations"] = {key: bool(value) for key, value in requested.items() if value}
+    if auto_enable is not None:
+        values["scan_timeline_auto_enable"] = auto_enable
+    # Auto-enable is meaningless without the permission it rides on, and leaving
+    # it set would silently re-arm every run the moment the Project is opted in
+    # again. Opting out clears it.
+    if not values["automations"].get("scan_timeline"):
+        values.pop("scan_timeline_auto_enable", None)
     try:
         await write_project_config(
             project.root,

@@ -9,7 +9,7 @@ test('scan timeline is explicitly gated per current run and resets at conversati
   const timeline = source('ScanTimelineTab.tsx')
   assert.ok(timeline.includes("state.global_enabled&&state.project_enabled"))
   assert.ok(timeline.includes('/scan-timeline`,{enabled}'))
-  assert.ok(timeline.includes('It resets on /clear, /new, or session end.'))
+  assert.ok(timeline.includes('It resets on /clear, /new, or session end'))
   assert.ok(timeline.includes("event.kind==='boundary'"))
 })
 
@@ -61,14 +61,52 @@ test('scan spending limits are global settings, never per-project', () => {
   assert.ok(projects.includes('Settings → Automation'))
 })
 
-test('timeline drawer owns project context, project permission, and full-session scans', () => {
+test('Project-wide scan settings live in Project settings, not the drawer tab', () => {
   const timeline = source('ScanTimelineTab.tsx')
-  assert.ok(timeline.includes('Project context'))
-  assert.ok(timeline.includes('Copy setup prompt'))
-  assert.ok(timeline.includes('/project-context'))
-  assert.ok(timeline.includes('/scan-timeline/project'))
+  const projects = source('ProjectsManager.tsx')
+  const editor = source('ProjectContextEditor.tsx')
+  // The drawer tab is session-scoped. Hosting the Project permission and the
+  // Project context editor there meant every session in a Project showed the
+  // same two controls, competing with the tab's actual job.
+  assert.ok(!timeline.includes('/scan-timeline/project'))
+  assert.ok(!timeline.includes('/project-context'))
+  assert.ok(!timeline.includes('Copy setup prompt'))
   assert.ok(timeline.includes('Scan full session'))
   assert.ok(timeline.includes('/scan-timeline/backfill'))
+  // ...and a route to where they went, from every timeline tab.
+  assert.ok(timeline.includes('onOpenProjectSettings'))
+  assert.ok(timeline.includes('Project settings'))
+  assert.ok(projects.includes('ProjectContextEditor'))
+  assert.ok(editor.includes('/project-context'))
+  assert.ok(editor.includes('Copy setup prompt'))
+})
+
+test('a Project can arm every new conversation instead of being re-armed by hand', () => {
+  const projects = source('ProjectsManager.tsx')
+  const timeline = source('ScanTimelineTab.tsx')
+  assert.ok(projects.includes('scan_timeline_auto_enable'))
+  assert.ok(projects.includes('Arm every new conversation'))
+  // The drawer says which of the two states an unarmed run is in, so "off" and
+  // "about to arm itself" do not read the same.
+  assert.ok(timeline.includes('state.auto_enable'))
+  assert.ok(timeline.includes('starts on the next turn'))
+  // ...and does not promise that to a conversation the human switched off.
+  assert.ok(timeline.includes('state.run_decided'))
+  assert.ok(timeline.includes('stays off'))
+})
+
+test('the timeline tab keeps its budget to one row and shows when a scan is out', () => {
+  const timeline = source('ScanTimelineTab.tsx')
+  const styles = source('style.css')
+  // Six budget lines is the honest set and was also most of a narrow drawer.
+  assert.ok(timeline.includes('<details class="scan-budget">'))
+  assert.ok(styles.includes('.scan-budget>summary{'))
+  // "Working on it" and "nothing is happening" looked identical while waiting.
+  assert.ok(timeline.includes('state.scanning'))
+  assert.ok(timeline.includes('Scanning…'))
+  assert.ok(styles.includes('scan-pulse'))
+  // The newest record is at the bottom, so that is where the list opens.
+  assert.ok(timeline.includes('list.scrollTop=list.scrollHeight'))
 })
 
 test('timeline records collapse verbose evidence targets by default', () => {

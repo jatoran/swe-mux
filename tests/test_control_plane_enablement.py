@@ -125,6 +125,18 @@ def test_a_committed_project_budget_is_read_tolerantly_and_written_away() -> Non
     assert b"scan_timeline_daily_budget_usd" not in written
 
 
+def test_auto_enable_round_trips_and_is_boolean_only() -> None:
+    data = serialize_project_config(
+        {"automations": {"scan_timeline": True}, "scan_timeline_auto_enable": True}
+    )
+    assert parse_project_config(data)["scan_timeline_auto_enable"] is True
+    assert "scan_timeline_auto_enable" not in parse_project_config(
+        serialize_project_config({"automations": {"scan_timeline": True}})
+    )
+    with pytest.raises(ValueError, match="scan_timeline_auto_enable must be a boolean"):
+        parse_project_config(b'version = 1\nscan_timeline_auto_enable = "yes"\n')
+
+
 def test_project_automations_reads_root(tmp_path: Path) -> None:
     mux_dir = tmp_path / ".swe-mux"
     mux_dir.mkdir()

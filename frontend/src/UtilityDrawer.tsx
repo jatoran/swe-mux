@@ -104,6 +104,8 @@ type Props = {
   onOpenPreview: (sessionId: string, url: string) => void
   /** Escape hatch to the modal inspector, prefiltered to the tab's current scope. */
   onOpenInspector: (projectId: string | null) => void
+  /** Scan timeline's Project permission, context, and auto-arm all live there. */
+  onOpenProjectSettings: (projectId: string) => void
   /** Notes: the note selected for this Project's persistent sub-tab rail. A note has
    *  one live editor per browser (see `drawerNotes.ts`), so this is also what tells the
    *  matching pane leaf to stand down. */
@@ -294,7 +296,7 @@ export function UtilityDrawer(props: Props) {
         // read there, and closing it after each copy would end the reading.
         return <TranscriptTab session={session} />
       case 'timeline':
-        return <ScanTimelineTab session={session} />
+        return <ScanTimelineTab session={session} onOpenProjectSettings={props.onOpenProjectSettings} />
       case 'agent':
         return <AgentEnvironmentTab session={session} />
       case 'files':
