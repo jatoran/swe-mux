@@ -92,6 +92,16 @@ test('a row that cannot be grouped with is an insertion target over its whole he
   assert.deepEqual(listDropTargetForPoint(rows,'b',20,groupable),{kind:'group',id:'a'})
 })
 
+test('grouping disabled entirely makes every row a whole-height before/after insertion', () => {
+  // The mobile session drag: a fingertip cannot aim the ~12px reorder edge of a row whose
+  // middle would otherwise group, so mobile passes an always-false predicate and the whole
+  // row splits at its midpoint into insert-before / insert-after.
+  const rows=[{id:'a',start:0,end:40},{id:'b',start:40,end:80}]
+  const never=()=>false
+  assert.deepEqual(listDropTargetForPoint(rows,'a',55,never),{kind:'insert',id:'b',side:'before'})
+  assert.deepEqual(listDropTargetForPoint(rows,'a',65,never),{kind:'insert',id:'b',side:'after'})
+})
+
 test('gaps and the space past either end of a list resolve to the nearest slot, never a group', () => {
   const rows=[{id:'a',start:0,end:40},{id:'b',start:60,end:100}]
   assert.deepEqual(listDropTargetForPoint(rows,'x',-30),{kind:'insert',id:'a',side:'before'})

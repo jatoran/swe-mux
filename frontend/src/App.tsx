@@ -2398,10 +2398,16 @@ export function App() {
       if(!bounds||pointer.clientX<bounds.left-DROP_LIST_MARGIN||pointer.clientX>bounds.right+DROP_LIST_MARGIN
         ||pointer.clientY<bounds.top-DROP_LIST_MARGIN||pointer.clientY>bounds.bottom+DROP_LIST_MARGIN){clearTarget();return}
       const rows=targetRows()
+      // On mobile the drop is reorder-only: grouping two sessions into one tabbed pane lives
+      // in the row's middle band, which needs a ~12px-edge hit to reorder instead — unaimable
+      // with a fingertip, so nearly every drop grouped and the list "wouldn't rearrange". A
+      // fingertip gets the whole row as a before/after insertion; grouping stays a desktop
+      // gesture (and the long-press menu's "combine" path).
+      const groupable=mobileWorkspace?()=>false:(id:string)=>!paneSiblings.has(id)
       const target=listDropTargetForPoint(rows.map(row=>{
         const box=row.getBoundingClientRect()
         return {id:row.dataset.sidebarSessionId||'',start:box.top,end:box.bottom}
-      }),session.id,pointer.clientY,id=>!paneSiblings.has(id))
+      }),session.id,pointer.clientY,groupable)
       const element=target?rows.find(row=>row.dataset.sidebarSessionId===target.id)||null:null
       if(!target||!element){clearTarget();return}
       dragSessionTargetRef.current=target
