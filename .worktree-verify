@@ -22,6 +22,13 @@ uv run mypy
 step "frontend tsc"
 ( cd frontend && npx tsc --noEmit )
 
+step "frontend renderer tsc"
+# The base tsconfig only includes src, so this typechecks the Playwright renderer
+# harnesses against the real components. It catches a harness prop that has drifted
+# from the component it mounts before it can rot into a runtime-only Playwright
+# failure (as pane-layout.spec.ts did).
+( cd frontend && npx tsc --noEmit -p tsconfig.test.json )
+
 step "frontend tests"
 ( cd frontend && npm test )
 

@@ -133,7 +133,10 @@ Windows-only, `tests/test_conpty_integration.py`) and the harness-adapter covera
 matrix (`tests/test_harness_adapter_matrix.py`, which fails when a harness is added to
 the registry with no adapter/spawn coverage) — the `not live_*` filter does not deselect
 them. `.github/workflows/ci.yml` mirrors this gate on `windows-latest` and adds the
-production frontend build and the focused `workspace-smoke` Playwright renderer suite
-(`npm --prefix frontend exec playwright test -- --config playwright.renderer.config.ts
-workspace-smoke`); the broader renderer suite has pre-existing voice-UI rot and is not
-gated yet (see ROADMAP Phase 7 friction notes).
+production frontend build and the full Playwright renderer suite
+(`npm run test:renderer`, in `frontend/`). `frontend/tsconfig.json` includes only
+`src`, so the plain `npx tsc --noEmit` does NOT typecheck `frontend/test/`; the
+renderer harnesses are typechecked separately by `npm run check:renderer`
+(`tsconfig.test.json`, `src` + `test/renderer`), which `.worktree-verify` now runs so a
+harness prop that drifts from the component it mounts fails at typecheck instead of only
+at Playwright runtime (the way `pane-layout.spec.ts` once rotted).

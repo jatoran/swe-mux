@@ -2,6 +2,7 @@ import { render } from 'preact'
 import { ConversationSurface, type Conversation } from '../../src/ConversationControl'
 import { VoicePlayer } from '../../src/VoicePlayer'
 import { MobileTerminalDraft } from '../../src/TerminalDraftComposer'
+import type { Command } from '../../src/commands'
 import type { Session, VoiceStatus } from '../../src/types'
 import '../../src/style.css'
 
@@ -18,10 +19,23 @@ const mobile = parameters.get('mobile') === '1'
 const draft = parameters.get('draft') === '1'
 
 const session = { id: 'pane-harness', name: 'harness', backend: 'claude', state: 'running', cwd: 'D:\\PROJECTS\\swe-mux' } as Session
+// `commands` is the configured capture-action list (`{action,phrases}[]`), the shape the
+// voice-command catalog reads. Populated so the catalog draws its configured section; an
+// empty object here silently crashed the whole overlay render, and `test/` is outside
+// `tsconfig.json`'s `include`, so tsc never caught it.
 const status = {
   enabled: true, stt_enabled: true, stt_available: true, engine: 'edge', content: 'summary',
-  default_mode: 'auto', wake_words: ['mux'], commands: {},
+  default_mode: 'auto', wake_words: ['mux'],
+  commands: [
+    { action: 'send', phrases: ['mux send'] },
+    { action: 'append', phrases: ['mux append'] },
+  ],
 } as unknown as VoiceStatus
+
+// The live command registry the catalog groups. Empty is a valid presentational fixture:
+// the panel and the voice-command dialog render their fixed grammar (including
+// "append without sending") with no registry commands, which is what these tests pin.
+const commands: Command[] = []
 
 // Enough of the controller for the panel to render every state it draws; the panel is
 // presentational, so no capture is started here.
@@ -51,8 +65,8 @@ const pane = <section class="terminal-pane focused">
     <div class="pane-tools"><button>⋯</button></div>
   </div>
   {overlay && <div class="voice-overlay-anchor"><div class="voice-overlay">
-    <VoicePlayer session={session} status={status} mode="auto" onSession={() => {}} onOpenSettings={() => {}} />
-    <ConversationSurface conversation={conversation} onOpenSettings={() => {}} placement="pane"/>
+    <VoicePlayer session={session} status={status} mode="auto" commands={commands} onSession={() => {}} onOpenSettings={() => {}} />
+    <ConversationSurface conversation={conversation} commands={commands} onOpenSettings={() => {}} placement="pane"/>
   </div></div>}
   <div class="terminal-surface">
     <div class="terminal-host" />
