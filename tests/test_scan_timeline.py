@@ -157,7 +157,6 @@ async def build_service(
             project_id="project-1",
             project_root=str(tmp_path),
             agent_run_id=str(current.record.agent_run_id),
-            daily_budget_usd=5.0,
             dead_end_memory_enabled=dead_end,
         )
 
@@ -592,7 +591,12 @@ async def test_scan_ignores_the_per_rule_caps_and_reports_the_binding_gate(
         assert gates["scan_daily_tokens"]["limit"] == 3_000_000
         assert gates["scan_daily_tokens"]["used"] > 0
         assert gates["scan_hourly_calls"]["limit"] == 600
-        assert gates["project_daily_usd"]["limit"] == 5.0
+        # One global dollar budget, not a per-Project one. There is no
+        # `project_daily_usd` gate any more, and nothing reads a Project file
+        # to decide what a scan may cost.
+        assert "project_daily_usd" not in gates
+        assert gates["scan_daily_usd"]["limit"] == 5.0
+        assert gates["scan_daily_usd"]["used"] > 0
         assert state["skip_reason"] is None
     finally:
         await service.stop()
@@ -609,6 +613,49 @@ async def test_an_exhausted_scan_budget_names_itself_in_the_snapshot(tmp_path: P
         assert await service.scan_now("session-1", "test") is None
         state = await service.snapshot("session-1")
         assert state["skip_reason"] == "the daily Scan timeline token budget is exhausted"
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_dollar_ceiling_is_one_global_setting(tmp_path: Path) -> None:
+    """No Project file is read to decide what a scan may cost."""
+    service, store, _provider, _sessions = await build_service(
+        tmp_path, scan_timeline_daily_budget_usd=0.0
+    )
+    try:
+        # Straight to the store: `set_enabled` also schedules a background scan,
+        # whose `_clear_skip` on entry races this test's read of the reason.
+        await store.set_scan_run_enabled(
+            agent_run_id="run-1",
+            session_id="session-1",
+            project_id="project-1",
+            enabled=True,
+        )
+        assert await service.scan_now("session-1", "test") is None
+        state = await service.snapshot("session-1")
+        assert state["skip_reason"] == "the daily Scan timeline dollar budget is exhausted"
+        assert state["daily_budget_usd"] == 0.0
+    finally:
+        await service.stop()
+        store.close()
+
+    generous = tmp_path / "generous"
+    generous.mkdir()
+    service, store, _provider, _sessions = await build_service(
+        generous, scan_timeline_daily_budget_usd=25.0
+    )
+    try:
+        await store.set_scan_run_enabled(
+            agent_run_id="run-1",
+            session_id="session-1",
+            project_id="project-1",
+            enabled=True,
+        )
+        assert await service.scan_now("session-1", "test") is not None
+        gates = {gate["id"]: gate for gate in (await service.snapshot("session-1"))["gates"]}
+        assert gates["scan_daily_usd"]["limit"] == 25.0
     finally:
         await service.stop()
         store.close()

@@ -47,6 +47,20 @@ test('a record admits when it was written behind the transcript or repaired', ()
   assert.ok(timeline.includes('Model output repaired'))
 })
 
+test('scan spending limits are global settings, never per-project', () => {
+  const settings = source('Settings.tsx')
+  const projects = source('ProjectsManager.tsx')
+  // The dollar ceiling lived in each Project's committed .swe-mux/config.toml,
+  // so the cap most likely to stop scanning sat in a file nobody opens and had
+  // to be raised once per checkout.
+  assert.ok(settings.includes('scan_timeline_daily_budget_usd'))
+  assert.ok(settings.includes('scan_timeline_daily_token_budget'))
+  assert.ok(settings.includes('scan_timeline_hourly_call_cap'))
+  assert.ok(settings.includes('scan_timeline_max_output_tokens'))
+  assert.ok(!projects.includes('scan_timeline_daily_budget_usd'))
+  assert.ok(projects.includes('Settings → Automation'))
+})
+
 test('timeline drawer owns project context, project permission, and full-session scans', () => {
   const timeline = source('ScanTimelineTab.tsx')
   assert.ok(timeline.includes('Project context'))

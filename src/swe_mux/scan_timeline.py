@@ -29,11 +29,6 @@ log = logging.getLogger(__name__)
 
 SCAN_RULE_ID = "builtin:scan-timeline"
 DEFAULT_SCAN_MODEL = "deepseek/deepseek-v4-flash"
-# The Project's own dollar ceiling, and the only budget a Project owner sets.
-# It was ten cents, which at the observed price is over a million tokens - but
-# it read as "this feature is a rounding error away from stopping", and it is
-# the number the drawer puts next to today's spend.
-DEFAULT_SCAN_DAILY_BUDGET_USD = 5.0
 SCAN_SCHEMA_VERSION = 1
 PROMPT_VERSION = 3
 HEARTBEAT_SECONDS = 180.0
@@ -156,7 +151,6 @@ class ScanContext:
     project_id: str
     project_root: str
     agent_run_id: str
-    daily_budget_usd: float
     dead_end_memory_enabled: bool = False
 
 
@@ -418,7 +412,10 @@ class ScanTimelineService:
     def _max_output_tokens(self) -> int:
         return int(getattr(self.config, "scan_timeline_max_output_tokens", 900))
 
-    async def _gates(self, context: ScanContext | None, run_id: str) -> list[dict[str, Any]]:
+    def _daily_budget_usd(self) -> float:
+        return float(getattr(self.config, "scan_timeline_daily_budget_usd", 5.0))
+
+    async def _gates(self, run_id: str) -> list[dict[str, Any]]:
         """Every quantitative cap that can stop a scan, with how close it is.
 
         The drawer used to show a project dollar figure, an undenominated token
@@ -431,11 +428,6 @@ class ScanTimelineService:
         global_spend = await self.store.spend()
         run_spend = (
             await self.store.scan_run_spend(run_id) if run_id else {"tokens": 0, "cost_usd": 0.0}
-        )
-        project_spend = (
-            await self.store.scan_project_spend(context.project_id)
-            if context
-            else {"tokens": 0, "cost_usd": 0.0}
         )
         hour_ago = time.time() - 3600
         calls = await self.store.observer_call_count(hour_ago, rule_id=SCAN_RULE_ID)
@@ -462,11 +454,11 @@ class ScanTimelineService:
                 "limit": self._hourly_call_cap(),
             },
             {
-                "id": "project_daily_usd",
-                "label": "Project cost today",
+                "id": "scan_daily_usd",
+                "label": "Scan cost today",
                 "unit": "usd",
-                "used": float(project_spend["cost_usd"]),
-                "limit": float(context.daily_budget_usd) if context else 0.0,
+                "used": float(rule_spend["cost_usd"]),
+                "limit": self._daily_budget_usd(),
             },
             {
                 "id": "automation_daily_tokens",
@@ -492,11 +484,10 @@ class ScanTimelineService:
         run_id = str(session.record.agent_run_id or "")
         run = await self.store.scan_run(run_id) if run_id else None
         project_id = str(session.record.project_id or "")
-        spend = (
-            await self.store.scan_project_spend(project_id)
-            if project_id
-            else {"tokens": 0, "cost_usd": 0.0}
-        )
+        # Fleet-wide, matching the budget it is measured against. It used to be
+        # this Project's share against this Project's cap, which is two numbers
+        # a reader has to know are Project-scoped to interpret at all.
+        spend = await self.store.spend(rule_id=SCAN_RULE_ID)
         run_spend = (
             await self.store.scan_run_spend(run_id) if run_id else {"tokens": 0, "cost_usd": 0.0}
         )
@@ -508,11 +499,11 @@ class ScanTimelineService:
             "project_enabled": context is not None,
             "run_enabled": bool(run and run.get("enabled")),
             "model": str(getattr(self.config, "scan_timeline_model", DEFAULT_SCAN_MODEL)),
-            "daily_budget_usd": context.daily_budget_usd if context else 0.0,
+            "daily_budget_usd": self._daily_budget_usd(),
             "spend_today": spend,
             "run_token_budget": self._run_token_budget(),
             "run_spend": run_spend,
-            "gates": await self._gates(context, run_id),
+            "gates": await self._gates(run_id),
             # Why the timeline is *stopped*, in the scanner's own words.
             # Without it the drawer can only show that nothing has arrived,
             # which reads identically to a quiet session. Chunk-local skips
@@ -1137,7 +1128,6 @@ class ScanTimelineService:
         max_output_tokens = self._max_output_tokens()
         global_spend = await self.store.spend()
         rule_spend = await self.store.spend(rule_id=SCAN_RULE_ID)
-        project_spend = await self.store.scan_project_spend(context.project_id)
         run_spend = await self.store.scan_run_spend(context.agent_run_id)
         estimated_input_tokens = (
             transcript.estimated_tokens
@@ -1186,10 +1176,12 @@ class ScanTimelineService:
             return None
         # `automation_rule_daily_budget_usd` is skipped for the same reason as
         # the per-rule token cap: it bounds an episodic observer. The dollar
-        # ceilings that do apply to a scan are the Project's own budget below
-        # and the global automation budget above.
-        if float(project_spend["cost_usd"]) + estimated_cost > context.daily_budget_usd:
-            self._skip(session_id, "the Project Scan timeline dollar budget is exhausted")
+        # ceilings that do apply to a scan are its own global budget below and
+        # the global automation budget above. This one was per Project, which
+        # put the cap most likely to stop scanning inside a committed file
+        # nobody opens, with a different value in every checkout.
+        if float(rule_spend["cost_usd"]) + estimated_cost > self._daily_budget_usd():
+            self._skip(session_id, "the daily Scan timeline dollar budget is exhausted")
             return None
 
         facts = await self.tier0.facts_for_run(

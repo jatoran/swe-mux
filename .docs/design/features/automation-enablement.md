@@ -59,7 +59,9 @@ enabled-and-working:
 - Unimplemented ids render disabled and labelled, never as ready to switch on.
 - The file remains the source of truth; the editor is a two-way view over it and the write
   is revision-checked like every other project-config write.
-- `scan_timeline` also exposes `scan_timeline_daily_budget_usd` in this editor.
+- Spending limits are **not** per-project. Scan timeline's budgets are global settings
+  (Settings → Automation); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
+  left in an existing Project file parses, is ignored, and is dropped on the next write.
   Project permission never enables a run; the current conversation must still be enabled from
   its Timeline tab.
 - The Timeline tab exposes a Project-scoped Scan timeline shortcut.

@@ -102,13 +102,18 @@ The token axis must never be the binding constraint while the dollar axis is unt
 
 The caps that do apply are:
 
-- `scan_timeline_daily_token_budget` (3,000,000), the feature's own daily token budget;
+- `scan_timeline_daily_budget_usd` ($5.00), the feature's dollar ceiling;
+- `scan_timeline_daily_token_budget` (3,000,000), its own daily token budget;
 - `scan_timeline_hourly_call_cap` (600), its own burst limiter;
 - `scan_timeline_run_token_budget` (500,000), one conversation's share;
-- the Project's `scan_timeline_daily_budget_usd` (default $5.00);
 - `automation_daily_token_budget` and `automation_daily_budget_usd`, the global emergency ceiling over every automation.
 
+All five are **global**, edited in Settings → Automation, and apply to every Project.
+The dollar ceiling used to be a per-Project field in the committed `.swe-mux/config.toml`.
+That put the cap most likely to stop scanning inside a file nobody opens, gave every checkout a different value, and meant raising it was a per-Project chore.
+It is one setting now; a `scan_timeline_daily_budget_usd` still present in a Project file is read tolerantly, ignored, and dropped on the next write.
 The global ceiling must stay above the scan's own daily budget, or it silently becomes the new invisible binding cap.
+The dollar budget should stay above what the daily token budget can cost, so the tokens run out first.
 Successful calls, provider failures that report billable usage, and locally refused responses all enter the shared spend ledger with Project and run attribution.
 An unpriced billable call reserves the conservative preflight estimate so missing provider accounting cannot weaken a budget.
 The ledger day is UTC.

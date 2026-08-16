@@ -34,9 +34,15 @@ PROJECT_CONFIG_FIELDS = {
     "notification_sounds_enabled",
     "ignore_patterns",
     "automations",
-    "scan_timeline_daily_budget_usd",
     "worktree",
 }
+# Read and discarded, never written. The scan-timeline dollar budget was a
+# per-project field; it is one global setting now, because a cap that lives in
+# a committed file nobody opens is a cap nobody can find when it stops the
+# feature. Tolerated here so an existing checkout - including one whose
+# `.swe-mux/config.toml` is committed and shared - still parses; the next write
+# drops the key.
+LEGACY_PROJECT_FIELDS = frozenset({"scan_timeline_daily_budget_usd"})
 FORBIDDEN_PROJECT_FIELDS = {
     "token",
     "bind",
@@ -960,6 +966,8 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
     version = parsed.pop("version", None)
     if version != PROJECT_CONFIG_VERSION:
         raise ValueError(f"project config version must be {PROJECT_CONFIG_VERSION}")
+    for legacy in LEGACY_PROJECT_FIELDS:
+        parsed.pop(legacy, None)
     forbidden = sorted(set(parsed) & FORBIDDEN_PROJECT_FIELDS)
     unknown = sorted(set(parsed) - PROJECT_CONFIG_FIELDS)
     if forbidden:
@@ -1023,14 +1031,6 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         parsed["automations"] = {
             key: value for key, value in automations.items() if key in AUTOMATION_REGISTRY
         }
-    if "scan_timeline_daily_budget_usd" in parsed:
-        budget = parsed["scan_timeline_daily_budget_usd"]
-        if (
-            isinstance(budget, bool)
-            or not isinstance(budget, int | float)
-            or not 0 <= budget <= 100
-        ):
-            raise ValueError("scan_timeline_daily_budget_usd must be between 0 and 100")
     if "worktree" in parsed:
         worktree = parsed["worktree"]
         if not isinstance(worktree, dict):
@@ -1049,6 +1049,10 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
 
 
 def serialize_project_config(values: dict[str, Any]) -> bytes:
+    # Retired fields are dropped rather than rejected, so a caller that read a
+    # config, changed one thing, and wrote it back does not have to know which
+    # keys have since moved to the global settings.
+    values = {key: value for key, value in values.items() if key not in LEGACY_PROJECT_FIELDS}
     invalid = sorted(set(values) - PROJECT_CONFIG_FIELDS)
     if invalid:
         raise ValueError(f"unknown project fields: {', '.join(invalid)}")
@@ -1082,11 +1086,6 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
             for key, value in sorted(automations.items())
         )
         lines.append(f"automations = {{ {pairs} }}")
-    if "scan_timeline_daily_budget_usd" in values:
-        lines.append(
-            "scan_timeline_daily_budget_usd = "
-            + format(float(values["scan_timeline_daily_budget_usd"]), ".10g")
-        )
     worktree = values.get("worktree")
     if isinstance(worktree, dict) and worktree.get("setup_command"):
         lines.extend(["", "[worktree]"])

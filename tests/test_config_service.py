@@ -63,6 +63,12 @@ def test_scan_timeline_budgets_leave_the_token_axis_non_binding(tmp_path: Path) 
     assert config.scan_timeline_daily_token_budget == 3_000_000
     assert config.scan_timeline_hourly_call_cap == 600
     assert config.scan_timeline_max_output_tokens == 900
+    # One global dollar ceiling, editable in Settings -> Automation. It used to
+    # be a per-Project field in a committed file, which put the cap most likely
+    # to stop scanning somewhere nobody looks, with a different value per
+    # checkout. It must sit above what the daily token budget can cost, or the
+    # dollars bind first and the token budget becomes decoration.
+    assert config.scan_timeline_daily_budget_usd == 5.0
     # The global ceiling still applies to a scan, so it has to sit above the
     # scan's own daily budget or it becomes the new invisible binding cap.
     assert config.automation_daily_token_budget >= config.scan_timeline_daily_token_budget

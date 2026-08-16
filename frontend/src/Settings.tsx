@@ -88,6 +88,8 @@ type Config = {
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
+  scan_timeline_daily_token_budget:number;scan_timeline_daily_budget_usd:number
+  scan_timeline_hourly_call_cap:number;scan_timeline_max_output_tokens:number
   attention_daily_interrupt_budget:number;attention_hourly_interrupt_cap:number
   attention_incident_window_seconds:number;attention_breakpoint_markers:boolean
   attention_narration_enabled:boolean;attention_narration_model:string
@@ -1045,13 +1047,19 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily tokens<input type="number" value={draft.automation_rule_daily_token_budget} onInput={event=>change('automation_rule_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily dollars<input type="number" step="0.01" value={draft.automation_rule_daily_budget_usd} onInput={event=>change('automation_rule_daily_budget_usd',Number(event.currentTarget.value))}/></label>
-          <label>Scan tokens per run<input type="number" min="512" max="1000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Hourly call cap<input type="number" value={draft.automation_hourly_call_cap} onInput={event=>change('automation_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Per-rule hourly calls<input type="number" value={draft.automation_rule_hourly_call_cap} onInput={event=>change('automation_rule_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Concurrent observers<input type="number" min="1" max="16" value={draft.automation_concurrency} onInput={event=>change('automation_concurrency',Number(event.currentTarget.value))}/></label>
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          <h3>Scan timeline</h3>
+          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps above. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars.</p>
+          <label>Daily dollar budget<input type="number" min="0" max="1000" step="0.25" value={draft.scan_timeline_daily_budget_usd} onInput={event=>change('scan_timeline_daily_budget_usd',Number(event.currentTarget.value))}/><small>Across every Project and session, reset daily (UTC).</small></label>
+          <label>Daily token budget<input type="number" min="512" max="100000000" value={draft.scan_timeline_daily_token_budget} onInput={event=>change('scan_timeline_daily_token_budget',Number(event.currentTarget.value))}/></label>
+          <label>Tokens per conversation<input type="number" min="512" max="20000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
+          <label>Hourly scan cap<input type="number" min="1" max="100000" value={draft.scan_timeline_hourly_call_cap} onInput={event=>change('scan_timeline_hourly_call_cap',Number(event.currentTarget.value))}/></label>
+          <label>Maximum output tokens<input type="number" min="256" max="8192" value={draft.scan_timeline_max_output_tokens} onInput={event=>change('scan_timeline_max_output_tokens',Number(event.currentTarget.value))}/><small>The record schema allows about 2,600 characters; too low truncates the response and loses the record.</small></label>
           <h3>Attention</h3>
           <p>Ranking decides which findings are worth interrupting you for. The daily budget is a hard bound counted per incident, so several detectors describing one event spend one slot. Cheap-to-resolve work never spends any. Ranked items appear in Alerts and are never pushed to a device.</p>
           <label>Daily interrupts<input type="number" min="0" max="100" value={draft.attention_daily_interrupt_budget} onInput={event=>change('attention_daily_interrupt_budget',Number(event.currentTarget.value))}/></label>

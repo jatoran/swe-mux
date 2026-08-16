@@ -101,6 +101,30 @@ def test_project_config_ignores_retired_generated_project_card_toggle() -> None:
     assert parsed["automations"] == {"scan_timeline": True}
 
 
+def test_a_committed_project_budget_is_read_tolerantly_and_written_away() -> None:
+    """`scan_timeline_daily_budget_usd` moved to one global setting.
+
+    It cannot simply be deleted from the accepted field set: the file is
+    committed and travels with a checkout, so an existing one has to keep
+    parsing rather than turning into "unknown project fields" on every read.
+    It is dropped on read and never written again, so the next write removes
+    it from the file.
+    """
+    parsed = parse_project_config(
+        b"version = 1\n"
+        b"scan_timeline_daily_budget_usd = 0.1\n"
+        b"automations = { scan_timeline = true }\n"
+    )
+    assert "scan_timeline_daily_budget_usd" not in parsed
+    assert parsed["automations"] == {"scan_timeline": True}
+
+    # A caller that read, edited, and wrote back does not have to know it moved.
+    written = serialize_project_config(
+        {"automations": {"scan_timeline": True}, "scan_timeline_daily_budget_usd": 0.1}
+    )
+    assert b"scan_timeline_daily_budget_usd" not in written
+
+
 def test_project_automations_reads_root(tmp_path: Path) -> None:
     mux_dir = tmp_path / ".swe-mux"
     mux_dir.mkdir()

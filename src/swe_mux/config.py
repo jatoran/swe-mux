@@ -13,7 +13,7 @@ from typing import Any
 from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
 from .keybindings import is_command
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 THEMES = {
     "light",
@@ -629,6 +629,14 @@ class Config:
     scan_timeline_daily_token_budget: int = 3_000_000
     scan_timeline_hourly_call_cap: int = 600
     scan_timeline_run_token_budget: int = 500_000
+    # The feature's dollar ceiling, and the one number worth adjusting. It was a
+    # per-Project field in a committed `.swe-mux/config.toml`, which meant the
+    # cap that could stop scanning lived in a file nobody opens, defaulted
+    # differently per checkout, and had to be raised once per Project. One
+    # global setting, edited in Settings -> Automation. At the observed ~$0.08
+    # per million tokens this is far above the daily token budget above, so the
+    # tokens run out first - which is the intended order.
+    scan_timeline_daily_budget_usd: float = 5.0
     # The schema permits ~2,600 characters of prose across five fields. 420
     # output tokens could not hold its own worst case, and a truncated strict
     # JSON body is an unparseable response that costs a record.
@@ -1022,6 +1030,8 @@ def _validate(config: Config) -> None:
         errors["scan_timeline_hourly_call_cap"] = "must be between 1 and 100000"
     if not 256 <= config.scan_timeline_max_output_tokens <= 8_192:
         errors["scan_timeline_max_output_tokens"] = "must be between 256 and 8192"
+    if not 0 <= config.scan_timeline_daily_budget_usd <= 1_000:
+        errors["scan_timeline_daily_budget_usd"] = "must be between 0 and 1000"
     if not 0 <= config.attention_daily_interrupt_budget <= 100:
         errors["attention_daily_interrupt_budget"] = "must be between 0 and 100"
     if not 0 <= config.attention_hourly_interrupt_cap <= 100:

@@ -216,12 +216,7 @@ from .provider_accounts import (
 )
 from .push import PUSH_SENDER_LOOP, PushSender, PushStore
 from .reconcile import reconcile_external_history
-from .scan_timeline import (
-    DEFAULT_SCAN_DAILY_BUDGET_USD,
-    SCAN_RULE_ID,
-    ScanContext,
-    ScanTimelineService,
-)
+from .scan_timeline import SCAN_RULE_ID, ScanContext, ScanTimelineService
 from .scrollback import SCREEN_TAIL_BYTES
 from .secret_store import PlatformSecretStore, SecretStoreError
 from .session import (
@@ -1296,20 +1291,10 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         enabled = await _enabled_automations(root)
         if "scan_timeline" not in enabled:
             return None
-        portable = await read_project_config(
-            root,
-            project=_registered_identity(projects.projects[record.project_id])
-            if record.project_id in projects.projects
-            else None,
-        )
-        values = portable["values"] if portable["status"] in {"ready", "read-only"} else {}
         return ScanContext(
             project_id=record.project_id,
             project_root=root,
             agent_run_id=record.agent_run_id,
-            daily_budget_usd=float(
-                values.get("scan_timeline_daily_budget_usd", DEFAULT_SCAN_DAILY_BUDGET_USD)
-            ),
             dead_end_memory_enabled="dead_end_memory" in enabled,
         )
 
@@ -3861,9 +3846,6 @@ async def get_project_automations(request: web.Request) -> web.Response:
             "requested": requested,
             "enabled": sorted(resolution.enabled),
             "blocked": {key: list(value) for key, value in resolution.blocked.items()},
-            "scan_timeline_daily_budget_usd": float(
-                values.get("scan_timeline_daily_budget_usd", DEFAULT_SCAN_DAILY_BUDGET_USD)
-            ),
             "automations": [
                 {
                     "id": automation.id,
@@ -3907,13 +3889,13 @@ async def put_project_automations(request: web.Request) -> web.Response:
             },
             409,
         )
-    budget = body.get("scan_timeline_daily_budget_usd", DEFAULT_SCAN_DAILY_BUDGET_USD)
-    if isinstance(budget, bool) or not isinstance(budget, int | float) or not 0 <= budget <= 100:
-        raise ValueError("scan_timeline_daily_budget_usd must be between 0 and 100")
+    # `scan_timeline_daily_budget_usd` is deliberately not accepted here any
+    # more: it is one global setting in Settings -> Automation. A body that
+    # still sends it is ignored rather than refused, and the retired key is
+    # dropped from the file on this write.
     current = await read_project_config(project.root, project=identity)
     values = dict(current["values"]) if current["status"] != "malformed" else {}
     values["automations"] = {key: bool(value) for key, value in requested.items() if value}
-    values["scan_timeline_daily_budget_usd"] = float(budget)
     try:
         await write_project_config(
             project.root,
