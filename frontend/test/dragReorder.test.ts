@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  edgeAutoScrollDelta, insertionEdge, listDropTargetForPoint, MOBILE_HOLD_MOVE_DRAG,
-  MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision, reorderForHover,
-  reorderTargetForPoint,
+  edgeAutoScrollDelta, insertionEdge, listDropTargetForPoint, MOBILE_HOLD_DRAG,
+  MOBILE_HOLD_MOVE_DRAG, MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
+  reorderForHover, reorderTargetForPoint,
 } from '../src/dragReorder.ts'
 
 test('movement drag activates only after its threshold', () => {
@@ -17,12 +17,18 @@ test('mobile Project hold tolerates jitter but yields to scrolling movement', ()
   assert.equal(pointerDragMoveDecision(MOBILE_PROJECT_HOLD_DRAG, 8.01), 'cancel')
 })
 
-test('mobile hold-move arms before the menu and shares the hold slop', () => {
-  // Must settle well before the 550ms long-press menu, or the menu could never win a
-  // still hold. The pure decision only reports the slop gate; the driver time-gates the
-  // actual activate, so a past-slop distance still reads as `cancel` here.
+test('mobile hold lift tolerates jitter but yields to a scroll before it lifts', () => {
+  // The sidebar/tab reorder model: the row lifts on a stationary hold, so any pre-lift move
+  // past the (generous) slop is a scroll, and jitter inside it waits for the lift.
+  assert.equal(MOBILE_HOLD_DRAG.mode, 'hold')
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_DRAG, 12), 'wait')
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_DRAG, 12.01), 'cancel')
+})
+
+test('drawer hold-move shares the hold slop gate', () => {
+  // The pure decision only reports the slop gate; the driver time-gates the actual activate,
+  // so a past-slop distance still reads as `cancel` here.
   assert.equal(MOBILE_HOLD_MOVE_DRAG.mode, 'hold-move')
-  if (MOBILE_HOLD_MOVE_DRAG.mode === 'hold-move') assert.ok(MOBILE_HOLD_MOVE_DRAG.delayMs < 550)
   assert.equal(pointerDragMoveDecision(MOBILE_HOLD_MOVE_DRAG, 8), 'wait')
   assert.equal(pointerDragMoveDecision(MOBILE_HOLD_MOVE_DRAG, 8.01), 'cancel')
 })

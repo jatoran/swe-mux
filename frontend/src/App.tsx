@@ -141,7 +141,7 @@ import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
 import { focusMemoryWith, parseFocusMemory, parseViewPreference, reconcileFocusView, rememberedView, resolveInitialFocus, viewUrl } from './viewState'
 import {
-  DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
+  DROP_LIST_MARGIN, edgeAutoScrollDelta, listDropTargetForPoint, MOBILE_HOLD_DRAG, MOBILE_HOLD_MOVE_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision,
   reorderForHover, reorderTargetFromContainer, type DropSide, type ListDropTarget, type PointerDragActivation, type ReorderAxis, type ReorderTarget,
 } from './dragReorder'
 import { claimPointerDrag, markPointerDragClaims, pointerDragOwnsPointer } from './pointerDragClaim'
@@ -1022,26 +1022,24 @@ export function App() {
     showDropSlot({left:box.left,width:box.width,gap:side==='before'?box.top:box.bottom,height,label})
   }
 
-  // How long a stationary mobile hold must last before lifting opens the release-in-place
-  // menu. Above the 250ms drag arm (a quick rest-then-drag never arms the menu) and near the
-  // old on-hold delay, so the felt threshold barely moves.
-  const MENU_HOLD_MS=500
   const beginPointerDrag=(
     event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
     onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
     activation:PointerDragActivation=POINTER_MOVE_DRAG,
-    // `hold-move` only: a stationary hold that matures (past `MENU_HOLD_MS`) and is then
-    // lifted without ever becoming a drag opens the context menu here, on release. The menu
-    // deliberately does NOT open while the finger is down: on a vertical list it would land
-    // on the drag path and block the very drag the hold might become (the "hold too long and
-    // it won't drag" bug). A hold that turns into a drag never reaches this.
+    // Mobile `hold` lift model: the row lifts on a stationary hold (below), and if it is then
+    // released WITHOUT being dragged, this opens the context menu on that release. The menu
+    // never opens while the finger is down — on a vertical list it lands on the drag path and
+    // blocks the very drag the hold became (the "hold too long and it won't drag" bug) — and
+    // activating on stillness (not on a move) keeps the swipe recognizer from racing the drag.
     onInertRelease?:()=>void,
   )=>{
     if(event.button!==0||!event.isPrimary)return
     const source=event.currentTarget
     const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
     let active=false,done=false,ghost:HTMLDivElement|null=null,activationTimer:number|null=null
-    let menuReady=false,menuTimer:number|null=null
+    // Set once a lifted drag has actually travelled: it decides release-in-place (menu) from a
+    // real reorder, and it is measured from where the drag lifted, not from touch-down.
+    let moved=false,activateX=startX,activateY=startY
     // `hold-move` only: set once the hold has settled, so the next move past slop drags
     // rather than scrolls. `hold` and `movement` never read it.
     let armed=false
@@ -1092,8 +1090,6 @@ export function App() {
       if(source.hasPointerCapture(pointerId))source.releasePointerCapture(pointerId)
       if(activationTimer!==null)window.clearTimeout(activationTimer)
       activationTimer=null
-      if(menuTimer!==null)window.clearTimeout(menuTimer)
-      menuTimer=null
       document.body.classList.remove('workspace-pointer-dragging')
       source.classList.remove('dragging')
       showPointerDropIndicator(null)
@@ -1103,26 +1099,22 @@ export function App() {
     const finish=(commit:boolean)=>{
       if(done)return
       done=true
-      // Read before cleanup nulls the timers: an inert release is a lift with no active drag,
-      // after the hold matured into menu-readiness and the finger never moved into a drag.
-      const inertMenu=!active&&commit&&menuReady&&!!onInertRelease
+      // A lifted-but-never-dragged release opens the menu (release-in-place) instead of
+      // committing a reorder. Only the mobile `hold` lift model does this — a movement-mode
+      // (desktop) drag has to move to exist, so a small one is a reorder, never a menu.
+      const inertMenu=active&&commit&&!moved&&!!onInertRelease&&activation.mode==='hold'
       cleanup()
-      if(active){
-        window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
-        if(commit)onDrop();else onCancel()
-        return
-      }
-      if(inertMenu){
-        // Swallow the click this lift is followed by, the same way an activated drag does,
-        // so opening the menu does not also select/activate the row underneath it.
-        suppressDragClickRef.current=identity
-        window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
-        onInertRelease?.()
-      }
+      if(!active)return
+      window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
+      // Unwind the drag's own state (auto-scroll frame, drop preview) without committing, then
+      // open the menu. `onCancel` is the no-commit teardown every caller already provides.
+      if(inertMenu){onCancel();onInertRelease?.();return}
+      if(commit)onDrop();else onCancel()
     }
     const activate=(clientX:number,clientY:number)=>{
       if(active||done)return
       active=true
+      activateX=clientX;activateY=clientY
       if(activationTimer!==null)window.clearTimeout(activationTimer)
       activationTimer=null
       releaseDragClaim=claimPointerDrag();suppressDragClickRef.current=identity
@@ -1150,6 +1142,7 @@ export function App() {
           activate(pointer.clientX,pointer.clientY)
         }
       }
+      if(!moved&&Math.hypot(pointer.clientX-activateX,pointer.clientY-activateY)>8)moved=true
       pointer.preventDefault()
       if(ghost)ghost.style.transform=`translate3d(${pointer.clientX+14}px,${pointer.clientY+12}px,0)`
       onMove(pointer)
@@ -1166,17 +1159,12 @@ export function App() {
     window.addEventListener('keydown',key,true)
     source.addEventListener('lostpointercapture',lostCapture)
     activePointerDragCancelRef.current=cancel
+    // `hold` lifts the row on a stationary hold (the mobile reorder model): one buzz, no move
+    // to time, and because it claims the pointer before any movement exists, the swipe
+    // recognizer never gets a gesture to misread. `hold-move` instead only arms and waits for a
+    // move (kept for the drawer, whose touch-action:none tabs never scroll under the hold).
     if(activation.mode==='hold')activationTimer=window.setTimeout(()=>activate(latestX,latestY),activation.delayMs)
-    // `hold-move` arms rather than activates: it waits for the move that follows, which
-    // is what leaves the still-hold to the long-press menu that shares this pointer.
-    else if(activation.mode==='hold-move'){
-      activationTimer=window.setTimeout(()=>{armed=true;activationTimer=null},activation.delayMs)
-      // A longer still hold arms the release-in-place menu, with the same buzz the menu
-      // used to give when it opened mid-hold. A move past slop before now would have
-      // already unwound this drag (scroll) or activated it (drag), so a live menu timer
-      // only survives on a genuinely stationary hold.
-      if(onInertRelease)menuTimer=window.setTimeout(()=>{menuReady=true;menuTimer=null;navigator.vibrate?.(20)},MENU_HOLD_MS)
-    }
+    else if(activation.mode==='hold-move')activationTimer=window.setTimeout(()=>{armed=true;activationTimer=null},activation.delayMs)
   }
   const startupOrigins=useRef<Record<string,number>>({})
   const pendingSpawns=useRef<Record<string,PendingSpawn>>({})
@@ -2310,7 +2298,7 @@ export function App() {
       },
       ()=>{stopAutoScroll();const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
       ()=>{stopAutoScroll();setDragProject(null)},
-      mobileWorkspace?MOBILE_HOLD_MOVE_DRAG:POINTER_MOVE_DRAG,
+      mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
       ()=>openProjectMenuAt(project,event.clientX,event.clientY),
     )
   }
@@ -2450,7 +2438,7 @@ export function App() {
         if(next!==current)void updateLayout(session.project_id,next)
       },
       ()=>{stopAutoScroll();dragSessionTargetRef.current=null},
-      mobileWorkspace?MOBILE_HOLD_MOVE_DRAG:POINTER_MOVE_DRAG,
+      mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
       session.pending?undefined:()=>openSessionMenu(session,event.clientX,event.clientY,'sidebar'),
     )
   }
@@ -5047,7 +5035,7 @@ export function App() {
       pointer=>{latestPointer={clientX:pointer.clientX,clientY:pointer.clientY};preview(pointer);if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)},
       ()=>{stopAutoScroll();const chosen=target;target=null;showPointerDropIndicator(null);if(chosen&&chosen.id!==leaf.id)commitMobileTabOrder(leaf,chosen)},
       ()=>{stopAutoScroll();target=null;showPointerDropIndicator(null)},
-      mobileWorkspace?MOBILE_HOLD_MOVE_DRAG:POINTER_MOVE_DRAG,
+      mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
       ()=>openMenu(event.clientX,event.clientY),
     )
   }
