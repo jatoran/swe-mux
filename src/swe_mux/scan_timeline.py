@@ -152,6 +152,7 @@ class ScanContext:
     project_root: str
     agent_run_id: str
     dead_end_memory_enabled: bool = False
+    auto_enable: bool = False
 
 
 def _lifecycle(record: Any) -> str:
@@ -334,6 +335,11 @@ class ScanTimelineService:
         self._backfill_tasks: dict[str, asyncio.Task[None]] = {}
         self._backfills: dict[str, dict[str, Any]] = {}
         self._cancelled_backfills: set[str] = set()
+        # Sessions with a provider call out right now. A scan is the only part
+        # of this feature with visible latency, and without this the drawer
+        # cannot tell "working on it" from "nothing is happening", which are the
+        # two states a user most wants to distinguish while waiting.
+        self._in_flight: set[str] = set()
         self._detached: set[asyncio.Task[None]] = set()
         self._catchup_depth: dict[str, int] = {}
         self._skip_reasons: dict[str, str] = {}
@@ -414,6 +420,43 @@ class ScanTimelineService:
 
     def _daily_budget_usd(self) -> float:
         return float(getattr(self.config, "scan_timeline_daily_budget_usd", 5.0))
+
+    async def _grant_for(
+        self, session_id: str, context: ScanContext
+    ) -> dict[str, Any] | None:
+        """The run's grant, creating one first if the Project auto-enables.
+
+        The grant belongs to a provider conversation, not to the terminal
+        session, so it resets on `/clear`, on `/new`, on a rollover, and on
+        every new session. That is right as a *cost* boundary and miserable as a
+        workflow: a Project that wants a timeline had to be re-armed by hand
+        every time. Auto-enable answers "yes, always" once.
+
+        It only ever fills in a run that has **no row**. A row that exists and
+        says disabled is a decision - the human switched it off, or the run
+        ended - and re-arming it would make the off switch useless.
+        """
+        run = await self.store.scan_run(context.agent_run_id)
+        if run is not None or not context.auto_enable:
+            return cast(dict[str, Any] | None, run)
+        session = self.sessions.sessions.get(session_id)
+        if session is None or session.record.agent_run_id != context.agent_run_id:
+            return None
+        log.info(
+            "Scan timeline auto-enabled a new run session_id=%s agent_run_id=%s project_id=%s",
+            session_id,
+            context.agent_run_id,
+            context.project_id,
+        )
+        return cast(
+            dict[str, Any],
+            await self.store.set_scan_run_enabled(
+                agent_run_id=context.agent_run_id,
+                session_id=session_id,
+                project_id=context.project_id,
+                enabled=True,
+            ),
+        )
 
     async def _gates(self, run_id: str) -> list[dict[str, Any]]:
         """Every quantitative cap that can stop a scan, with how close it is.
@@ -498,6 +541,17 @@ class ScanTimelineService:
             "global_enabled": bool(getattr(self.config, "scan_timeline_enabled", False)),
             "project_enabled": context is not None,
             "run_enabled": bool(run and run.get("enabled")),
+            # Whether this Project arms new conversations by itself. The
+            # snapshot deliberately does not *apply* it - a read that enables
+            # scanning would make opening the drawer a spending decision - so a
+            # brand-new run reads as off here and arms on its first trigger.
+            "auto_enable": bool(context and context.auto_enable),
+            # Whether this run has a grant row at all. Auto-enable only fills in
+            # a run nobody has decided about, so "off and will arm itself" and
+            # "off because it was switched off" are different states and must
+            # not read the same.
+            "run_decided": run is not None,
+            "scanning": session_id in self._in_flight,
             "model": str(getattr(self.config, "scan_timeline_model", DEFAULT_SCAN_MODEL)),
             "daily_budget_usd": self._daily_budget_usd(),
             "spend_today": spend,
@@ -1072,7 +1126,7 @@ class ScanTimelineService:
         if session is None or session.record.agent_run_id != context.agent_run_id:
             self._skip(session_id, "the current agent run is unavailable")
             return None
-        run = await self.store.scan_run(context.agent_run_id)
+        run = await self._grant_for(session_id, context)
         if not run or not run.get("enabled"):
             self._skip(session_id, "Scan timeline is off for this run")
             return None
@@ -1219,15 +1273,19 @@ class ScanTimelineService:
             ensure_ascii=False,
         )
         prompt_hash = hashlib.sha256((SYSTEM_PROMPT + prompt_input).encode("utf-8")).hexdigest()
-        completion, semantic, repairs = await self._complete_with_retry(
-            context=context,
-            model=model,
-            prompt_input=prompt_input,
-            transcript=transcript,
-            t1=t1,
-            estimated_cost=estimated_cost,
-            max_output_tokens=max_output_tokens,
-        )
+        self._in_flight.add(session_id)
+        try:
+            completion, semantic, repairs = await self._complete_with_retry(
+                context=context,
+                model=model,
+                prompt_input=prompt_input,
+                transcript=transcript,
+                t1=t1,
+                estimated_cost=estimated_cost,
+                max_output_tokens=max_output_tokens,
+            )
+        finally:
+            self._in_flight.discard(session_id)
 
         cost = float(completion.cost_usd or 0.0)
         evidence_refs = [
@@ -1502,6 +1560,7 @@ class ScanTimelineService:
             "repaired_responses": self.repairs,
             "last_error": self.last_error,
             "last_repair": self.last_repair,
+            "scanning": sorted(self._in_flight),
             "running_backfills": sum(not task.done() for task in self._backfill_tasks.values()),
             "last_skip_reasons": dict(self._skip_reasons),
             "catchup_depth": dict(self._catchup_depth),

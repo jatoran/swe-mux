@@ -18,13 +18,12 @@ type Backfill = {
   failed_chunks?:number;skipped_chunks?:number;reason:string|null;estimated_tokens?:number
 }
 type Gate = {id:string;label:string;unit:'tokens'|'usd'|'calls';used:number;limit:number}
-type ProjectContext = {project_id:string;path:string;exists:boolean;revision:string;markdown:string;max_bytes:number;generation_prompt:string}
 type TimelineState = {
   session_id:string;project_id:string|null;agent_run_id:string|null;global_enabled:boolean;project_enabled:boolean
-  run_enabled:boolean;model:string;daily_budget_usd:number
+  run_enabled:boolean;auto_enable:boolean;run_decided:boolean;model:string;daily_budget_usd:number
   spend_today:{tokens:number;cost_usd:number};run_token_budget:number
   run_spend:{tokens:number;cost_usd:number};metrics:Metrics;gates:Gate[]
-  skip_reason:string|null;last_scan_at:number|null
+  skip_reason:string|null;last_scan_at:number|null;scanning:boolean
   records:TimelineRecord[];boundaries:Boundary[];backfill:Backfill
 }
 
@@ -45,55 +44,58 @@ const backfillLabel:Record<BackfillState,string> = {
   completed_with_gaps:'complete with gaps', partial:'stopped early', failed:'failed',
 }
 
-export function ScanTimelineTab({session}:{session:Session|null}) {
+export function ScanTimelineTab({session,onOpenProjectSettings}:{
+  session:Session|null
+  onOpenProjectSettings:(projectId:string)=>void
+}) {
   const [state,setState]=useState<TimelineState|null>(null)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
   const [expanded,setExpanded]=useState<Record<string,unknown[]|null>>({})
-  const [context,setContext]=useState<ProjectContext|null>(null)
-  const [contextDraft,setContextDraft]=useState('')
-  const [contextOpen,setContextOpen]=useState(false)
-  const [contextMessage,setContextMessage]=useState('')
-  const contextProject=useRef('')
-  const savedContext=useRef('')
-  const draftContext=useRef('')
-  const contextRevision=useRef('missing')
+  const listRef=useRef<HTMLDivElement|null>(null)
+  const pinned=useRef(true)
   const sid=session?.id||''
   const run=session?.agent_run_id||''
+  const projectId=session?.project_id||''
 
   const load=async()=>{
     if(!sid){setState(null);return}
     try{
-      const timeline=await api<TimelineState>('GET',`/api/sessions/${sid}/scan-timeline`)
-      setState(timeline)
-      if(timeline.project_id){
-        const value=await api<ProjectContext>('GET',`/api/projects/${timeline.project_id}/project-context`)
-        const sameProject=contextProject.current===value.project_id
-        const dirty=sameProject&&draftContext.current!==savedContext.current
-        if(!dirty){
-          setContext(value);setContextDraft(value.markdown)
-          contextProject.current=value.project_id;savedContext.current=value.markdown
-          draftContext.current=value.markdown;contextRevision.current=value.revision
-        }else if(value.revision!==contextRevision.current){
-          setContextMessage('File changed externally. Copy your draft, then switch sessions or reopen Timeline to reload it.')
-        }
-      }else{setContext(null);setContextDraft('');contextProject.current='';savedContext.current='';draftContext.current='';contextRevision.current='missing'}
+      setState(await api<TimelineState>('GET',`/api/sessions/${sid}/scan-timeline`))
       setError('')
     }
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   useEffect(()=>{void load()},[sid,run])
+  // Polled only while there is something to watch: a running full-session scan,
+  // or an armed run whose next scan the footer indicator has to catch starting.
+  // A timeline that is off for this conversation polls nothing.
   useEffect(()=>{
-    if(state?.backfill.state!=='running')return
-    const timer=window.setInterval(()=>void load(),1200)
+    if(!sid)return
+    const live=state?.backfill.state==='running'
+    if(!live&&!state?.run_enabled)return
+    const timer=window.setInterval(()=>void load(),live?1200:2000)
     return()=>window.clearInterval(timer)
-  },[sid,run,state?.backfill.state])
+  },[sid,run,state?.backfill.state,state?.run_enabled])
   useEffect(()=>{
     const refresh=()=>void load()
     window.addEventListener('mux:turn-ended',refresh)
     window.addEventListener('mux:transcript-changed',refresh)
     return()=>{window.removeEventListener('mux:turn-ended',refresh);window.removeEventListener('mux:transcript-changed',refresh)}
   },[sid,run])
+  // The newest record is the one worth seeing, and it is at the bottom because
+  // the list is chronological — so opening the tab used to land on the oldest.
+  // Stays pinned as records arrive, and lets go the moment the reader scrolls up.
+  useEffect(()=>{pinned.current=true},[sid,run])
+  useEffect(()=>{
+    const list=listRef.current
+    if(!list||!pinned.current)return
+    list.scrollTop=list.scrollHeight
+  },[sid,run,state?.records.length,state?.boundaries.length])
+  const onListScroll=(event:Event)=>{
+    const list=event.currentTarget as HTMLDivElement
+    pinned.current=list.scrollHeight-list.scrollTop-list.clientHeight<=48
+  }
 
   const toggle=async(enabled:boolean)=>{
     if(!sid)return
@@ -106,13 +108,6 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
     if(!sid)return
     setBusy(true)
     try{await api('POST',`/api/sessions/${sid}/scan-timeline/scan`,{});await load()}
-    catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
-    finally{setBusy(false)}
-  }
-  const toggleProject=async(enabled:boolean)=>{
-    if(!sid)return
-    setBusy(true)
-    try{setState(await api<TimelineState>('PUT',`/api/sessions/${sid}/scan-timeline/project`,{enabled}));await load()}
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
@@ -130,20 +125,6 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
     catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
     finally{setBusy(false)}
   }
-  const saveContext=async()=>{
-    if(!state?.project_id||!context)return
-    setBusy(true);setContextMessage('')
-    try{
-      const value=await api<ProjectContext>('PUT',`/api/projects/${state.project_id}/project-context`,{markdown:contextDraft,revision:context.revision})
-      setContext(value);setContextDraft(value.markdown);savedContext.current=value.markdown;draftContext.current=value.markdown;contextRevision.current=value.revision;setContextMessage('Saved')
-    }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
-    finally{setBusy(false)}
-  }
-  const copySetupPrompt=async()=>{
-    if(!context)return
-    try{await navigator.clipboard.writeText(context.generation_prompt);setContextMessage('Setup prompt copied')}
-    catch{setContextMessage('Clipboard access failed')}
-  }
   const source=async(record:TimelineRecord)=>{
     if(expanded[record.id]!==undefined){setExpanded(current=>{const next={...current};delete next[record.id];return next});return}
     setBusy(true)
@@ -160,40 +141,60 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
   const allowed=state.global_enabled&&state.project_enabled
   const binding=bindingGate(state.gates||[])
   const running=state.backfill.state==='running'
+  const projectButton=<button class="scan-project-link" disabled={!projectId}
+    onClick={()=>projectId&&onOpenProjectSettings(projectId)}>Project settings</button>
+  if(!allowed)return <section class="scan-timeline-panel">
+    <header>
+      <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
+      {projectButton}
+    </header>
+    <div class="scan-timeline-off">
+      <p>{state.global_enabled
+        ? 'This Project has not permitted Scan timeline.'
+        : 'The global Scan timeline switch is off in Settings → Automation.'}</p>
+      <p class="scan-timeline-off-hint">{state.global_enabled
+        ? 'Permission, the Project context sent with each scan, and the option to arm every new conversation automatically all live in the Project’s settings.'
+        : 'Turn the master switch on first, then permit this Project in its settings.'}</p>
+      {projectButton}
+    </div>
+  </section>
   const events=[
     ...state.records.map(record=>({kind:'record' as const,at:record.t1,record})),
     ...state.boundaries.map(boundary=>({kind:'boundary' as const,at:boundary.created_at,boundary})),
   ].sort((left,right)=>left.at-right.at)
   return <section class="scan-timeline-panel">
-    <div class="scan-project-section">
-      <header><div><strong>Project timeline</strong><small>Applies to every session in this Project</small></div><label class="scan-run-toggle"><span>enabled</span><input type="checkbox" checked={state.project_enabled} disabled={busy||!state.project_id} onChange={event=>void toggleProject(event.currentTarget.checked)}/></label></header>
-      <button class="scan-context-toggle" aria-expanded={contextOpen} onClick={()=>setContextOpen(value=>!value)}><span>Project context</span><small>{context?.markdown.trim()?'configured':'empty'} · {context?.path||'.swe-mux/project-context.md'}</small><b>{contextOpen?'−':'+'}</b></button>
-      {contextOpen&&context&&<div class="scan-context-editor">
-        <p>User-authored Markdown sent with timeline scans. swe-mux does not derive it from repository docs.</p>
-        <textarea value={contextDraft} placeholder="Describe this Project for timeline scans…" onInput={event=>{draftContext.current=event.currentTarget.value;setContextDraft(event.currentTarget.value);setContextMessage('')}}/>
-        <div><span>{new TextEncoder().encode(contextDraft).length.toLocaleString()} / {context.max_bytes.toLocaleString()} bytes</span><button disabled={busy||contextDraft===context.markdown||new TextEncoder().encode(contextDraft).length>context.max_bytes} onClick={()=>void saveContext()}>Save</button><button disabled={busy} onClick={()=>void copySetupPrompt()}>Copy setup prompt</button></div>
-        {contextMessage&&<small role="status">{contextMessage}</small>}
-      </div>}
-    </div>
     <header>
       <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
-      <label class="scan-run-toggle"><span>this run</span><input type="checkbox" checked={state.run_enabled} disabled={busy||!allowed||!state.agent_run_id} onChange={event=>void toggle(event.currentTarget.checked)}/></label>
+      <label class="scan-run-toggle"><span>this run</span><input type="checkbox" checked={state.run_enabled} disabled={busy||!state.agent_run_id} onChange={event=>void toggle(event.currentTarget.checked)}/></label>
+      {projectButton}
     </header>
-    <div class="scan-spend-line" title="Every cap that can stop the timeline. The first one is whichever is closest.">
-      {binding&&<span class={headroom(binding)>=0.9?'scan-gate-binding':undefined}>{binding.label} {amount(binding)}</span>}
-      {state.gates.filter(gate=>gate!==binding).map(gate=><span key={gate.id}>{gate.label} {amount(gate)}</span>)}
-    </div>
-    {!state.global_enabled&&<p class="scan-gate">The global Scan timeline switch is off in Automation.</p>}
-    {state.global_enabled&&!state.project_enabled&&<p class="scan-gate">This Project has not permitted Scan timeline and its dependencies.</p>}
-    {allowed&&!state.run_enabled&&<p class="scan-gate">Off for this conversation. Enable it here when you want a timeline. It resets on /clear, /new, or session end.</p>}
-    {allowed&&state.run_enabled&&state.skip_reason&&<p class="scan-gate scan-stopped">Not scanning: {state.skip_reason}.</p>}
+    {/* One row by default. Six budget lines is the honest set, and it was also
+        most of the panel on a narrow drawer; the one closest to binding is the
+        only one worth standing costs. */}
+    <details class="scan-budget">
+      <summary>
+        <span>Budget</span>
+        {binding
+          ? <em class={headroom(binding)>=0.9?'scan-gate-binding':undefined}>{binding.label} {amount(binding)} · {percent(headroom(binding))}</em>
+          : <em>no limits reported</em>}
+      </summary>
+      <div class="scan-spend-line">
+        {state.gates.map(gate=><span key={gate.id} class={gate===binding&&headroom(gate)>=0.9?'scan-gate-binding':undefined}>{gate.label} {amount(gate)}</span>)}
+      </div>
+    </details>
+    {!state.run_enabled&&<p class="scan-gate">{state.auto_enable&&!state.run_decided
+      ? 'Not armed yet. This Project arms new conversations automatically, so it starts on the next turn.'
+      : state.auto_enable
+        ? 'Switched off for this conversation. This Project arms new ones automatically, but a conversation you turned off stays off.'
+        : 'Off for this conversation. It resets on /clear, /new, or session end — turn on “arm every new conversation” in Project settings to stop repeating this.'}</p>}
+    {state.run_enabled&&state.skip_reason&&<p class="scan-gate scan-stopped">Not scanning: {state.skip_reason}.</p>}
     {error&&<p class="usage-error">{error}</p>}
     {state.backfill.state!=='idle'&&<p class={`scan-backfill-status ${state.backfill.state}`}>
       {state.backfill.state==='running'
         ? `Scanning full session · ${state.backfill.processed_chunks}/${state.backfill.total_chunks||'…'} chunks · ${state.backfill.created_records} records`
         : `Full-session scan ${backfillLabel[state.backfill.state]} · ${state.backfill.processed_chunks}/${state.backfill.total_chunks} chunks · ${state.backfill.created_records} records${state.backfill.failed_chunks?` · ${state.backfill.failed_chunks} chunks failed`:''}${state.backfill.skipped_chunks?` · ${state.backfill.skipped_chunks} already covered`:''}${state.backfill.reason?` · ${state.backfill.reason}`:''}`}
     </p>}
-    <div class="scan-timeline-list">
+    <div class="scan-timeline-list" ref={listRef} onScroll={onListScroll}>
       {state.records.length===0&&<p class="drawer-empty">No scan records for this session.</p>}
       {events.map(event=>{
         if(event.kind==='boundary')return <div class="scan-boundary" key={event.boundary.id}><strong>New conversation</strong><span>{clock(event.boundary.created_at)} · {event.boundary.reason}</span></div>
@@ -229,7 +230,13 @@ export function ScanTimelineTab({session}:{session:Session|null}) {
           ? <button disabled={busy} onClick={()=>void stopBackfill()}>Stop full scan</button>
           : <button disabled={busy||!state.run_enabled} onClick={()=>void backfill()}>Scan full session</button>}
       </div>
-      <span title={`source expansions ${state.metrics.rehydrations}/${state.metrics.record_reads}`}>Event-triggered · 3 minute heartbeat</span>
+      <span class={`scan-activity ${state.scanning||running?'busy':''}`}
+        title={state.scanning
+          ? 'A scan request is out to the model and its record has not landed yet.'
+          : `Event-triggered · 3 minute heartbeat · source expansions ${state.metrics.rehydrations}/${state.metrics.record_reads}`}>
+        <b aria-hidden="true"/>
+        {state.scanning?'Scanning…':running?'Full-session scan…':'Idle · 3 min heartbeat'}
+      </span>
     </footer>
   </section>
 }

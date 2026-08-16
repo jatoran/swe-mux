@@ -5143,6 +5143,7 @@ export function App() {
           if(owner)void openDetectedServer({url},owner)
         }}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
+        onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target,tab:'settings'})}}
         queuePending={queuePendingTotal}
         onOpenFleetQueue={()=>openFleetQueue()}
         notesAllProjects={notesAllProjects}

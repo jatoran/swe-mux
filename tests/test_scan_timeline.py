@@ -141,6 +141,7 @@ async def build_service(
     *,
     abandoned: bool = False,
     dead_end: bool = False,
+    auto_enable: bool = False,
     provider: Any | None = None,
     **config_overrides: Any,
 ) -> tuple[ScanTimelineService, AutomationStore, Any, SimpleNamespace]:
@@ -158,6 +159,7 @@ async def build_service(
             project_root=str(tmp_path),
             agent_run_id=str(current.record.agent_run_id),
             dead_end_memory_enabled=dead_end,
+            auto_enable=auto_enable,
         )
 
     service = ScanTimelineService(
@@ -934,6 +936,112 @@ async def test_a_full_session_scan_can_be_stopped_and_keeps_its_records(
         assert state["reason"] == "stopped from the Timeline tab"
         assert state["created_records"] == 1
         assert len(await store.scan_records(agent_run_id="run-1")) == 1
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_enable_arms_a_run_that_has_no_grant_yet(tmp_path: Path) -> None:
+    """The Project answers "yes, always" once instead of per conversation.
+
+    The grant belongs to a provider conversation, so it resets on /clear, /new,
+    a rollover and every new session. That is right as a cost boundary and
+    means a Project that wants a timeline is re-armed by hand forever.
+    """
+    service, store, _provider, sessions = await build_service(tmp_path, auto_enable=True)
+    try:
+        assert await store.scan_run("run-1") is None
+        record = await service.scan_now("session-1", "test")
+        assert record is not None, "a run with no decision arms itself"
+        row = await store.scan_run("run-1")
+        assert row is not None
+        assert row["enabled"] == 1
+        assert row["session_id"] == "session-1"
+
+        # A rollover leaves the successor with no row, so it arms too - which is
+        # the case the manual toggle made most tedious.
+        sessions.sessions["session-1"].record.agent_run_id = "run-2"
+        assert await store.scan_run("run-2") is None
+        assert await service.scan_now("session-1", "test") is not None
+        successor = await store.scan_run("run-2")
+        assert successor is not None
+        assert successor["enabled"] == 1
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_enable_never_overrides_a_run_switched_off(tmp_path: Path) -> None:
+    """An off switch that re-arms itself is not an off switch."""
+    service, store, _provider, _sessions = await build_service(tmp_path, auto_enable=True)
+    try:
+        await store.set_scan_run_enabled(
+            agent_run_id="run-1",
+            session_id="session-1",
+            project_id="project-1",
+            enabled=False,
+        )
+        assert await service.scan_now("session-1", "test") is None
+        assert service._skip_reasons["session-1"] == "Scan timeline is off for this run"
+        row = await store.scan_run("run-1")
+        assert row is not None
+        assert row["enabled"] == 0
+        # The drawer must not tell this run it is about to arm itself.
+        state = await service.snapshot("session-1")
+        assert state["auto_enable"] is True
+        assert state["run_decided"] is True
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_without_auto_enable_a_fresh_run_stays_off(tmp_path: Path) -> None:
+    service, store, _provider, _sessions = await build_service(tmp_path, auto_enable=False)
+    try:
+        assert await service.scan_now("session-1", "test") is None
+        assert service._skip_reasons["session-1"] == "Scan timeline is off for this run"
+        assert await store.scan_run("run-1") is None, "no grant is invented"
+        state = await service.snapshot("session-1")
+        assert state["auto_enable"] is False
+        assert state["run_decided"] is False
+    finally:
+        await service.stop()
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_reports_an_in_flight_scan(tmp_path: Path) -> None:
+    """"Working on it" and "nothing is happening" looked identical while waiting."""
+    import asyncio
+
+    seen: dict[str, Any] = {}
+
+    class ObservedProvider:
+        async def complete_json(self, **kwargs: Any) -> OpenRouterResult:
+            seen["during"] = (await service.snapshot("session-1"))["scanning"]
+            return OpenRouterResult(
+                generation_id="g1",
+                requested_model=str(kwargs["model"]),
+                resolved_model=str(kwargs["model"]),
+                value=semantic_body(),
+                input_tokens=10,
+                output_tokens=5,
+                cost_usd=0.00001,
+                latency_ms=1,
+            )
+
+    service, store, _provider, _sessions = await build_service(
+        tmp_path, auto_enable=True, provider=ObservedProvider()
+    )
+    try:
+        assert (await service.snapshot("session-1"))["scanning"] is False
+        assert await service.scan_now("session-1", "test") is not None
+        assert seen["during"] is True
+        assert (await service.snapshot("session-1"))["scanning"] is False
+        assert isinstance(asyncio.get_running_loop(), asyncio.AbstractEventLoop)
     finally:
         await service.stop()
         store.close()

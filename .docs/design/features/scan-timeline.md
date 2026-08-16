@@ -24,6 +24,12 @@ It belongs to one provider conversation, not the persistent terminal session.
 `/clear`, `/new`, another conversation rollover, session exit, and session crash disable the old run and never authorize the successor.
 A rollover writes a visible boundary record and resets the transcript cursor, continuity window, and novelty comparison.
 
+That boundary is right as a cost decision and, repeated per conversation, is pure friction for a Project that has already decided it wants a timeline.
+`scan_timeline_auto_enable` in the Project config answers "yes, always" once.
+It only ever creates a grant for a run that has **no row at all**: a run the human switched off, or one an ended session disabled, stays off, because an off switch that re-arms itself is not an off switch.
+The snapshot reports `auto_enable` but never applies it - a read that started scanning would make opening the drawer a spending decision - so a brand-new run reads as off until its first trigger arms it.
+Turning the Project's permission off clears the flag, so re-permitting later does not silently re-arm every conversation.
+
 ## Capture flow
 
 Event triggers are `turn_started`, `turn_ended`, `tool_result`, Git change, context compaction, session exit, and session crash.
@@ -118,8 +124,12 @@ Successful calls, provider failures that report billable usage, and locally refu
 An unpriced billable call reserves the conservative preflight estimate so missing provider accounting cannot weaken a budget.
 The ledger day is UTC.
 
-The Timeline tab is the only scan control and status surface.
-It lists **every** cap with its current usage and puts whichever is closest to binding first, because a drawer that shows only the caps with headroom makes a stopped timeline look healthy.
+The Timeline drawer tab is session-scoped, and everything Project-wide lives in the Project's settings instead: permission, the auto-arm flag, and the Project context Markdown.
+Hosting those in the drawer meant every session in a Project showed the same three Project controls, competing with the tab's actual job.
+Every timeline tab carries a button to that Project's settings, and a tab whose Project has not permitted scanning shows only that fact and the same button.
+It lists **every** cap with its current usage, collapsed to one row naming whichever is closest to binding and expandable to the full set, because a drawer that shows only the caps with headroom makes a stopped timeline look healthy, and six budget lines was most of a narrow drawer.
+The footer reports whether a scan request is actually out, since "working on it" and "nothing is happening" otherwise look identical while waiting.
+The record list opens scrolled to the newest entry and stays pinned there until the reader scrolls up.
 When scanning is actually stopped, the drawer states the scanner's own reason; a merely idle run says nothing.
 It also shows Project permission and context, current-run permission, and full-session chunk arithmetic on every terminal state, not just while running.
 Each record shows the count of deterministic evidence targets and keeps their paths, symbols, and command strings inside a collapsed, scroll-bounded disclosure, plus any repairs applied to the model's output and any messages the window did not reach.
@@ -151,6 +161,7 @@ GET  /api/sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 - `src/swe_mux/server.py`
 - `src/swe_mux/project_context.py`
 - `frontend/src/ScanTimelineTab.tsx`
+- `frontend/src/ProjectContextEditor.tsx`, `frontend/src/ProjectsManager.tsx`
 - `tests/test_scan_timeline.py`
 - `tests/test_transcript_forward_slice.py`
 

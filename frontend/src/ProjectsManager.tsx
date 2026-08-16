@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { api } from './api'
+import { ProjectContextEditor } from './ProjectContextEditor'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
 import { allBackendNames, harnessDisplayName } from './harnessRegistry'
@@ -48,6 +49,7 @@ type AutomationState = {
   enabled: string[]
   blocked: Record<string, string[]>
   automations: AutomationEntry[]
+  scan_timeline_auto_enable: boolean
 }
 
 /**
@@ -77,12 +79,14 @@ function AutomationOptIns({ project, busy, onError }: {
     return () => { stale = true }
   }, [project.id])
 
-  const write = async (next: Record<string, boolean>) => {
+  const write = async (next: Record<string, boolean>, autoEnable?: boolean) => {
     if (!state) return
     setSaving(true)
     try {
       setState(await api<AutomationState>('PUT', `/api/projects/${project.id}/automations`, {
-        automations: next, revision: state.revision,
+        automations: next,
+        scan_timeline_auto_enable: autoEnable ?? state.scan_timeline_auto_enable,
+        revision: state.revision,
       }))
     } catch (cause) { onError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setSaving(false) }
@@ -129,12 +133,49 @@ function AutomationOptIns({ project, busy, onError }: {
     </li>
   }
   const substrate = state.automations.filter(item => item.kind === 'substrate')
-  const consumers = state.automations.filter(item => item.kind === 'consumer')
+  // Scan timeline gets its own block below, with the two settings that only
+  // make sense next to its permission. Listing it twice would mean two
+  // checkboxes for one thing.
+  const consumers = state.automations.filter(item => item.kind === 'consumer' && item.id !== 'scan_timeline')
+  const scanOn = state.requested.scan_timeline === true
+  const scanBlocked = state.blocked.scan_timeline || []
   return <div class="project-automations">
     <h4>Control-plane automations<em class="project-setting-chip">repo</em></h4>
     <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in Settings → Automation.</p>
     <ul class="project-automation-list">{substrate.map(row)}</ul>
     <ul class="project-automation-list">{consumers.map(row)}</ul>
+
+    <h4>Scan timeline<em class="project-setting-chip">repo</em></h4>
+    <p>A readable behavioural history of each conversation in this Project. Permitting it here also enables the substrate it reads from. The Timeline drawer tab shows the result; everything that applies to the whole Project is set here.</p>
+    <ul class="project-automation-list">
+      <li>
+        <label class="check">
+          <span class="project-setting-name">Permitted for this Project</span>
+          <input type="checkbox" disabled={busy || saving} checked={scanOn}
+            onChange={event => toggle('scan_timeline', event.currentTarget.checked)} />
+        </label>
+        {scanBlocked.length > 0 && <p class="project-automation-deps">
+          needs {scanBlocked.join(' · ')} — enabled with it
+        </p>}
+      </li>
+      <li class={scanOn ? '' : 'unavailable'}>
+        <label class="check">
+          <span class="project-setting-name">Arm every new conversation</span>
+          <input type="checkbox" disabled={busy || saving || !scanOn}
+            checked={scanOn && state.scan_timeline_auto_enable}
+            onChange={event => void write(state.requested, event.currentTarget.checked)} />
+        </label>
+        {/* The grant belongs to one provider conversation, so it resets on
+            /clear, /new, a rollover and every new session. Without this you
+            re-arm by hand every time. */}
+        <p class="project-automation-deps">
+          Off, each conversation starts unscanned and you arm it in the Timeline tab. On, a
+          conversation with no decision yet arms itself on its first turn — one you switched
+          off stays off.
+        </p>
+      </li>
+    </ul>
+    {scanOn && <ProjectContextEditor projectId={project.id} busy={busy || saving} onError={onError} />}
   </div>
 }
 

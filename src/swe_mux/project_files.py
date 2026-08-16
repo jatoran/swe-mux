@@ -35,6 +35,12 @@ PROJECT_CONFIG_FIELDS = {
     "ignore_patterns",
     "automations",
     "worktree",
+    # Scan timeline's run grant belongs to one provider conversation and defaults
+    # off, so a Project that wants a timeline had to be re-armed after every
+    # `/clear`, every new session, every rollover. This says "yes, always" for
+    # this Project. It only ever creates a grant for a run that has none: a run
+    # the human switched off stays off.
+    "scan_timeline_auto_enable",
     # Phase 7.6: the authority level for agent session control in this Project,
     # once the `session_control` automation is opted in. "draft" (the default)
     # makes an agent interrupt/end write an inert request a human approves;
@@ -1041,6 +1047,10 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         parsed["notification_sounds_enabled"], bool
     ):
         raise ValueError("notification_sounds_enabled must be a boolean")
+    if "scan_timeline_auto_enable" in parsed and not isinstance(
+        parsed["scan_timeline_auto_enable"], bool
+    ):
+        raise ValueError("scan_timeline_auto_enable must be a boolean")
     if "ignore_patterns" in parsed and (
         not isinstance(parsed["ignore_patterns"], list)
         or not all(isinstance(item, str) for item in parsed["ignore_patterns"])
@@ -1102,6 +1112,11 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         lines.append(
             "notification_sounds_enabled = "
             + ("true" if values["notification_sounds_enabled"] else "false")
+        )
+    if "scan_timeline_auto_enable" in values:
+        lines.append(
+            "scan_timeline_auto_enable = "
+            + ("true" if values["scan_timeline_auto_enable"] else "false")
         )
     if agent_profiles := values.get("default_agent_profiles"):
         pairs = ", ".join(
