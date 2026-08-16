@@ -21,8 +21,8 @@ test('mobile hold lift tolerates jitter but yields to a scroll before it lifts',
   // The sidebar/tab reorder model: the row lifts on a stationary hold, so any pre-lift move
   // past the (generous) slop is a scroll, and jitter inside it waits for the lift.
   assert.equal(MOBILE_HOLD_DRAG.mode, 'hold')
-  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_DRAG, 12), 'wait')
-  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_DRAG, 12.01), 'cancel')
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_DRAG, 16), 'wait')
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_DRAG, 16.01), 'cancel')
 })
 
 test('drawer hold-move shares the hold slop gate', () => {

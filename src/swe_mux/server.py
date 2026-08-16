@@ -679,6 +679,8 @@ def create_app(
             web.post("/api/history/{sid}/second-opinion", second_opinion),
             web.get("/api/history/{sid}/handoff", export_handoff),
             web.get("/api/telemetry/workloads", workload_telemetry),
+            web.post("/api/diag/drag", diag_drag_post),
+            web.get("/api/diag/drag", diag_drag_get),
             web.get("/api/experiences", list_experiences),
             web.get("/api/automation/batches", list_observer_batches),
             web.post("/api/automation/batches", create_observer_batch),
@@ -3085,6 +3087,30 @@ async def export_handoff(request: web.Request) -> web.Response:
         ]
     )
     return json_response({"run_id": history_id, "markdown": "\n".join(lines) + "\n"})
+
+
+# Temporary in-memory trace of the client pointer-drag lifecycle, so a real phone's mobile
+# reorder gesture can be read back over HTTP while the gesture is being tuned. Bounded, process
+# local, wiped on restart. Remove with the client `dragTrace` calls once reorder is settled.
+_DRAG_TRACE: list[dict[str, Any]] = []
+
+
+async def diag_drag_post(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"ok": False}, 400)
+    if isinstance(body, dict):
+        _DRAG_TRACE.append(body)
+        del _DRAG_TRACE[:-400]
+    return json_response({"ok": True})
+
+
+async def diag_drag_get(request: web.Request) -> web.Response:
+    if request.query.get("clear"):
+        _DRAG_TRACE.clear()
+        return json_response({"cleared": True})
+    return json_response({"count": len(_DRAG_TRACE), "events": _DRAG_TRACE})
 
 
 async def workload_telemetry(request: web.Request) -> web.Response:

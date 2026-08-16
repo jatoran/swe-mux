@@ -1022,24 +1022,30 @@ export function App() {
     showDropSlot({left:box.left,width:box.width,gap:side==='before'?box.top:box.bottom,height,label})
   }
 
+  // How far a lifted `hold` must travel from where it opened its menu before the gesture is a
+  // reorder rather than a hand settling on the menu. Small enough to feel immediate, past the
+  // idle jitter of a finger resting on a phone.
+  const DRAG_BEGIN=12
+  // Temporary diagnostics: mirror the pointer-drag lifecycle to the daemon so a real phone's
+  // gesture can be read back with `GET /api/diag/drag`. Fire-and-forget, never throws into a
+  // drag. Remove once the mobile reorder gesture is settled.
+  const dragTrace=(identity:string,phase:string,extra:Record<string,unknown>={})=>{
+    try{void fetch('/api/diag/drag',{method:'POST',headers:{'content-type':'application/json'},keepalive:true,body:JSON.stringify({t:Math.round(performance.now()),phase,identity,mobile:mobileWorkspace,...extra})}).catch(()=>{})}catch{/* diagnostics must never break a drag */}
+  }
   const beginPointerDrag=(
     event:JSX.TargetedPointerEvent<HTMLElement>,label:string,identity:string,
     onStart:()=>void,onMove:(event:PointerEvent)=>void,onDrop:()=>void,onCancel:()=>void,
     activation:PointerDragActivation=POINTER_MOVE_DRAG,
-    // Mobile `hold` lift model: the row lifts on a stationary hold (below), and if it is then
-    // released WITHOUT being dragged, this opens the context menu on that release. The menu
-    // never opens while the finger is down — on a vertical list it lands on the drag path and
-    // blocks the very drag the hold became (the "hold too long and it won't drag" bug) — and
-    // activating on stillness (not on a move) keeps the swipe recognizer from racing the drag.
-    onInertRelease?:()=>void,
   )=>{
     if(event.button!==0||!event.isPrimary)return
+    dragTrace(identity,'down',{mode:activation.mode})
     const source=event.currentTarget
     const pointerId=event.pointerId,startX=event.clientX,startY=event.clientY
     let active=false,done=false,ghost:HTMLDivElement|null=null,activationTimer:number|null=null
-    // Set once a lifted drag has actually travelled: it decides release-in-place (menu) from a
-    // real reorder, and it is measured from where the drag lifted, not from touch-down.
-    let moved=false,activateX=startX,activateY=startY
+    // `dragging` turns true only once a lifted `hold` has actually travelled past DRAG_BEGIN
+    // (or immediately, for a movement-mode desktop drag): before that a `hold` has opened its
+    // menu and is still "menu territory", so releasing keeps the menu instead of reordering.
+    let dragging=false,activateX=startX,activateY=startY
     // `hold-move` only: set once the hold has settled, so the next move past slop drags
     // rather than scrolls. `hold` and `movement` never read it.
     let armed=false
@@ -1096,20 +1102,26 @@ export function App() {
       showDropSlot(null)
       ghost?.remove()
     }
+    const beginDragVisual=(clientX:number,clientY:number)=>{
+      if(dragging)return
+      dragging=true
+      document.body.classList.add('workspace-pointer-dragging');source.classList.add('dragging')
+      ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
+      ghost.style.transform=`translate3d(${clientX+14}px,${clientY+12}px,0)`
+      dragTrace(identity,'drag')
+    }
     const finish=(commit:boolean)=>{
       if(done)return
       done=true
-      // A lifted-but-never-dragged release opens the menu (release-in-place) instead of
-      // committing a reorder. Only the mobile `hold` lift model does this — a movement-mode
-      // (desktop) drag has to move to exist, so a small one is a reorder, never a menu.
-      const inertMenu=active&&commit&&!moved&&!!onInertRelease&&activation.mode==='hold'
+      const wasDragging=dragging
+      dragTrace(identity,'finish',{active,dragging:wasDragging,commit})
       cleanup()
       if(!active)return
       window.setTimeout(()=>{if(suppressDragClickRef.current===identity)suppressDragClickRef.current=null},0)
-      // Unwind the drag's own state (auto-scroll frame, drop preview) without committing, then
-      // open the menu. `onCancel` is the no-commit teardown every caller already provides.
-      if(inertMenu){onCancel();onInertRelease?.();return}
-      if(commit)onDrop();else onCancel()
+      // Dragged: commit the reorder (or cancel). Activated but never dragged: a `hold` opened
+      // its menu at activation and that menu stays up — just tear the drag down, no reorder.
+      if(wasDragging){if(commit)onDrop();else onCancel();return}
+      onCancel()
     }
     const activate=(clientX:number,clientY:number)=>{
       if(active||done)return
@@ -1118,11 +1130,13 @@ export function App() {
       if(activationTimer!==null)window.clearTimeout(activationTimer)
       activationTimer=null
       releaseDragClaim=claimPointerDrag();suppressDragClickRef.current=identity
-      document.body.classList.add('workspace-pointer-dragging');source.classList.add('dragging')
       try{source.setPointerCapture(pointerId)}catch{finish(false);return}
-      ghost=document.createElement('div');ghost.className='mux-pointer-drag-ghost';ghost.textContent=label;document.body.appendChild(ghost)
-      ghost.style.transform=`translate3d(${clientX+14}px,${clientY+12}px,0)`
+      dragTrace(identity,'activate',{mode:activation.mode})
+      // A `hold` opens its menu here (via onStart) and shows no ghost yet — the drag begins
+      // only once the finger travels past DRAG_BEGIN, which dismisses that menu. Every other
+      // mode is a drag from the first instant it activates.
       onStart()
+      if(activation.mode!=='hold')beginDragVisual(clientX,clientY)
     }
     const move=(pointer:PointerEvent)=>{
       if(pointer.pointerId!==pointerId)return
@@ -1142,7 +1156,12 @@ export function App() {
           activate(pointer.clientX,pointer.clientY)
         }
       }
-      if(!moved&&Math.hypot(pointer.clientX-activateX,pointer.clientY-activateY)>8)moved=true
+      if(!dragging){
+        // `hold` only reaches here (others begin the visual at activate). The lifted menu holds
+        // until the finger clearly travels, so a hand that merely settles keeps the menu.
+        if(Math.hypot(pointer.clientX-activateX,pointer.clientY-activateY)<=DRAG_BEGIN){pointer.preventDefault();return}
+        beginDragVisual(pointer.clientX,pointer.clientY)
+      }
       pointer.preventDefault()
       if(ghost)ghost.style.transform=`translate3d(${pointer.clientX+14}px,${pointer.clientY+12}px,0)`
       onMove(pointer)
@@ -2286,12 +2305,15 @@ export function App() {
       scrollFrame=window.requestAnimationFrame(autoScroll)
     }
     beginPointerDrag(event,project.name,`project:${project.id}`,
+      // Mobile: the hold opens the Project menu here; a drag past DRAG_BEGIN dismisses it in onMove.
       ()=>{
-        cancelLongPress();setProjectMenu(null);setContextMenu(null);setRunMenu(null)
+        cancelLongPress();setContextMenu(null);setRunMenu(null)
+        if(mobileWorkspace)openProjectMenuAt(project,event.clientX,event.clientY);else setProjectMenu(null)
         if(mobileWorkspace)navigator.vibrate?.(15)
         dragProjectRef.current=initial
       },
       pointer=>{
+        setProjectMenu(null)
         latestPointer={clientX:pointer.clientX,clientY:pointer.clientY}
         preview(pointer)
         if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)
@@ -2299,7 +2321,6 @@ export function App() {
       ()=>{stopAutoScroll();const current=dragProjectRef.current;setDragProject(null);if(current)void commitProjectOrder(current.previewIds)},
       ()=>{stopAutoScroll();setDragProject(null)},
       mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
-      ()=>openProjectMenuAt(project,event.clientX,event.clientY),
     )
   }
   /** Reorder the sidebar's Groups. Root Projects stay before them and Group order
@@ -2421,8 +2442,10 @@ export function App() {
       scrollFrame=window.requestAnimationFrame(autoScroll)
     }
     beginPointerDrag(event,label,`session:${session.id}`,
-      ()=>{cancelLongPress();setContextMenu(null);setProjectMenu(null);if(mobileWorkspace)navigator.vibrate?.(15);dragSessionTargetRef.current=null},
+      // Mobile: the hold opens the row's menu here; a drag past DRAG_BEGIN dismisses it in onMove.
+      ()=>{cancelLongPress();setProjectMenu(null);if(mobileWorkspace&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'sidebar');if(mobileWorkspace)navigator.vibrate?.(15);dragSessionTargetRef.current=null},
       pointer=>{
+        setContextMenu(null)
         latestPointer={clientX:pointer.clientX,clientY:pointer.clientY}
         preview(pointer)
         if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)
@@ -2439,7 +2462,6 @@ export function App() {
       },
       ()=>{stopAutoScroll();dragSessionTargetRef.current=null},
       mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
-      session.pending?undefined:()=>openSessionMenu(session,event.clientX,event.clientY,'sidebar'),
     )
   }
 
@@ -5031,12 +5053,12 @@ export function App() {
       scrollFrame=window.requestAnimationFrame(autoScroll)
     }
     beginPointerDrag(event,label,`mobiletab:${leaf.id}`,
-      ()=>{mobileTabHeldRef.current=false;if(mobileWorkspace)navigator.vibrate?.(15)},
-      pointer=>{latestPointer={clientX:pointer.clientX,clientY:pointer.clientY};preview(pointer);if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)},
+      // Mobile: the hold opens the tab menu here; a drag past DRAG_BEGIN dismisses it in onMove.
+      ()=>{mobileTabHeldRef.current=false;if(mobileWorkspace)openMenu(event.clientX,event.clientY);if(mobileWorkspace)navigator.vibrate?.(15)},
+      pointer=>{setContextMenu(null);setTabMenu(null);latestPointer={clientX:pointer.clientX,clientY:pointer.clientY};preview(pointer);if(scrollFrame===null)scrollFrame=window.requestAnimationFrame(autoScroll)},
       ()=>{stopAutoScroll();const chosen=target;target=null;showPointerDropIndicator(null);if(chosen&&chosen.id!==leaf.id)commitMobileTabOrder(leaf,chosen)},
       ()=>{stopAutoScroll();target=null;showPointerDropIndicator(null)},
       mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
-      ()=>openMenu(event.clientX,event.clientY),
     )
   }
   const mobileTab=(leaf:PaneLeaf):ComponentChildren=>{
