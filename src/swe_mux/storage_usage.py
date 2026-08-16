@@ -110,6 +110,28 @@ def _entry_size(path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def _child_breakdown(root: Path) -> list[dict[str, object]]:
+    """Size each immediate child of ``root``, largest first.
+
+    Directories are walked recursively and reported as one entry; files are
+    reported individually. This is the per-area breakdown of a single ``.swe-mux``
+    folder (``notes``, ``attachments``, ``preview-shots``, ``config.toml``, ...)
+    -- the same idea as the data-dir buckets, one level down.
+    """
+    children: list[dict[str, object]] = []
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return children
+    for entry in entries:
+        size, files = _entry_size(Path(entry.path))
+        if files == 0:
+            continue
+        children.append({"name": entry.name, "bytes": size, "files": files})
+    children.sort(key=lambda item: cast(int, item["bytes"]), reverse=True)
+    return children
+
+
 @dataclass(frozen=True)
 class ProjectFootprintTarget:
     """The subset of a Project a footprint read needs."""
@@ -235,6 +257,7 @@ class StorageUsage:
                     "present": present,
                     "bytes": size,
                     "files": files,
+                    "buckets": _child_breakdown(mux_dir) if present else [],
                 }
             )
         items.sort(key=lambda item: cast(int, item["bytes"]), reverse=True)

@@ -85,6 +85,12 @@ def test_snapshot_reports_buckets_and_projects(tmp_path: Path) -> None:
     assert items["p1"]["present"] is True
     assert items["p2"]["present"] is False
     assert items["p2"]["bytes"] == 0
+    assert items["p2"]["buckets"] == []
+    # Per-project breakdown: immediate children of .swe-mux, largest first.
+    p1_buckets = {bucket["name"]: bucket for bucket in items["p1"]["buckets"]}
+    assert p1_buckets["notes"]["bytes"] == 120
+    assert p1_buckets["config.toml"]["bytes"] == 300
+    assert items["p1"]["buckets"][0]["name"] == "config.toml"
     # Largest project first.
     assert projects_section["items"][0]["project_id"] == "p1"
 

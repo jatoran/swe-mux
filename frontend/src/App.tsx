@@ -5441,6 +5441,7 @@ export function App() {
       <button onClick={()=>runNamedCommand('clipboard.open')}>Clipboard history…</button>
       <button onClick={() => runNamedCommand('usage.open')}>Usage analytics…</button>
       <button onClick={() => runNamedCommand('networkUsage.open')}>Bandwidth usage…</button>
+      <button onClick={() => runNamedCommand('storageUsage.open')}>Storage usage…</button>
       <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       <div class="context-subtitle">CONFIGURATION</div>
       {/* Adding a Project lives in the registry and the empty-sidebar menu; this
