@@ -66,7 +66,10 @@ _MODULE_ALLOWLIST: dict[str, str] = {
 # that a missing harness means *no behaviour*, never wrong behaviour.
 _FUNCTION_ALLOWLIST: dict[str, str] = {
     # Declared tables and module constants whose missing entry means no behaviour.
-    "config.py::<module>": "per-harness external usage commands, keyed by the registry",
+    "config.py::<module>": "legacy ccusage source-command migration ids",
+    "usage.py::<module>": (
+        "ccusage source display labels; unknown sources use a generic fallback"
+    ),
     "observation.py::<module>": "classifier backend set, checked against the registry",
     "operational_telemetry.py::<module>": "parser revisions keyed by transcript dialect",
     "agent_context.py::<module>": "sync direction ids are a stable public contract",

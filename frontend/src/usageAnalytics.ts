@@ -8,7 +8,7 @@ export type UsageRow = {
   month?:string
   session_id?:string
   model?:string
-  provider?:string
+  source_id?:string
   input_tokens:number
   output_tokens:number
   cache_creation_tokens:number
@@ -19,8 +19,10 @@ export type UsageRow = {
   cost_method?:CostMethod
 }
 
-export type ProviderUsage = {
-  provider:string
+export type UsageSource = {
+  source_id:string
+  source_label:string
+  collector_id:string
   daily:UsageRow[]
   monthly:UsageRow[]
   sessions:UsageRow[]
@@ -124,21 +126,21 @@ export function sumUsageRows(rows:UsageRow[]):UsageRow {
   return result
 }
 
-export type ModelPeriodRow = UsageRow&{period:string;provider:string;model:string}
+export type ModelPeriodRow = UsageRow&{period:string;source_id:string;model:string}
 
 export function modelPeriodRows(
-  providers:ProviderUsage[],
+  sources:UsageSource[],
   visibleDates:Set<string>,
   resolution:'daily'|'monthly',
 ):ModelPeriodRow[] {
-  const grouped = new Map<string,{period:string;provider:string;model:string;rows:UsageRow[]}>()
-  for(const provider of providers){
-    for(const row of provider.model_daily||[]){
+  const grouped = new Map<string,{period:string;source_id:string;model:string;rows:UsageRow[]}>()
+  for(const source of sources){
+    for(const row of source.model_daily||[]){
       if(!row.date||!visibleDates.has(row.date))continue
       const period = resolution==='daily'?row.date:row.date.slice(0,7)
       const model = row.model||'unknown'
-      const key = `${period}\0${provider.provider}\0${model}`
-      const group = grouped.get(key)||{period,provider:provider.provider,model,rows:[]}
+      const key = `${period}\0${source.source_id}\0${model}`
+      const group = grouped.get(key)||{period,source_id:source.source_id,model,rows:[]}
       group.rows.push(row)
       grouped.set(key,group)
     }
@@ -146,9 +148,9 @@ export function modelPeriodRows(
   return [...grouped.values()].map(group=>({
     ...sumUsageRows(group.rows),
     period:group.period,
-    provider:group.provider,
+    source_id:group.source_id,
     model:group.model,
-  })).sort((a,b)=>b.period.localeCompare(a.period)||a.provider.localeCompare(b.provider)||a.model.localeCompare(b.model))
+  })).sort((a,b)=>b.period.localeCompare(a.period)||a.source_id.localeCompare(b.source_id)||a.model.localeCompare(b.model))
 }
 
 export function accountDisplayLabel(account:Pick<ProviderAccount,'label'|'email'|'provider'>):string {

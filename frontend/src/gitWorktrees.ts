@@ -447,6 +447,82 @@ export type GitWorktreeOverview = {
   worktrees: GitOverviewWorktree[]
 }
 
+export type GitGraphDecorationKind =
+  | 'head'
+  | 'comparison'
+  | 'worktree-ref'
+  | 'tag'
+  | 'other-ref'
+  | 'main-tree'
+  | 'worktree-tip'
+
+export type GitGraphDecoration = {
+  kind: GitGraphDecorationKind
+  label: string
+  title: string
+}
+
+/** The graph lane containing this commit's node, folded onto the five-color TUI palette. */
+export function graphNodeLane(graph: string): number {
+  const node=graph.indexOf('*')
+  return node<0?0:Math.floor(node/2)%5
+}
+
+/**
+ * Turn Git's ref strings plus the registered checkout inventory into semantic badges.
+ *
+ * A linear ahead branch has no fork in the commit DAG. Its ref and worktree badges are
+ * therefore the only truthful way to distinguish its tip from the comparison ref until
+ * another branch advances and Git has an actual fork to draw.
+ */
+export function graphDecorations(
+  line: GitGraphCommit,
+  overview: GitWorktreeOverview | null,
+): GitGraphDecoration[] {
+  const tips=(overview?.worktrees||[]).filter(tree=>tree.head?.toLowerCase()===line.oid.toLowerCase())
+  const linked=tips.filter(tree=>!tree.main)
+  const comparisonNames=new Set(
+    [overview?.comparison.ref,overview?.comparison.display].filter((value):value is string=>Boolean(value)),
+  )
+  const worktreeBranches=new Map<string,GitOverviewWorktree[]>()
+  for(const tree of tips){
+    if(!tree.branch)continue
+    const trees=worktreeBranches.get(tree.branch)||[]
+    trees.push(tree)
+    worktreeBranches.set(tree.branch,trees)
+  }
+  const rank:Record<GitGraphDecorationKind,number>={
+    head:0,comparison:1,'worktree-ref':2,tag:3,'other-ref':4,'main-tree':5,'worktree-tip':6,
+  }
+  const refs=line.refs.map((ref):GitGraphDecoration=>{
+    if(ref==='HEAD')return {kind:'head',label:'HEAD',title:'Project root HEAD'}
+    if(comparisonNames.has(ref))return {kind:'comparison',label:ref,title:`Comparison ref ${ref}`}
+    const checkedOut=worktreeBranches.get(ref)
+    if(checkedOut?.length){
+      const names=checkedOut.map(tree=>pathTail(tree.path)).join(', ')
+      return {kind:'worktree-ref',label:ref,title:`Checked out in ${names}`}
+    }
+    if(ref.startsWith('tag: '))return {kind:'tag',label:ref.slice(5),title:`Tag ${ref.slice(5)}`}
+    return {kind:'other-ref',label:ref,title:`Git ref ${ref}`}
+  }).sort((left,right)=>rank[left.kind]-rank[right.kind])
+  if(tips.some(tree=>tree.main)){
+    refs.push({kind:'main-tree',label:'MAIN TREE',title:'The Project root checkout points at this commit'})
+  }
+  if(linked.length===1){
+    const tree=linked[0]
+    refs.push({
+      kind:'worktree-tip',label:`WT ${pathTail(tree.path)}`,
+      title:`Linked worktree ${tree.path}${tree.branch?` on ${tree.branch}`:' in detached HEAD'}`,
+    })
+  }else if(linked.length>1){
+    refs.push({
+      kind:'worktree-tip',label:`${linked.length} WORKTREES`,
+      title:linked.map(tree=>`${pathTail(tree.path)}${tree.branch?` on ${tree.branch}`:' (detached)'}`).join('\n'),
+    })
+  }
+  return refs
+}
+
 export function localMeasurement(tree: GitOverviewWorktree): { measured: boolean; total: number } {
   const summaries=[tree.conflicted,tree.unstaged,tree.staged]
   return {

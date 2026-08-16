@@ -47,7 +47,11 @@ class UsageStub:
     def snapshot(self) -> dict[str, Any]:
         if self.fail:
             raise RuntimeError("ccusage cache unreadable")
-        return {"enabled": False, "refreshing": False, "states": {}}
+        return {
+            "enabled": False,
+            "refreshing": False,
+            "collector": {"id": "ccusage", "status": "disabled"},
+        }
 
 
 def _request(tmp_path: Path, *, usage_fails: bool = False, cwd: str | None = None) -> Any:

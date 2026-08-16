@@ -21,9 +21,21 @@ from swe_mux.mcp_contract import READ_TOOL_NAMES
 from swe_mux.prompt_queue import QueueError
 from tests.test_mcp import HistoryStub, live_session, manager_for
 
-MEMORY_TOOLS = ("provenance", "verified_status", "prior_resolutions", "dead_ends")
+MEMORY_TOOLS = (
+    "provenance",
+    "verified_status",
+    "prior_resolutions",
+    "dead_ends",
+    "doc_debt",
+)
 ALL_ENABLED = frozenset(
-    {"provenance_graph", "declared_vs_verified", "dead_end_memory", "prior_resolutions"}
+    {
+        "provenance_graph",
+        "declared_vs_verified",
+        "dead_end_memory",
+        "prior_resolutions",
+        "doc_debt",
+    }
 )
 
 
@@ -521,6 +533,113 @@ async def test_dead_ends_subsystem_filter_and_low_confidence() -> None:
     other = await service.dead_ends(caller, {"subsystem": "scan_timeline"})
     assert other["dead_ends"] == []
     assert other["low_confidence_suppressed"] == 1
+
+
+# ------------------------------------------------------------------ doc_debt
+
+
+def _write_doc(root: Any, rel: str, key_files: list[str]) -> None:
+    doc = root / ".docs" / rel
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    body = "# Doc\n\n## Key files\n\n" + "".join(
+        f"- `{path}` — owned here\n" for path in key_files
+    )
+    doc.write_text(body, encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_doc_debt_maps_each_doc_to_its_changed_files(tmp_path: Any) -> None:
+    caller = _caller()
+    _write_doc(tmp_path, "design/foo.md", ["src/swe_mux/foo.py"])
+    facts = {
+        "p1": [
+            _fact(
+                "f1",
+                kind="file_write_result",
+                target="src/swe_mux/foo.py",
+                session_id="s1",
+                run="r1",
+            )
+        ]
+    }
+    service = _service(
+        caller,
+        tier0=Tier0Stub(project_facts=facts),
+        projects=_projects(root=str(tmp_path)),
+    )
+    result = await service.doc_debt(caller, {})
+    assert result["docs"] == [
+        {
+            "doc": "design/foo.md",
+            "changed_files": ["src/swe_mux/foo.py"],
+            "project_id": "p1",
+        }
+    ]
+    # The blind spot is stated so an empty result is never read as "docs current".
+    assert "not proof" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_doc_debt_empty_when_change_is_undocumented(tmp_path: Any) -> None:
+    # A file no doc lists in its Key files owns no doc: the blind spot. Empty, and
+    # counted empty, rather than a fabricated pair.
+    caller = _caller()
+    _write_doc(tmp_path, "design/foo.md", ["src/swe_mux/foo.py"])
+    facts = {
+        "p1": [
+            _fact(
+                "f1",
+                kind="file_write_result",
+                target="src/swe_mux/undocumented.py",
+                session_id="s1",
+                run="r1",
+            )
+        ]
+    }
+    service = _service(
+        caller,
+        tier0=Tier0Stub(project_facts=facts),
+        projects=_projects(root=str(tmp_path)),
+    )
+    result = await service.doc_debt(caller, {})
+    assert result["docs"] == []
+    outcomes = service.status()["memory_outcomes"]
+    assert outcomes["doc_debt"]["empty"] == 1
+    assert outcomes["doc_debt"]["returned"] == 0
+
+
+@pytest.mark.asyncio
+async def test_doc_debt_excludes_a_doc_edited_in_the_same_window(tmp_path: Any) -> None:
+    # Debt paid as it was incurred: a doc written in the same window is not owed,
+    # matching the detector that writes the annotation.
+    caller = _caller()
+    _write_doc(tmp_path, "design/foo.md", ["src/swe_mux/foo.py"])
+    facts = {
+        "p1": [
+            _fact(
+                "f1",
+                kind="file_write_result",
+                target="src/swe_mux/foo.py",
+                session_id="s1",
+                run="r1",
+            ),
+            _fact(
+                "f2",
+                kind="file_write_result",
+                target=".docs/design/foo.md",
+                session_id="s1",
+                run="r1",
+                created_at=2.0,
+            ),
+        ]
+    }
+    service = _service(
+        caller,
+        tier0=Tier0Stub(project_facts=facts),
+        projects=_projects(root=str(tmp_path)),
+    )
+    result = await service.doc_debt(caller, {})
+    assert result["docs"] == []
 
 
 # ---------------------------------------------------------------- read-only

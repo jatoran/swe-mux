@@ -17,7 +17,7 @@ responsive controls.
   The product wordmark is omitted because Project scope is the useful persistent identity in this compact row.
   Workspace tabs are not global top-rail state; every pane renders its own tab strip beside that rail.
   Scan timeline has no top-rail action or spend chip.
-  Its complete control and status surface lives in the utility drawer's Timeline tab.
+  Its complete control and status surface lives in the Timeline segment of the utility drawer's Insight tab (the tab that replaced the standalone Timeline tab in Phase 7.10; the Findings pane is its other segment).
 - The Timeline tab begins with Project-scoped controls: Project permission and the expandable `.swe-mux/project-context.md` editor with Save and **Copy setup prompt**.
   Session-scoped controls follow: current-run permission, current scan, full-session scan and progress, spend, records, rollover boundaries, and source expansion.
   Each record keeps its potentially long evidence-target list collapsed by default, exposes the target count in the disclosure label, and bounds the expanded list with its own scroll area.

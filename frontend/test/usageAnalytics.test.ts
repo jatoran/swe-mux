@@ -5,7 +5,7 @@ import {
   modelPeriodRows,
   quotaPointValue,
   quotaSeriesPath,
-  type ProviderUsage,
+  type UsageSource,
 } from '../src/usageAnalytics.ts'
 
 const base = {
@@ -17,10 +17,10 @@ const base = {
   cost_usd:0,
 }
 
-test('model history stays separated by provider, model, and day',()=>{
-  const providers:ProviderUsage[]=[
+test('model history stays separated by source, model, and day',()=>{
+  const sources:UsageSource[]=[
     {
-      provider:'codex',daily:[],monthly:[],sessions:[],models:[],totals:base,
+      source_id:'codex',source_label:'Codex',collector_id:'ccusage',daily:[],monthly:[],sessions:[],models:[],totals:base,
       model_daily:[
         {...base,date:'2026-08-01',model:'gpt-5',total_tokens:100,cost_usd:1,cost_method:'proportional'},
         {...base,date:'2026-08-02',model:'gpt-5',total_tokens:200,cost_usd:2,cost_method:'proportional'},
@@ -28,14 +28,14 @@ test('model history stays separated by provider, model, and day',()=>{
       ],
     },
     {
-      provider:'claude',daily:[],monthly:[],sessions:[],models:[],totals:base,
+      source_id:'claude',source_label:'Claude Code',collector_id:'ccusage',daily:[],monthly:[],sessions:[],models:[],totals:base,
       model_daily:[
         {...base,date:'2026-08-02',model:'opus',total_tokens:300,cost_usd:3,cost_method:'source_estimate'},
       ],
     },
   ]
-  const rows=modelPeriodRows(providers,new Set(['2026-08-01','2026-08-02']),'daily')
-  assert.deepEqual(rows.map(row=>[row.period,row.provider,row.model,row.total_tokens]),[
+  const rows=modelPeriodRows(sources,new Set(['2026-08-01','2026-08-02']),'daily')
+  assert.deepEqual(rows.map(row=>[row.period,row.source_id,row.model,row.total_tokens]),[
     ['2026-08-02','claude','opus',300],
     ['2026-08-02','codex','gpt-5',200],
     ['2026-08-02','codex','gpt-5-mini',50],
@@ -44,15 +44,15 @@ test('model history stays separated by provider, model, and day',()=>{
   assert.equal(rows[1].cost_method,'proportional')
 })
 
-test('monthly model history sums days without merging providers or models',()=>{
-  const provider:ProviderUsage={
-    provider:'codex',daily:[],monthly:[],sessions:[],models:[],totals:base,
+test('monthly model history sums days without merging sources or models',()=>{
+  const source:UsageSource={
+    source_id:'codex',source_label:'Codex',collector_id:'ccusage',daily:[],monthly:[],sessions:[],models:[],totals:base,
     model_daily:[
       {...base,date:'2026-08-01',model:'gpt-5',total_tokens:100,cost_usd:1,cost_method:'proportional'},
       {...base,date:'2026-08-02',model:'gpt-5',total_tokens:200,cost_usd:2,cost_method:'proportional'},
     ],
   }
-  const rows=modelPeriodRows([provider],new Set(['2026-08-01','2026-08-02']),'monthly')
+  const rows=modelPeriodRows([source],new Set(['2026-08-01','2026-08-02']),'monthly')
   assert.equal(rows.length,1)
   assert.equal(rows[0].period,'2026-08')
   assert.equal(rows[0].total_tokens,300)

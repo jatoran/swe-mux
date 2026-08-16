@@ -43,8 +43,9 @@ Its startup seed is generated from the descriptors into `frontend/src/harnessReg
 The seed was previously hand-maintained and had drifted: opencode was two capability levels below its descriptor with measurement reported as absent, and pi was missing its `pty` state source, because nothing compared the two.
 A trait the browser needs therefore has to travel in the payload; `test_every_browser_read_trait_travels_in_the_public_payload` asserts the published capability set, and `tests/test_harness_name_literals.py` fails on a harness name compiled into a frontend module outside a small allowlist.
 
-Adding a field to the payload keeps `version` at 1, because consumers read the keys they know and default the rest.
-Removing or re-typing a field is what would require a bump.
+Adding a field keeps the current payload version because consumers read the keys they know and default the rest.
+Version 2 removed the obsolete harness-scoped external usage capability.
+The frontend accepts versions 1 and 2 during rolling upgrades.
 
 ## Detection and enablement
 
@@ -82,7 +83,6 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | Can mux read normalized transcript state? | `has_observable_transcript(name)` | Observation startup, transcript/history views, branching, title generation, read-aloud, watchdog recovery |
 | Can mux submit a prompt through the PTY? | `delivers_prompts_through_pty(name)` | Prompt queue, auto-delivery, voice submission and interruption |
 | Does the harness report lifecycle hooks? | `reports_lifecycle_hooks(name)` | Hook identity binding, rollover decisions, hook-reported transcript relocation |
-| Which harnesses need an external usage command? | `external_usage_harnesses()` | Usage polling and provider-state creation |
 | Which harnesses expose mux-managed accounts? | `provider_account_harnesses()` | Credential inventory, swapping, and quota polling |
 | Does the TUI rewrite content already in scrollback? | `repaints_scrollback` (backend `repaints_scrollback(name)`; published capability; frontend `repaintsScrollback(name)`) | Terminal renderer selection (repainting harnesses stay on the DOM renderer under `auto`); client-requested transcript restatement after a wrapped-ring replay (`features/sessions.md`) |
 | Can the TUI repair its own screen after a width change? | `needs_resize_repaint(name)`, derived from `screen == "alternate"` | Daemon-driven repaint pulse once an arbitrated resize settles (`features/terminal-input.md`) |
@@ -101,7 +101,8 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | How are its past conversations found? | `conversation_discovery` | `reconcile.scan_external_transcripts`, history backfill |
 
 `AGENT_BACKENDS` is derived once in `harness.py`; session and voice code do not declare local backend sets.
-Provider-account and external-usage iteration derives from independent descriptor capabilities, because a managed harness can report both through its native transcript without exposing mux-managed accounts.
+Provider-account iteration derives from its descriptor capability.
+Historical usage source discovery belongs to the independent ccusage collector and is not a harness capability.
 Direct `claude` and `codex` branches remain only where provider data shapes, parser records, authentication, argv, or resume behavior differ.
 Adapter construction, shim generation, and launcher dispatch derive from the registry and each descriptor's adapter family.
 Executable and argument overrides live in the per-harness `harness_exe` and `harness_args` configuration maps.
@@ -176,7 +177,7 @@ The descriptor is the source of truth for all generic surfaces.
   A probe it cannot offer is declared `None`, which excludes it from that tier by derivation rather than by a skip inside the test: pi ships no subagent tool, so it declares no subagent probe.
 - Every harness declares `conversation_discovery`: how mux finds conversations it wrote outside mux, either a filesystem layout under its data home or a store query.
   `None` is a permitted answer and states that mux does not index its past conversations; what is not permitted is leaving the question unanswered, which is how three harnesses came to be silently undiscoverable.
-- Every harness declares automation evidence, tool-catalog provenance, and whether historical usage needs an external command.
+- Every harness declares automation evidence and tool-catalog provenance.
 - Add the harness name to the closed `Backend` literal and handle every new `assert_never` failure explicitly.
 - Add provider-specific branches only for real differences in record schema, auth, argv, resume, or TUI behavior, and only in a module `tests/test_harness_name_literals.py` allow-lists with the exhaustive dispatch that anchors it.
 - Regenerate the browser seed (`packaging/generate_frontend_registry.py`) and verify the public registry payload and the launchable-harness frontend contract before enabling richer levels.
@@ -326,7 +327,8 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   exact native token/cache/cost measurements, and the active branch's provider-to-account-hash
   credential pins into live and historical session summaries.
   The account hashes are OMP's pseudonymous SHA-256 values and remain linkable.
-  OMP deliberately declares neither provider-account management nor an external usage command.
+  OMP deliberately declares no provider-account management.
+  Historical ccusage source discovery is independent of this descriptor.
   The descriptor publishes its documented 31 built-in tools and labels the 16 discoverable tools
   that mount under `xd://` when xdev is enabled.
   `read`, `write`, the other essential tools, and the four integration-sensitive discoverable

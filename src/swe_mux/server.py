@@ -2686,14 +2686,66 @@ async def automation_firings(request: web.Request) -> web.Response:
     )
 
 
+async def _annotation_session_run_ids(app: web.Application, session_id: str) -> list[str]:
+    """Every agent-run id belonging to one session, live run plus its history.
+
+    A session filter on the Findings surface matches these ids against the
+    annotations' ``agent_run_id`` column, because that column is the only anchor
+    every run-scoped detector writes (the ``session_id`` column is populated by
+    one detector alone). The live record carries the current run; superseded runs
+    (a ``/clear`` mints a fresh one) live in history, so both are unioned.
+    """
+    run_ids: set[str] = set()
+    live = app["sessions"].sessions.get(session_id)
+    if live is not None:
+        current = str(getattr(live.record, "agent_run_id", "") or "")
+        if current:
+            run_ids.add(current)
+    for row in await app["history"].agent_runs_for_session(session_id):
+        run_id = str(row.get("agent_run_id") or "")
+        if run_id:
+            run_ids.add(run_id)
+    return sorted(run_ids)
+
+
 async def list_annotations(request: web.Request) -> web.Response:
+    """Findings read: annotations filtered by tag, project, session, run, and time.
+
+    Extends the original run/tag read rather than forking a second endpoint. A
+    ``session_id`` is resolved to the session's run-id set (see
+    ``_annotation_session_run_ids``); ``tag_counts`` reports per-tag totals in the
+    same scope but ignores the tag chip, so the human surface can tell a quiet
+    scope from a filtered one.
+    """
+    store = request.app["automation_store"]
+    query = request.query
+    agent_run_id = query.get("agent_run_id")
+    project_id = query.get("project_id")
+    tag = query.get("tag")
+    raw_since = query.get("since")
+    since = float(raw_since) if raw_since not in (None, "") else None
+    session_id = query.get("session_id")
+    agent_run_ids = (
+        await _annotation_session_run_ids(request.app, session_id)
+        if session_id
+        else None
+    )
     return json_response(
         {
-            "items": await request.app["automation_store"].annotations(
-                agent_run_id=request.query.get("agent_run_id"),
-                tag=request.query.get("tag"),
-                limit=int(request.query.get("limit", 200)),
-            )
+            "items": await store.annotations(
+                agent_run_id=agent_run_id,
+                agent_run_ids=agent_run_ids,
+                project_id=project_id,
+                tag=tag,
+                since=since,
+                limit=int(query.get("limit", 200)),
+            ),
+            "tag_counts": await store.annotation_tag_counts(
+                agent_run_id=agent_run_id,
+                agent_run_ids=agent_run_ids,
+                project_id=project_id,
+                since=since,
+            ),
         }
     )
 
@@ -8844,8 +8896,7 @@ async def get_usage(request: web.Request) -> web.Response:
 
 async def refresh_usage(request: web.Request) -> web.Response:
     usage: UsageManager = request.app["usage"]
-    body = await request.json() if request.can_read_body else {}
-    return json_response(await usage.refresh(body.get("provider")))
+    return json_response(await usage.refresh())
 
 
 async def clear_usage_cache(request: web.Request) -> web.Response:

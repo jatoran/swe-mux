@@ -46,6 +46,7 @@ import json
 import logging
 import math
 import secrets
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,9 @@ from typing import Any
 from .clipboard_store import looks_like_secret
 from .deterministic_consumers import (
     CLAIM_PATTERN,
+    PROJECT_FACT_WINDOW_SECONDS,
+    build_doc_debt_map,
+    build_doc_ownership,
     build_provenance_edges,
     detect_declared_vs_verified,
     normalize_target,
@@ -139,6 +143,10 @@ MEMORY_TOOL_AUTOMATION = {
     "verified_status": "declared_vs_verified",
     "dead_ends": "dead_end_memory",
     "prior_resolutions": "prior_resolutions",
+    # `doc_debt` reads the same doc-ownership substrate the `doc-debt` detector
+    # writes, so it is gated on that detector's own per-Project opt-in rather
+    # than a new consumer id.
+    "doc_debt": "doc_debt",
 }
 
 #: The `project` argument, identical on every tool that has one. Written once so
@@ -1028,6 +1036,27 @@ TOOLS: list[dict[str, Any]] = [
                         "against; omit for every dead end in scope"
                     ),
                 },
+                "project": _PROJECT_ARG,
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "doc_debt",
+        "description": (
+            "Which docs owe an update for the source files this Project changed "
+            "recently? Returns {doc, changed_files} pairs re-derived from each "
+            "doc's 'Key files' section: a doc that lists a changed source file "
+            "owes an update, unless that doc was itself edited in the same window. "
+            "Blind spot: a source file no doc lists in a 'Key files' section owns "
+            "no doc, so an empty result is not proof the docs are current - it can "
+            "also mean the changed files are undocumented. Defaults to your own "
+            'Project; pass project:"fleet" or a Project name to widen. Needs the '
+            "Doc-debt ledger automation enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
                 "project": _PROJECT_ARG,
             },
             "additionalProperties": False,
@@ -3065,6 +3094,51 @@ class McpService:
             **self._scope_envelope(scope),
         }
 
+    async def doc_debt(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.docDebt()`: which docs owe an update for recent source changes.
+
+        Re-derived from each doc's "Key files" section (`build_doc_ownership`
+        inverted to `doc -> changed files`), never scraped from the doc-debt
+        annotation, whose `content` is a human sentence and whose flat lists carry
+        no per-doc mapping. Same window and rules as the detector that writes the
+        annotation: a 24h Project fact window, and a doc edited inside it is not
+        counted, because the debt was paid as it was incurred.
+        """
+        scope, projects, disabled, _truncated = await self._memory_scope(
+            caller, args, "doc_debt"
+        )
+        since = time.time() - PROJECT_FACT_WINDOW_SECONDS
+        results: list[dict[str, Any]] = []
+        for project in projects:
+            root = str(project.root)
+            ownership = await asyncio.to_thread(
+                build_doc_ownership, Path(root) / ".docs"
+            )
+            if not ownership:
+                continue
+            facts = await self.tier0.facts_for_project(str(project.id), since=since)
+            per_doc = build_doc_debt_map(facts, ownership, project_root=root)
+            for doc, changed in per_doc.items():
+                results.append(
+                    {
+                        "doc": doc,
+                        "changed_files": list(changed[:MEMORY_MAX_RESULTS]),
+                        "project_id": str(project.id),
+                    }
+                )
+        results.sort(key=lambda item: len(item.get("changed_files") or []), reverse=True)
+        self._record_memory_outcome("doc_debt", returned=len(results), suppressed=0)
+        return {
+            "docs": results[:MEMORY_MAX_RESULTS],
+            "note": (
+                "Each doc owes an update for the listed changed files. Empty is "
+                "not proof the docs are current: a file no doc lists in a 'Key "
+                "files' section owns no doc and produces no debt."
+            ),
+            **self._disabled_note(disabled, "doc_debt"),
+            **self._scope_envelope(scope),
+        }
+
     # ----------------------------------------------------------- write tools
 
     def _messaging(self) -> Any:
@@ -3241,6 +3315,7 @@ class McpService:
             "verified_status": self.verified_status,
             "prior_resolutions": self.prior_resolutions,
             "dead_ends": self.dead_ends,
+            "doc_debt": self.doc_debt,
             "notify": self.notify,
             "request_spawn": self.request_spawn,
             "run_action": self.run_action,
