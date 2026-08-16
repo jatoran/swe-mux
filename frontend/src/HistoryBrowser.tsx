@@ -39,7 +39,7 @@ type TranscriptMessage={role:'user'|'assistant';ts?:string;content:TranscriptCon
 type Transcript={entry:HistoryEntry;messages:TranscriptMessage[];annotations:DerivedAnnotation[];matches:HistoryMatch[]}
 type LineageEdge={id:string;parent_run_id:string;child_run_id:string;relation:string;created_at:number}
 type HistoryPage={items:HistoryEntry[];next_cursor:string|null}
-type HistoryProject={project_id:string|null;label:string;root?:string;sessions:number;last_activity:number}
+type HistoryProject={project_id:string|null;label:string;root?:string;removed_at?:number;sessions:number;last_activity:number}
 type BackfillJob={
   id:string;project_id:string;project_name:string;status:string;phase:string;scanned:number;total:number;processed:number
   discovered:number;indexed:number;indexed_messages:number;unchanged:number;ambiguous:number;unreadable:number
@@ -179,7 +179,8 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
       const key=entry.project_id||null
       const known=historyProjects.find(item=>item.project_id===key)
       const configured=projects.find(item=>item.id===key)
-      const group=groups.get(key)||{label:known?.label||configured?.name||entry.project_label||'Unassigned',entries:[]}
+      const baseLabel=known?.label||configured?.name||entry.project_label||'Unassigned'
+      const group=groups.get(key)||{label:known?.removed_at?`${baseLabel} (removed)`:baseLabel,entries:[]}
       group.entries.push(entry);groups.set(key,group)
     }
     return [...groups.entries()]

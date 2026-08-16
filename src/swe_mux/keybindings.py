@@ -60,7 +60,7 @@ KEYBINDING_COMMANDS = (
     ("project.newTerminalCustom", "New custom terminal in selected project", "project"),
     ("project.rename", "Rename selected project", "project"),
     ("project.settings", "Open selected project settings", "project"),
-    ("project.delete", "Delete selected project", "project"),
+    ("project.delete", "Remove selected project from swe-mux", "project"),
     ("project.files", "Browse selected project files", "project"),
     ("pane.splitHorizontal", "Split focused pane right", "pane"),
     ("pane.splitVertical", "Split focused pane below", "pane"),

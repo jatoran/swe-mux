@@ -57,6 +57,9 @@
   General `last_activity` remains derived per request from `history` and is not a recency-sort input.
   `projects.git_compare_ref` is a nullable exact ref override for Git review display, migrated additively for existing databases and preserved by unrelated Project patches.
   It is intentionally outside `.swe-mux/config.toml`, so changing the display comparison does not dirty the repository.
+  `projects.deleted_at` is nullable.
+  Active registry reads exclude rows with a deletion timestamp, while History joins retain them as stable ownership tombstones.
+  Re-registering the same canonical root clears `deleted_at` instead of allocating a new Project ID.
 - `history`: durable agent-run lifecycle, canonical `project_id`, legacy terminal `note_id`
   retained for note migration provenance,
   native identity, transcript pointer, derived Git metadata, context/model telemetry, explicit
@@ -67,7 +70,7 @@
   The uniqueness key is `(session_id, agent_run_id, worktree_root, commit_oid)` with shell runs represented by the empty run id.
   An internal evidence rank permits only equal or stronger observations to replace classification fields while preserving the earliest observation time.
   Explicit transcript backfills use the same ranked upsert in batches of at most 1,000 rows, so rerunning an import cannot duplicate or weaken existing live evidence.
-  Project deletion removes Project rows, and explicit History-entry deletion removes rows for that agent run.
+  Project removal retains Project and provenance rows as a tombstoned historical identity, and explicit History-entry deletion removes rows for that agent run.
 - `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
   `history_messages_fts` provides Unicode token-prefix lookup and `history_messages_trigram` provides case-insensitive literal substring lookup.
   Both FTS5 tables are external-content derivatives of `history_messages` and stay synchronized by triggers.

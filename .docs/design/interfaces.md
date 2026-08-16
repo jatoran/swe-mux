@@ -118,18 +118,22 @@ PATCH  /project-groups/{group_id}   {name?, position?}
 DELETE /project-groups/{group_id}
 ```
 
-Project payloads add `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), and derived `last_activity`
-(latest session activity from history), all as epoch seconds with `0` when unknown.
+Project payloads add `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
+Time fields use epoch seconds with `0` when unknown.
 `POST /projects/{project_id}/used` advances `last_used_at` monotonically and emits `project_used {project_id, last_used_at, reason}` so connected clients converge without sharing browser storage.
 Both order endpoints demand a
 complete permutation plus the `expected_order` the client last saw, answering `409` with
 `{"code": "order_conflict"}` when another device already moved something.
 
-Project creation rejects duplicate canonical roots and an empty root, and initializes
+Project creation rejects duplicate active canonical roots and an empty root, and initializes
 `.swe-mux/`. `create_missing` makes exactly one folder: the parent must already exist, an
 already-present folder is accepted, and the duplicate/group checks run first so a rejected
-request leaves no stray directory. Project deletion rejects any live or historical session
-reference. Deleting a Group ungroups its Projects.
+request leaves no stray directory.
+When the canonical root belongs to a removed Project, creation restores the original Project ID and responds with HTTP 200 plus `restored=true`; a new identity responds with HTTP 201 and `restored=false`.
+Project removal tombstones the registration, preserves History and disk contents, and returns the number of preserved history rows.
+Only live sessions block removal; the HTTP 409 response carries `code=project_has_live_sessions` and a bounded identity list.
+Project and note read paths never recreate a missing canonical root.
+Deleting a Group ungroups its Projects.
 
 ```text
 POST /projects/{project_id}/init-scripts/run   {script_ids}

@@ -474,7 +474,6 @@ export function App() {
   const [zoomedId, setZoomedId] = useState<string | null>(null)
   const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
-  const [confirmProjectDeleteId, setConfirmProjectDeleteId] = useState<string | null>(null)
   const [confirmHideId, setConfirmHideId] = useState<string | null>(null)
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => loadCollapsedProjects(localStorage.getItem(COLLAPSED_PROJECTS_KEY)))
   const [mainMenuOpen, setMainMenuOpen] = useState(false)
@@ -2791,10 +2790,23 @@ export function App() {
     }
   }
 
-  const deleteProject = async (project: Project) => {
+  const removeProject = async (project: Project, closeLive: boolean) => {
+    if(closeLive){
+      const liveSessions=sessions.filter(session=>session.project_id===project.id&&!isEndedSession(session))
+      for(const session of liveSessions)pendingKills.current[session.id]={sessionId:session.id,projectId:project.id,startedAt:Date.now()}
+      setSessions(items=>applyKillTombstones(items,pendingKills.current))
+      try{
+        await Promise.all(liveSessions.map(session=>deleteSessionOnce(session.id)))
+      }finally{
+        for(const session of liveSessions)delete pendingKills.current[session.id]
+      }
+      let layout=layoutValues.current[project.id]||parseLayout(project.layout)
+      for(const session of liveSessions)layout=removeLeaf(layout,'terminal',session.id)
+      for(const leaf of leaves(layout,'preview'))layout=removeLeaf(layout,'preview',leaf.id)
+      await updateLayout(project.id,layout)
+    }
     await api('DELETE', `/api/projects/${project.id}`)
     setProjects(items => items.filter(item => item.id !== project.id))
-    setConfirmProjectDeleteId(null)
     if (projectId === project.id) setProjectId(projects.find(item=>item.id!==project.id)?.id||'')
   }
 
@@ -4099,7 +4111,7 @@ export function App() {
     { id:'project.moveUp',label:'Move selected Project up',category:'project',available:!!commandProject&&displayProjects.filter(item=>groupIdFor(item)===groupIdFor(commandProject))[0]?.id!==commandProject.id,disabledReason:'Project is already first here',run:()=>commandProject&&moveProjectRelative(commandProject,-1) },
     { id:'project.moveDown',label:'Move selected Project down',category:'project',available:!!commandProject&&displayProjects.filter(item=>groupIdFor(item)===groupIdFor(commandProject)).at(-1)?.id!==commandProject.id,disabledReason:'Project is already last here',run:()=>commandProject&&moveProjectRelative(commandProject,1) },
     { id: 'project.settings', label: 'Open selected project settings', category: 'project', available: !!commandProject, disabledReason: 'No project selected', run: () => commandProject && openProjectsManager({ project: commandProject, tab: 'settings' }) },
-    { id: 'project.delete', label: 'Delete selected project…', category: 'project', available: !!commandProject&&!sessions.some(session=>session.project_id===commandProject.id), disabledReason: 'Remove this project’s sessions first', run: () => { if (commandProject) { setConfirmProjectDeleteId(commandProject.id); setProjectMenu(current => current || { project: commandProject, x: innerWidth / 2, y: innerHeight / 2 }) } } },
+    { id: 'project.delete', label: 'Remove selected Project from swe-mux…', category: 'project', available: !!commandProject, disabledReason: 'No Project selected', run: () => commandProject&&openProjectsManager({project:commandProject,tab:'details'}) },
     ...unpanned.map((session): Command => ({
       id: `session.attach(${session.id})`, label: `Attach live session: ${sessionName(session)}`, category: 'pane', available: true,
       run: () => { setActiveId(session.id); setEmptyMenu(null); void updateLayout(projectId, replaceTerminal(activeLayout, activeId, session.id)) },
@@ -5314,12 +5326,7 @@ export function App() {
       <button disabled={!commands.find(item=>item.id==='project.moveUp')?.available} onClick={()=>runNamedCommand('project.moveUp')}>Move Project up</button>
       <button disabled={!commands.find(item=>item.id==='project.moveDown')?.available} onClick={()=>runNamedCommand('project.moveDown')}>Move Project down</button>
       <button onClick={() => runNamedCommand('project.settings')}>Project settings…</button>
-      {confirmProjectDeleteId !== projectMenu.project.id && <button class="danger" disabled={sessions.some(session=>session.project_id===projectMenu.project.id)} onClick={() => runNamedCommand('project.delete')}>Delete project…</button>}
-      {confirmProjectDeleteId === projectMenu.project.id && <>
-        <div class="context-subtitle">DELETE PROJECT REGISTRATION</div>
-        <button class="danger" onClick={() => { const target = projectMenu.project; setProjectMenu(null); void deleteProject(target) }}>Confirm delete</button>
-        <button onClick={() => setConfirmProjectDeleteId(null)}>Cancel</button>
-      </>}
+      <button class="danger" onClick={() => runNamedCommand('project.delete')}>Remove from swe-mux…</button>
     </div>}
 
     {sidebarMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sidebar actions" style={{left:clampContextMenuLeft(sidebarMenu.x,innerWidth),top:Math.max(4,Math.min(sidebarMenu.y,innerHeight-300))}}>
@@ -5462,7 +5469,7 @@ export function App() {
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
-    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNotes={project=>{setProjectsManagerOpen(false);openNotesBrowser(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onDelete={deleteProject}/>}
+    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialTab={projectsManagerFocus?.tab} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onNotes={project=>{setProjectsManagerOpen(false);openNotesBrowser(project)}} onFiles={project=>{setProjectsManagerOpen(false);openProjectFiles(project)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 
     {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
       <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>

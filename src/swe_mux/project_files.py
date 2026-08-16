@@ -250,7 +250,10 @@ def note_path(root: str | Path, identity: str) -> Path:
 
 def ensure_project_notes_ignored(root: str | Path) -> Path:
     """Keep all Project-owned note storage out of Git."""
-    notes_root = Path(root).resolve() / ".swe-mux" / "notes"
+    project_root = Path(root).resolve()
+    if not project_root.is_dir():
+        raise FileNotFoundError(f"Project folder is unavailable: {project_root}")
+    notes_root = project_root / ".swe-mux" / "notes"
     notes_root.mkdir(parents=True, exist_ok=True)
     if notes_root.is_symlink() or not notes_root.is_dir():
         raise ValueError("Project note storage path is unsafe")
@@ -410,6 +413,8 @@ def migrate_legacy_notes(
     moved into the recoverable ``notes/legacy`` tree after the new file is durable.
     """
     project_root = Path(root).resolve()
+    if not project_root.is_dir():
+        return {"migrated": 0, "archived_empty": 0}
     ensure_project_notes_ignored(project_root)
     legacy_dir = project_root / ".swe-mux" / "notes" / "sessions"
     titles = legacy_titles or {}

@@ -198,3 +198,16 @@ def test_listing_includes_explicit_empty_notes(tmp_path: Path) -> None:
     )
 
     assert [(item["title"], item["excerpt"]) for item in summaries] == [("Empty note", "")]
+
+
+def test_listing_notes_does_not_recreate_a_missing_project_root(tmp_path: Path) -> None:
+    root = tmp_path / "removed-project"
+
+    summaries = project_note_summaries(
+        root,
+        default_note_id="project-id",
+        default_title="Removed notes",
+    )
+
+    assert summaries == []
+    assert not root.exists()
