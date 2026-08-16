@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  edgeAutoScrollDelta, insertionEdge, listDropTargetForPoint, MOBILE_PROJECT_HOLD_DRAG,
-  POINTER_MOVE_DRAG, pointerDragMoveDecision, reorderForHover, reorderTargetForPoint,
+  edgeAutoScrollDelta, insertionEdge, listDropTargetForPoint, MOBILE_HOLD_MOVE_DRAG,
+  MOBILE_PROJECT_HOLD_DRAG, POINTER_MOVE_DRAG, pointerDragMoveDecision, reorderForHover,
+  reorderTargetForPoint,
 } from '../src/dragReorder.ts'
 
 test('movement drag activates only after its threshold', () => {
@@ -14,6 +15,16 @@ test('mobile Project hold tolerates jitter but yields to scrolling movement', ()
   assert.equal(MOBILE_PROJECT_HOLD_DRAG.delayMs, 325)
   assert.equal(pointerDragMoveDecision(MOBILE_PROJECT_HOLD_DRAG, 8), 'wait')
   assert.equal(pointerDragMoveDecision(MOBILE_PROJECT_HOLD_DRAG, 8.01), 'cancel')
+})
+
+test('mobile hold-move arms before the menu and shares the hold slop', () => {
+  // Must settle well before the 550ms long-press menu, or the menu could never win a
+  // still hold. The pure decision only reports the slop gate; the driver time-gates the
+  // actual activate, so a past-slop distance still reads as `cancel` here.
+  assert.equal(MOBILE_HOLD_MOVE_DRAG.mode, 'hold-move')
+  if (MOBILE_HOLD_MOVE_DRAG.mode === 'hold-move') assert.ok(MOBILE_HOLD_MOVE_DRAG.delayMs < 550)
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_MOVE_DRAG, 8), 'wait')
+  assert.equal(pointerDragMoveDecision(MOBILE_HOLD_MOVE_DRAG, 8.01), 'cancel')
 })
 
 test('edge auto-scroll accelerates toward either edge and stops in the middle', () => {
@@ -79,6 +90,16 @@ test('a row that cannot be grouped with is an insertion target over its whole he
   assert.deepEqual(listDropTargetForPoint(rows,'a',65,groupable),{kind:'insert',id:'b',side:'after'})
   // The predicate only speaks for the row it rejects.
   assert.deepEqual(listDropTargetForPoint(rows,'b',20,groupable),{kind:'group',id:'a'})
+})
+
+test('grouping disabled entirely makes every row a whole-height before/after insertion', () => {
+  // The mobile session drag: a fingertip cannot aim the ~12px reorder edge of a row whose
+  // middle would otherwise group, so mobile passes an always-false predicate and the whole
+  // row splits at its midpoint into insert-before / insert-after.
+  const rows=[{id:'a',start:0,end:40},{id:'b',start:40,end:80}]
+  const never=()=>false
+  assert.deepEqual(listDropTargetForPoint(rows,'a',55,never),{kind:'insert',id:'b',side:'before'})
+  assert.deepEqual(listDropTargetForPoint(rows,'a',65,never),{kind:'insert',id:'b',side:'after'})
 })
 
 test('gaps and the space past either end of a list resolve to the nearest slot, never a group', () => {

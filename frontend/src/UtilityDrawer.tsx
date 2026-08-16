@@ -118,6 +118,9 @@ type Props = {
   /** Give it back and put it in a pane, focused. */
   onPopDrawerNoteToTab: (resourceId: string) => void
   onTabDragStart: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
+  /** Mobile only: hold-then-drag reorder of the flattened projection rail. Runs alongside
+   *  the projection's long-press menu — a still hold opens the menu, a drag reorders. */
+  onProjectionTabReorder?: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
   /** Open the drawer-tab Icons/Titles preference menu from any drawer tab. */
   onTabDisplayMenu: (x: number, y: number) => void
   /** True while a tab is being dragged, so the strip can suppress its own click. */
@@ -397,7 +400,9 @@ export function UtilityDrawer(props: Props) {
         tabIndex={id === selected ? 0 : -1}
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
         title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
-        onPointerDown={projection ? beginTabLongPress : event => props.onTabDragStart(event, id)}
+        onPointerDown={projection
+          ? event => { beginTabLongPress(event); props.onProjectionTabReorder?.(event, id) }
+          : event => props.onTabDragStart(event, id)}
         onContextMenu={event => {
           event.preventDefault()
           event.stopPropagation()
