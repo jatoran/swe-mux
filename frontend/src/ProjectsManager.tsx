@@ -5,13 +5,15 @@ import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
 import { allBackendNames, harnessDisplayName } from './harnessRegistry'
 import { useDismissLevel } from './modalFocus'
+import { ProjectPicker, type ProjectPickerOption } from './ProjectPicker'
 
 // The Projects registry is the ONLY per-Project editor. Settings holds global
 // options exclusively; anything scoped to one Project — its record and its
 // defaults — is edited here, reached from this modal or from a Project's context
 // menu. Two doors to two overlapping surfaces was the previous arrangement and it
-// left users hunting for which modal owned which field.
-export type ProjectsManagerTab = 'details' | 'settings'
+// left users hunting for which modal owned which field. The record fields and the
+// defaults share one scrolling settings surface — there is no Details/Settings
+// split, because it is all settings for the same Project.
 
 // A Project default can live in either of two layers, and users care about the
 // difference: `device` is a database override private to this machine, `repo` is
@@ -199,24 +201,20 @@ type Props = {
   sessions:Session[]
   profiles:LaunchProfile[]
   initialProjectId?:string
-  initialTab?:ProjectsManagerTab
   onClose:()=>void
   onAdd:()=>void
   onAddGroup:()=>void
   onOpen:(project:Project)=>void
-  onNotes:(project:Project)=>void
-  onFiles:(project:Project)=>void
   onPatch:(project:Project,changes:ProjectPatch)=>Promise<Project>
   onRemove:(project:Project,closeLive:boolean)=>Promise<void>
 }
 
 const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
 
-export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialTab,onClose,onAdd,onAddGroup,onOpen,onNotes,onFiles,onPatch,onRemove}:Props){
+export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,onClose,onAdd,onAddGroup,onOpen,onPatch,onRemove}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
   const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
-  const [tab,setTab]=useState<ProjectsManagerTab>(initialTab||'details')
   // List and detail sit side by side rather than drilling in, so the registry is one
   // level: back closes it, and there is no inner step to unwind first.
   useDismissLevel(onClose,true,'projects-manager')
@@ -231,6 +229,9 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   const [confirmRemove,setConfirmRemove]=useState(false)
+  // A pending switch target parked while the current Project has unsaved edits, so
+  // a fast pick (the mobile dropdown especially) cannot silently discard them.
+  const [pendingSwitch,setPendingSwitch]=useState<string|null>(null)
   const selected=projects.find(project=>project.id===selectedId)||ordered[0]||null
   const shown=ordered.filter(project=>{
     if(filter==='visible'&&!isVisible(project))return false
@@ -316,6 +317,18 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   const portableDirty=!sameDraftValue(values,savedValues)
   const dirty=detailsDirty||overridesDirty||portableDirty
 
+  // Switching Projects re-seeds every draft field, so an unsaved edit would be lost.
+  // Guard the switch when dirty; a clean switch is immediate.
+  const selectProject=(id:string)=>{
+    if(id===selectedId)return
+    if(dirty){setPendingSwitch(id);return}
+    setSelectedId(id)
+  }
+  useEffect(()=>{setPendingSwitch(null)},[selectedId])
+  const pickerOptions=useMemo<ProjectPickerOption[]>(()=>ordered.map(project=>({
+    id:project.id,name:project.name,hint:project.root,visible:isVisible(project),
+  })),[ordered])
+
   const save=async()=>{
     if(!selected||!name.trim())return
     setBusy(true);setError('')
@@ -368,18 +381,19 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
       <header><div><span>PROJECTS::REGISTRY</span><h2>Projects</h2><small>Configured Projects keep their notes, files, settings, and history even when hidden from the sidebar.</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>New group</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button><button class="icon" aria-label="Close Projects" onClick={onClose}>×</button></div></header>
       <div class="projects-manager-body">
         <aside><div class="projects-manager-filter"><input aria-label="Search projects" placeholder="Search projects…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><select aria-label="Filter projects" value={filter} onChange={event=>setFilter(event.currentTarget.value as typeof filter)}><option value="all">All</option><option value="visible">In sidebar</option><option value="hidden">Hidden</option></select></div>
-          <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>setSelectedId(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project)?'sidebar':'hidden'}</em></button>)}{!shown.length&&<p>No Projects match this view.</p>}</div>
+          <div data-tutorial="project-list" class="projects-manager-list">{shown.map(project=><button class={project.id===selected?.id?'active':''} onClick={()=>selectProject(project.id)}><span class={`project-visibility-dot ${isVisible(project)?'visible':'hidden'}`} aria-hidden="true"/><strong>{project.name}</strong><small>{project.root}</small><em>{isVisible(project)?'sidebar':'hidden'}</em></button>)}{!shown.length&&<p>No Projects match this view.</p>}</div>
         </aside>
         <main>{selected?<>
-          <div class="projects-manager-title"><div><span>PROJECT::{selected.id.slice(0,8)}</span><h3>{selected.name}</h3><small>{liveCount} live session{liveCount===1?'':'s'} · {selected.history_count||0} conversation{selected.history_count===1?'':'s'} · {selected.root_available===false?'folder missing':isVisible(selected)?'shown in sidebar':'configured, hidden from sidebar'}</small></div><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div>
-          <div class="projects-manager-actions"><button data-tutorial="open-project" class="primary" disabled={selected.root_available===false} onClick={()=>onOpen(selected)}>Open workspace</button><button disabled={selected.root_available===false} onClick={()=>onNotes(selected)}>Notes</button><button disabled={selected.root_available===false} onClick={()=>onFiles(selected)}>Files</button></div>
-          <div class="projects-manager-tabs" role="tablist" aria-label="Project record and settings">
-            <button role="tab" aria-selected={tab==='details'} class={tab==='details'?'active':''} onClick={()=>setTab('details')}>Details</button>
-            <button role="tab" aria-selected={tab==='settings'} class={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>Settings</button>
-          </div>
+          <div class="projects-manager-picker"><ProjectPicker id="projects-manager-picker" value={selected.id} options={pickerOptions} placeholder="Select a project…" onChange={selectProject}/></div>
+          {pendingSwitch&&<div class="projects-manager-switch-confirm" role="alertdialog" aria-label="Unsaved changes"><span>Discard unsaved changes to <strong>{selected.name}</strong>?</span><div><button onClick={()=>setPendingSwitch(null)}>Keep editing</button><button class="danger" onClick={()=>{const target=pendingSwitch;setPendingSwitch(null);setSelectedId(target)}}>Discard and switch</button></div></div>}
+          <div class="projects-manager-title"><div><span>PROJECT::{selected.id.slice(0,8)}</span><h3>{selected.name}</h3><small>{liveCount} live session{liveCount===1?'':'s'} · {selected.history_count||0} conversation{selected.history_count===1?'':'s'}{selected.root_available===false?' · folder missing':''}</small></div><div class="projects-manager-title-actions"><button data-tutorial="open-project" class="primary" disabled={selected.root_available===false} onClick={()=>onOpen(selected)}>Open workspace</button><button class={`sidebar-visibility-toggle ${isVisible(selected)?'active':''}`} disabled={busy} onClick={()=>void toggleVisible()}><span aria-hidden="true">{isVisible(selected)?'◉':'○'}</span>{isVisible(selected)?'Shown in sidebar':'Show in sidebar'}</button></div></div>
           <div class="projects-manager-panel">
-            {tab==='details'&&<div class="projects-manager-form"><label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label><label>Folder<input class={selected.root_available===false?'missing':''} value={selected.root} readOnly/>{selected.root_available===false&&<span class="project-folder-missing">Folder missing. swe-mux will not recreate it.</span>}</label><label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label></div>}
-            {tab==='settings'&&<div class="projects-manager-form">
+            <div class="projects-manager-form">
+              <h4 class="projects-manager-section">Identity</h4>
+              <label>Name<input value={name} onInput={event=>setName(event.currentTarget.value)}/></label>
+              <label>Folder<input class={selected.root_available===false?'missing':''} value={selected.root} readOnly/>{selected.root_available===false&&<span class="project-folder-missing">Folder missing. swe-mux will not recreate it.</span>}</label>
+              <label>Group<div><select value={groupId} onChange={event=>setGroupId(event.currentTarget.value)}><option value="">Ungrouped</option>{groups.map(group=><option value={group.id}>{group.name}</option>)}</select><button onClick={onAddGroup}>+</button></div></label>
+              <h4 class="projects-manager-section">Defaults</h4>
               <p>Blank inherits the global default. Each value is stored either on this device or in the Project's <code>.swe-mux/config.toml</code>; device wins where both are set.{config?` · .swe-mux/config.toml: ${config.status}${config.error?` · ${config.error}`:''}`:' · reading .swe-mux/config.toml…'}</p>
               <div class="project-setting">
                 <label><span class="project-setting-name">Default backend{backendValue&&<em class="project-setting-chip">{backendLayer==='repo'?'repo':'device'}</em>}</span>
@@ -399,6 +413,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
                 </label>
                 {layerRow(agentProfileLayer(backend),layer=>setAgentProfile(backend,agentProfileValue(backend),layer),!!agentProfileValue(backend))}
               </div>)}
+              <h4 class="projects-manager-section">Repository options</h4>
               <label><span class="project-setting-name">Prompt library scope<em class="project-setting-chip">repo</em></span>
                 <select value={values.prompt_library_scope||''} disabled={busy||!config} onChange={event=>setValues(current=>({...current,prompt_library_scope:(event.currentTarget.value||undefined) as PromptLibraryScope|undefined}))}><option value="">Inherit ({SCOPE_LABELS[effective?.prompt_library_scope||'both']})</option>{(Object.keys(SCOPE_LABELS) as PromptLibraryScope[]).map(scope=><option value={scope}>{SCOPE_LABELS[scope]}</option>)}</select>
               </label>
@@ -416,7 +431,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
               </section>
               <div><button disabled={busy||!config} onClick={()=>setValues({})}>Reset repo options to inherited</button></div>
               <AutomationOptIns project={selected} busy={busy} onError={setError} />
-            </div>}
+            </div>
           </div>
           {confirmRemove&&<section class="project-removal-summary" aria-label="Remove Project confirmation">
             <h4>Remove {selected.name} from swe-mux?</h4>
