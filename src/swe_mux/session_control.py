@@ -66,6 +66,9 @@ class SessionControlService:
         interrupt_op: Callable[[Any], Awaitable[None]],
         graceful_end_op: Callable[[Any, str], Awaitable[dict[str, Any]]],
         is_daemon_owner: Callable[[Any], bool],
+        spawn_grant_field: Callable[[str], str] | None = None,
+        spawn_op: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
+        draft_spawn: Any = None,
         append_observation: Any = None,
         read_observations: Any = None,
         clock: Callable[[], float] = time.time,
@@ -80,6 +83,12 @@ class SessionControlService:
         self._interrupt_op = interrupt_op
         self._graceful_end_op = graceful_end_op
         self._is_daemon_owner = is_daemon_owner
+        # Spawn (the Phase 7.6 follow-on). `draft_spawn` is the Phase 5 inert-
+        # request producer this falls back to; `spawn_op` creates a session
+        # directly on the granted path.
+        self._spawn_grant_field = spawn_grant_field
+        self._spawn_op = spawn_op
+        self._draft_spawn = draft_spawn
         self._append_observation = append_observation
         self._read_observations = read_observations
         self._clock = clock
@@ -126,6 +135,189 @@ class SessionControlService:
             correlation_id=correlation_id,
             project=project,
         )
+
+    async def spawn(
+        self,
+        caller: Any,
+        *,
+        prompt: str,
+        backend: str = "",
+        name: str = "",
+        reason: str = "",
+        correlation_id: str | None = None,
+        project: str = "",
+    ) -> dict[str, Any]:
+        """Create a session, or draft the request, per the target Project's grant.
+
+        Authority is by target Project, like interrupt and end: a Project's
+        `spawn_grant` of "granted" (with the `session_control` automation on) lets
+        an agent create a session in it directly, inside a per-origin budget;
+        anything else keeps the Phase 5 behaviour of an inert Fleet Queue request a
+        human approves. The `project` argument names the target Project, defaulting
+        to the caller's own; an agent can spawn into any registered Project that
+        granted it.
+        """
+        if not self.config.request_spawn_enabled:
+            raise QueueError(
+                "request_spawn_disabled",
+                "drafted spawn requests are disabled on this mux install",
+                status=403,
+            )
+        text = str(prompt or "").strip()
+        if not text:
+            raise QueueError("invalid_body", "prompt must not be empty", status=400)
+        if backend and not is_agent_harness(backend):
+            raise QueueError(
+                "invalid_backend", "backend must be a registered agent", status=400
+            )
+        correlation = str(correlation_id or "").strip()
+        if correlation and correlation in self._idempotency:
+            return self._idempotency[correlation]
+        scope = resolve_project_scope(project, caller.record, self.projects)
+        if scope.fleet:
+            raise QueueError(
+                "invalid_project",
+                "a spawn belongs to one Project; name the Project the session "
+                'should start in rather than passing "fleet"',
+                status=400,
+            )
+        project_id = scope.project_id or str(caller.record.project_id or "")
+        target_project = (
+            self.projects.projects.get(project_id) if project_id else None
+        )
+        if target_project is None:
+            raise QueueError(
+                "no_project", "your session is not registered to a Project", status=409
+            )
+        grant = await self._resolve_spawn_grant(str(target_project.root))
+        if grant != "granted":
+            result = await self._draft_spawn_request(
+                caller, prompt=text, backend=backend, name=name, reason=reason,
+                project=project,
+            )
+        else:
+            result = await self._spawn_now(
+                caller, target_project, prompt=text, backend=backend, name=name,
+                reason=reason,
+            )
+        if correlation:
+            result = {**result, "correlation_id": correlation}
+            self._idempotency[correlation] = result
+        return result
+
+    async def _draft_spawn_request(
+        self, caller: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        if self._draft_spawn is None:
+            raise QueueError(
+                "request_spawn_unavailable",
+                "spawn request storage is unavailable",
+                status=503,
+            )
+        return dict(await self._draft_spawn(caller, **kwargs))
+
+    async def _spawn_now(
+        self,
+        caller: Any,
+        target_project: Any,
+        *,
+        prompt: str,
+        backend: str,
+        name: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        if self._spawn_op is None:
+            raise QueueError(
+                "spawn_unavailable",
+                "this daemon cannot spawn a session directly",
+                status=503,
+            )
+        self._enforce_spawn_budget(caller)
+        resolved_backend = backend or str(getattr(caller.record, "backend", "") or "")
+        body: dict[str, Any] = {
+            "project_id": str(target_project.id),
+            "backend": resolved_backend,
+            "seed_text": prompt,
+        }
+        label = str(name or "").strip()[:80]
+        if label:
+            body["name"] = label
+        session = await self._spawn_op(body)
+        self._recent.append(
+            _ControlAction(
+                origin_session=str(caller.record.id),
+                target_session=str(session.record.id),
+                kind="spawn",
+                at=self._clock(),
+            )
+        )
+        await self.events.emit(
+            "agent_session_control",
+            session_id=str(caller.record.id),
+            source="agent",
+            action="spawn",
+            outcome="spawned",
+            target_session_id=str(session.record.id),
+            target_name=str(session.record.name),
+            origin_run_id=str(getattr(caller.record, "agent_run_id", "") or ""),
+            project_id=str(target_project.id),
+            reason=str(reason or "")[:500],
+        )
+        cross_project = str(target_project.id) != str(caller.record.project_id or "")
+        return {
+            "status": "spawned",
+            "grant": "granted",
+            "session_id": str(session.record.id),
+            "name": str(session.record.name),
+            "backend": str(session.record.backend),
+            "project_id": str(target_project.id),
+            "project_name": str(target_project.name),
+            "cross_project": cross_project,
+            "note": (
+                "A live session was created and seeded with your prompt. Watch it "
+                "with get_session / read_transcript, and end it with end_session "
+                "when its work is done."
+            ),
+        }
+
+    async def _resolve_spawn_grant(self, root: str) -> str:
+        """off / draft / granted for spawning into a Project root.
+
+        "off" collapses into "draft" here: without the `session_control`
+        automation the Phase 5 inert-request path is exactly the desired default,
+        so there is no separate refusal - a spawn always has the draft to fall back
+        on, unlike interrupt/end which have nothing to do when disabled.
+        """
+        if not root or self._spawn_grant_field is None:
+            return "draft"
+        enabled = await self._automation_gate(root)
+        if "session_control" not in enabled:
+            return "draft"
+        return self._spawn_grant_field(root)
+
+    def _enforce_spawn_budget(self, caller: Any) -> None:
+        budget = int(self.config.agent_spawn_hourly_budget)
+        if budget <= 0:
+            raise QueueError(
+                "origin_budget_exhausted",
+                "this install allows no agent-initiated spawns",
+                status=429,
+            )
+        cutoff = self._clock() - _BUDGET_WINDOW_SECONDS
+        used = sum(
+            1
+            for action in self._recent
+            if action.kind == "spawn"
+            and action.origin_session == str(caller.record.id)
+            and action.at >= cutoff
+        )
+        if used >= budget:
+            raise QueueError(
+                "origin_budget_exhausted",
+                f"this session has spawned {used} sessions in the last hour "
+                f"(limit {budget})",
+                status=429,
+            )
 
     # --------------------------------------------------------------- guts
 
@@ -378,7 +570,9 @@ class SessionControlService:
         used = sum(
             1
             for action in self._recent
-            if action.origin_session == str(caller.record.id) and action.at >= cutoff
+            if action.kind != "spawn"
+            and action.origin_session == str(caller.record.id)
+            and action.at >= cutoff
         )
         if used >= budget:
             raise QueueError(

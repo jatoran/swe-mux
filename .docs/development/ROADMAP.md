@@ -2123,14 +2123,18 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
   fan-out; the answer is a bounded standing grant with a budget and an audit trail, not a
   permanently different mechanism for a capability the user wants exposed. If the grant model
   proves out for interrupt/end, `request_spawn` gains the same `granted` position with its
-  own budget; if it does not, spawn stays drafted and so do these. (Resolved to the
-  "or not at all" branch for now: the grant machinery is proven and shipped for interrupt/end,
-  but spawn's blast radius - one injection into unbounded fan-out - is categorically larger
-  than a single interrupt or end, so the `granted` position is deliberately not extended to
-  `request_spawn` in this phase. It continues to draft only. The mechanism it would reuse -
-  the per-Project three-position grant, the per-origin budget, the audit event - now exists in
-  `SessionControlService`, so adding a `spawn_grant` later is a bounded follow-on rather than a
-  new design.)
+  own budget; if it does not, spawn stays drafted and so do these. (Implemented 2026-08-16 on
+  user request: `request_spawn` now takes the `granted` position through the same
+  `SessionControlService`. A new per-Project `spawn_grant` config field ("draft"|"granted",
+  default "draft"), gated by the same `session_control` automation, decides whether an agent
+  creates a session in a Project directly or drafts the Phase 5 inert request. Authority is by
+  target Project, exactly as for interrupt/end, so an agent can spawn into any registered
+  Project that granted it - the flow "a swe-mux session spins up and later ends a Continuity
+  session" works when both Projects grant it. Bounded by a dedicated per-origin
+  `agent_spawn_hourly_budget` (default 10, smaller than the interrupt/end budget because spawn's
+  blast radius is larger), idempotency, and an `agent_session_control` audit event with
+  `action:"spawn"`. The default everywhere stays the inert draft, so nothing spawns directly
+  until an operator raises a Project's grant.)
 - [x] Bound the granted path with the machinery `agent_messaging.py` already proves: Project
   scope, live-agent-only targets, per-origin budget, chain depth and cycle detection over the
   recorded path (A interrupting B while B interrupts A is a loop), idempotency keys, typed
@@ -2434,13 +2438,13 @@ failure behavior:
   boundary.
 - Autonomous agent-to-agent routing beyond Phase 5 user-authored/user-approved/`mux.notify`
   messages and bounded deterministic templates.
-- Agent-held spawn authority. Phase 5 ships `mux.requestSpawn` as a **draft producer** only
-  (`CONTROL_PLANE_ROADMAP.md` §7.2, §16); letting a tool call actually create a session
-  without human approval remains a separate product decision, because it converts one prompt
-  injection into unbounded fan-out. **This one now has a deciding vehicle rather than an open
-  end:** Phase 7.6 introduces the per-Project three-position authority grant
-  (`off`/`draft`/`granted`) for agent session control, and the spawn decision is made there,
-  under the same budget and audit trail, or not at all.
+- ~~Agent-held spawn authority.~~ **Decided and implemented (2026-08-16).** Phase 5 shipped
+  `mux.requestSpawn` as a draft producer only; the Phase 7.6 per-Project authority grant
+  became its deciding vehicle, and the grant now covers spawn. A Project's `spawn_grant`
+  (`draft` default, `granted`) lets an agent create a session in it directly, gated by the
+  `session_control` automation, capped by `agent_spawn_hourly_budget`, audited, and target-
+  Project-scoped like interrupt/end. The default stays the inert draft, so this is opt-in per
+  Project (`design/features/mux-mcp.md`, ROADMAP Phase 7.6).
 - Automatic termination of suspected orphan processes. Agent-initiated termination of a
   *session* is a different question and is scheduled in Phase 7.6; this entry remains about
   the daemon acting on processes it merely suspects are orphaned.

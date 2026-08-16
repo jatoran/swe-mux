@@ -244,6 +244,11 @@
   `session_control_grant` field (`"draft"` | `"granted"`, default `"draft"`) that sets the
   authority of the Phase 7.6 `interrupt`/`end_session` tools once the `session_control`
   automation is opted in - read by `project_session_control_grant()`, and never machine-wide.
+  A sibling `spawn_grant` field (same values, same default, same automation gate, read by
+  `project_spawn_grant()`) sets whether `mux.requestSpawn` creates a session in this Project
+  directly (`granted`) or writes the Phase 5 inert draft (`draft`); authority is by target
+  Project, so an agent spawns into a Project the operator granted. The install caps the granted
+  path with `agent_spawn_hourly_budget` (default 10).
   Legacy `resource_open_mode` input remains parseable for compatibility but is omitted from current
   effective/public options.
 - `<project>/.swe-mux/observations.json`: the Project's capture inbox — a bounded list of

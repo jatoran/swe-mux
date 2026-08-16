@@ -207,12 +207,22 @@ operator's.
   approval is what acts. `granted` acts directly, inside bounds. The draft/granted split is the
   `.swe-mux/config.toml` field `session_control_grant` (`"draft"` | `"granted"`, default
   `"draft"`), read by `project_session_control_grant()`.
-- **Bounds on the granted path.** A per-origin hourly budget (drafts spend it too, because
-  unbounded drafting is its own denial of service), a reciprocal-cycle guard (A interrupting B
-  while B recently controlled A is refused `relay_cycle`), idempotency by `correlation_id`, and
-  typed refusals rather than JSON-RPC faults. The install master switch is
-  `config.session_control_enabled` (default true), with `session_control_hourly_budget`
-  (default 30) and `session_control_graceful_timeout_s` (default 12.0).
+- **Bounds on the granted path.** A per-origin hourly budget (charged only when the granted
+  path acts, not for a draft), a reciprocal-cycle guard (A interrupting B while B recently
+  controlled A is refused `relay_cycle`), idempotency by `correlation_id`, and typed refusals
+  rather than JSON-RPC faults. The install master switch is `config.session_control_enabled`
+  (default true), with `session_control_hourly_budget` (default 30) and
+  `session_control_graceful_timeout_s` (default 12.0).
+- **Granted spawn.** `mux.requestSpawn` takes the same three-position model. A per-Project
+  `spawn_grant` (`"draft"` | `"granted"`, default `"draft"`, gated by the same `session_control`
+  automation, read by `project_spawn_grant()`) decides whether the call creates a session in the
+  target Project directly or writes the Phase 5 inert draft. Authority is by target Project, so
+  an agent can spawn into any registered Project that granted it (and, since interrupt/end are
+  also target-authority, monitor and end that session too). The granted spawn goes through the
+  same `_spawn_from_body` path the browser and Fleet-Queue approval use, is capped by a
+  dedicated per-origin `agent_spawn_hourly_budget` (default 10), and emits an
+  `agent_session_control` event with `action:"spawn"`. The default everywhere stays the inert
+  draft, so nothing spawns directly until an operator raises a Project's grant.
 - **What stays impossible at any grant.** A target outside the requested scope is
   indistinguishable from nonexistent; a shell or other non-agent pane is refused; and the
   session that hosts the running daemon is refused (`_session_owns_daemon`, a psutil ancestry

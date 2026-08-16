@@ -37,6 +37,8 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   necessary but not sufficient: the authority still defaults to `draft` - a human approves
   every `interrupt`/`end_session` in the Fleet Queue - until the Project's separate
   `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
+  The same automation gates the Project's `spawn_grant`, which does the identical draft/granted
+  split for agent-initiated `mux.requestSpawn` into that Project.
 - **Consumer that spends**: `model_narration` is the only consumer that costs model calls.
   It depends on `attention_ranking`, so with ranking off there is nothing to narrate and no
   path to a call (`attention-ranking.md`).

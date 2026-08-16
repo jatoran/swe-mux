@@ -179,6 +179,7 @@ from .project_files import (
     project_note_summaries,
     project_path,
     project_session_control_grant,
+    project_spawn_grant,
     read_global_note,
     read_note,
     read_observations,
@@ -1246,6 +1247,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             app, session, reason
         ),
         is_daemon_owner=_session_owns_daemon,
+        spawn_grant_field=project_spawn_grant,
+        # The granted spawn goes through the identical spawn path the browser and
+        # the Fleet Queue approval use, so an agent-created session is spawned no
+        # differently from any other.
+        spawn_op=lambda body: _spawn_from_body(app, body),
+        draft_spawn=agent_messaging.request_spawn,
         append_observation=append_observation,
         read_observations=read_observations,
     )

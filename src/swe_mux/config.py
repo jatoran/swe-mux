@@ -601,6 +601,11 @@ class Config:
     # How long a graceful end waits for the CLI to tear itself down after the exit
     # sequence before it falls back to a hard stop.
     session_control_graceful_timeout_s: float = 12.0
+    # Phase 7.6 follow-on: how many sessions one origin may spawn per hour on the
+    # granted path (`mux.requestSpawn` with a Project `spawn_grant` of "granted").
+    # Spawn's blast radius is a single injection into fan-out, so this is smaller
+    # than the interrupt/end budget and is what bounds that fan-out.
+    agent_spawn_hourly_budget: int = 10
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -1011,6 +1016,8 @@ def _validate(config: Config) -> None:
         errors["session_control_hourly_budget"] = "must be between 0 and 1000 actions per hour"
     if not 1 <= config.session_control_graceful_timeout_s <= 120:
         errors["session_control_graceful_timeout_s"] = "must be between 1 and 120 seconds"
+    if not 0 <= config.agent_spawn_hourly_budget <= 1000:
+        errors["agent_spawn_hourly_budget"] = "must be between 0 and 1000 spawns per hour"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

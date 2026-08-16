@@ -47,6 +47,8 @@ def _config(**overrides: Any) -> Any:
         session_control_enabled=True,
         session_control_hourly_budget=30,
         session_control_graceful_timeout_s=12.0,
+        request_spawn_enabled=True,
+        agent_spawn_hourly_budget=10,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -63,6 +65,7 @@ class _Clock:
 def _build(
     *sessions: Any,
     grant: str = "granted",
+    spawn_grant: str = "granted",
     automation_on: bool = True,
     readiness: str = "safe",
     config: Any = None,
@@ -72,12 +75,18 @@ def _build(
     graceful_op: Any = None,
     daemon_owner_ids: frozenset[str] = frozenset(),
     append_observation: Any = None,
+    spawn_op: Any = None,
+    draft_spawn: Any = None,
+    projects: Any = None,
 ) -> SessionControlService:
     async def gate(_root: str) -> frozenset[str]:
         return frozenset({"session_control"}) if automation_on else frozenset()
 
     def grant_field(_root: str) -> str:
         return grant
+
+    def spawn_grant_field(_root: str) -> str:
+        return spawn_grant
 
     def readiness_evaluate(_session: Any) -> dict[str, Any]:
         return {"delivery_state": readiness, "reason": "test"}
@@ -87,7 +96,7 @@ def _build(
 
     return SessionControlService(
         sessions=manager_for(*sessions),
-        projects=_projects(),
+        projects=projects or _projects(),
         config=config or _config(),
         events=events or EventsStub(),
         readiness_evaluate=readiness_evaluate,
@@ -96,6 +105,9 @@ def _build(
         interrupt_op=interrupt_op or _noop_interrupt,
         graceful_end_op=graceful_op or _noop_graceful,
         is_daemon_owner=is_daemon_owner,
+        spawn_grant_field=spawn_grant_field,
+        spawn_op=spawn_op,
+        draft_spawn=draft_spawn,
         append_observation=append_observation,
         clock=clock or _Clock(),
     )
@@ -377,6 +389,148 @@ async def test_actions_emit_audit_events() -> None:
     payload = dict(events.emitted[-1][1])
     assert payload["action"] == "interrupt"
     assert payload["target_session_id"] == "s2"
+
+
+# --------------------------------------------------------- granted spawn
+
+
+def _two_projects() -> Any:
+    return SimpleNamespace(
+        projects={
+            "p1": SimpleNamespace(id="p1", name="Work", root="D:/work"),
+            "p2": SimpleNamespace(id="p2", name="Continuity", root="D:/cont"),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_granted_spawn_creates_session_directly() -> None:
+    caller = _caller()
+    bodies: list[dict[str, Any]] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        bodies.append(body)
+        return live_session("new-1", project_id="p1", backend="claude")
+
+    events = EventsStub()
+    service = _build(caller, spawn_grant="granted", spawn_op=spawn_op, events=events)
+    result = await service.spawn(caller, prompt="do the thing", backend="claude")
+    assert result["status"] == "spawned"
+    assert result["session_id"] == "new-1"
+    assert result["cross_project"] is False
+    assert bodies[0] == {
+        "project_id": "p1",
+        "backend": "claude",
+        "seed_text": "do the thing",
+    }
+    payload = dict(events.emitted[-1][1])
+    assert payload["action"] == "spawn" and payload["outcome"] == "spawned"
+
+
+@pytest.mark.asyncio
+async def test_granted_spawn_into_another_project() -> None:
+    caller = _caller()
+    bodies: list[dict[str, Any]] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        bodies.append(body)
+        return live_session("cont-1", project_id="p2", backend="claude")
+
+    service = _build(
+        caller, spawn_grant="granted", spawn_op=spawn_op, projects=_two_projects()
+    )
+    result = await service.spawn(caller, prompt="update the editor", project="Continuity")
+    assert result["status"] == "spawned"
+    assert result["cross_project"] is True
+    assert bodies[0]["project_id"] == "p2"
+
+
+@pytest.mark.asyncio
+async def test_spawn_drafts_when_grant_is_draft() -> None:
+    caller = _caller()
+    spawns: list[Any] = []
+    drafts: list[dict[str, Any]] = []
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        spawns.append(body)
+        return live_session("x")
+
+    async def draft(_caller: Any, **kwargs: Any) -> dict[str, Any]:
+        drafts.append(kwargs)
+        return {"status": "drafted", "request_id": "r1"}
+
+    service = _build(
+        caller, spawn_grant="draft", spawn_op=spawn_op, draft_spawn=draft
+    )
+    result = await service.spawn(caller, prompt="later")
+    assert result["status"] == "drafted"
+    assert spawns == []  # nothing was created
+
+
+@pytest.mark.asyncio
+async def test_spawn_drafts_when_automation_off() -> None:
+    caller = _caller()
+    drafts: list[dict[str, Any]] = []
+
+    async def draft(_caller: Any, **kwargs: Any) -> dict[str, Any]:
+        drafts.append(kwargs)
+        return {"status": "drafted"}
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        raise AssertionError("must not spawn when the automation is off")
+
+    # Grant says granted, but the session_control automation is not opted in, so
+    # spawn falls back to the Phase 5 draft.
+    service = _build(
+        caller, spawn_grant="granted", automation_on=False,
+        spawn_op=spawn_op, draft_spawn=draft,
+    )
+    result = await service.spawn(caller, prompt="x")
+    assert result["status"] == "drafted"
+
+
+@pytest.mark.asyncio
+async def test_spawn_budget_exhausts() -> None:
+    caller = _caller()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("s")
+
+    service = _build(
+        caller, spawn_grant="granted", spawn_op=spawn_op,
+        config=_config(agent_spawn_hourly_budget=1),
+    )
+    await service.spawn(caller, prompt="one")
+    with pytest.raises(QueueError) as excinfo:
+        await service.spawn(caller, prompt="two")
+    assert excinfo.value.code == "origin_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_spawn_refused_when_install_disabled() -> None:
+    caller = _caller()
+    service = _build(
+        caller, spawn_grant="granted", config=_config(request_spawn_enabled=False)
+    )
+    with pytest.raises(QueueError) as excinfo:
+        await service.spawn(caller, prompt="x")
+    assert excinfo.value.code == "request_spawn_disabled"
+
+
+@pytest.mark.asyncio
+async def test_spawn_rejects_empty_prompt_and_fleet() -> None:
+    caller = _caller()
+
+    async def spawn_op(body: dict[str, Any]) -> Any:
+        return live_session("s")
+
+    service = _build(caller, spawn_grant="granted", spawn_op=spawn_op)
+    with pytest.raises(QueueError) as empty:
+        await service.spawn(caller, prompt="   ")
+    assert empty.value.code == "invalid_body"
+    with pytest.raises(QueueError) as fleet:
+        await service.spawn(caller, prompt="x", project="fleet")
+    assert fleet.value.code == "invalid_project"
 
 
 # --------------------------------------------------- durable end reasons

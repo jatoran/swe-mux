@@ -618,25 +618,30 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "request_spawn",
         "description": (
-            "Ask the human to start a new agent session with a "
-            "prompt you supply. This starts nothing: it writes an inert draft "
-            "into the Fleet Queue, and a person decides. Use it "
-            "when work should continue in a separate session. The session would "
-            "belong to your Project unless you name another one."
+            "Start a new agent session with a prompt you supply, in your Project "
+            "or another registered one. By default this starts nothing: it writes "
+            "an inert draft into the Fleet Queue and a person decides. A Project "
+            "an operator has granted agent spawn creates the session directly "
+            "instead, inside a per-origin budget, and the result carries its live "
+            "session id - watch it with get_session/read_transcript and end it "
+            "with end_session when its work is done. Use it when work should "
+            "continue in a separate session, and only when a human asked for it. "
+            "The session belongs to your Project unless you name another one."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt the new session would be seeded with",
+                    "description": "The prompt the new session is seeded with",
                 },
                 "project": {
                     "type": "string",
                     "description": (
-                        "Project the requested session would belong to "
-                        "(name or id; defaults to yours). A request has one "
-                        'Project, so "fleet" is not accepted here.'
+                        "Project the session belongs to (name or id; defaults to "
+                        'yours). A spawn has one Project, so "fleet" is not '
+                        "accepted here. Direct spawn needs that Project to have "
+                        "granted agent spawn; otherwise it drafts."
                     ),
                 },
                 "backend": {
@@ -646,6 +651,13 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "name": {"type": "string", "description": "Suggested session name"},
                 "reason": {"type": "string", "description": "Why a separate session is warranted"},
+                "correlation_id": {
+                    "type": "string",
+                    "description": (
+                        "Idempotency key; a retry with the same value does not "
+                        "spawn twice"
+                    ),
+                },
             },
             "required": ["prompt"],
             "additionalProperties": False,
@@ -3127,16 +3139,39 @@ class McpService:
         return dict(result)
 
     async def request_spawn(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
-        """`mux.requestSpawn`: a draft producer. It starts nothing."""
+        """`mux.requestSpawn`: draft a session request, or (where the target
+        Project granted it) create the session directly.
+
+        Which one happens is the target Project's `spawn_grant`, resolved inside
+        the session-control service - never here. The default everywhere is the
+        inert draft a human approves; a Project raises its grant to let agents
+        spawn into it directly, inside a per-origin budget.
+        """
         self.writes += 1
-        result = await self._messaging().request_spawn(
-            caller,
-            prompt=str(args.get("prompt") or ""),
-            backend=str(args.get("backend") or ""),
-            name=str(args.get("name") or ""),
-            reason=str(args.get("reason") or ""),
-            project=str(args.get("project") or ""),
-        )
+        prompt = str(args.get("prompt") or "")
+        backend = str(args.get("backend") or "")
+        name = str(args.get("name") or "")
+        reason = str(args.get("reason") or "")
+        project = str(args.get("project") or "")
+        if self.session_control is not None:
+            result = await self.session_control.spawn(
+                caller,
+                prompt=prompt,
+                backend=backend,
+                name=name,
+                reason=reason,
+                correlation_id=str(args.get("correlation_id") or "") or None,
+                project=project,
+            )
+        else:
+            result = await self._messaging().request_spawn(
+                caller,
+                prompt=prompt,
+                backend=backend,
+                name=name,
+                reason=reason,
+                project=project,
+            )
         return dict(result)
 
     def _control(self) -> Any:
