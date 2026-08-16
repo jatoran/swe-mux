@@ -2842,6 +2842,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-map-metrics em{font-style:normal;font-size:8px;white-space:nowrap}
 .git-map-metrics .clean{color:var(--muted)}
 .git-map-metrics .local,.git-map-metrics .unlanded,.git-map-metrics .warn{color:var(--amber)}
+.git-map-metrics .ahead{color:#c58af9;font-weight:600}
 .git-map-metrics .branch-files,.git-map-metrics .diverged{color:var(--accent)}
 .git-map-metrics .landed,.git-map-metrics .live{color:var(--green)}
 .git-map-chevron{color:var(--muted);font-size:11px;text-align:center}
@@ -2870,12 +2871,19 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-external>div span{color:var(--muted);text-align:right}
 /* Git supplies every graph prefix, including connector-only rows. Styling characters by
    two-column lane keeps the real topology while giving it the subdued Git Graph palette. */
+.git-graph-context{display:flex;flex-wrap:wrap;gap:3px 12px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel);font-size:7px;line-height:1.4}
+.git-graph-context span{display:flex;min-width:0;align-items:baseline;gap:4px;white-space:nowrap}
+.git-graph-context b{color:var(--muted);font-weight:500;letter-spacing:.055em}
+.git-graph-context strong{overflow:hidden;text-overflow:ellipsis;color:var(--text);font-weight:500}
+.git-graph-context code{color:var(--muted);font:inherit}
 .git-graph{min-width:max-content;padding:5px 0;background:var(--bg)}
 .git-graph-row{display:grid;grid-template-columns:max-content minmax(220px,1fr);align-items:start;gap:7px;min-height:39px;padding:3px 9px}
 .git-graph-row:hover{background:var(--panel2)}
 .git-graph-connector{height:11px;padding:0 9px;color:var(--muted);line-height:calc(11px*var(--ui-scale))}
 .git-graph-glyph{display:block;min-width:12px;white-space:pre;color:var(--muted);font-size:10px;line-height:calc(16px*var(--ui-scale))}
 .git-graph-glyph i{font-style:normal}
+.git-graph-glyph i.edge{opacity:.7}
+.git-graph-glyph i.node{font-size:11px;font-weight:700;text-shadow:0 0 6px currentColor}
 .git-graph-glyph .lane-0{color:var(--accent)}
 .git-graph-glyph .lane-1{color:var(--green)}
 .git-graph-glyph .lane-2{color:var(--amber)}
@@ -2886,9 +2894,18 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-commit-title strong{color:var(--accent);font-size:8px;font-weight:400}
 .git-commit-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
 .git-commit-refs{display:flex;flex-wrap:wrap;gap:3px}
-.git-commit-refs em{padding:0 3px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line));color:var(--accent);font-size:7px;font-style:normal;white-space:nowrap}
-.git-commit-refs em.head{border-color:var(--green);color:var(--green)}
+.git-commit-refs em{--git-ref-color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;padding:0 3px;border:1px solid color-mix(in srgb,var(--git-ref-color) 45%,var(--line));color:var(--git-ref-color);font-size:7px;font-style:normal;white-space:nowrap}
+.git-commit-refs em.lane-0{--git-ref-color:var(--accent)}
+.git-commit-refs em.lane-1{--git-ref-color:var(--green)}
+.git-commit-refs em.lane-2{--git-ref-color:var(--amber)}
+.git-commit-refs em.lane-3{--git-ref-color:#c58af9}
+.git-commit-refs em.lane-4{--git-ref-color:#ff7996}
+.git-commit-refs em.head{border-color:var(--green);background:var(--green);color:var(--bg);font-weight:700}
+.git-commit-refs em.comparison{border-color:var(--accent);color:var(--accent);font-weight:600}
 .git-commit-refs em.tag{border-color:var(--amber);color:var(--amber)}
+.git-commit-refs em.other-ref{border-color:color-mix(in srgb,var(--muted) 45%,var(--line));color:var(--muted)}
+.git-commit-refs em.main-tree{border-color:var(--green);border-style:dashed;color:var(--green)}
+.git-commit-refs em.worktree-ref,.git-commit-refs em.worktree-tip{border-color:color-mix(in srgb,var(--git-ref-color) 72%,var(--line));background:color-mix(in srgb,var(--git-ref-color) 10%,transparent);color:var(--git-ref-color)}
 .git-commit small{color:var(--muted);font-size:7px}
 .git-load-more{display:block;min-height:30px;margin:6px auto;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
 .git-load-more:hover:not(:disabled){border-color:var(--accent)}

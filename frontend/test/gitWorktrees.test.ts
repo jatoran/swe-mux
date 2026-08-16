@@ -9,6 +9,8 @@ import {
   normalizePath,
   comparisonSourceLabel,
   fileStatLabel,
+  graphDecorations,
+  graphNodeLane,
   parseCommitChanges,
   parseGitGraph,
   parseGitOverview,
@@ -248,6 +250,47 @@ test('commit graph parsing keeps Git connector rows and typed commits', () => {
   assert.equal(graph.lines[1].kind, 'connector')
   assert.equal(graph.limit, 80)
   assert.equal(graph.hasMore, true)
+})
+
+test('graph decorations expose HEAD, comparison, refs, and worktree tips without inventing a fork',()=>{
+  const oid='a'.repeat(40)
+  const overview=parseGitOverview({
+    repository:{root:'/repo',common_dir:'/repo/.git'},
+    comparison:{ref:'master',display:'master',source:'local_fallback',available:true,reason:null,candidates:['master']},
+    worktrees:[
+      {worktree:'/repo',HEAD:oid,branch:'refs/heads/master',main:true,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
+      {worktree:'/repo/.codex/worktrees/usage',HEAD:oid,branch:'refs/heads/worktree-usage',main:false,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
+    ],
+  })!
+  const line={kind:'commit',graph:'| * ',oid,parents:[],refs:['other','tag: v1','worktree-usage','master','HEAD'],author:'Ada',committedAt:1,subject:'tip'} as const
+  assert.equal(graphNodeLane(line.graph),1)
+  assert.deepEqual(graphDecorations(line,overview).map(item=>[item.kind,item.label]),[
+    ['head','HEAD'],
+    ['comparison','master'],
+    ['worktree-ref','worktree-usage'],
+    ['tag','v1'],
+    ['other-ref','other'],
+    ['main-tree','MAIN TREE'],
+    ['worktree-tip','WT usage'],
+  ])
+})
+
+test('several linked worktrees at one commit collapse to one exact tip badge',()=>{
+  const oid='b'.repeat(40)
+  const overview=parseGitOverview({
+    repository:{root:'/repo',common_dir:'/repo/.git'},
+    comparison:{ref:'master',display:'master',source:'local_fallback',available:true,reason:null,candidates:['master']},
+    worktrees:[
+      {worktree:'/repo',HEAD:oid,branch:'refs/heads/master',main:true,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
+      {worktree:'/wt/one',HEAD:oid,branch:'refs/heads/one',main:false,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
+      {worktree:'/wt/two',HEAD:oid,branch:'refs/heads/two',main:false,comparison_counts:{ahead:0,behind:0},unstaged:null,staged:null,conflicted:null,branch_delta:null},
+    ],
+  })!
+  const line={kind:'commit',graph:'* ',oid,parents:[],refs:['HEAD','master','one','two'],author:'Ada',committedAt:1,subject:'shared'} as const
+  const tips=graphDecorations(line,overview).filter(item=>item.kind==='worktree-tip')
+  assert.equal(tips[0].label,'2 WORKTREES')
+  assert.match(tips[0].title,/one on one/)
+  assert.match(tips[0].title,/two on two/)
 })
 
 test('session Git provenance parsing keeps evidence strength and rejects malformed rows', () => {

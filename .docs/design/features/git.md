@@ -156,6 +156,7 @@ uncommitted work together.
 - A path changed on both sides of the index appears independently in staged and unstaged groups.
 - Branch changes compare the worktree `HEAD` with the merge base of the effective comparison ref.
 - Comparison ahead and behind counts are distinct from the session monitor's upstream ahead and behind values.
+- A nonzero comparison-ahead count uses the graph palette's violet emphasis so committed branch work remains visible beside a clean local tree.
 - Every group reports exact file count, text additions, text deletions, binary count, and at most 200 typed file rows.
 - Untracked content inspection is limited to the 200 returned rows and a 16 MiB aggregate read budget.
   A deleted ignore file therefore cannot make Map open every file in a surviving dependency tree before applying the response limit.
@@ -175,6 +176,13 @@ uncommitted work together.
 ### Commit log
 
 - Log preserves Git's `--graph` topology and loads 80 commits initially, bounded at 200.
+- The log context strip names the main-tree branch and commit, effective comparison ref, linked-worktree count, and `all refs` scope before the graph.
+- All refs remain in the graph so a local branch without a registered worktree cannot disappear from repository history.
+- Git's lane geometry remains authoritative: a linear branch ahead of its base stays on one lane rather than receiving a fabricated fork.
+- Colored lane edges and solid commit nodes preserve the terminal graph while making crossings and tips easier to trace.
+- Commit decorations render in priority order as Project-root `HEAD`, comparison ref, checked-out worktree refs, tags, and muted other refs.
+- A commit at a registered checkout tip carries `MAIN TREE`, `WT <leaf>`, or a collapsed `<count> WORKTREES` marker derived by exact commit OID.
+- Ref and worktree markers wrap below the commit subject so narrow drawers retain identity instead of clipping it.
 - Connector-only rows are inert.
 - Expanding a commit lazily loads its typed file summary and reuses the shared file rows.
 - Expanding a commit also shows its whole message, subject and body, wrapped and unclamped; the collapsed row keeps the one elided subject line it has room for.
