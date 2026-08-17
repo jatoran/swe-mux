@@ -226,9 +226,17 @@ class ProjectInputs:
 
 
 def _select_projects(db: sqlite3.Connection, project_selector: str | None) -> list[dict[str, str]]:
-    """One Project by selector, or every registered Project when none is given."""
+    """One Project by selector, or every registered Project when none is given.
+
+    The sweep skips removed Projects. A tombstoned Project usually has no checkout
+    left to read, so including it turned an ordinary sweep into a list of errors
+    about repositories that are gone on purpose. Naming one explicitly still works,
+    because importing the history of a Project that was removed is a real request.
+    """
     if project_selector is None:
-        rows = db.execute("SELECT id,name,root FROM projects ORDER BY name,id").fetchall()
+        rows = db.execute(
+            "SELECT id,name,root FROM projects WHERE deleted_at IS NULL ORDER BY name,id"
+        ).fetchall()
         return [{key: str(row[key]) for key in ("id", "name", "root")} for row in rows]
     rows = db.execute(
         "SELECT id,name,root FROM projects WHERE id=? OR lower(name)=lower(?) "

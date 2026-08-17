@@ -130,6 +130,7 @@ The sidebar marks a quantity whose root carries more than one live session
 - Historical provenance is an explicit, idempotent operator action, never a startup migration.
   `python -m swe_mux.git_provenance_backfill PROJECT` is read-only and reports the proposed evidence classes; `--apply` writes the same plan in one bounded transaction.
   `--all-projects` sweeps every registered Project instead of one, which is what re-attributing existing history needs.
+  The sweep skips removed Projects, whose checkout is usually gone; naming one explicitly still imports it.
 - The pass has three parts: import commits from native transcripts, promote rows the retired shared-checkout rule downgraded, and derive contributors for the commits already recorded.
 - Re-attribution touches live command evidence only.
   It re-checks that the row's recorded previous HEAD really is an ancestor of the commit, refuses when two sessions' commands claim one object, and leaves a transcript match's confidence alone because ancestry cannot improve an identification the transcript made.
