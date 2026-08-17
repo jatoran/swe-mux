@@ -28,12 +28,16 @@ def build_agent_adapter(
     mcp_url: str,
     command_resolver: Callable[[str], tuple[str, tuple[str, ...]]] | None = None,
     instrument: bool = True,
+    approval_hook_timeout: float = 5.0,
 ) -> BackendAdapter:
     """Construct an adapter from one descriptor and runtime configuration.
 
     ``mcp_url`` empty disables the mux MCP registration for this harness (the MCP
     toggle). ``instrument`` false launches it without mux's lifecycle hooks (the
     "launch clean" toggle), which drops the harness to unobserved.
+    ``approval_hook_timeout`` bounds how long the CLI waits for mux to answer a
+    permission request; it only reaches a harness that declares
+    ``hook_approval_decisions``.
     """
     if harness.adapter_family == "claude":
         return ClaudeAdapter(
@@ -46,6 +50,7 @@ def build_agent_adapter(
             script_base_name=harness.script_base_name,
             data_home_resolver=harness.data_home,
             instrument=instrument,
+            approval_hook_timeout=approval_hook_timeout,
         )
     if harness.adapter_family == "codex":
         return CodexAdapter(

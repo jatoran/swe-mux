@@ -26,6 +26,7 @@ export type RowFieldId =
   | 'state' | 'detail' | 'duration' | 'sincePrompt' | 'idleFor' | 'context'
   | 'branch' | 'worktree' | 'diff' | 'dirty' | 'compareDiff' | 'compareFiles' | 'sync'
   | 'queue' | 'model' | 'account' | 'compactions' | 'cost' | 'cwd' | 'exit'
+  | 'approvals'
 
 export type RowFieldMode = 'notable' | 'always'
 export type RowLine = 'top' | 'bottom'
@@ -182,6 +183,11 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'broadcast', label: 'Broadcast flag', notable: 'session is in the broadcast set', priority: 88, identity: true },
   { id: 'badges', label: 'Standing activity', notable: 'a loop, cron, subagent, or background task is live', priority: 90, identity: true },
   { id: 'draft', label: 'Unsent input', notable: 'text is sitting unsent in this session’s composer', priority: 92, identity: true },
+  // Sits in the flag strip and is on by default, unlike almost every other
+  // field. The mode's entire effect is *removing* the notification an approval
+  // would raise, so the fleet list is the only place a grant nobody remembers
+  // setting can still be seen. A shed or opt-in badge would defeat the point.
+  { id: 'approvals', label: 'Approval mode', notable: 'mux is answering approvals here', priority: 96, identity: true },
   { id: 'detail', label: 'What it is doing', notable: 'the harness reported a tool or a question', priority: 70 },
   { id: 'duration', label: 'Time', notable: 'past the per-state threshold', priority: 80 },
   {
@@ -235,6 +241,7 @@ export function defaultSessionRowConfig(): SessionRowConfig {
         { id: 'title', mode: 'always' },
       ],
       right: [
+        { id: 'approvals', mode: 'notable' },
         { id: 'broadcast', mode: 'notable' },
         { id: 'badges', mode: 'notable' },
         { id: 'draft', mode: 'always' },

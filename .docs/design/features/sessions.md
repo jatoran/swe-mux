@@ -197,25 +197,49 @@ and reattachable browser viewports.
   left alone; the child's own most recent word outranks a restatement. `?9001` (win32 input
   mode) is deliberately excluded: it changes how keys are *encoded* rather than what the
   terminal reports back, and nothing observed points at its loss causing harm.
-- **Branch** forks a live agent conversation and leaves both halves open, and is the only flow
-  that types a command into a pane the operator is holding. It therefore runs a readiness gate
-  first (`_branch_block_reason`): a pane that is mid-turn, waiting on an approval, ended, or
-  holding unsent composer text is refused rather than typed into, because in each of those the
-  injected `/branch` becomes something other than a command.
-- A Claude branch completes in two waits, and the second is the load-bearing one. A new
-  transcript appearing proves the fork **started**; it does not prove the source process has
-  released the conversation the sibling is about to resume. Those are seconds apart — measured
-  live on 2026-08-14, 0.2 s versus 8 s — and resuming inside the gap is fatal rather than slow,
-  because Claude refuses a conversation another live process still holds and the resumed CLI
-  exits 1. So the daemon waits for the source pane's own `SessionStart` hook to name a different
-  transcript, which is the CLI reporting where it went rather than the daemon inferring it from a
-  directory listing. That report also names the fork in the one case the listing must decline to
-  guess: two transcripts appearing at once.
-- The release wait makes the first spawn succeed; it is not what makes the branch correct. The
-  sibling is spawned and then **watched**, and one that exits inside the settle window is
-  discarded and retried rather than attached. A fork that cannot be identified at all is refused
-  outright rather than resumed: without the identity roll the source pane still claims the
-  original, and the sibling would show one conversation as two rows over one file.
+- **Branch** forks a conversation into a new pane and leaves the source pane exactly as it was.
+  Two strategies exist, declared per harness (`branch_strategy`), and they differ in who does the
+  forking.
+- **`transcript_fork`** (Claude) is mux's own, and it is the only one that can branch from a
+  chosen *point*. The daemon reads the source conversation, writes a **new** conversation file
+  holding its records up to that point (`transcript_fork.py`), and resumes that file in a sibling
+  pane. Nothing is typed into anybody's terminal, the source file is opened read-only, and the
+  source pane keeps its conversation, its identity and its run. Everything a CLI-mediated fork
+  needed therefore does not exist here: no fork to wait for, no release to race, no identity roll,
+  and no readiness gate — a pane that is mid-turn, waiting on an approval, or already exited
+  branches exactly as well as an idle one. The branch is a genuinely new conversation with its
+  own history row, recorded as a `branch` lineage edge carrying the message and cut it was made
+  at, because a fork is otherwise indistinguishable from two conversations that share a prefix.
+- **`resume_child_thread`** (Codex) asks the CLI instead: `codex resume` opens a child thread
+  with its own rollout, diverging from the still-live original. It can only fork from where the
+  conversation currently stands, so a request naming a point is refused (`branch_point_unsupported`)
+  rather than silently forked from the end. Because it reopens a conversation a live process is
+  still on, it keeps the readiness gate (`_branch_block_reason`: mid-turn, awaiting approval,
+  ended, or unsent composer text) and the spawn retry that a CLI-mediated fork needs.
+- **Where a fork may be cut is a per-point answer, not a per-harness one**
+  (`transcript_view.conversation_cut_points`). Every cut lands on a message's own end offset, so
+  a fork's last record is always a real conversational record rather than whichever housekeeping
+  line the CLI wrote next. A cut that would leave an assistant turn's tool call unanswered is
+  refused: the provider rejects such a conversation outright, so a fork made there would not load
+  at all. A dialect with no measured rule for that returns no cut points rather than assuming
+  every boundary is clean, which is what keeps an unimplemented harness refusing instead of
+  writing conversations that fail on open.
+- **A fork is independent of the conversation it came from.** Every record's `sessionId` becomes
+  the fork's, Claude's absolute references to oversized tool results are repointed at the fork's
+  own directory and those files copied, titles are marked so the CLI has no name collision to
+  break (the 2026-08-14 incident where a shared title drove the collision resolver to write
+  ~57 MB of generated suffixes into two transcripts), and a queued prompt staged against the
+  *source* pane is dropped rather than inherited — delivering somebody's queued message into a
+  conversation they had not yet decided to have is the one failure mode a branch must not have.
+- A branch cut **before** one of the operator's own messages hands that message back. It is
+  staged client-side and inserted into the new pane's composer once its replay finishes
+  (`branchSeed.ts`), never submitted: re-sending the prompt unedited would repeat the request the
+  branch existed to change. Deliberately not the spawn's own `seed_text`, which appends the
+  prompt to the CLI's argv and therefore runs it.
+- The sibling is spawned and then **watched**, and one that exits inside the settle window is
+  discarded rather than attached. Whether to retry differs by strategy: a `transcript_fork`
+  sibling opens a conversation nothing has ever held, so a refusal will repeat and is reported at
+  once, while a `resume_child_thread` sibling is racing a live process and retries.
 - **Handing back a pane that spawned dead is the defect, not a degraded success**
   (`spawn_probe.py`, shared by Branch and Resume). A CLI that refuses the conversation it was
   given does not fail its spawn: it starts, prints one line, and exits *after* the response that
@@ -226,8 +250,9 @@ and reattachable browser viewports.
   changes its wording or a harness mux has never seen refuses something.
   The window ends early on positive proof that the pane took what it was given (its own pid
   against the conversation in the CLI's state file); without such proof it is paid in full.
-  Whether to retry belongs to the caller: Branch retries because it is racing a release that the
-  next attempt is further from, while a refusal that will repeat forever is reported instead.
+  Whether to retry belongs to the caller: a Codex branch retries because it is racing a live
+  process the next attempt is further from, while a refusal that will repeat forever is reported
+  instead.
   This is a spawn check, not a health check — a pane that dies later is ordinary lifecycle and
   belongs to the watchdog.
 - Terminal environments are built from a scrubbed base (`spawn_contract.base_session_env`):

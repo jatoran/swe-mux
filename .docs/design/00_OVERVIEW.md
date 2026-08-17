@@ -31,6 +31,7 @@
 
 - Automation and OpenRouter observers: `features/automation.md`
 - Automation enablement (per-project opt-in DAG): `features/automation-enablement.md`
+- Scheduled agent runs (cron/interval/one-off session starts): `features/scheduled-runs.md`
 - Tier 0 deterministic facts: `features/tier0-facts.md`
 - Model-free control-plane detectors: `features/deterministic-consumers.md`
 - Spawn-request compatibility storage and retired Observation Inbox: `features/observations.md`

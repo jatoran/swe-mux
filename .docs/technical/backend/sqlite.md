@@ -2,7 +2,8 @@
 
 ## Why this exists
 
-History, Automation, Operational Telemetry, Status Timeline, Voice, Tier 0, and Clipboard
+History, Automation, Operational Telemetry, Status Timeline, Voice, Tier 0, Prompt Queue,
+Schedules, and Clipboard
 history use separate
 connections and serialized executors against one WAL database. SQLite still has one writer slot. A transaction left open on
 one connection can otherwise make unrelated session spawn or PTY event writes fail with
@@ -79,6 +80,10 @@ def op():
     if duplicate:
         return None  # may return while SQLite still owns an implicit transaction
 ```
+
+A uniqueness violation is sometimes the *mechanism* rather than an error to swallow.
+`schedule_runs(schedule_id, fire_key)` is unique, and `ScheduleStore.claim_run` inserts that row before a scheduled session is spawned: the losing insert raises `IntegrityError`, rolls back, and is surfaced as a typed `ScheduleConflict` the caller treats as "already claimed" (`../../design/features/scheduled-runs.md`).
+That is what makes a fire idempotent across a daemon restart, which no in-memory guard can be.
 
 Even expected uniqueness/deduplication paths must commit or roll back before return. Do not catch
 `OperationalError` and retry at the HTTP route: fix the store operation boundary so every caller

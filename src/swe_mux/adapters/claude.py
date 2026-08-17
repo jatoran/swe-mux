@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from ..approvals import DECISION_HOOK_EVENTS
 from ..harness import HARNESSES, descriptor
 from ..mcp_contract import claude_read_permissions
 from .base import BackendAdapter, SpawnOptions, SpawnSpec
@@ -93,6 +94,7 @@ class ClaudeAdapter(BackendAdapter):
         data_home_resolver: Callable[[], Path] | None = None,
         user_home_resolver: Callable[[], Path] | None = None,
         instrument: bool = True,
+        approval_hook_timeout: float = 5.0,
     ) -> None:
         self.name = name
         self.shim_name = f"{name}.cmd"
@@ -113,6 +115,7 @@ class ClaudeAdapter(BackendAdapter):
         # or passed, so this harness runs unobserved (no status/history/queue).
         self.instrument = instrument
         self._mux_read_permissions = claude_read_permissions() if mcp_url else []
+        self._approval_hook_timeout = max(1, int(round(approval_hook_timeout)))
         if data_dir:
             data_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = (
@@ -151,7 +154,15 @@ class ClaudeAdapter(BackendAdapter):
         family = descriptor(self.name) if self.name in HARNESSES else descriptor("claude")
         for event in family.hook_events:
             command = _hook_command(event, identity=identity)
-            hooks[event] = [{"hooks": [{"type": "command", "command": command}]}]
+            entry: dict[str, object] = {"type": "command", "command": command}
+            if family.hook_approval_decisions and event in DECISION_HOOK_EVENTS:
+                # The CLI's own default is 600 s, and a timed-out hook does not
+                # block — it falls through to the normal permission prompt. So
+                # this is not a correctness gate; it is the difference between a
+                # daemon that is wedged costing one prompt a few seconds and
+                # costing ten minutes of an agent parked on a dialog.
+                entry["timeout"] = self._approval_hook_timeout
+            hooks[event] = [{"hooks": [entry]}]
         temporary = path.with_suffix(".json.tmp")
         payload: dict[str, object] = {"hooks": hooks}
         if self._mux_read_permissions:

@@ -31,6 +31,20 @@ test('rows roll a session up and follow Project order then session age', () => {
   assert.equal(rows[0].projectLabel, 'Alpha')
 })
 
+test('a row names its session the way the sidebar does', () => {
+  const named = [
+    { id: 's1', name: 'claude-0e7d93', generated_title: 'Fix the parser', project_id: 'p1', state: 'running', created_at: 10 },
+    { id: 's2', name: 'release prep', generated_title: 'Fix the parser', auto_named: false, project_id: 'p1', state: 'running', created_at: 20 },
+  ]
+  const rows = buildWatchRows(snapshot, named, projects, 'p1', null)
+  assert.deepEqual(rows.map(row => row.label), ['Fix the parser', 'release prep'])
+})
+
+test('a session the fleet no longer holds falls back to its id rather than an empty row', () => {
+  const rows = buildWatchRows(snapshot, [], projects, '', null)
+  assert.deepEqual(rows.map(row => row.label).sort(), ['s1', 's2', 's3'])
+})
+
 test('the focused session sorts first, whatever Project it is in', () => {
   const rows = buildWatchRows(snapshot, sessions, projects, '', 's3')
   assert.deepEqual(rows.map(row => row.sessionId), ['s3', 's1', 's2'])

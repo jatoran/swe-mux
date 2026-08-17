@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
 import {
-  allBackendNames, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
+  allBackendNames, branchesFromMessage, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
   isObservedHarness, setHarnessEnablement, type HarnessRegistryPayload,
 } from './harnessRegistry'
+import { BranchPicker } from './BranchPicker'
+import type { BranchRequest } from './branchPoints'
+import { stageBranchSeed } from './branchSeed'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
 import { EndedPaneBanner } from './EndedPaneBanner'
@@ -100,7 +103,7 @@ import {
 import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
-import type { Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
+import type { ApprovalMode, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
@@ -165,6 +168,7 @@ import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseR
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
 import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
+import { effectiveApprovalMode } from './approvals'
 import { activityBadges, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
@@ -399,6 +403,9 @@ export function App() {
   // processes view would churn its whole body on each focus change and read empty most of the
   // time, since most sessions are just their agent CLI and a conhost.
   const [processWatchScope,setProcessWatchScope]=useState<WatchScope>('')
+  // The Schedule tab's scope, kept here for the same reason: '' is every Project's
+  // schedules ("what fires tonight"), anything else is one Project's.
+  const [scheduleScope,setScheduleScope]=useState<string>('')
   // Which Project's templates join the global ones. Unlike the other surfaces
   // this is additive rather than restrictive, so the app menu still passes the
   // active Project: opening "unscoped" would remove templates, not filters.
@@ -605,6 +612,10 @@ export function App() {
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
   const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
+  // The session whose branch point is being chosen. Held by id rather than by object
+  // so a session update under the dialog cannot leave it rendering a stale snapshot,
+  // and so the dialog closes by itself if that session disappears.
+  const [branchPickerId,setBranchPickerId]=useState<string|null>(null)
   // The inbox is per-Project, so it carries its Project rather than following the
   // active one — it opens from a Project's own context menu.
   // The Queue drawer tab's deliberate-open counter focuses the composer even when the
@@ -2927,6 +2938,40 @@ export function App() {
     }
   }
 
+  // Setting the mode from the palette or the context menu, for the same reason
+  // the strip exists in the pane: a control whose only home is one disclosed
+  // line is one you have to be looking at the right pane to reach. Revoking to
+  // `wait` is deliberately always offered and never refused - taking authority
+  // back must not depend on the install switch, the Project ceiling, or the
+  // conversation still being the one the grant was made against.
+  const setApprovalMode = async (session: Session, mode: ApprovalMode) => {
+    setContextMenu(null)
+    try {
+      await api('PUT', `/api/sessions/${session.id}/approvals`, { mode, set_by: 'palette' })
+      window.dispatchEvent(
+        new CustomEvent('mux:approvals-changed', { detail: { sessionId: session.id } }),
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  // The one-shot. Answers the request the focused session is showing, once, and
+  // is not a mode: the server re-checks the agent run, the screen classification,
+  // and the prompt fingerprint before it writes anything.
+  const approvePendingRequest = async (session: Session) => {
+    setContextMenu(null)
+    try {
+      const result = await api<{ operation: string }>(
+        'POST', `/api/sessions/${session.id}/approvals/approve-once`,
+      )
+      return result.operation
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      return null
+    }
+  }
+
   // One menu item, not two. "Mark as read" and "Mark as unread" are the same
   // decision, and listing both makes the reader work out which of the pair is
   // currently true before clicking - which is exactly what a label stating the
@@ -3587,16 +3632,32 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
-  // Fork an agent conversation into a sibling pane. The daemon injects Claude's
-  // native /branch (or a Codex resume child-thread), attaches the new pane, and
-  // returns the new session; refresh() re-syncs the server-updated layout.
-  const branchSession = async (session: Session) => {
+  // Fork a conversation into a sibling pane. The daemon writes the forked
+  // conversation itself (`transcript_fork`) or asks the CLI for a child thread,
+  // attaches the new pane, and returns the new session; refresh() re-syncs the
+  // server-updated layout. The source pane is never touched either way.
+  //
+  // A `before` cut hands back the prompt it excluded. It is staged rather than typed:
+  // the pane it belongs to is still spawning, and it claims the text once its replay
+  // finishes (`branchSeed.ts`).
+  const runBranch = async (session: Session, request: BranchRequest = {}): Promise<string> => {
     try {
-      const result = await api<{ session: Session; source: string }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after' })
+      const result = await api<{ session: Session; source: string; seed_text: string | null }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after', ...request })
+      stageBranchSeed(result.session.id, result.seed_text)
       markProjectRecent(result.session.project_id)
       setSessions(items => [...items, result.session]); setActiveId(result.session.id); requestFocusView(result.session.id)
       await refresh()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+      return ''
+    } catch (cause) { return cause instanceof Error ? cause.message : String(cause) }
+  }
+
+  // A harness that honours a chosen point gets the picker; one that can only fork from
+  // where the conversation stands now branches on the click, because a picker there
+  // would offer a choice the daemon then refuses.
+  const branchSession = async (session: Session) => {
+    if (branchesFromMessage(session.backend)) { setBranchPickerId(session.id); return }
+    const failure = await runBranch(session)
+    if (failure) setError(failure)
   }
 
   // Resume targets the history entry of the conversation the pane was last on,
@@ -4355,6 +4416,10 @@ export function App() {
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
     { id: 'session.regenerateTitle', label: 'Regenerate generated title', category: 'session', available: !!commandSession && isAgent(commandSession) && commandSession.auto_named !== false && !isEndedSession(commandSession), disabledReason: 'Select a live auto-named agent session', run: () => commandSession && void regenerateSessionTitle(commandSession) },
     { id: 'session.clearStandingActivity', label: 'Clear standing activity (subagents / background tasks)', category: 'session', available: !!commandSession && activityBadges(commandSession).length > 0, disabledReason: 'Select a session with a standing-activity badge', run: () => commandSession && void clearStandingActivity(commandSession) },
+    { id: 'session.approveOnce', label: 'Approve the request this session is showing', category: 'session', available: !!commandSession && commandSession.state === 'awaiting' && commandSession.awaiting_reason === 'approval', disabledReason: 'Select a session waiting for an approval', run: () => commandSession && void approvePendingRequest(commandSession) },
+    { id: 'session.approvals.wait', label: 'Approvals: wait for me (default)', category: 'session', available: !!commandSession && effectiveApprovalMode(commandSession, Date.now() / 1000) !== 'wait', disabledReason: 'This session already routes every approval to you', run: () => commandSession && void setApprovalMode(commandSession, 'wait') },
+    { id: 'session.approvals.allowlisted', label: 'Approvals: auto-approve allowlisted requests', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Select a live agent session', run: () => commandSession && void setApprovalMode(commandSession, 'allowlisted') },
+    { id: 'session.approvals.allowAll', label: 'Approvals: auto-approve everything but the floor', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Select a live agent session', run: () => commandSession && void setApprovalMode(commandSession, 'allow_all') },
     { id: 'session.toggleRead', label: commandSession && isUnread(commandSession, ackedTurns) ? 'Mark selected session read' : 'Mark selected session unread', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Read state is tracked for live agent sessions', run: () => commandSession && void toggleSessionRead(commandSession) },
     { id: 'session.copyId', label: 'Copy selected session ID', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.id).catch(() => setError('Clipboard access was blocked.')) ; setContextMenu(null) } },
     { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(workingCwd(commandSession)).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
@@ -5525,6 +5590,11 @@ export function App() {
         processScope={processWatchScope&&projects.some(project=>project.id===processWatchScope)?processWatchScope:(projectId||'')}
         onProcessScope={setProcessWatchScope}
         onRefreshProcesses={()=>void loadProcesses()}
+        // Same resolution as the process scope: an unscoped tab follows the Project the
+        // drawer is sitting beside rather than pinning whichever was active on open.
+        scheduleScope={scheduleScope&&projects.some(project=>project.id===scheduleScope)?scheduleScope:(projectId||'')}
+        onScheduleScope={setScheduleScope}
+        profiles={profiles}
         onOpenPreview={(sessionId,url)=>{
           const owner=sessions.find(item=>item.id===sessionId)
           if(owner)void openDetectedServer({url},owner)
@@ -5651,6 +5721,12 @@ export function App() {
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       {canRestartCold(contextMenu.session) && <button onClick={() => runNamedCommand('session.restartCold')}>Restart terminal</button>}
       {activityBadges(contextMenu.session).length>0&&<button onClick={() => runNamedCommand('session.clearStandingActivity')}>Clear standing activity</button>}
+      {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button onClick={() => runNamedCommand('session.approveOnce')}>Approve this request</button>}
+      {/* Revoking is offered wherever a grant is standing, and only revoking:
+          *granting* authority from a right-click on a row you are not looking at
+          is the wrong affordance for it, and the pane's strip is where the mode,
+          its rules, and its budget are all visible together. */}
+      {effectiveApprovalMode(contextMenu.session,Date.now()/1000)!=='wait'&&<button onClick={() => runNamedCommand('session.approvals.wait')}>Stop auto-approving here</button>}
       {isAgent(contextMenu.session)&&!isEndedSession(contextMenu.session)&&<button onClick={()=>runNamedCommand('session.toggleRead')}>{isUnread(contextMenu.session,ackedTurns)?'Mark as read':'Mark as unread'}</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
       {/* Pane-only, deliberately. A session's own ⋯ header menu is where its
@@ -5834,10 +5910,12 @@ export function App() {
         <button onClick={() => runNamedCommand('storageUsage.open')}>Storage usage…</button>
         <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       </MenuGroup>
-      {/* The Project registry is not here: adding and managing Projects are the two
-          buttons in the sidebar's own PROJECTS header, beside the tree they act on.
-          A registry entry buried in an app-wide menu was a second door to the same
-          surface, one step further from what it edits. */}
+      {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
+          beside the tree it edits. It is repeated here on purpose: the header button is
+          discoverable only once the sidebar is open and the header is in view, and this
+          menu is where every other app-wide surface is looked for. Two doors to one
+          registry is the lesser cost. */}
+      <button onClick={() => runNamedCommand('project.create')}>Projects…</button>
       <button onClick={() => runNamedCommand('actions.configure')}>Configure Actions…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
       <MenuGroup id="maintenance" label="Maintenance" openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
@@ -5918,6 +5996,10 @@ export function App() {
 
     {actionEditorOpen && <ActionEditorModal onClose={() => setActionEditorOpen(false)} />}
 
+    {/* Resolved from the live list each render, so a session that ends or is removed
+        under the dialog closes it instead of leaving it aimed at a pane that is gone. */}
+    {(()=>{const target=branchPickerId?sessions.find(item=>item.id===branchPickerId):null
+      return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}

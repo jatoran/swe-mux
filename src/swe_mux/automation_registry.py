@@ -141,6 +141,14 @@ _AUTOMATIONS: tuple[Automation, ...] = (
     # authority defaults to `draft` - a human approves every action - until the
     # Project's `session_control_grant` is raised to `granted`.
     Automation("session_control", CONSUMER, "Agent session control", ()),
+    # Scheduled runs: cron/interval/one-off spawns of an agent session in this
+    # Project, authored by a human ahead of time. Like `session_control` it gates
+    # a capability rather than a read over another automation's output, so it
+    # depends on no substrate. Off by default, and permission alone starts
+    # nothing: the schedules themselves are machine-local rows in the daemon's
+    # database, so a clone that inherits this opt-in has none of them
+    # (`schedule_store.py`).
+    Automation("scheduled_runs", CONSUMER, "Scheduled runs", ()),
 )
 
 REGISTRY: dict[str, Automation] = {automation.id: automation for automation in _AUTOMATIONS}
