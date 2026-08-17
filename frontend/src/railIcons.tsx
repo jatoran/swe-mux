@@ -202,6 +202,39 @@ export const NavPanelIcon = () => <svg {...stroke}>
   <line x1="9" y1="4" x2="9" y2="20" />
 </svg>
 
+/** A double chevron pointing down: open everything. The accordion mark — one chevron says
+ *  "this row", two say "all of them".
+ *
+ *  The PROJECTS header used to say this with `⊞`/`⊟`, the box-drawing pair for a single
+ *  *tree node*: nobody reads it as a bulk control, and at 11px the two differ by one
+ *  hairline stroke. The obvious replacement is Material's `unfold_more`/`unfold_less`
+ *  (chevrons diverging and converging), and it is wrong here — at the 14px this row runs,
+ *  two converging chevrons with round joins render as an ✕. Two *parallel* chevrons keep
+ *  the pair distinguishable by direction alone, which survives any size. */
+export const UnfoldMoreIcon = () => <svg {...stroke}>
+  <path d="M6 5l6 6 6-6" />
+  <path d="M6 13l6 6 6-6" />
+</svg>
+
+/** `UnfoldMoreIcon` pointing the other way: fold everything shut. */
+export const UnfoldLessIcon = () => <svg {...stroke}>
+  <path d="M6 11l6-6 6 6" />
+  <path d="M6 19l6-6 6 6" />
+</svg>
+
+/** A cogwheel: the registry behind the tree, where a Project's own record is edited. */
+export const CogIcon = () => <svg {...stroke}>
+  <circle cx="12" cy="12" r="7.6" />
+  <circle cx="12" cy="12" r="2.8" />
+  <path d="M12 1.8v2.6M12 19.6v2.6M22.2 12h-2.6M4.4 12H1.8M19.2 4.8l-1.9 1.9M6.7 17.3l-1.9 1.9M19.2 19.2l-1.9-1.9M6.7 6.7 4.8 4.8" />
+</svg>
+
+/** A plus. Add one more of the thing this surface lists. */
+export const PlusIcon = () => <svg {...stroke}>
+  <line x1="12" y1="5" x2="12" y2="19" />
+  <line x1="5" y1="12" x2="19" y2="12" />
+</svg>
+
 /** Every drawer tab must appear here; the strip and the rail both read this map. */
 export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   clipboard: ClipboardHistoryIcon,

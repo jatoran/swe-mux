@@ -254,15 +254,30 @@ test('a title too long for the sidebar ellipsizes rather than pushing the flags 
   expect(overflow).toBe('ellipsis')
 })
 
-test('the hover-revealed kill control does not land on top of the flags', async ({ page }) => {
+/**
+ * The kill control overlays the row's right edge; it does not clear a lane for
+ * itself. It used to widen `.session-copy` while it was shown, which kept it off
+ * the flags but re-laid-out the row at the moment the pointer arrived — every
+ * token slid left while you were reading them. Covering one token is a smaller
+ * loss than moving all of them, so the reserved lane is gone and this test now
+ * guards the opposite invariant: hovering changes no geometry at all.
+ */
+test('the hover-revealed kill control overlays the row without reflowing it', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
   await page.goto('/session-row-harness.html')
-  await stripGeometry(page, 300)
+  const before = await stripGeometry(page, 300)
   await page.hover('[data-row="standing"]')
-  const g = await stripGeometry(page, 300)
+  const after = await stripGeometry(page, 300)
 
-  expect(g.actions!.width).toBeGreaterThan(0)
-  expect(g.strip!.right).toBeLessThanOrEqual(g.actions!.x + 0.5)
+  expect(after.actions!.width).toBeGreaterThan(0)
+  // Nothing under the control moves when it appears.
+  expect(after.title).toEqual(before.title)
+  expect(after.strip).toEqual(before.strip)
+  expect(after.flags).toEqual(before.flags)
+  expect(after.titleClient).toBe(before.titleClient)
+  // It sits over the row's right edge rather than beyond it.
+  expect(after.actions!.right).toBeLessThanOrEqual(after.row!.right + 0.5)
+  expect(after.actions!.x).toBeGreaterThan(after.row!.x)
 })
 
 /**

@@ -41,7 +41,7 @@ def test_normal_ui_flows_do_not_use_browser_native_dialogs() -> None:
     assert "/api/fs/roots" in source
     assert "/api/fs/list" in source
     assert "folderNameFromPath(root)" in source
-    assert 'class="project-trigger"' in source
+    assert 'aria-label="Manage Projects"' in source
     assert "project_files_changed" in source
     assert "Select this folder" in source
     assert "Create worktree + terminal" not in source
@@ -147,13 +147,25 @@ def test_drag_reorder_keeps_native_source_mounted_and_commits_latest_preview() -
     assert "{node.children.map(child=>" in app
     assert "dragProjectRef.current" in app
     assert "dragStackTabRef.current" in app
-    assert "reorderTargetFromContainer(projectList,current.id,'vertical',pointer.clientY)" in app
+    assert "reorderTargetFromContainer(list,current.id,'vertical',pointer.clientY)" in app
     assert (
         "reorderTargetFromContainer(tabStrip,current.childId,'horizontal',pointer.clientX)" in app
     )
-    # Each root or Group list supplies its own peers, so drag cannot cross the
-    # explicit Group-assignment boundary.
-    assert "beginProjectPointerDrag(event,project,peerIds)" in app
+    # A Project drag resolves its target list from the pointer, across the whole tree,
+    # rather than being confined to the list it started in: the same gesture reorders
+    # within a Group and moves a Project between Groups. Which list it landed in is read
+    # off `data-group-id`, and the drop commits the Group change and the order together.
+    assert "beginProjectPointerDrag(event,project)" in app
+    assert "const list=projectListAt(tree,pointer.clientY)" in app
+    assert "const groupId=list.dataset.groupId||null" in app
+    assert "':scope > [data-group-id]'" in app
+    assert "commitProjectDrop(project,current)" in app
+    assert "'PATCH',`/api/projects/${project.id}`,{group_id:drop.groupId}" in app
+    assert "await commitProjectOrder(drop.previewIds)" in app
+    # A list with no rows to sit beside — an empty Group, or a folded one — is a target in
+    # its own right, outlined whole because there is no gap to draw a line in.
+    assert "showPointerDropIndicator(list,'drop-into')" in app
+    assert '.sidebar-project-list[data-pointer-drop-indicator="drop-into"]' in css
     assert "showPointerDropIndicator(targetElement,`insert-${target.side}`)" in app
     assert "data-reorder-id={project.id}" in app
     assert "data-reorder-id={child.id}" in app
@@ -216,16 +228,31 @@ def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
     assert app.index('class="sidebar-tools sidebar-projects-header"') < app.index(
         'class="project-tree"'
     )
-    assert 'class="sidebar-project-list sidebar-ungrouped-projects"' in app
+    assert 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""' in app
     assert "setAllFolded(!allFolded)" in app
     assert "setAllCollapsed(displayProjects.map(project=>project.id),folded)" in app
     assert (
-        "setAllBucketsCollapsed(sidebarOrder,projectBuckets.map(bucket=>bucket.id),folded)"
+        "setAllBucketsCollapsed(sidebarOrder,displayBuckets.map(bucket=>bucket.id),folded)"
         in app
     )
     # Fold-all flips to Expand only once nothing on screen is left to collapse.
     assert "displayProjects.every(project=>collapsedProjects.has(project.id))" in app
-    assert "projectBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))" in app
+    assert "displayBuckets.every(bucket=>isBucketCollapsed(sidebarOrder,bucket.id))" in app
+    # Every Group renders, empty ones included: a Group nobody has filled yet is the one
+    # that most needs to be on screen, because dragging a Project in is how it gets filled.
+    assert "displayBuckets.filter(" not in app
+    assert "projectBuckets" not in app
+    # Fold and add/manage are icons, not glyphs. `⊞`/`⊟` is the box-drawing pair for a
+    # tree *node*, which nobody reads as a bulk expand/collapse control.
+    assert "{allFolded?<UnfoldMoreIcon/>:<UnfoldLessIcon/>}" in app
+    assert "⊞" not in app and "⊟" not in app
+    assert 'title="Manage Projects" onClick={()=>openProjectsManager()}><CogIcon/>' in app
+    assert "onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/>" in app
+    # Four controls over content the user is reading: revealed on hover where there is a
+    # hover to give, always visible on touch, and never `display`, which would reflow the row.
+    assert "@media (hover:hover) and (pointer:fine){" in css
+    assert ".sidebar-projects-header .sidebar-tool{opacity:0" in css
+    assert ".sidebar-projects-header:hover .sidebar-tool," in css
     # The header doubles as the section's drag handle; its buttons keep the pointer.
     assert "beginBucketPointerDrag(event,bucket.id,bucket.name)" in app
     assert "data-reorder-id={bucket.id}" in app
@@ -240,8 +267,8 @@ def test_a_group_can_be_renamed_from_the_sidebar_but_not_deleted() -> None:
     """The × next to the fold toggle could dissolve a Group in one stray click.
 
     Removing it leaves no delete path in the UI; that is the intent. A Group is emptied
-    instead — reassign its Projects and it stops rendering, because a Group with no
-    Projects in it is not a sidebar section. The endpoint is untouched.
+    instead — reassign its Projects and it keeps its header, holding a drop hint. The
+    endpoint is untouched.
     """
     app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
         encoding="utf-8"
@@ -270,10 +297,14 @@ def test_groups_sort_from_the_projects_header_and_collapse_from_their_header() -
     # Click folds, drag reorders; the drag swallows the click it ends with.
     assert "suppressDragClickRef.current===`bucket:${bucket.id}`" in app
     assert "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))" in app
+    assert "{!bucketCollapsed&&bucket.items.map(project=>sidebarProjectRow(project))}" in app
+    # An emptied Group keeps its section and says what to do with it — that hint is also
+    # the drop target, since a header alone is too thin a strip to aim a dragged row at.
     assert (
-        "{!bucketCollapsed&&bucket.items.map(project=>sidebarProjectRow(project,peerIds))}"
-        in app
+        "{!bucketCollapsed&&!bucket.items.length&&<p class=\"project-list-empty\">"
+        "Drag a Project here</p>}" in app
     )
+    assert ".project-list-empty{" in css
     # A folded Group reports live count *and* the strongest agent state, or an
     # approval waiting inside it would be invisible.
     assert "projectSetRailStatus(sessions,peerIds,ackedTurns)" in app
@@ -496,7 +527,8 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
     assert depths["project-registry-dialog-layer"] > depths["projects-manager-layer"]
     # openProjectsManager takes an optional focus (which Project, which tab), so
     # every plain trigger must call it rather than hand it the click event.
-    assert 'class="project-trigger" onClick={()=>openProjectsManager()}' in app
+    assert 'title="Manage Projects" onClick={()=>openProjectsManager()}' in app
+    assert 'title="Projects" onClick={()=>openProjectsManager()}' in app
     # Only the resource menu still drives layout from a menu — a Project note or an
     # opened file has no tab to drag until it is already in a pane, so removing it there
     # would leave no way in. The session/tab menus lost theirs, Move tab included; see

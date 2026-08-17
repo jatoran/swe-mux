@@ -85,6 +85,10 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
    wide rather than an eyeballed padding. */
 .menu-group-header:before { white-space:pre }
 .menu-group-caret { margin-left:auto;padding-left:8px;opacity:.55;font-size:9px }
+/* A folded group's own count. It sits beside the label rather than at the caret so it
+   reads as part of the name — "Utilities, 3 of them waiting" — instead of a second
+   control next to the one that opens the group. */
+.menu-group-badge { margin-left:7px;padding:0 5px;border-radius:8px;background:color-mix(in srgb,var(--green) 20%,transparent);color:var(--green);font:600 8px 'JetBrains Mono';font-style:normal;letter-spacing:0 }
 .menu-group-items { padding-left:10px }
 .menu-flyout { z-index:36 }
 .terminal-menu { position:fixed;z-index:40;width:calc(145px*var(--ui-scale));padding:5px;border:1px solid #3b434d;border-radius:7px;background:#15191e;box-shadow:0 15px 50px #000 }.terminal-menu button { width:100%;height:calc(28px*var(--ui-scale));border:0;border-radius:4px;background:transparent;color:#bac2cc;text-align:left;padding:0 8px;font-size:10px;cursor:pointer }.terminal-menu button:hover:not(:disabled) { background:#252c25;color:#e6ece2 }.terminal-menu button:disabled { color:#4f5863 }
@@ -711,16 +715,19 @@ body {
 .pane-tools .startup-chip{color:var(--muted);white-space:nowrap;cursor:help}
 .context-menu,.terminal-menu { max-height:calc(100dvh - 8px);overflow-y:auto;overscroll-behavior:contain }
 .session-row { grid-template-columns:10px minmax(0,1fr) }
+/* Absolutely positioned, so showing it never reflows the row it sits on. The box is
+   wider than the button by the 12px the fade lane needs (see `.row-actions` below),
+   and the button is pinned to its right edge. */
 .row-actions {
   position:absolute;
   top:50%;
   right:7px;
   transform:translateY(-50%);
   display:flex;
-  width:22px;
-  min-width:22px;
+  width:34px;
+  min-width:34px;
   height:calc(22px*var(--ui-scale));
-  justify-content:center;
+  justify-content:flex-end;
   visibility:hidden;
 }
 /* Hover reveals the row's kill control; selection must not. `:focus-within` did
@@ -1054,13 +1061,13 @@ body {
 @media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:calc(36px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{height:calc(44px*var(--ui-scale));grid-template-columns:18px minmax(0,1fr) 40px 40px!important;padding-right:4px}.project-row .project-row-menu,.project-row-run{display:grid!important;place-items:center;width:100%;min-width:40px;height:100%;min-height:44px;font-size:15px}.project-row-run{font-size:10px}.project-run-menu{left:6px!important;right:6px;width:auto;max-height:calc(100dvh - 12px)}.run-menu-section>button{min-height:44px}.run-worktree-form input,.run-worktree-form select{min-height:42px;font-size:16px}.run-worktree-form button{min-height:42px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}.project-action-source-layer{padding:0}.project-action-source{width:100vw;height:100dvh;max-height:none;border:0}.project-action-source-text{min-height:220px;font-size:12px}.project-action-inputs-layer{padding:0}.project-action-inputs{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-inputs form{flex:1;overflow:auto;align-content:start}.project-action-inputs input,.project-action-inputs select{min-height:42px;font-size:16px}}
 
 /* Compact sidebar commands and project resource editing. */
-.sidebar-footer{justify-content:flex-start;gap:8px}.sidebar-footer .project-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:left;white-space:nowrap;font:9px 'Cascadia Mono',Consolas,monospace}.sidebar-footer .project-trigger:hover{border:0;background:transparent;color:#a8eab3}.sidebar-footer .project-trigger span{margin-right:6px;color:#8ee69a}
-.sidebar-footer .notify-trigger,.sidebar-footer .settings-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
-.sidebar-footer .notify-trigger:hover,.sidebar-footer .settings-trigger:hover{border:0;background:transparent;color:#a8eab3}
+.sidebar-footer{justify-content:flex-start;gap:8px}
+.sidebar-footer .notify-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding:0 6px!important;border:0;background:transparent;color:#6f9277;cursor:pointer}
+.sidebar-footer .notify-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notify-trigger.off{color:#5a6470}
 .sidebar-footer .notify-trigger.off:hover{color:#8ee69a}
-.sidebar-footer .notify-trigger svg,.sidebar-footer .settings-trigger svg{display:block}
-@media(max-width:760px){.sidebar-footer .notify-trigger,.sidebar-footer .settings-trigger{min-height:44px}}
+.sidebar-footer .notify-trigger svg{display:block}
+@media(max-width:760px){.sidebar-footer .notify-trigger{min-height:44px}}
 .project-resource:has(>.resource-error){grid-template-rows:auto auto [resource-editor] minmax(0,1fr)}.resource-actions{display:flex!important;grid-auto-flow:column!important;gap:4px!important}.resource-actions button{min-width:29px;padding:0 8px;cursor:pointer}.resource-actions button:last-child{font-size:15px}.file-tree{min-height:0;overflow:auto;padding:3px 0}.file-tree-branch{display:block}.file-tree-row{width:100%;min-height:30px;display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:6px;border:0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding-right:9px;background:transparent;color:var(--text);text-align:left;cursor:pointer}.file-tree-row:hover{background:var(--panel2)}.file-tree-row span,.file-tree-row small{color:var(--muted)}.file-tree-row strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.file-tree-row.directory strong{color:color-mix(in srgb,var(--text) 88%,var(--green))}.file-tree-loading{margin:0;min-height:28px;display:flex;align-items:center;padding:0 9px;color:var(--muted);font-size:8px}
 .resource-retry{min-height:0;padding:1px 7px;border:1px solid var(--line);background:var(--panel2);color:inherit;font:inherit;cursor:pointer}
 @media(hover:none){.resource-retry{min-height:28px;padding:0 10px}}
@@ -1084,7 +1091,7 @@ body {
 .file-result-line{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:6px;min-width:0}
 .file-result-line small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .file-result-snippet{margin-left:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-style:normal;font-size:8px}
-@media(max-width:760px){.sidebar-footer .project-trigger{display:flex!important;min-height:44px;align-items:center;justify-content:center}.resource-actions button{min-height:36px}.file-tree-row{min-height:36px}}
+@media(max-width:760px){.resource-actions button{min-height:36px}.file-tree-row{min-height:36px}}
 
 /* Phase 5.5: layout hierarchy, terminal stacks, and the durable project shelf. */
 .project-row{grid-template-columns:14px minmax(0,1fr) 18px 24px}
@@ -1453,13 +1460,13 @@ body {
 @media(max-width:700px){.send-agent-targets{max-height:200px}.control-plane-modal-body .send-agent-option,.control-plane-modal-body .send-agent-submit{grid-template-columns:24px minmax(0,1fr)}.control-plane-modal-body .send-agent-message{min-height:150px}}
 
 /* Unified note discovery: the footer is the global entry point; editors remain contextual. */
-/* menu pinned left, projects pinned right, and the icon switches (alerts, settings)
-   as one cluster between them. `space-between` would have spread every button
-   evenly, which reads as four unrelated controls rather than two labelled ends
-   around a pair of toggles. */
+/* menu pinned left, the alerts switch pinned right. The footer used to end in a
+   projects button and a settings cog; both moved to where they belong — Projects to
+   the PROJECTS header beside the tree it edits, Settings to the one menu row that
+   already named it. `space-between` is still not used: the left item's own
+   `margin-right:auto` survives either button coming back. */
 .sidebar-footer{justify-content:flex-start}
 .sidebar-footer .menu-trigger{margin-right:auto}
-.sidebar-footer .project-trigger{margin-left:auto}
 .sidebar-footer .notes-shelf-trigger{width:auto!important;height:calc(28px*var(--ui-scale));flex:0 0 auto;margin-left:auto;padding:0 5px!important;border:0;background:transparent;color:#6f9277;text-align:right;font:inherit}
 .sidebar-footer .notes-shelf-trigger:hover{border:0;background:transparent;color:#a8eab3}
 .sidebar-footer .notes-shelf-trigger span{margin-right:6px;color:#8ee69a}
@@ -2100,9 +2107,42 @@ body {
 .sidebar-project-bucket>header .bucket-rename:focus-visible{opacity:1}
 @media (pointer:coarse){.sidebar-project-bucket>header .bucket-rename{opacity:1}}
 /* PROJECTS is the tree title, not a synthetic Group. Root Projects follow it
-   directly; fold-all and sort stay pinned in the same row. */
-.sidebar-tools{flex:none;display:flex;align-items:center;gap:4px;min-height:26px;padding:3px 7px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.sidebar-tools>strong{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}.sidebar-tools .sidebar-tool{flex:0 0 auto;width:20px;height:calc(20px*var(--ui-scale));border:0;background:transparent;border-radius:4px;color:var(--muted);font-size:11px;line-height:1;cursor:pointer}.sidebar-tools .sidebar-tool:hover:not(:disabled){color:var(--text);background:var(--panel2)}.sidebar-tools .sidebar-tool:disabled{opacity:.3;cursor:default}.sidebar-tools .sidebar-sort.active:not(:disabled){color:var(--green)}
+   directly; fold-all, sort, the registry cog, and add stay pinned in the same row. */
+.sidebar-tools{flex:none;display:flex;align-items:center;gap:2px;min-height:30px;padding:3px 5px 3px 7px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.08em}.sidebar-tools>strong{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit}.sidebar-tools .sidebar-tool{flex:0 0 auto;width:24px;height:calc(24px*var(--ui-scale));display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;border-radius:4px;color:var(--muted);font-size:15px;line-height:1;cursor:pointer}.sidebar-tools .sidebar-tool:hover:not(:disabled){color:var(--text);background:var(--panel2)}.sidebar-tools .sidebar-tool:disabled{opacity:.3;cursor:default}.sidebar-tools .sidebar-sort.active:not(:disabled){color:var(--green)}
+/* The icon controls are drawn as strokes on a 24-box and sized here, like every other
+   icon-only surface in the app: this row runs an 8px font, and an `em`-sized mark on it
+   would be a smudge. 17px is the size at which a 24-box stroke icon reads at a glance
+   next to `⇅`, which is a text glyph and carries far more ink per pixel than a 2-unit
+   stroke does; matching the two by their boxes rather than by their weight is what left
+   the icons looking like the smaller controls. */
+.sidebar-tools .sidebar-tool svg{display:block;width:17px;height:17px}
+/* Four controls on the tree's title row is four pieces of chrome over content the user
+   is reading, so on a fine pointer they wait until the header is under the cursor — or
+   until one of them has keyboard focus, which is the only way a non-pointer user reaches
+   them. Opacity rather than `display`, so the row never reflows as they come and go.
+   Touch has no hover at all and always shows them, which is why this is scoped to a
+   hover query rather than undone by a `pointer:coarse` override. */
+@media (hover:hover) and (pointer:fine){
+  .sidebar-projects-header .sidebar-tool{opacity:0;transition:opacity .12s ease}
+  .sidebar-projects-header .sidebar-tool:disabled{opacity:0}
+  .sidebar-projects-header:hover .sidebar-tool,
+  .sidebar-projects-header:focus-within .sidebar-tool{opacity:1}
+  .sidebar-projects-header:hover .sidebar-tool:disabled,
+  .sidebar-projects-header:focus-within .sidebar-tool:disabled{opacity:.3}
+  /* The guided tour spotlights the registry cog and then blocks every click outside
+     the ring, so the control has to be visible before the pointer is anywhere near it —
+     a highlighted empty box is not something a first-run user knows to hover. */
+  body:has(.tutorial-layer) .sidebar-projects-header .sidebar-tool{opacity:1}
+}
 .sidebar-ungrouped-projects{position:relative;display:flex;flex-direction:column;margin:0 0 8px}
+/* An empty list — a Group nobody has filled yet, or the root with every Project grouped
+   — says what to do with it and is the drop target for doing it. Without a body the
+   section would be a header alone, too thin a strip to aim a dragged row at. */
+.project-list-empty{margin:0;padding:9px 10px 9px 22px;border:1px dashed var(--line);border-radius:4px;color:var(--muted);font-size:9px;font-style:italic}
+/* Dropping *into* a list rather than between two of its rows: there is no gap to draw an
+   insertion line in, so the whole list is outlined instead. Same green as every other
+   drop affordance, so one drag never speaks two visual languages. */
+.sidebar-project-list[data-pointer-drop-indicator="drop-into"]{outline:2px solid var(--green);outline-offset:-1px;border-radius:4px;background:color-mix(in srgb,var(--green) 8%,transparent)}
 /* A folded section still has to answer for what is inside it. The count mirrors a
    collapsed Project's badge; the dot carries the strongest agent state, because a
    count alone cannot say that something in here is waiting on you. Colours and
@@ -2119,7 +2159,10 @@ body {
 /* Folded sections sit tighter together: the 8px tail exists to separate a section's
    Projects from the next heading, and with no Projects showing it reads as a gap. */
 .sidebar-project-bucket.collapsed{margin-bottom:2px}
-.sidebar-project-bucket[data-pointer-drop-indicator]:after{content:"";position:absolute;left:2px;right:2px;height:3px;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]:after{top:-3px}.sidebar-project-bucket[data-pointer-drop-indicator="insert-after"]:after{bottom:-3px}
+/* Scoped to the two insertion values, not to the attribute: a Project dropping *into*
+   this Group sets `drop-into` on the same element, and an unanchored bar would render
+   at the section's static position rather than at either edge. */
+.sidebar-project-bucket[data-pointer-drop-indicator^="insert-"]:after{content:"";position:absolute;left:2px;right:2px;height:3px;z-index:30;pointer-events:none;background:var(--green);box-shadow:0 0 8px color-mix(in srgb,var(--green) 75%,transparent)}.sidebar-project-bucket[data-pointer-drop-indicator="insert-before"]:after{top:-3px}.sidebar-project-bucket[data-pointer-drop-indicator="insert-after"]:after{bottom:-3px}
 .empty-project-cta{width:100%;display:grid;gap:5px;padding:14px;border:1px dashed var(--line);background:transparent;color:var(--text);text-align:left;cursor:pointer}.empty-project-cta small{color:var(--muted)}
 .context-select{display:grid;grid-template-columns:auto minmax(110px,1fr);align-items:center;gap:9px;padding:6px 9px;color:var(--muted);font-size:9px}.context-select select{min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
 .project-resource{position:relative;width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto [resource-editor] minmax(0,1fr);background:var(--bg)}.project-resource>header{min-width:0;min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-bottom:1px solid var(--line)}.project-resource>header>div{min-width:0;display:grid;gap:3px}.project-resource>header strong,.project-resource>header span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-resource>header span{color:var(--muted);font-size:8px}.project-resource>header button{min-height:29px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}.project-resource textarea{width:100%;height:100%;min-height:0;resize:none;border:0;padding:12px;background:var(--bg);color:var(--text);font:12px/1.55 'Cascadia Mono',Consolas,monospace;outline:none}.file-list{min-height:0;overflow:auto}.file-list>button{width:100%;min-height:31px;display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:7px;border:0;border-bottom:1px solid var(--line);padding:0 9px;background:transparent;color:var(--text);text-align:left}.file-list>button:hover{background:var(--panel2)}.file-list>button span,.file-list>button small{color:var(--muted)}.file-list>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.resource-error,.resource-unavailable{margin:0;padding:12px;color:var(--red)}.resource-unavailable{color:var(--muted)}
@@ -3287,15 +3330,17 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    spilled visibly *under* the first letter of a long name. */
 .row-line.top .row-section.left .row-token{flex:none}
 .row-line.top .row-section.left .row-token:last-child{flex:0 1 auto}
-/* The hover/focus lane for `.row-actions`, which is absolutely positioned over
-   the row's right edge. Reserved only while the control is actually shown, so
-   no row pays for it at rest: without it the kill button lands on top of the
-   flags (and, as it always has, on the bottom line's right-hand tokens) at the
-   moment the pointer arrives to read them. */
-.session-row:hover .session-copy,
-.session-row:focus-visible .session-copy,
-.session-row:has(.row-actions button:focus-visible) .session-copy{padding-right:26px}
-@media(hover:none){.session-row:focus-within .session-copy{padding-right:26px}}
+/* `.row-actions` overlays the row's right edge and reserves nothing.
+   It used to widen `.session-copy` by a lane while it was shown, so that the kill
+   button never covered the flags. The cost was that arriving with the pointer
+   re-laid-out the row underneath it: every token slid left at the moment you were
+   reading them, which is a worse way to lose a token than having one covered.
+   The button is opaque and `.row-actions` inherits the row's own background, so
+   the mask below fades whatever runs under it into that background rather than
+   letting a name collide with the button's edge. Inheriting rather than naming a
+   colour is what keeps the fade right on a hovered, selected, or awaiting row —
+   all three paint different backgrounds, and one of them pulses. */
+.row-actions{background-color:inherit;-webkit-mask-image:linear-gradient(to right,transparent,#000 12px);mask-image:linear-gradient(to right,transparent,#000 12px)}
 /* The bottom line does the opposite: neither section shrinks, the right one is
    pushed over by `margin-left:auto` only while there is room, and the line
    clips. So the two sections slide together as the sidebar narrows, meet at a

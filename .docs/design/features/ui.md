@@ -44,25 +44,46 @@ responsive controls.
   On mobile, a Group header only folds because Project rows are the sidebar's sole reorder target.
   The Group header's only button is `✎`, which renames the Group.
   It appears on hover over its own header, and on keyboard focus, so the resting sidebar is a list of names rather than a column of glyphs; a coarse pointer has no hover and always shows it.
-- **The `PROJECTS` header owns sort and fold-everything**, because both act on the whole tree and must remain outside the scrolling list.
-  It holds two buttons:
-  - `⊟`/`⊞` folds or unfolds **every Project row and every Group** in one click.
+- **The `PROJECTS` header owns every control that acts on the tree as a whole**, because none of them may scroll away with the list.
+  It holds four buttons:
+  - A double chevron folds or unfolds **every Project row and every Group** in one click — pointing up to collapse, down to expand.
     It offers Expand only once nothing on screen is left to collapse, so the next click finishes a half-folded tree instead of undoing it.
+    It is an icon rather than the `⊟`/`⊞` it replaced: that pair is the box-drawing mark for a single *tree node*, so it reads as
+    "fold this one", and at this row's size its two states differ by one hairline stroke.
+    Material's `unfold_less`/`unfold_more` is the obvious substitute and is also wrong here — two converging chevrons with round
+    joins render as an `✕` at this size. Two *parallel* chevrons differ by direction alone, which survives any size.
   - `⇅` sorts, covering both levels: flat items sort the Projects (Manual, Recently used, Name
     A→Z / Z→A, Newest / Oldest first), and a `Sort Groups` group sorts only explicit Groups
     (Manual, Recently used, Name A→Z / Z→A).
     A `MenuGroup` keeps the common case from paying for the rarer one.
     The button highlights while either level is sorted, and its tooltip carries both
     modes, which otherwise have no always-visible cue.
+  - A cogwheel opens the Projects registry — the single per-Project editor. It was a footer button and an app-menu row, both a
+    screen away from the tree they edit.
+  - `+` opens the registry **and** its Add-project dialog in one click, so the create dialog dismisses onto the registry rather than
+    back onto the tree. Reaching it used to mean opening the registry and finding its button.
+- The three icon controls are sized against `⇅`, not against each other's boxes. `⇅` is a text glyph and carries far more ink per
+  pixel than a 2-unit stroke on a 24-box does, so matching them by box left the icons reading as the smaller controls even at
+  equal dimensions; they are drawn larger than the glyph's nominal size to land at the same visual weight.
+- The four header controls are revealed by hovering the header, and by keyboard focus on any of them, so the resting sidebar is a
+  title rather than a toolbar; a coarse pointer has no hover and always shows them. Opacity, never `display`, so the row does not
+  reflow as they come and go. The guided tour spotlights the cogwheel and blocks clicks outside its ring, so the tour's presence
+  overrides the reveal — a highlighted empty box is not something a first-run user knows to hover.
 - Project sort is one global mode, applied to root Projects and inside every Group. It was per section once, on the
   theory that a Group might be a hand-arranged shortlist while another is a long alphabetical
   pile; in practice it was set the same everywhere and cost a `⇅` on every header. Placing
   anything by hand puts that level back on Manual, because a hand-placed row that the next render
   re-sorts away reads as a broken drag.
 - The sidebar cannot delete a Group. The `×` that did sat one pixel from the fold toggle and
-  dissolved a Group on a stray click; a Group is emptied instead — reassign its Projects (Projects
-  registry, or a Project menu's Group select) and it stops rendering, since a Group with no
-  Projects in it is not a section.
+  dissolved a Group on a stray click; a Group is emptied instead — reassign its Projects (drag,
+  the Projects registry, or a Project menu's Group select). Deleting one is an API-only operation.
+- **Every Group renders, including one holding nothing.** An empty Group shows its header plus a
+  `Drag a Project here` hint. It used to be filtered out of the tree, which made creating a Group
+  look like it had failed and pointed the only way to fill it — dragging a Project in — at a
+  section that was not on screen. The hint is also the drop target: a header alone is too thin a
+  strip to aim a dragged row at.
+  The ungrouped root list follows the same rule in reverse: it renders whenever any Group exists,
+  even with nothing in it, so a user who grouped every Project still has somewhere to drag one back out to.
 - A folded Group shows a live-session count and a state dot for the strongest agent state
   inside it, in the collapsed rail's colours so one folded thing never speaks a different visual
   language from another. The dot exists because a count alone would let an agent waiting on
@@ -146,6 +167,15 @@ responsive controls.
   session wore a hover affordance until focus left the sidebar entirely.
   Touch raises neither hover nor `:focus-visible`, so there the tapped row keeps the
   `:focus-within` reveal — it is the only way to reach the control on a phone.
+  **It overlays the row and reserves nothing.** It used to widen `.session-copy` by a lane while
+  shown, which kept it clear of the flags at the cost of re-laying-out the row the instant the
+  pointer arrived: every token slid left while you were reading them. Covering one token is a
+  smaller loss than moving all of them. The button is opaque, and its container inherits the row's
+  own background so a short mask fades whatever runs under it into that background instead of
+  colliding with the button's edge — inherited rather than named, because a hovered, selected, and
+  awaiting row each paint a different background and one of them pulses.
+  `session-row-layout.spec.ts` guards it: hovering must leave the title, flag strip, and every
+  flag box byte-identical.
 - The active-Project header exposes **Run** persistently.
   On desktop, each Project row reveals its Run control while the pointer or keyboard focus is anywhere in that Project's row-and-session block; its reserved column preserves row alignment while hidden.
   On mobile, Project rows expose Run persistently and also expose `⋮` immediately left of it, giving Project actions direct tap targets.
@@ -156,14 +186,13 @@ responsive controls.
   equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
-- The sidebar footer reads `menu` at the left edge, `projects` at the right, and the two
-  install-wide icon switches - the alerts bell and a settings cog - clustered between them.
-  The cog opens Settings directly; `menu → All Settings…` stays, because a named row is
-  searchable and reachable from the keyboard while an icon is not, and the app menu is where
-  someone already looking for a global action goes. Settings had been three interactions deep
-  for the one panel that is opened most often. The two icons sit adjacent rather than spread
-  by `space-between`: evenly distributed, four buttons read as four unrelated controls instead
-  of two labelled ends around a pair of toggles.
+- The sidebar footer is two controls: `menu` at the left edge and the alerts bell at the right.
+  It held four. `projects` moved into the `PROJECTS` header, beside the tree it edits, and the
+  settings cog was removed: `menu → All Settings…` sits one row away from the button next to it,
+  and a second permanent door to the same panel cost a footer slot for a saving of nothing.
+  A named menu row is also searchable and keyboard-reachable, which an icon is not.
+  The remaining pair still uses the left item's own `margin-right:auto` rather than
+  `space-between`, so either removed button can come back without the layout re-deciding itself.
 - Separate Claude and Codex rows and owned CPU/RSS status remain pinned at the sidebar bottom.
   Account/resource popovers render through the viewport overlay layer, so a narrow or collapsed
   sidebar cannot clip them.
@@ -224,17 +253,26 @@ responsive controls.
 
 ## Menus and overlays
 
-- Scope follows the menu that opened a surface, never a hidden mode. The app menu's unlabeled
-  lead block opens History, Notes, Process fleet, prompt library, clipboard history,
-  usage, bandwidth metrics, and notifications across every Project; right-clicking a Project row opens the same
+- Scope follows the menu that opened a surface, never a hidden mode. The app menu's `Utilities`
+  group opens History, Notes, Process fleet, the fleet queue, prompt library, clipboard history,
+  usage, bandwidth metrics, storage, and notifications across every Project; right-clicking a Project row opens the same
   surfaces under `BROWSE THIS PROJECT`, prefiltered to it. Right-clicking empty sidebar space is
   the no-Project case and matches the app menu.
-- The app menu holds **nothing that acts on a single Project**. Per-Project actions — the
-  Project settings, files, notes, and Project-scoped Fleet Queue approval rows live on the Project itself: right-click a
-  sidebar row, or tap the Project title in the mobile top bar (both open the same menu). The
-  lead block is therefore deliberately unlabeled; a `BROWSE ALL PROJECTS` heading described
-  neither the clipboard nor notifications, and the old `CURRENT PROJECT` section duplicated the
-  Project menu one level away from the Project it acted on.
+- **The app menu is two halves: `Utilities` (places you go) and, below it, the things you set.**
+  Those ten viewers used to sit unfolded at the top and made the menu a wall — reading
+  past them to reach the settings half was the whole cost of opening it. The `CONFIGURATION`
+  heading that used to divide the halves went with them: once the viewers are behind one row,
+  everything below it is configuration, and a heading over an already-obvious group is a row
+  that costs height and says nothing. `Utilities` carries a
+  count badge summing the pending queue and unread notifications, because folding rows away folds
+  their counts away with them and "something is queued" has to survive the fold. The two counts
+  add to one number deliberately: the header answers *is there anything in here*, and the tooltip
+  says which.
+- The app menu holds **nothing that acts on a single Project**, and no longer holds the Project
+  registry either — adding and managing Projects are the two buttons in the sidebar's `PROJECTS`
+  header, beside the tree they act on. Per-Project actions — Project settings, files, notes, and
+  Project-scoped Fleet Queue approval rows — live on the Project itself: right-click a
+  sidebar row, or tap the Project title in the mobile top bar (both open the same menu).
 - Starting work is the Run menu's job alone (active-Project header, every Project row, mobile
   rail). Neither the app menu nor the Project context menu carries "New terminal": Run already
   offers the same backends plus the Project's imported tasks, and a second door only split the

@@ -43,7 +43,11 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - The sidebar renders only visible Projects.
   Ungrouped Projects are root rows immediately under the global `PROJECTS` header; explicit Groups render afterward as named sections.
   `PROJECTS` is navigation chrome, not a synthetic Group, and cannot fold or move among Groups.
-- The `PROJECTS` header carries a sort control (`⇅`) covering **two levels**.
+- The `PROJECTS` header carries four controls: fold-everything, sort, a cogwheel opening the
+  Projects registry, and `+` opening the registry and its Add-project dialog together.
+  All four act on the tree as a whole, so none of them may scroll away with the list.
+  Placement, reveal-on-hover, and the icon choices are in `ui.md`.
+- The `PROJECTS` header's sort control (`⇅`) covers **two levels**.
   Flat options act on root Projects and Projects inside every Group: Manual order, Recently used, Name A→Z / Z→A, Newest / Oldest first.
   A `Sort Groups` submenu acts only on explicit Groups: Manual order, Recently used, Name A→Z / Z→A.
   Both live on one control because `⇅` already means "how is this list ordered"; the submenu keeps the common case one click deep and carries its current mode in its label, since Group order has no always-visible indicator of its own.
@@ -52,7 +56,7 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   A device upgrading from the per-section format keeps whichever mode it had actually set (see `loadSidebarOrder`), rather than being silently reset to Manual.
   Group sorting is necessarily one setting.
   Both sort-mode selections are device-local presentation preferences.
-- The same header carries `⊟`/`⊞`, which folds or unfolds **every Project row and every Group**
+- The same header's fold control folds or unfolds **every Project row and every Group**
   at once, so tidying a long sidebar is one click rather than one per row. It offers Expand only
   once nothing on screen is folded open; expanding clears the stored fold lists outright rather
   than subtracting the visible ids, so an id left behind by something hidden or deleted while
@@ -71,22 +75,49 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
   Mobile Group headers only fold because Project rows are the sidebar's sole mobile reorder target.
   The desktop drag swallows the click it ends with.
   Collapsing is presentation only: the folded Projects keep their place in the collapsed rail, numbered shortcuts, and every order.
-- Mobile Project pickup closes open menus, gives short haptic feedback, previews one insertion inside the current root list or Group, and edge-scrolls the tree until release.
-  Releasing commits one order write; cancellation preserves the original order.
-  Project Group assignment remains an explicit Project-menu or registry action rather than a cross-Group drop side effect.
+- **A Project drag crosses Group boundaries.** It resolves its target from the pointer across the
+  whole tree rather than being confined to the list it started in, so the one gesture both reorders
+  within a section and moves a Project between sections. Which list it landed in is read off that
+  list's `data-group-id`; the ungrouped root list carries the empty string.
+  It was confined to its own list originally, on the argument that Group membership is an explicit
+  decision rather than a drop side effect. In practice a Group could only be filled from a menu two
+  levels away from the tree it rearranges, which is the surface the decision is actually made on.
+  The Project-menu Group select and the registry's Group field remain, unchanged.
+- A drop commits **two writes, in this order**: `PATCH /api/projects/{id}` for the Group, then
+  `PUT /api/projects/order` for the position. The reorder is validated against the positions it was
+  planned from, and a Group write changes none of them, so the order is safe either way round.
+  A drag that never left its Group sends only the reorder; one that only changed Group sends only
+  the `PATCH`, because the ordering call returns early on an unchanged order — before it would
+  demote the sort to Manual.
+- A list with no row to sit beside — an empty Group, a folded one, or the root with every Project
+  grouped — is a drop target in its own right, outlined whole rather than shown an insertion line
+  there is no gap to draw. The Project keeps its slot in the global position order, since there is
+  no sibling in there to sit before or after.
+- Releasing outside every list commits nothing. The pointer must be inside a list's box or within
+  `DROP_LIST_MARGIN` of one — which is what makes the seams between sections droppable — and a miss
+  resets the plan to the baseline rather than leaving the last hovered target armed. With a Group
+  change riding on the same gesture, a stray release must not reassign a Project.
+- Mobile Project pickup closes open menus, gives short haptic feedback, previews the landing slot, and edge-scrolls the tree until release.
+  Cancellation preserves the original order and Group.
 - Mobile Project rows expose `⋮` immediately left of Run for the Project context menu.
   Project long-press is reserved for reorder; desktop right-click remains the pointer context-menu route.
   Mobile session long-press remains context-menu-only and never starts sidebar grouping or reorder.
 - A Group header's only button is `✎` (rename), revealed on hover over that header (and on
   keyboard focus; touch always shows it, having no hover). It carried a `×` that deleted the Group and
   ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
-  click, so the sidebar no longer deletes Groups at all. Emptying one has the same visible effect,
-  since a Group with no Projects in it is not rendered as a section.
+  click, so the sidebar no longer deletes Groups at all. Deleting one is an API-only operation.
+- **A Group renders whether or not it holds anything.** An empty one shows its header plus a
+  `Drag a Project here` hint, which is also its drop target. Empty Groups were filtered out of the
+  tree, so creating a Group appeared to do nothing and the only way to fill it pointed at a section
+  that was not on screen. The ungrouped root list follows the same rule in reverse: it renders
+  whenever any Group exists, so a user who grouped every Project can still drag one back out.
 - A folded Group reports both a live-session count and the strongest agent state inside it,
   in the collapsed rail's colours. A count alone would let an agent waiting for approval
   disappear behind the fold, which is the one thing collapsing must not hide.
-- A drag only ever permutes the rows on screen; hidden Projects and empty Groups keep the slots
-  they already held rather than being reshuffled by a reorder the user could not see.
+- A drag only ever permutes the rows on screen; a Project hidden from the sidebar keeps the slot it
+  already held rather than being reshuffled by a reorder the user could not see. (Empty Groups are
+  now on screen and so are ordinary drag participants; `mergeVisibleOrder` stays in the Group path
+  because it is what keeps this correct if anything is ever filtered out of the tree again.)
 - "Recently used" reads the daemon-persisted `ProjectRecord.last_used_at` timestamp, so mobile and desktop rank the same explicit Project use.
   The sort-mode selection remains device-local; selecting Recently used on one browser does not change another browser's selected mode.
   A successful explicit prompt submission or user-initiated session start advances the timestamp through `POST /api/projects/{project_id}/used`.

@@ -47,9 +47,13 @@ type Props = {
   children: ComponentChildren
   disabled?: boolean
   hint?: string
+  /** Rendered between the label and the caret. Folding rows away also folds away any
+   *  count they carried, so a group holding something that wants attention has to say
+   *  so on its own header or the signal is simply gone until the group is opened. */
+  badge?: ComponentChildren
 }
 
-export function MenuGroup({ id, label, openId, onOpenChange, children, disabled, hint }: Props) {
+export function MenuGroup({ id, label, openId, onOpenChange, children, disabled, hint, badge }: Props) {
   const flyout = useFlyoutCapable()
   const open = openId === id && !disabled
   const header = useRef<HTMLButtonElement>(null)
@@ -100,7 +104,7 @@ export function MenuGroup({ id, label, openId, onOpenChange, children, disabled,
       onPointerEnter={event => { if (event.pointerType !== 'touch') scheduleOpen() }}
       onPointerLeave={event => { if (event.pointerType !== 'touch') scheduleClose() }}
       onClick={() => { clear(); onOpenChange(open ? null : id) }}
-    >{label}<span class="menu-group-caret" aria-hidden="true">{flyout ? '›' : open ? '▾' : '▸'}</span></button>
+    >{label}{badge}<span class="menu-group-caret" aria-hidden="true">{flyout ? '›' : open ? '▾' : '▸'}</span></button>
     {open && (flyout
       ? <div
           ref={panel}
