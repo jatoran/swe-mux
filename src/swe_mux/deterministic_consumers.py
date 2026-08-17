@@ -981,7 +981,10 @@ class DeterministicConsumerService:
             if fact.get("kind") not in ("file_write", "file_write_result"):
                 continue
             identity = normalize_target(fact.get("target"), root)
-            if identity is None or cg.spec_for_path(identity) is None:
+            # Same rule the graph itself uses: a worktree copy or generated file is
+            # not part of the canonical tree, so it neither maintains the graph nor
+            # earns a blast-radius finding.
+            if identity is None or not cg.is_indexable_path(identity):
                 continue
             if identity not in out:
                 out.append(identity)

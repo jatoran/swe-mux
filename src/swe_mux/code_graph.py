@@ -854,6 +854,18 @@ class CodeGraphStore:
 
         return await self._run(op)
 
+    async def clear_project(self, project_id: str) -> None:
+        """Drop the whole graph for a Project. Used before a fresh seed so stale
+        rows (a file since deleted, or a worktree copy a prior build wrongly
+        indexed) do not survive as phantom nodes and edges."""
+
+        def op() -> None:
+            for table in ("code_graph_edges", "code_graph_symbols", "code_graph_files"):
+                self._db.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+            self._db.commit()
+
+        await self._run(op)
+
     # -- Queries ----------------------------------------------------------- #
 
     async def reverse_dependents(
@@ -1218,6 +1230,28 @@ def _abspath(project_root: str, target: str) -> Path:
     return Path(project_root) / target
 
 
+def is_indexable_path(path: str) -> bool:
+    """Whether a normalized path belongs in the graph.
+
+    A supported source file that is not under a skipped or hidden directory. The
+    seed walk (``iter_source_files``) prunes these dirs already; the incremental
+    maintenance path must apply the identical rule, or a session that edits a
+    nested worktree (``.claude/worktrees/…``), a dependency, or generated output
+    leaks near-duplicate copies of the whole repository into the Project's
+    canonical graph — bloating it without bound and polluting every blast radius
+    with worktree copies of the real callers.
+    """
+    if spec_for_path(path) is None:
+        return False
+    segments = path.replace("\\", "/").split("/")
+    for segment in segments[:-1]:
+        if not segment or segment in (".", ".."):
+            continue
+        if segment in _SKIP_DIRS or segment.startswith("."):
+            return False
+    return True
+
+
 def _read_and_parse(path: str, project_root: str) -> ParsedFile | None:
     """Read a file's bytes and parse it — the CPU-bound half, run on a worker
     thread so a large index never blocks the event loop."""
@@ -1239,6 +1273,10 @@ async def index_project(
     edges once; every later edit refreshes its own file. It is not the rejected
     full-rebuild-on-every-change watcher — it runs at most once per project.
     """
+    # A fresh seed is authoritative for the whole tree, so clear first: a prior
+    # build's stale rows (a since-deleted file, or worktree copies the incremental
+    # path leaked in before this rule existed) must not survive as phantom nodes.
+    await store.clear_project(project_id)
     files = await asyncio.to_thread(lambda: list(iter_source_files(project_root, limit=limit)))
     parsed_files: list[ParsedFile] = []
     leaf_index: dict[str, set[str]] = {}
@@ -1273,7 +1311,10 @@ async def maintain_files(
         if identity is None or identity in seen:
             continue
         seen.add(identity)
-        if spec_for_path(identity) is None:
+        if not is_indexable_path(identity):
+            # A worktree copy or generated file the seed would never walk: keep it
+            # out of the canonical graph, and remove any copy a prior build leaked.
+            await store.remove_file(project_id, identity)
             continue
         abspath = _abspath(project_root, raw)
         try:

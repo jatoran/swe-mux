@@ -265,6 +265,30 @@ async def test_subgraph_bounded(tmp_path: Path) -> None:
     store.close()
 
 
+def test_is_indexable_path_excludes_worktrees_and_generated() -> None:
+    from swe_mux.code_graph import is_indexable_path
+
+    assert is_indexable_path("src/swe_mux/server.py")
+    assert is_indexable_path("frontend/src/api.ts")
+    # A nested worktree copy, a dependency, and generated output are not part of
+    # the canonical tree the graph indexes.
+    assert not is_indexable_path(".claude/worktrees/x/frontend/src/api.ts")
+    assert not is_indexable_path("frontend/node_modules/pkg/index.js")
+    assert not is_indexable_path("dist/bundle.js")
+    assert not is_indexable_path("readme.md")  # unsupported extension
+
+
+async def test_maintain_skips_worktree_copies(tmp_path: Path) -> None:
+    # A write under a nested worktree must not leak a copy of the repo into the
+    # Project graph (the bug that ballooned the live edge table).
+    (tmp_path / ".claude" / "worktrees" / "x").mkdir(parents=True)
+    (tmp_path / ".claude" / "worktrees" / "x" / "app.py").write_text("def f():\n    return 1\n")
+    store = CodeGraphStore(tmp_path / "graph.db")
+    await maintain_files(store, "p1", str(tmp_path), [".claude/worktrees/x/app.py"])
+    assert await store.file_count("p1") == 0
+    store.close()
+
+
 async def test_edges_dedupe_call_sites(tmp_path: Path) -> None:
     # A caller that calls the same target several times is one relationship, not one
     # edge per call site — otherwise the reverse-dependency walk explodes on a real
