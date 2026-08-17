@@ -802,7 +802,11 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
     """
     app = source("App.tsx")
 
-    for flow in ("resumeHistoryEntry", "branchSession", "resumeSession", "confirmSecondOpinion"):
+    # `runBranch` rather than `branchSession`: the latter now decides between opening
+    # the point picker and branching on the click, and it is `runBranch` that actually
+    # spawns and therefore owes the focus request - reached both directly and from the
+    # picker's confirm.
+    for flow in ("resumeHistoryEntry", "runBranch", "resumeSession", "confirmSecondOpinion"):
         body = re.search(rf"const {flow} = ?async[^\n]*\n(.*?)\n  \}}\n", app, re.DOTALL)
         assert body, f"{flow} is no longer a recognisable handler"
         assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"

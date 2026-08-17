@@ -1495,6 +1495,29 @@ body {
 .control-plane-modal-body .send-agent-submit{grid-template-columns:24px minmax(0,1fr);align-items:center;gap:8px;cursor:pointer}
 .control-plane-modal-body .send-agent-message{min-height:200px;white-space:pre-wrap;font:12px 'Cascadia Mono',Consolas,monospace}
 @media(max-width:700px){.send-agent-targets{max-height:200px}.control-plane-modal-body .send-agent-option,.control-plane-modal-body .send-agent-submit{grid-template-columns:24px minmax(0,1fr)}.control-plane-modal-body .send-agent-message{min-height:150px}}
+/* Choosing where a conversation forks. Rows in the same shape as the send-to-agent picker,
+   newest first, with the speaker and the cut this row would make read as one line so the
+   list is scannable rather than re-readable. An ineligible row keeps its reason inline:
+   hiding it would leave the reader wondering why a point they can see is not offered. */
+.branch-picker-modal{width:min(760px,calc(100vw - 24px))}
+.branch-picker-note{margin:0;color:var(--muted)}
+.branch-point-list{max-height:min(52vh,420px);overflow:auto;border:1px solid var(--line);background:var(--bg)}
+.control-plane-modal-body .branch-point{grid-template-columns:24px minmax(0,1fr);align-items:start;gap:8px;padding:8px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);cursor:pointer}
+.branch-point:last-child{border-bottom:0}
+.branch-point:hover{background:var(--panel2)}
+.branch-point.active{background:color-mix(in srgb,var(--accent) 10%,var(--panel2))}
+.branch-point.blocked{cursor:default;opacity:.72}
+.branch-point.blocked:hover{background:transparent}
+.branch-point-body{display:grid;gap:3px;min-width:0}
+.branch-point-body strong{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:var(--text);font-weight:400}
+.branch-point-body small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.branch-point-speaker{text-transform:uppercase;letter-spacing:.06em;font-size:11px;color:var(--muted)}
+.branch-point.user .branch-point-speaker{color:var(--accent)}
+.branch-point-body time{font-size:11px;color:var(--muted)}
+.branch-point-action{margin-left:auto;font-size:11px;color:var(--muted)}
+.branch-point.active .branch-point-action{color:var(--accent)}
+.branch-point-blocked{font-style:normal;font-size:11px;color:var(--warn,var(--muted))}
+@media(max-width:700px){.branch-point-list{max-height:46vh}.branch-point-action{margin-left:0}}
 
 /* Unified note discovery: the footer is the global entry point; editors remain contextual. */
 /* menu pinned left, the alerts switch pinned right. The footer used to end in a

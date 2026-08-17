@@ -511,7 +511,8 @@ POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
 DELETE /sessions/{id}
 POST   /sessions/{id}/input
-POST   /sessions/{id}/branch          {name?, target_session_id?, direction?}
+GET    /sessions/{id}/branch-points[?limit=]
+POST   /sessions/{id}/branch          {name?, target_session_id?, direction?, from_message_id?, mode?}
 POST   /sessions/{id}/broadcast-set
 POST   /broadcast/input
 POST   /sessions/{id}/attachments   multipart `file`; X-Mux-User-Gesture: terminal-attachment
@@ -522,24 +523,50 @@ GET    /sessions/{id}/skills[?refresh=1]
 GET    /sessions/{id}/agent-environment[?refresh=1]
 ```
 
-`POST /sessions/{id}/branch` forks a live agent conversation and returns
-`201 {session, source}` with the sibling pane already attached to the Project layout. It is a
-slow endpoint by design — it types a command into a running CLI and then waits for that CLI to
-report the result — and it emits `session_branched` carrying `original`, `branch_id`,
-`sibling_id`, `release`, `attempts`, and `duration_ms`. The refusals are all distinguishable, and
-none of them leaves a half-made pane behind:
+`GET /sessions/{id}/branch-points` lists where this conversation can be forked. Every "nothing to
+offer" case answers `200` with a `reason` rather than an error status, because opening the picker
+on a pane that has not spoken yet is an ordinary thing to do:
+
+```
+{session_id, backend, conversation_id, strategy, from_message, truncated,
+ reason: null|not_agent|no_transcript|unreadable|dialect_unsupported|strategy_has_no_points,
+ points: [{message_id, ordinal, role, ts, text, default_mode,
+           modes: {before: {eligible, reason}, after: {eligible, reason}}}]}
+```
+
+`default_mode` follows the role, because the two cuts are opposite acts on opposite kinds of
+message: a prompt is a thing to redo (`before`), an agent reply a thing to continue from
+(`after`). Eligibility is per point, not per harness — the same conversation offers a legal cut
+after one reply and an `unanswered_tool_calls` refusal after the next. `truncated` bounds only
+which cuts can be *named*: a fork always carries the conversation from its first byte.
+
+`POST /sessions/{id}/branch` forks the conversation and returns
+`201 {session, source, strategy, fork, seed_text}` with the new pane already attached to the
+Project layout. `from_message_id`/`mode` are accepted only by a `transcript_fork` harness and
+default to the newest point; `fork` reports `{conversation_id, from_message_id, mode, cut_offset,
+records_written, records_dropped, attachments_copied, bytes_written}`; `seed_text` is the prompt a
+`before` cut excluded, for the client to place in the new pane's composer. It emits
+`session_branched` carrying `original`, `branch_id`, `sibling_id`, `strategy`, `from_message_id`,
+`mode`, `records_written`, `attempts`, and `duration_ms`, and records a `branch` lineage edge. The
+refusals are all distinguishable, and none of them leaves a half-made pane behind:
 
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `not_agent` | 422 | The backend has no observable transcript |
 | `branch_unsupported` | 422 | The harness declares no `branch_strategy` |
-| `source_busy` | 409 | The pane is mid-turn or holding an approval dialog |
-| `source_not_live` | 409 | The pane has ended |
-| `source_composer_dirty` | 409 | Unsent composer text would swallow the command |
+| `branch_point_unsupported` | 422 | A point was named for a harness that can only fork from now |
+| `bad_mode` | 422 | `mode` was neither `before` nor `after` |
+| `source_busy` | 409 | `resume_child_thread` only: the pane is mid-turn or holding an approval dialog |
+| `source_not_live` | 409 | `resume_child_thread` only: the pane has ended |
+| `source_composer_dirty` | 409 | `resume_child_thread` only: unsent composer text would swallow the command |
 | `native_id_missing` | 409 | No conversation id to fork from yet |
-| `branch_timeout` | 504 | No fork transcript appeared; carries `source_state`, re-read at the timeout, because a turn that had begun but was not yet detected is the usual cause |
-| `branch_id_unresolved` | 409 | Branched, but nothing could name the fork; original stays in History |
-| `branch_sibling_failed` | 503 | Branched, but the original would not reopen after N attempts |
+| `no_transcript` / `unreadable` / `dialect_unsupported` / `no_messages` | 409 | Nothing forkable to read |
+| `branch_point_unknown` | 409 | The named message is not in the conversation's current window |
+| `unanswered_tool_calls` | 409 | A cut there would leave a tool call unanswered, and the provider rejects such a conversation |
+| `outside_window` | 409 | Nothing precedes that message to cut after |
+| `empty_prefix` / `source_too_large` / `fork_id_taken` / `source_unreadable` | 409 | The writer refused the source (`transcript_fork.ForkRefused`) |
+| `fork_write_failed` | 500 | The fork could not be written |
+| `branch_sibling_failed` | 503 | The branch exists but its pane would not stay up; carries `conversation_id` so it can be reopened from History |
 
 `POST /sessions/{id}/title/regenerate` accepts no body and returns `202 {ok:true}` after emitting
 an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex

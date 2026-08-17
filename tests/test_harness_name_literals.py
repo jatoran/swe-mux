@@ -109,6 +109,11 @@ _FUNCTION_ALLOWLIST: dict[str, str] = {
     ),
     # Dialect comparisons that happen to share a spelling with a harness name.
     "transcript_view.py::_conversation_records": "compares dialects, not harnesses",
+    # Dialect-keyed capability registries. The key is the record format, which is why
+    # pi and oh-my-pi will share one entry rather than needing two; a missing key
+    # means "mux cannot do this here" and every reader of these tables states that.
+    "transcript_view.py::<module>": "dialect-keyed scanner registry, not harnesses",
+    "transcript_fork.py::<module>": "dialect-keyed writer registry, not harnesses",
     # Anchored dispatches whose `assert_never` the scanner cannot see from here.
     "adapters/__init__.py::build_agent_adapter": "adapter-family dispatch, assert_never anchored",
 }

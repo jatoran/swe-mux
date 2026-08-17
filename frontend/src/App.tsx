@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren, JSX } from 'preact'
 import { api, openWebSocket, type ApiError } from './api'
 import {
-  allBackendNames, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
+  allBackendNames, branchesFromMessage, deliversHarnessPrompts, harnessDisplayName, hasHarnessTranscript, installHarnessRegistry, isAgentBackend,
   isObservedHarness, setHarnessEnablement, type HarnessRegistryPayload,
 } from './harnessRegistry'
+import { BranchPicker } from './BranchPicker'
+import type { BranchRequest } from './branchPoints'
+import { stageBranchSeed } from './branchSeed'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
 import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
@@ -602,6 +605,10 @@ export function App() {
   const setDragStackTab=(next:StackTabDrag|null)=>{dragStackTabRef.current=next;setDragStackTabState(next)}
   const previewDragStackTab=(next:StackTabDrag)=>{dragStackTabRef.current=next}
   const [promptLibraryOpen,setPromptLibraryOpen]=useState(false)
+  // The session whose branch point is being chosen. Held by id rather than by object
+  // so a session update under the dialog cannot leave it rendering a stale snapshot,
+  // and so the dialog closes by itself if that session disappears.
+  const [branchPickerId,setBranchPickerId]=useState<string|null>(null)
   // The inbox is per-Project, so it carries its Project rather than following the
   // active one — it opens from a Project's own context menu.
   // The Queue drawer tab's deliberate-open counter focuses the composer even when the
@@ -3572,16 +3579,32 @@ export function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
 
-  // Fork an agent conversation into a sibling pane. The daemon injects Claude's
-  // native /branch (or a Codex resume child-thread), attaches the new pane, and
-  // returns the new session; refresh() re-syncs the server-updated layout.
-  const branchSession = async (session: Session) => {
+  // Fork a conversation into a sibling pane. The daemon writes the forked
+  // conversation itself (`transcript_fork`) or asks the CLI for a child thread,
+  // attaches the new pane, and returns the new session; refresh() re-syncs the
+  // server-updated layout. The source pane is never touched either way.
+  //
+  // A `before` cut hands back the prompt it excluded. It is staged rather than typed:
+  // the pane it belongs to is still spawning, and it claims the text once its replay
+  // finishes (`branchSeed.ts`).
+  const runBranch = async (session: Session, request: BranchRequest = {}): Promise<string> => {
     try {
-      const result = await api<{ session: Session; source: string }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after' })
+      const result = await api<{ session: Session; source: string; seed_text: string | null }>('POST', `/api/sessions/${session.id}/branch`, { target_session_id: session.id, direction: 'after', ...request })
+      stageBranchSeed(result.session.id, result.seed_text)
       markProjectRecent(result.session.project_id)
       setSessions(items => [...items, result.session]); setActiveId(result.session.id); requestFocusView(result.session.id)
       await refresh()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+      return ''
+    } catch (cause) { return cause instanceof Error ? cause.message : String(cause) }
+  }
+
+  // A harness that honours a chosen point gets the picker; one that can only fork from
+  // where the conversation stands now branches on the click, because a picker there
+  // would offer a choice the daemon then refuses.
+  const branchSession = async (session: Session) => {
+    if (branchesFromMessage(session.backend)) { setBranchPickerId(session.id); return }
+    const failure = await runBranch(session)
+    if (failure) setError(failure)
   }
 
   // Resume targets the history entry of the conversation the pane was last on,
@@ -5882,6 +5905,10 @@ export function App() {
 
     {actionEditorOpen && <ActionEditorModal onClose={() => setActionEditorOpen(false)} />}
 
+    {/* Resolved from the live list each render, so a session that ends or is removed
+        under the dialog closes it instead of leaving it aimed at a pane that is gone. */}
+    {(()=>{const target=branchPickerId?sessions.find(item=>item.id===branchPickerId):null
+      return target?<BranchPicker session={target} onClose={()=>setBranchPickerId(null)} onBranch={request=>runBranch(target,request)}/>:null})()}
     {promptLibraryOpen&&<PromptLibrary project={promptScope||activeProject} backend={(sessions.find(session=>session.id===promptTargetId)||active)?.backend} onClose={()=>{setPromptLibraryOpen(false);setPromptTargetId(null)}} onInsert={text=>window.dispatchEvent(new CustomEvent('mux:terminal-action',{detail:{sessionId:promptTargetId||activeId,action:'insertText',text}}))}/>}
 
     {usageOpen&&<UsageDashboard onClose={()=>setUsageOpen(false)} onConfigure={()=>{setUsageOpen(false);openSettings('Usage analytics')}}/>}

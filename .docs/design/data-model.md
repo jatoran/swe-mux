@@ -228,6 +228,14 @@
   model, generation, token and cost usage, latency, provider, finish reason, HTTP status,
   retryability, and response content type and length.
   Provider response content is not stored.
+- `session_lineage(parent_run_id, child_run_id, relation, metadata_json)`: how one run came from
+  another, unique per triple. `relation` is one of `resume`, `handoff`, `continuation`, `review`,
+  `branch`. A `branch` edge is the only record that a fork happened: the branch is a separate
+  conversation in its own file, so without the edge it is indistinguishable from an unrelated
+  conversation that happens to share a prefix. Its metadata carries the strategy, both
+  conversation ids, and the message and cut the fork was made at, so the fork point outlives the
+  request. The edge is written after the branch's pane is proved up, and a failure to write it is
+  logged rather than raised — losing the edge degrades the lineage view, not the conversation.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
   feature-specific contracts. `AutomationStore` has an additive migration path; the
   annotations rebuild that relaxed `agent_run_id` to nullable is gated on the new column

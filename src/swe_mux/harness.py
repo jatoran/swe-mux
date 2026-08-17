@@ -39,15 +39,23 @@ TranscriptDialect = Literal["claude", "codex", "pi", "opencode"]
 ToolCatalogSource = Literal["documented_catalog", "runtime_dependent"]
 Backend = Literal["shell", "claude", "codex", "omp", "pi", "opencode"]
 AdapterFamily = Literal["claude", "codex", "omp", "pi", "opencode"]
-# How a harness forks a live conversation, for the harnesses that can.
+# How a harness forks a conversation, for the harnesses that can.
 #
-# `native_slash_command` drives the CLI's own fork command over the PTY and lets
-# it mint the new conversation. `resume_child_thread` spawns a resume of the
-# parent, which the CLI opens as a child thread. `None` means mux has no
-# implemented strategy and the server refuses the request rather than reaching
-# for a generic one: resuming a live conversation whose writer is still attached
-# would interleave two writers into one session file.
-BranchStrategy = Literal["native_slash_command", "resume_child_thread"]
+# `transcript_fork` is mux's own: it writes a **new** conversation file holding the
+# source conversation's records up to a chosen message and resumes that. The source
+# file is opened read-only, no process is asked to participate, and the cut can land
+# anywhere in the conversation rather than only at its end - so a session that is
+# mid-turn, waiting on an approval, or already exited forks exactly as well as an
+# idle one. It is the only strategy that can branch from a *point*.
+#
+# `resume_child_thread` spawns a resume of the parent, which the CLI opens as a
+# child thread diverging from the still-live original. It can only ever fork from
+# now, because the CLI decides what the child inherits.
+#
+# `None` means mux has no implemented strategy and the server refuses the request
+# rather than reaching for a generic one: resuming a live conversation whose writer
+# is still attached would interleave two writers into one session file.
+BranchStrategy = Literal["transcript_fork", "resume_child_thread"]
 MemoryInventoryKind = Literal["claude_project_markdown", "codex_feature_flag"]
 
 
@@ -695,7 +703,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
             "-c",
             "--fork-session",
         ),
-        branch_strategy="native_slash_command",
+        branch_strategy="transcript_fork",
         instruction_file_name="CLAUDE.md",
         global_instruction_parts=_CLAUDE_GLOBAL_INSTRUCTIONS,
         memory_inventory=MemoryInventory(
@@ -1343,6 +1351,17 @@ def branchable_harnesses() -> tuple[str, ...]:
     return tuple(name for name, harness in HARNESSES.items() if harness.branch_strategy)
 
 
+def branches_from_message(name: object) -> bool:
+    """Whether a branch of this harness can be cut at a chosen message.
+
+    The distinction the browser needs: a `transcript_fork` harness is offered a
+    point to branch from, while every other branchable harness can only fork from
+    where the conversation currently stands, so offering it a picker would present a
+    choice the daemon would then ignore.
+    """
+    return branch_strategy(name) == "transcript_fork"
+
+
 def live_canary_harnesses() -> tuple[str, ...]:
     """Harnesses the live transcript-conformance canary can drive against a real CLI.
 
@@ -1795,6 +1814,10 @@ def public_harness_registry(
                     # session's cwd and the browser has to say so.
                     "resolves_transcript_by_cwd": harness.resolves_transcript_by_cwd,
                     "branch": harness.branch_strategy is not None,
+                    # Branching from a chosen message, as distinct from branching at
+                    # all. The rail offers a picker only where the daemon can honour
+                    # one.
+                    "branch_from_message": harness.branch_strategy == "transcript_fork",
                     "webgl_unsafe": harness.webgl_unsafe,
                     "owns_scroll_viewport": harness.owns_scroll_viewport,
                     "width_envelope": harness.applies_width_envelope,

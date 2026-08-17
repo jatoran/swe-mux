@@ -9,6 +9,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import '@xterm/xterm/css/xterm.css'
 import { api, openWebSocket, uploadTerminalAttachment } from './api'
+import { takeBranchSeed } from './branchSeed'
 import type { Session } from './types'
 import { applicationTouchScrollProfile, assignsConversationId, harnessDisplayName, isAgentBackend, repaintsScrollback, resolvesTranscriptByCwd, supportsBranch } from './harnessRegistry.ts'
 import { keyChord } from './keys'
@@ -2009,6 +2010,17 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       for (const item of queued) sendInput(item.data, false, item.broadcast, false, item.capture)
       scheduleFullRedraw()
       maybeRequestScrollbackRepaint()
+      // A branch cut before one of the operator's own messages hands that message
+      // back. This is the first moment the pane can take it: the composer exists and
+      // the replay is no longer racing what is typed into it. Routed through the
+      // pane's own action listener rather than calling `injectText` directly, so it
+      // takes the same broadcast, read-mode and error path as any other insertion.
+      // Inserted, never submitted - re-sending the prompt unedited would repeat the
+      // request the branch existed to change.
+      const seed = takeBranchSeed(session.id)
+      if (seed) window.dispatchEvent(new CustomEvent('mux:terminal-action', {
+        detail: { sessionId: session.id, action: 'insertText', text: seed },
+      }))
     }
     const handleMessage=(event:MessageEvent, source:WebSocket)=>{
       if (event.data instanceof ArrayBuffer) {

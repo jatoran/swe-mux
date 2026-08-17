@@ -1299,6 +1299,15 @@ responsive controls.
   deliberately keeps its label**: a copy glyph cannot distinguish it from Copy reply, and the
   two sit side by side. Icon buttons size like keys (30/44 px) and carry an explicit
   `aria-label`, since the title attribute is not a name on touch.
+- **Branch opens a point picker where the daemon honours one** (`BranchPicker.tsx`, gated on the
+  published `branch_from_message`), and forks on the click where it does not — offering a choice
+  the daemon would then refuse is worse than offering none. The picker is a dialog of its own
+  rather than controls added to the Transcript tab: that tab is deliberately inert, copy being its
+  only verb, because it is where somebody reviews what an agent already did and a stray tap there
+  must not start a session. Rows run newest first, since a branch is normally a recent regret; each
+  states the cut it would make in the words of the act (a prompt is branched *before*, a reply
+  *after*); and a row whose cut is illegal stays visible with its reason inline, because the reader
+  can see the message and hiding why it is not offered leaves them guessing.
 - The Markdown editor carries a *second, separate* rail: Continuity's own, which the vendored
   editor renders only on touch-primary devices and persists per device in `localStorage`. swe-mux
   registers one host action on it (`mux:send-to-agent`) instead of projecting its `RailItem`

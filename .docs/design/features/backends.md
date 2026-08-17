@@ -92,7 +92,8 @@ Skipping the panel sets only that flag and writes no `harness_enabled` entries, 
 | Did mux dictate this conversation id? | `assigns_conversation_id(name)` | Identity healing, collision reconciliation, observer transcript rebinding, branch readiness, resume availability |
 | Which argv carries a conversation id? | `conversation_id_argv(name)`, `native_id_from_args(name, args)` | Recovering a pane's conversation from its recorded command line |
 | What resumes this conversation elsewhere? | `resume_command(name, id)`; published `cli_name` + `resume_argv` | The Copy-resume affordance |
-| How is a live conversation forked? | `branch_strategy(name)` | Branch dispatch and its refusal; the browser's branch gate reads the published `branch` capability |
+| How is a conversation forked? | `branch_strategy(name)` | Branch dispatch and its refusal; the browser's branch gate reads the published `branch` capability |
+| Can a branch be cut at a chosen message? | `branches_from_message(name)` (frontend `branchesFromMessage(name)`, published `branch_from_message`) | Whether the rail's Branch opens a point picker or forks on the click |
 | What does a user type to invoke a skill? | published `skill_invocation_prefix` | Skill inventories and the command rail's injected payload |
 | Which root instruction file does the CLI read? | `instruction_harnesses()`, `instruction_file_name`, `global_instruction_parts` | Agent Context inventory and sync |
 | Which harness is this command line running? | `harness_for_command(executable, args)` | Recognizing an already-launched agent, including the history backend-mismatch repair |
@@ -169,6 +170,9 @@ The descriptor is the source of truth for all generic surfaces.
 - Every harness declares its CLI grammar: `spawn_id_argv`, `resume_argv`, `skill_invocation_prefix`, `instruction_file_name` with `global_instruction_parts`, and `npm_entrypoint` when it ships as an npm package.
   `spawn_id_argv` is non-empty exactly when `assigns_conversation_id` is true, and the descriptor rejects a pair that disagrees.
 - Every harness declares `publishes_cli_state`, `branch_strategy` (or `None`), and `requires_direct_entrypoint`.
+  `transcript_fork` is the strategy where mux writes the forked conversation itself; declaring it obliges two dialect-keyed entries, both keyed on `transcript_dialect` rather than the harness name so two harnesses sharing a record format share one implementation: a cut-point scanner (`transcript_view._OPEN_TOOL_SCANNERS`, which answers what a cut at each record boundary would leave unanswered) and a fork writer (`transcript_fork._FORK_WRITERS`).
+  A dialect present in neither is a dialect mux refuses to fork rather than one it forks blindly; adding both is the whole cost of making a new harness branchable from a point, and nothing in the server, the API, or the browser changes.
+  `resume_child_thread` obliges nothing beyond a CLI whose resume opens a child thread with its own conversation file.
 - Every observed harness declares non-empty `normalized_events`, a record classifier, and replay fixtures meeting its derived-level corpus floor.
   Its own fixtures must produce every normalized event it declares, reach `working` and `idle`, reach `awaiting` with an `approval` sub-reason when it declares `approval_needed`, and produce an inferred reading plus a watchdog recovery when it declares a `pty` source (`test_status_matrix_is_covered_per_harness_not_just_corpus_wide`).
   The corpus-wide matrix is a union that Claude's fixtures largely satisfy alone, so per-harness coverage is asserted separately.

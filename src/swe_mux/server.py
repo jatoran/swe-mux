@@ -268,9 +268,18 @@ from .tailscale import (
 )
 from .terminal_arbitration import ClaimReason, ClaimRequest, evaluate_claim
 from .tier0_store import Tier0Context, Tier0Store
+from .transcript_fork import (
+    ForkPlan,
+    ForkRefused,
+    ForkUnsupported,
+    mint_conversation_id,
+    write_fork,
+)
 from .transcript_view import (
     CONVERSATION_DEFAULT_LIMIT,
     CONVERSATION_MAX_LIMIT,
+    CutPoint,
+    conversation_cut_points,
     conversation_is_readable,
     conversation_view_cached,
     final_reply_text,
@@ -851,6 +860,7 @@ def create_app(
             ),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/relaunch", relaunch_session),
+            web.get("/api/sessions/{sid}/branch-points", session_branch_points),
             web.post("/api/sessions/{sid}/branch", branch_session),
             web.post("/api/sessions/{sid}/input", session_input),
             web.post("/api/sessions/{sid}/startup-metrics", session_startup_metrics),
@@ -2956,7 +2966,13 @@ async def create_lineage(request: web.Request) -> web.Response:
     parent = str(body.get("parent_run_id") or "")
     child = str(body.get("child_run_id") or "")
     relation = str(body.get("relation") or "")
-    if not parent or not child or relation not in {"resume", "handoff", "continuation", "review"}:
+    if not parent or not child or relation not in {
+        "resume",
+        "handoff",
+        "continuation",
+        "review",
+        "branch",
+    }:
         raise ValueError("parent_run_id, child_run_id, and a valid relation are required")
     return json_response(
         await request.app["automation_store"].add_lineage(
@@ -5806,37 +5822,33 @@ def _branch_source_id(source: Any) -> str | None:
     return candidate if candidate and candidate != record.id else None
 
 
-def _claude_transcript_stems(adapter: Any, cwd: str) -> set[str]:
-    """Existing Claude transcript ids (file stems) for a working directory."""
-    try:
-        directory = adapter.transcript_path("probe", Path(cwd)).parent
-        return {path.stem for path in directory.glob("*.jsonl")} if directory.exists() else set()
-    except OSError:
-        return set()
-
-
-# How long `/branch` has to put a new transcript on disk. Generous because the CLI
-# writes the fork only after copying the conversation into it, and that cost grows
-# with the conversation.
-BRANCH_FORK_TIMEOUT_SECONDS = 20.0
-# How long to then wait for the source CLI to report that it has moved onto the fork.
-# See `_await_source_release` for why a file appearing is not that signal.
-BRANCH_RELEASE_TIMEOUT_SECONDS = 15.0
 # How long a freshly spawned sibling must stay alive before it counts as up. The
 # failure this measures killed a pane 1.3s after spawn, so the window has to clear it.
 BRANCH_SIBLING_SETTLE_SECONDS = 3.0
+# A `transcript_fork` sibling resumes a conversation nothing else has ever opened, so
+# there is no release to race and nothing a second attempt would be further from. A
+# `resume_child_thread` sibling reopens a conversation the source pane is still live
+# on, which is exactly the race a retry helps.
 BRANCH_SIBLING_ATTEMPTS = 3
 BRANCH_SIBLING_RETRY_BACKOFF_SECONDS = 1.5
+# Reading the conversation to list its branch points competes with nothing, but it
+# parses a whole transcript and must not be able to hold a request open.
+BRANCH_POINTS_TIMEOUT_SECONDS = 20.0
+# Writing the fork copies the prefix and its sidecar files. Generous, because the cost
+# is the conversation's size and a long one is the case worth being patient for.
+BRANCH_WRITE_TIMEOUT_SECONDS = 60.0
 
 
 def _branch_block_reason(session: Any) -> tuple[str, str] | None:
-    """Why writing `/branch` into this pane right now would damage it.
+    """Why forking this pane's conversation *through the CLI* would damage it.
 
-    Branching is the one flow that types into somebody else's terminal, so it owes
-    the same "is this pane ready for input" question every other write path asks.
-    Mid-turn, the slash command lands in a CLI that is not reading commands; with an
-    approval up it answers the dialog; with unsent text in the composer it appends to
-    that text and submits the pair as a prompt. All three are worse than refusing.
+    Only `resume_child_thread` asks a live process to participate in the fork, so
+    only it owes the "is this pane ready" question. Mid-turn, waiting on an approval,
+    ended, or holding unsent composer text, the CLI is not in a state to be asked.
+
+    A `transcript_fork` branch answers this question with the file system and is
+    therefore not gated: nothing is typed, the source file is opened read-only, and a
+    pane that is mid-turn or has already exited forks exactly as well as an idle one.
 
     Permissive where it cannot see: a record with no state is not evidence of a bad
     state, and this gate exists to catch the known-bad ones rather than to demand
@@ -5855,89 +5867,16 @@ def _branch_block_reason(session: Any) -> tuple[str, str] | None:
     return None
 
 
-async def _await_claude_fork(
-    adapter: Any, cwd: str, original: str, before: set[str], timeout_seconds: float
-) -> tuple[bool, str | None]:
-    """Wait for ``/branch`` to write a brand-new transcript in ``cwd``.
-
-    Watching the filesystem directly (rather than ``record.native_session_id``)
-    sidesteps the sibling-cwd switch gate, which intentionally suppresses the
-    daemon's own id update when other agents share the directory.
-
-    Returns ``(forked, branch_id)``. The id is the conversation the source pane
-    moved to, and it is reported only when exactly one new transcript appeared:
-    another agent starting in this cwd in the same instant makes "which file is the
-    fork" a guess, and the caller must not roll a pane's identity onto a guess. The
-    fork itself is still confirmed, and `_await_source_release` names the fork from
-    the CLI's own report, which is not a guess and settles the ambiguous case.
-    """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    while loop.time() < deadline:
-        await asyncio.sleep(0.3)
-        appeared = _claude_transcript_stems(adapter, cwd) - before - {original}
-        if appeared:
-            return True, next(iter(appeared)) if len(appeared) == 1 else None
-    return False, None
-
-
-async def _await_source_release(
-    queue: Any, source_id: str, original: str, timeout_seconds: float
-) -> tuple[str, str | None]:
-    """Wait for the source pane's CLI to report that it has left ``original``.
-
-    A new transcript appearing proves `/branch` **started**. It does not prove the
-    source process has let go of the conversation the sibling is about to resume, and
-    the two are seconds apart: measured live on 2026-08-14, the fork file appeared
-    0.2s after the command and the source pane reported the switch 8s after it.
-    Resuming inside that gap is fatal rather than slow — Claude refuses a conversation
-    another live process still holds and the resumed CLI exits 1 — and it reached the
-    operator as a sibling pane that spawned grey and dead.
-
-    The signal that the switch finished is the source pane's own ``SessionStart`` hook
-    naming a different transcript: the CLI reporting where it went, rather than the
-    daemon inferring it from a directory listing. That report also *names* the fork,
-    which is what makes it useful when two files appeared at once and the glob had to
-    decline to guess.
-
-    Returns ``(outcome, observed_id)``. Every outcome is a return value rather than an
-    exception because none of them stops the branch: the spawn retry downstream is what
-    actually verifies the conversation is free, and this wait only makes the first
-    attempt the one that succeeds.
-    """
-    if queue is None:
-        return "unavailable", None
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_seconds
-    # unsupervised-loop-ok: scoped to one branch request and bounded by `deadline`;
-    # every path out of it is a return, and an exception belongs to that request.
-    while True:
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            return "timeout", None
-        try:
-            event = await asyncio.wait_for(queue.get(), timeout=remaining)
-        except TimeoutError:
-            return "timeout", None
-        if getattr(event, "session_id", None) != source_id:
-            continue
-        if getattr(event, "type", "") != "SessionStart":
-            continue
-        payload = getattr(event, "payload", None) or {}
-        stem = Path(str(payload.get("transcript_path") or "")).stem
-        if stem and stem != original:
-            return "reported", stem
-
-
 async def _spawn_branch_sibling(
-    manager: Any, source_id: str, **spawn_kwargs: Any
+    manager: Any, source_id: str, attempts: int, **spawn_kwargs: Any
 ) -> tuple[Any, int, SpawnFailure | None]:
-    """Spawn the sibling pane and prove it survived, retrying an immediate exit.
+    """Spawn the sibling pane and prove it survived before handing it back.
 
-    Retrying is right *here* specifically: the failure this exists for is the
-    source CLI not yet having let go of the original conversation, which is a race
-    the next attempt is further from. `spawn_probe` deliberately leaves that
-    decision to the caller — a flow whose refusal is permanent must not retry it.
+    Verification is the load-bearing part and applies to both strategies: a CLI that
+    refuses the conversation it was given starts, prints one line, and exits *after*
+    the response that announced success, so an unverified branch reaches the operator
+    as a grey pane with no message. Whether to retry is the caller's, which is why
+    ``attempts`` is a parameter rather than a constant.
 
     Returns ``(session, attempts_used, failure)``.
     """
@@ -5945,57 +5884,357 @@ async def _spawn_branch_sibling(
         manager,
         flow=f"branch sibling for {source_id}",
         settle_seconds=BRANCH_SIBLING_SETTLE_SECONDS,
-        attempts=BRANCH_SIBLING_ATTEMPTS,
+        attempts=attempts,
         retry_backoff_seconds=BRANCH_SIBLING_RETRY_BACKOFF_SECONDS,
         **spawn_kwargs,
     )
 
 
-async def branch_session(request: web.Request) -> web.Response:
-    """Fork an agent conversation, keeping the original and the branch both open.
+def _branch_point_payload(
+    point: CutPoint, previous: CutPoint | None, text: str
+) -> dict[str, Any]:
+    """One offered branch point, with both cuts and why each is or is not available.
 
-    Claude has a native ``/branch`` that forks to a fresh session id in place, so
-    we inject it, wait for the new transcript to appear (the fork started) and then
-    for the source CLI to report that it moved onto it (the original is free), then
-    reopen the original id in a sibling pane — the source pane holds the new branch.
-    The second wait is not redundant with the first; see `_await_source_release` for
-    the failure that proved it. Codex has no in-CLI branch, so we simulate
-    one: ``codex resume`` starts a child thread (``parent_thread_id`` set) that
-    diverges from the still-live original without sharing its rollout, so the
-    source pane keeps the original and the new pane holds the branch.
+    Two cuts per message rather than one, because the two things an operator wants
+    from a conversation they are re-reading are opposite: *after* an agent's reply
+    continues from a point it had reached, while *before* their own message replays
+    the moment they were about to send it, so it can be sent differently. Neither is
+    the other with an off-by-one; a message has records on both sides of it.
 
-    In the Claude case the sibling *continues* the original conversation rather than
-    starting a new one, so it inherits that conversation's run exactly as a resume
-    does; opening a second row there left one conversation showing as two entries
-    with one file indexed twice. That inheritance is only sound once the source pane
-    has let go of the run, so the confirmed fork id is applied to it first: the
-    source retires the original row and opens its own, and the sibling then reopens
-    the row the original conversation owns. Without the explicit roll the source pane
-    keeps the retired id until a hook happens to report the replacement.
+    ``default_mode`` is which of the two that message is normally branched at, and it
+    follows the role: a user message is a thing to redo, an agent message is a thing
+    to continue from.
 
-    "Has let go" is a claim about a live process, not about a file, and getting that
-    wrong is what the release wait and the spawn retry below exist for. See
-    `_await_source_release` for the measurement that says so.
+    ``before`` is answered from the *preceding* message, because that is the record
+    the cut actually lands on. Stated here exactly as `_resolve_branch_cut` decides it:
+    a listing that offered a cut the request then refused would be a picker whose rows
+    lie.
+    """
+    return {
+        "message_id": point.message_id,
+        "ordinal": point.ordinal,
+        "role": point.role,
+        "ts": point.ts,
+        "text": text,
+        "default_mode": "before" if point.role == "user" else "after",
+        "modes": {
+            "after": _branch_mode_state(point),
+            "before": _branch_mode_state(previous),
+        },
+    }
+
+
+def _branch_mode_state(cut_at: CutPoint | None) -> dict[str, Any]:
+    """Whether a cut landing on ``cut_at``'s end offset is available, and why not."""
+    if cut_at is None:
+        return {"eligible": False, "reason": "outside_window"}
+    if cut_at.open_tool_calls:
+        return {"eligible": False, "reason": "unanswered_tool_calls"}
+    return {"eligible": True, "reason": None}
+
+
+def _resolve_branch_cut(
+    points: list[CutPoint], message_id: str, mode: str
+) -> tuple[int, CutPoint] | tuple[None, str]:
+    """The byte offset a branch is cut at, or the code explaining why there is none.
+
+    Every cut lands on some message's end offset, never on an arbitrary byte: cutting
+    *before* a message means cutting after the one that precedes it. That is what
+    keeps a fork's last record a real conversational record rather than whichever
+    housekeeping line the CLI happened to write next, and it is why "before the
+    oldest message this window can name" is refused instead of approximated with
+    byte zero.
+    """
+    index = next((i for i, point in enumerate(points) if point.message_id == message_id), None)
+    if index is None:
+        return None, "branch_point_unknown"
+    if mode == "after":
+        point = points[index]
+        if point.open_tool_calls:
+            return None, "unanswered_tool_calls"
+        return point.source_end, point
+    if index == 0:
+        return None, "outside_window"
+    previous = points[index - 1]
+    if previous.open_tool_calls:
+        return None, "unanswered_tool_calls"
+    return previous.source_end, points[index]
+
+
+def _branch_source(request: web.Request) -> tuple[Any, str, Any] | web.Response:
+    """The pane, its conversation id and its Project, or the refusal that replaces them.
+
+    Shared by the branch-point listing and the branch itself so the two cannot
+    disagree about which conversation a pane means — the listing offering points from
+    one conversation while the fork cut another is the exact class of bug the
+    ``agent_lifecycle_id`` anchor already exists to prevent.
     """
     manager: SessionManager = request.app["sessions"]
-    source = manager.resolve(request.match_info["sid"])
-    record = source.record
+    session = manager.resolve(request.match_info["sid"])
+    record = session.record
     if not has_observable_transcript(record.backend):
         return json_response(
             {"error": "only observable agent sessions can branch", "code": "not_agent"}, 422
         )
-    if blocked := _branch_block_reason(source):
-        code, why = blocked
-        log.info("branch refused for %s: %s (%s)", record.id, why, code)
-        return json_response({"error": f"cannot branch while {why}", "code": code}, 409)
+    conversation = _branch_source_id(session)
+    if not conversation:
+        return json_response(
+            {"error": "no conversation id to branch from yet", "code": "native_id_missing"}, 409
+        )
+    project = request.app["projects"].projects.get(record.project_id)
+    if project is None:
+        return json_response({"error": "project missing", "code": "project_missing"}, 422)
+    return session, conversation, project
+
+
+async def _read_branch_points(
+    session: Any, limit: int
+) -> tuple[list[CutPoint], dict[str, str], bool] | str:
+    """``(points, text_by_id, truncated)`` for this conversation, or a refusal code.
+
+    The reader answers two questions in one parse: where the cuts are, and what the
+    operator would recognise each one by. Both come from the same window, so a point
+    can never be offered with somebody else's words beside it.
+    """
+    record = session.record
+    path = session.transcript_path
+    if not conversation_is_readable(path, record.backend, record.native_session_id):
+        return "no_transcript"
+    try:
+        points = await asyncio.wait_for(
+            asyncio.to_thread(
+                conversation_cut_points,
+                path,
+                record.backend,
+                limit=limit,
+                native_id=record.native_session_id,
+            ),
+            timeout=BRANCH_POINTS_TIMEOUT_SECONDS,
+        )
+        view = await asyncio.wait_for(
+            asyncio.to_thread(
+                conversation_view_cached,
+                path,
+                record.backend,
+                limit=limit,
+                native_id=record.native_session_id,
+            ),
+            timeout=BRANCH_POINTS_TIMEOUT_SECONDS,
+        )
+    except (OSError, TimeoutError):
+        return "unreadable"
+    if points is None:
+        return "dialect_unsupported"
+    text_by_id = {
+        str(message["message_id"]): str(message.get("text") or "")
+        for message in view.get("messages", [])
+    }
+    return points, text_by_id, bool(view.get("truncated"))
+
+
+async def session_branch_points(request: web.Request) -> web.Response:
+    """Where this session's conversation can be forked, and what each point says.
+
+    A listing rather than a capability flag because eligibility is per point, not per
+    harness: the same conversation offers a legal cut after one reply and an illegal
+    one after the next, purely because the second asked for a tool whose result had
+    not yet arrived. A picker that cannot say which is which would offer a branch
+    that writes a conversation the provider rejects.
+
+    Every "nothing to offer" case answers 200 with a ``reason``. Opening the picker
+    on a pane that has not spoken yet is an ordinary thing to do, not an error.
+    """
+    resolved = _branch_source(request)
+    if isinstance(resolved, web.Response):
+        return resolved
+    session, conversation, _project = resolved
+    record = session.record
+    strategy = branch_strategy(record.backend)
+    try:
+        limit = int(request.query.get("limit") or CONVERSATION_DEFAULT_LIMIT)
+    except ValueError:
+        raise web.HTTPBadRequest(text="limit must be an integer") from None
+    limit = max(1, min(limit, CONVERSATION_MAX_LIMIT))
+    empty: dict[str, Any] = {
+        "session_id": record.id,
+        "backend": record.backend,
+        "conversation_id": conversation,
+        "strategy": strategy,
+        "from_message": strategy == "transcript_fork",
+        "points": [],
+        "truncated": False,
+        "reason": None,
+    }
+    if strategy != "transcript_fork":
+        return json_response({**empty, "reason": "strategy_has_no_points"})
+    outcome = await _read_branch_points(session, limit)
+    if isinstance(outcome, str):
+        return json_response({**empty, "reason": outcome})
+    points, text_by_id, truncated = outcome
+    # Only the oldest point in the window has no preceding record to cut after, and
+    # only there is "branch before this" unavailable. Whether the window itself is
+    # truncated is beside the point: a fork always carries the conversation from its
+    # first byte, so a bounded read costs which cuts can be *named*, never what one
+    # contains.
+    payload = [
+        _branch_point_payload(
+            point,
+            points[index - 1] if index else None,
+            text_by_id.get(point.message_id, ""),
+        )
+        for index, point in enumerate(points)
+    ]
+    return json_response({**empty, "points": payload, "truncated": truncated})
+
+
+async def _branch_by_transcript_fork(
+    request: web.Request, session: Any, conversation: str, body: dict[str, Any]
+) -> tuple[dict[str, Any], str | None] | web.Response:
+    """Write the forked conversation, or the refusal explaining why there is none.
+
+    Returns ``(fork_details, seed_text)``. ``seed_text`` is the message the cut
+    excluded, and only for a ``before`` cut on something the operator typed: the
+    point of replaying that moment is to send it differently, and handing the words
+    back is what makes editing them the obvious next act rather than retyping from
+    memory.
+    """
+    record = session.record
+    manager: SessionManager = request.app["sessions"]
+    adapter = manager.adapters.get(record.backend)
+    if adapter is None:
+        return json_response(
+            {"error": f"no adapter for {record.backend}", "code": "adapter_missing"}, 422
+        )
+    outcome = await _read_branch_points(session, CONVERSATION_MAX_LIMIT)
+    if isinstance(outcome, str):
+        return json_response(
+            {"error": f"the conversation cannot be forked: {outcome}", "code": outcome}, 409
+        )
+    points, text_by_id, _truncated = outcome
+    if not points:
+        return json_response(
+            {"error": "the conversation has no messages to branch from", "code": "no_messages"},
+            409,
+        )
+    message_id = str(body.get("from_message_id") or "") or points[-1].message_id
+    chosen = next((point for point in points if point.message_id == message_id), None)
+    mode = str(body.get("mode") or "") or (
+        "before" if chosen is not None and chosen.role == "user" else "after"
+    )
+    if mode not in {"before", "after"}:
+        return json_response(
+            {"error": "mode must be 'before' or 'after'", "code": "bad_mode"}, 422
+        )
+    cut, detail = _resolve_branch_cut(points, message_id, mode)
+    if cut is None:
+        assert isinstance(detail, str)
+        log.info(
+            "branch refused for %s at %s/%s: %s", record.id, message_id, mode, detail
+        )
+        return json_response(
+            {"error": f"that point cannot be branched from: {detail}", "code": detail}, 409
+        )
+    assert isinstance(detail, CutPoint)
+    branch_cwd = record.run_cwd or record.cwd
+    fork_id = mint_conversation_id(record.backend)
+    # Derived from the cwd the new pane will run in, not from where the source file
+    # happens to sit. Claude resolves a conversation from its working directory, so a
+    # fork written beside a relocated source file is a fork the CLI cannot open.
+    target_path = adapter.transcript_path(fork_id, Path(branch_cwd))
+    source_path = session.transcript_path
+    if target_path is None or source_path is None:
+        return json_response(
+            {
+                "error": f"{record.backend} does not keep this conversation in a file "
+                "mux can fork",
+                "code": "no_transcript",
+            },
+            409,
+        )
+    plan = ForkPlan(
+        backend=record.backend,
+        source_path=source_path,
+        source_conversation_id=conversation,
+        fork_conversation_id=fork_id,
+        target_path=target_path,
+        cut_offset=cut,
+        title_marker=f"[branch {fork_id[:8]}]",
+    )
+    log.info(
+        "branch fork writing session=%s conversation=%s fork=%s at %s/%s cut=%d cwd=%s",
+        record.id,
+        conversation,
+        fork_id,
+        message_id,
+        mode,
+        cut,
+        branch_cwd,
+    )
+    try:
+        written = await asyncio.wait_for(
+            asyncio.to_thread(write_fork, plan), timeout=BRANCH_WRITE_TIMEOUT_SECONDS
+        )
+    except ForkRefused as exc:
+        log.warning("branch fork of %s refused: %s (%s)", conversation, exc, exc.code)
+        return json_response({"error": str(exc), "code": exc.code}, 409)
+    except ForkUnsupported as exc:
+        return json_response({"error": str(exc), "code": "branch_unsupported"}, 422)
+    except (OSError, TimeoutError) as exc:
+        log.error("branch fork of %s failed to write: %s", conversation, exc)
+        return json_response(
+            {"error": f"the fork could not be written: {exc}", "code": "fork_write_failed"}, 500
+        )
+    seed = text_by_id.get(message_id) if mode == "before" and detail.role == "user" else None
+    return {
+        "conversation_id": written.conversation_id,
+        "path": str(written.path),
+        "cut_offset": cut,
+        "from_message_id": message_id,
+        "mode": mode,
+        "records_written": written.records_written,
+        "records_dropped": written.records_dropped,
+        "attachments_copied": written.attachments_copied,
+        "bytes_written": written.bytes_written,
+    }, seed
+
+
+async def branch_session(request: web.Request) -> web.Response:
+    """Fork a conversation into a new pane, leaving the source pane exactly as it was.
+
+    Two strategies, and they differ in who does the forking.
+
+    ``transcript_fork`` (Claude) is mux's own, and it is the one that can branch from
+    a *point*. The daemon reads the source conversation, writes a **new** conversation
+    file holding its records up to the chosen message, and resumes that in a sibling
+    pane. Nothing is typed into anybody's terminal, the source file is opened
+    read-only, and the source pane keeps its conversation, its identity and its run
+    untouched — so there is no fork to wait for, no release to race, and no reason to
+    refuse a pane that is mid-turn or has already exited. The new conversation is
+    genuinely new and gets its own history row; the fork is recorded as a ``branch``
+    lineage edge rather than inferred from a shared transcript.
+
+    ``resume_child_thread`` (Codex) asks the CLI: ``codex resume`` opens a child
+    thread with its own rollout, diverging from the still-live original. That is only
+    ever a fork from now, and because it reopens a conversation a live process is
+    still on, it keeps the readiness gate and the spawn retry that a CLI-mediated
+    fork needs.
+
+    Both prove the sibling survived before handing it back (`spawn_probe.py`). A CLI
+    that refuses the conversation it was given exits *after* the response announcing
+    success, so an unverified branch reaches the operator as a grey pane and no
+    message.
+    """
+    resolved = _branch_source(request)
+    if isinstance(resolved, web.Response):
+        return resolved
+    session, conversation, project = resolved
+    manager: SessionManager = request.app["sessions"]
+    record = session.record
     strategy = branch_strategy(record.backend)
     if strategy is None:
-        # The resume path below reopens the original conversation id while the
-        # source is still live. A `resume_child_thread` harness tolerates that (its
-        # resume starts a child thread with its own rollout); every other harness
-        # here appends to the *same* session file, so two live processes would
-        # interleave writes into one conversation. A harness with no declared
-        # strategy is refused outright rather than corrupted politely.
+        # Every remaining harness's resume appends to the *same* session file, so
+        # two live processes would interleave writes into one conversation. Refused
+        # outright rather than corrupted politely.
         return json_response(
             {
                 "error": f"branching is not implemented for {record.backend} sessions",
@@ -6003,176 +6242,102 @@ async def branch_session(request: web.Request) -> web.Response:
             },
             422,
         )
-    original = _branch_source_id(source)
-    if not original:
-        return json_response(
-            {"error": "no conversation id to branch from yet", "code": "native_id_missing"}, 409
-        )
-    project = request.app["projects"].projects.get(record.project_id)
-    if project is None:
-        return json_response({"error": "project missing", "code": "project_missing"}, 422)
     body = await request.json() if request.can_read_body else {}
-    # Claude resolves transcripts by working directory, so the fork and the
-    # resumed copy must run in the same cwd the conversation was recorded under.
+    if strategy != "transcript_fork" and body.get("from_message_id"):
+        return json_response(
+            {
+                "error": f"{record.backend} can only branch from where the conversation "
+                "stands now",
+                "code": "branch_point_unsupported",
+            },
+            422,
+        )
+    if strategy == "resume_child_thread" and (blocked := _branch_block_reason(session)):
+        code, why = blocked
+        log.info("branch refused for %s: %s (%s)", record.id, why, code)
+        return json_response({"error": f"cannot branch while {why}", "code": code}, 409)
     branch_cwd = record.run_cwd or record.cwd
-
-    # Captured before the fork: after it, the source pane's run is its own new
-    # conversation's, and the row this sibling continues is the one it holds now.
-    original_run_id = record.agent_run_id or record.id
-    adopt_run_id: str | None = None
     started_at = time.monotonic()
     events = request.app.get("events")
-    release = "not_applicable"
-    if strategy == "native_slash_command":
-        adapter = manager.adapters.get(record.backend)
-        before = _claude_transcript_stems(adapter, branch_cwd) if adapter else set()
-        branch_id: str | None = None
-        observed_id: str | None = None
-        # Subscribed before the command is written, so the source pane's report cannot
-        # land in the gap between writing and listening and be missed.
-        queue = events.subscribe(name=f"branch:{record.id}") if events is not None else None
-        try:
-            log.info(
-                "branch started session=%s backend=%s conversation=%s cwd=%s",
-                record.id,
-                record.backend,
-                original,
-                branch_cwd,
-            )
-            source.pty.write("/branch\r")
-            forked, branch_id = (
-                await _await_claude_fork(
-                    adapter,
-                    branch_cwd,
-                    original,
-                    before,
-                    timeout_seconds=BRANCH_FORK_TIMEOUT_SECONDS,
-                )
-                if adapter
-                else (False, None)
-            )
-            if not forked:
-                # The fork never registered; do not resume the (still-live) original —
-                # that would collide on its transcript. The source pane may already be
-                # branched; the original stays resumable from history.
-                #
-                # Re-read the state rather than reporting the one the gate saw. The
-                # commonest cause of landing here is a turn that had started but had not
-                # yet been detected when the gate ran, and a CLI that is thinking simply
-                # never reads the command. "Try again" is true but says nothing; naming
-                # the turn tells the operator both why it failed and when to retry.
-                late = getattr(record, "state", "")
-                detail = (
-                    "the agent started a turn"
-                    if late in {"working", "awaiting"}
-                    else "the CLI did not accept the command"
-                )
-                log.warning(
-                    "branch timed out waiting for a fork of %s after %.1fs (%s, state=%s)",
-                    original,
-                    BRANCH_FORK_TIMEOUT_SECONDS,
-                    detail,
-                    late,
-                )
-                return json_response(
-                    {
-                        "error": f"branch did not complete: {detail}; try again",
-                        "code": "branch_timeout",
-                        "source_state": late,
-                    },
-                    504,
-                )
-            release, observed_id = await _await_source_release(
-                queue, record.id, original, BRANCH_RELEASE_TIMEOUT_SECONDS
-            )
-        finally:
-            if queue is not None and events is not None:
-                events.unsubscribe(queue)
-        # The CLI's own report outranks the directory listing, and names the fork in
-        # the one case the listing had to decline: two files appeared at once.
-        branch_id = branch_id or observed_id
+    fork: dict[str, Any] | None = None
+    seed_text: str | None = None
+    if strategy == "transcript_fork":
+        outcome = await _branch_by_transcript_fork(request, session, conversation, body)
+        if isinstance(outcome, web.Response):
+            return outcome
+        fork, seed_text = outcome
+        resume_id = fork["conversation_id"]
+        attempts_allowed = 1
+        suffix = "branch"
+    else:
+        resume_id = conversation
+        attempts_allowed = BRANCH_SIBLING_ATTEMPTS
+        suffix = "branch"
         log.info(
-            "branch fork of %s confirmed as %s (release=%s) in %.1fs",
-            original,
-            branch_id,
-            release,
-            time.monotonic() - started_at,
+            "branch started session=%s backend=%s conversation=%s cwd=%s strategy=%s",
+            record.id,
+            record.backend,
+            conversation,
+            branch_cwd,
+            strategy,
         )
-        if branch_id is None:
-            # Resuming the original now would leave the source pane still claiming it:
-            # one conversation, two rows, one file indexed twice. Refuse instead. The
-            # pane is branched and the original stays resumable from history.
-            log.warning("branch of %s could not identify the fork; sibling not opened", original)
-            return json_response(
-                {
-                    "error": "branched, but the new conversation could not be identified; "
-                    "reopen the original from History",
-                    "code": "branch_id_unresolved",
-                },
-                409,
-            )
-        if await manager.roll_agent_conversation(
-            record.id, native_id=branch_id, reason="branched", source="branch"
-        ):
-            # The source pane is on its own conversation now, so the original's row
-            # is free for the sibling that continues it.
-            adopt_run_id = original_run_id
-    # A native fork leaves the *branch* in the source pane, so the sibling that
-    # reopens the original conversation is the original. A resumed child thread is
-    # the other way round.
-    suffix = "original" if strategy == "native_slash_command" else "branch"
-    session, attempts, failure = await _spawn_branch_sibling(
+    session_new, attempts, failure = await _spawn_branch_sibling(
         manager,
         record.id,
+        attempts_allowed,
         backend=record.backend,
         name=body.get("name") or f"{record.name} {suffix}",
         cwd=branch_cwd,
         project_id=record.project_id,
-        resume_native_id=original,
-        adopt_run_id=adopt_run_id,
+        resume_native_id=resume_id,
         project_label=project.name,
     )
-    if session is None:
+    if session_new is None:
         detail = failure.describe() if failure is not None else "no failure recorded"
         log.error(
-            "branch of %s could not reopen the original after %d attempts: %s",
-            original,
+            "branch of %s could not open the fork after %d attempts: %s",
+            conversation,
             attempts,
             detail,
         )
         return json_response(
             {
-                "error": "branched, but the original conversation would not reopen "
-                f"({detail}); reopen it from History",
+                "error": f"the branch was created but would not open ({detail}); "
+                "reopen it from History",
                 "code": "branch_sibling_failed",
                 "attempts": attempts,
+                "conversation_id": resume_id,
             },
             503,
         )
+    await _record_branch_lineage(request, record, session_new, strategy, conversation, fork)
     if events is not None:
         events.emit_background(
             "session_branched",
             session_id=record.id,
             backend=record.backend,
             strategy=strategy,
-            original=original,
-            branch_id=branch_id,
-            sibling_id=session.record.id,
-            release=release,
+            original=conversation,
+            branch_id=resume_id,
+            sibling_id=session_new.record.id,
+            from_message_id=(fork or {}).get("from_message_id"),
+            mode=(fork or {}).get("mode"),
+            records_written=(fork or {}).get("records_written"),
             attempts=attempts,
             duration_ms=round((time.monotonic() - started_at) * 1000, 1),
         )
     log.info(
-        "branch completed session=%s original=%s sibling=%s attempts=%d in %.1fs",
+        "branch completed session=%s original=%s branch=%s sibling=%s attempts=%d in %.1fs",
         record.id,
-        original,
-        session.record.id,
+        conversation,
+        resume_id,
+        session_new.record.id,
         attempts,
         time.monotonic() - started_at,
     )
     next_layout = attach_terminal(
         project.layout,
-        session.record.id,
+        session_new.record.id,
         target_id=body.get("target_session_id") or record.id,
         direction=body.get("direction") or "after",
     )
@@ -6181,10 +6346,60 @@ async def branch_session(request: web.Request) -> web.Response:
             record.project_id, layout=next_layout, layout_revision=project.layout_revision
         )
     except Exception:
-        await manager.stop(session.record.id)
-        manager.sessions.pop(session.record.id, None)
+        await manager.stop(session_new.record.id)
+        manager.sessions.pop(session_new.record.id, None)
         raise
-    return json_response({"session": session.record.snapshot(), "source": record.id}, 201)
+    return json_response(
+        {
+            "session": session_new.record.snapshot(),
+            "source": record.id,
+            "strategy": strategy,
+            "fork": fork,
+            "seed_text": seed_text,
+        },
+        201,
+    )
+
+
+async def _record_branch_lineage(
+    request: web.Request,
+    record: Any,
+    branched: Any,
+    strategy: str,
+    conversation: str,
+    fork: dict[str, Any] | None,
+) -> None:
+    """Record the branch edge, so the fork point survives the request that made it.
+
+    Written after the pane is proved up rather than before it: an edge to a
+    conversation that never opened would describe a branch nobody can visit. Failure
+    to record it is logged and swallowed — the branch itself is done, and losing the
+    edge degrades the tree view rather than the conversation.
+    """
+    store = request.app.get("automation_store")
+    if store is None:
+        return
+    parent = record.agent_run_id or record.id
+    child = branched.record.agent_run_id or branched.record.id
+    if parent == child:
+        return
+    try:
+        await store.add_lineage(
+            parent,
+            child,
+            "branch",
+            {
+                "backend": record.backend,
+                "strategy": strategy,
+                "source_conversation_id": conversation,
+                "branch_conversation_id": branched.record.native_session_id,
+                "from_message_id": (fork or {}).get("from_message_id"),
+                "mode": (fork or {}).get("mode"),
+                "cut_offset": (fork or {}).get("cut_offset"),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - the branch succeeded; the edge is bookkeeping
+        log.warning("branch of %s could not record its lineage edge: %s", conversation, exc)
 
 
 def _note_composer_write(events: EventBus, session: Any, data: str | bytes, source: str) -> None:
