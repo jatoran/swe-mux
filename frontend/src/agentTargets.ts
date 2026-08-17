@@ -7,6 +7,7 @@
 
 import type { Project, Session } from './types'
 import { deliversHarnessPrompts, promptDeliveryHarnesses } from './harnessRegistry.ts'
+import { sessionDisplayName } from './sessionNames.ts'
 
 export type NewAgentBackend = string
 
@@ -70,7 +71,7 @@ export function retargetForProject(
   return candidates.some(session => session.id === sessionId) ? current : defaultNewTarget(project)
 }
 
-/** Same rule as the sidebar: a generated title wins only while the session is auto-named. */
+/** Same rule as the sidebar, which is `sessionDisplayName` and lives in `sessionNames.ts`. */
 export function agentTargetName(session: Session): string {
-  return session.auto_named !== false && session.generated_title ? session.generated_title : session.name
+  return sessionDisplayName(session)
 }

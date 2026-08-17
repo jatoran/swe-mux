@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { api } from './api'
+import { api, type ApiError } from './api'
 import { withoutClipboardCapture } from './clipboardHistory'
 import { useDismissLevel, useModalFocus } from './modalFocus'
 import { copyPreparedText } from './terminalClipboard'
@@ -13,6 +13,7 @@ import {
   type TranscriptContentBlock,
 } from './transcriptView'
 import type { Project } from './types'
+import { runDisplayName } from './sessionNames'
 import { harnessDisplayName, promptDeliveryHarnesses, transcriptHarnesses } from './harnessRegistry'
 import { ModelName } from './ModelName'
 import { parseGitProvenance, provenanceRoleLabel, shortSha, type GitProvenance } from './gitWorktrees'
@@ -53,6 +54,8 @@ type BackfillJob={
 type Props={
   projects:Project[]
   initialProjectId:string
+  /** Open straight onto this conversation instead of the list. Empty means browse. */
+  initialEntryId?:string
   onClose:()=>void
   onResume:(entry:HistoryEntry)=>void|Promise<void>
   onSecondOpinion:(entry:HistoryEntry)=>void|Promise<void>
@@ -61,7 +64,7 @@ type Props={
 
 const money=new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',maximumFractionDigits:4})
 const COPIED_FLASH_MS=1200
-const historyName=(entry:HistoryEntry)=>entry.auto_named!==0&&entry.generated_title?entry.generated_title:entry.name
+const historyName=(entry:HistoryEntry)=>runDisplayName(entry)
 const timestampDate=(value?:string|number|null)=>{
   if(value===undefined||value===null||value==='')return null
   const numeric=typeof value==='number'?value:/^\d+(?:\.\d+)?$/.test(value)?Number(value):null
@@ -87,7 +90,7 @@ const formatBytes=(bytes?:number|null)=>{
 }
 const historyMessageText=(message:TranscriptMessage)=>message.content.filter(block=>block.type==='text').map(block=>block.text||'').filter(Boolean).join('\n\n')
 
-export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSecondOpinion,onHandoff}:Props){
+export function HistoryBrowser({projects,initialProjectId,initialEntryId,onClose,onResume,onSecondOpinion,onHandoff}:Props){
   const [items,setItems]=useState<HistoryEntry[]>([])
   const [historyProjects,setHistoryProjects]=useState<HistoryProject[]>([])
   const [nextCursor,setNextCursor]=useState<string|null>(null)
@@ -205,6 +208,39 @@ export function HistoryBrowser({projects,initialProjectId,onClose,onResume,onSec
       void api<{items:LineageEdge[]}>('GET',`/api/lineage?run_id=${encodeURIComponent(entry.id)}`).then(result=>setLineage(result.items)).catch(()=>setLineage([]))
     }catch(cause){setTranscript(null);setError(cause instanceof Error?cause.message:String(cause))}
   }
+
+  /** Open one conversation by id, for a caller that named a session instead of browsing.
+   *
+   *  The transcript response carries the row, so nothing about the entry has to be known
+   *  in advance. Two misses are expected rather than exceptional and are reported as
+   *  themselves: the row can have been deleted, and a harness that keeps no readable
+   *  transcript answers 409. Either way the browser stays open on its list, because the
+   *  caller's intent - find this session - is still servable by hand. */
+  const viewById=async(historyId:string)=>{
+    setError('');setActiveMatch(0);setLineage([]);setGitProvenance([]);setExpandedMessages(new Set());setCopiedMessage(null)
+    try{
+      const nextTranscript=await api<Transcript>('GET',`/api/history/${historyId}/transcript`)
+      setTranscript(nextTranscript)
+      const projectId=nextTranscript.entry.project_id
+      if(projectId){
+        void api<unknown>('GET',`/api/git/provenance?project_id=${encodeURIComponent(projectId)}&agent_run_id=${encodeURIComponent(nextTranscript.entry.id)}&limit=500`)
+          .then(raw=>setGitProvenance(parseGitProvenance(raw))).catch(()=>setGitProvenance([]))
+      }
+      void api<{items:LineageEdge[]}>('GET',`/api/lineage?run_id=${encodeURIComponent(nextTranscript.entry.id)}`).then(result=>setLineage(result.items)).catch(()=>setLineage([]))
+    }catch(cause){
+      const error=cause as ApiError
+      setTranscript(null)
+      setError(error?.status===404
+        ? 'That session has no History row any more, so its conversation cannot be opened. Search below for it by name.'
+        : error?.detail?.code==='transcript_unavailable'
+          ? 'That session kept no readable transcript, so there is no conversation to open.'
+          : cause instanceof Error?cause.message:String(cause))
+    }
+  }
+
+  // A deep link is the reason this overlay opened, so it runs once per requested id and
+  // never re-fires when the list underneath reloads.
+  useEffect(()=>{if(initialEntryId)void viewById(initialEntryId)},[initialEntryId])
 
   const remove=async(entry:HistoryEntry)=>{
     if(confirmDelete!==entry.id){setConfirmDelete(entry.id);return}

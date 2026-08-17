@@ -30,7 +30,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .broadcast-banner { grid-row:2;height:calc(34px*var(--ui-scale));background:#382e0c;border-bottom:1px solid #806817;display:flex;align-items:center;justify-content:center;gap:18px;color:#e6ce78;font-size:12px }.broadcast-banner span { color:#b5a76d }.broadcast-banner button { border:0;background:transparent;text-decoration:underline;cursor:pointer }
 .workspace { grid-row:3;display:grid;grid-template-columns:254px minmax(0,1fr);min-height:0 }.sidebar { display:flex;flex-direction:column;min-height:0;background:#0d1014;border-right:1px solid var(--line) }.sidebar-heading { height:calc(38px*var(--ui-scale));flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 13px;font:600 9px 'JetBrains Mono';letter-spacing:.11em;color:#67717f;border-bottom:1px solid #1d2229 }.sidebar-heading button { width:25px;height:calc(25px*var(--ui-scale));border:0;background:transparent;border-radius:5px;color:#7f8997;cursor:pointer }.sidebar-heading button:hover { background:#1b2027;color:var(--green) }
 .project-tree { flex:1;min-height:0;overflow:auto;padding:6px }.project-group { margin-bottom:3px;border:1px solid transparent;border-radius:7px }.project-group.active { background:#101510;border-color:#263123 }.project-row { height:calc(34px*var(--ui-scale));display:grid;grid-template-columns:16px minmax(0,1fr) 20px 24px 24px;align-items:center;padding:0 3px 0 6px;border-radius:6px;color:#858f9c;cursor:pointer }.project-row:hover { background:#171c22;color:#cdd2da }.project-group.active>.project-row { color:#dfe7da }.project-chevron { color:#59636f;font-size:10px }.project-row strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px }.project-row small { text-align:center;color:#65705e;font:9px 'JetBrains Mono' }.project-row button { width:22px;height:calc(22px*var(--ui-scale));border:0;background:transparent;border-radius:4px;color:#65707d;cursor:pointer }.project-row button:hover { color:var(--green);background:#252c25 }.project-group .session-list { overflow:visible;flex:none;padding:2px 4px 5px 15px }.project-group .session-row { height:calc(49px*var(--ui-scale)) }.project-empty { width:100%;height:calc(31px*var(--ui-scale));border:1px dashed #2b3328;border-radius:5px;background:transparent;color:#697564;text-align:left;padding-left:10px;font-size:10px;cursor:pointer }.project-empty:hover { border-color:#55684c;color:#9fbd91 }
-.session-list { overflow:auto;flex:1;padding:7px }.session-row { display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;width:100%;height:calc(55px*var(--ui-scale));padding:8px 7px;border:1px solid transparent;background:transparent;border-radius:7px;cursor:pointer;text-align:left;position:relative;margin-bottom:2px }.session-row:hover { background:#15191f }.session-row.active { background:#1a201a;border-color:#34442d;box-shadow:inset 2px 0 var(--green) }.session-row.awaiting { background:#2b2510;animation:pulse 2s ease-in-out infinite }.session-row.crashed,.session-row.exited { opacity:.62 }.state-dot { display:inline-block;width:7px;height:7px;border-radius:50%;background:#727b88;align-self:start;margin-top:5px;flex:none }.state-dot.running,.state-dot.idle { background:#7fc95a }.state-dot.working { background:var(--blue);box-shadow:0 0 7px #72a7ff88 }.state-dot.starting { background:#ae91d3 }.state-dot.awaiting { background:var(--amber);box-shadow:0 0 8px #e7c768aa }.state-dot.crashed { background:var(--red) }.state-dot.exited { background:#69717d }.state-dot.idle.standing { background:transparent;border:2px solid var(--blue);box-sizing:border-box;box-shadow:0 0 6px #72a7ff55;animation:none }
+.session-list { overflow:auto;flex:1;padding:7px }.session-row { display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:var(--session-row-gap);width:100%;height:calc(55px*var(--ui-scale));padding:8px 7px;border:1px solid transparent;background:transparent;border-radius:7px;cursor:pointer;text-align:left;position:relative;margin-bottom:2px }.session-row:hover { background:#15191f }.session-row.active { background:#1a201a;border-color:#34442d;box-shadow:inset 2px 0 var(--green) }.session-row.awaiting { background:#2b2510;animation:pulse 2s ease-in-out infinite }.session-row.crashed,.session-row.exited { opacity:.62 }.state-dot { display:inline-block;width:7px;height:7px;border-radius:50%;background:#727b88;align-self:start;margin-top:5px;flex:none }.state-dot.running,.state-dot.idle { background:#7fc95a }.state-dot.working { background:var(--blue);box-shadow:0 0 7px #72a7ff88 }.state-dot.starting { background:#ae91d3 }.state-dot.awaiting { background:var(--amber);box-shadow:0 0 8px #e7c768aa }.state-dot.crashed { background:var(--red) }.state-dot.exited { background:#69717d }.state-dot.idle.standing { background:transparent;border:2px solid var(--blue);box-sizing:border-box;box-shadow:0 0 6px #72a7ff55;animation:none }
 .state-dot.working.interrupting { background:var(--amber);box-shadow:0 0 7px #e7c76888;animation:none }
 .session-copy { display:flex;flex-direction:column;gap:4px;min-width:0 }.session-copy strong { font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.session-copy small { font:9px 'JetBrains Mono';color:#697381;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.row-actions { display:none;position:absolute;right:7px;bottom:6px }.session-row:hover .row-actions { display:block }.row-actions button { border:0;background:#262d35;border-radius:4px;color:#aeb5bf;cursor:pointer }.row-actions button:hover { color:var(--red) }
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
@@ -1058,7 +1058,7 @@ body {
 @media(min-width:761px) and (hover:hover){.project-row-run{opacity:0;visibility:hidden;pointer-events:none;transition:opacity .1s ease}.project-group:hover>.project-row .project-row-run,.project-group:focus-within>.project-row .project-row-run{opacity:1;visibility:visible;pointer-events:auto}}
 .run-menu-scrim{position:fixed;inset:0;z-index:76;background:transparent}.project-run-menu{position:fixed;z-index:77;width:calc(300px*var(--ui-scale));max-height:min(560px,calc(100dvh - 12px));overflow:auto;border:1px solid var(--line);background:var(--panel);box-shadow:7px 9px #0009}.project-run-menu>header{position:sticky;top:0;z-index:1;min-height:42px;display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--line);background:var(--panel)}.project-run-menu>header>div{min-width:0;flex:1;display:grid;gap:2px}.project-run-menu>header span,.run-menu-section>small{color:var(--accent);font-size:8px;text-transform:uppercase}.project-run-menu>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.project-run-menu>header>button{width:29px;height:calc(29px*var(--ui-scale));border:0;background:transparent;color:var(--muted);cursor:pointer}.run-menu-section{display:grid;padding:5px;border-bottom:1px solid var(--line)}.run-menu-section>small{padding:4px 5px}.run-menu-section>button{min-height:34px;display:grid;grid-template-columns:24px minmax(0,1fr);align-items:center;gap:5px;border:0;background:transparent;color:var(--text);text-align:left;cursor:pointer}.run-menu-section>button:hover:not(:disabled){background:var(--panel2)}.run-menu-section>button:disabled{opacity:.5;cursor:not-allowed}.run-menu-section>button>span{color:var(--accent);text-align:center}.run-menu-section>button>div{min-width:0;display:flex;align-items:baseline;justify-content:space-between;gap:8px}.run-menu-section>button strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}.run-menu-section>button em{flex:none;color:var(--muted);font-size:8px;font-style:normal}.project-run-menu>p,.project-run-menu details{margin:0;padding:9px;color:var(--muted);font-size:8px}.project-run-menu summary{cursor:pointer}.project-run-menu details p{margin:6px 0 0;line-height:1.4}.project-action-trust-layer{z-index:90}.project-action-trust{width:min(620px,calc(100vw - 24px))}.project-action-trust-body{padding:16px 20px;color:var(--muted);line-height:1.5}.project-action-trust-body strong{color:var(--text)}.project-action-trust-body ul{padding-left:20px}.project-action-trust-body pre{max-height:180px;overflow:auto;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre-wrap}.project-action-trust-body details{margin-top:10px}.project-action-trust-body summary{cursor:pointer;color:var(--accent)}.project-action-diff{max-height:220px;font-size:9px;line-height:1.45}.project-action-source-layer{z-index:90}.project-action-source{width:min(760px,calc(100vw - 24px));display:flex;flex-direction:column;max-height:calc(100dvh - 48px)}.project-action-source-body{flex:1;overflow:auto;display:grid;gap:8px;padding:14px 18px;color:var(--muted);line-height:1.5}.project-action-source-body>p{margin:0}.project-action-source-body button.link{justify-self:start;padding:0;border:0;background:transparent;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit}.project-action-source-text{min-height:320px;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre;font:12px 'Cascadia Mono',Consolas,monospace;tab-size:2}.project-action-source-body pre.error{margin:0;padding:10px;overflow:auto;max-height:150px;border:1px solid var(--danger,#c33);background:var(--bg);color:var(--danger,#f66);white-space:pre-wrap;font-size:10px}.project-action-help{padding:10px;border:1px solid var(--line);background:var(--bg);font-size:10px;line-height:1.6}.project-action-help p{margin:0 0 6px}.project-action-help ul{margin:0;padding-left:18px}.project-action-help li{margin-bottom:3px}.project-action-help code{padding:0 3px;border:1px solid var(--line);color:var(--text)}.project-action-inputs-layer{z-index:90}.project-action-inputs{width:min(520px,calc(100vw - 24px))}.project-action-inputs form{display:grid;gap:10px;padding:16px 20px}.project-action-inputs label{display:grid;gap:4px;color:var(--muted)}.project-action-inputs input,.project-action-inputs select{min-height:32px;padding:0 8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}.project-action-inputs pre{max-height:140px;overflow:auto;margin:0;padding:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);white-space:pre-wrap}.project-action-inputs p{margin:0;color:var(--muted);line-height:1.5}.mobile-run-trigger{display:none}
 .run-worktree-form{display:grid;gap:8px;padding:10px}.run-worktree-form>small{color:var(--accent);font-size:8px}.run-worktree-form label{display:grid;gap:3px;color:var(--muted);font-size:8px}.run-worktree-form label em{font-style:normal;color:var(--muted)}.run-worktree-form input,.run-worktree-form select{width:100%;min-width:0;min-height:31px;padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}.run-worktree-form input:disabled,.run-worktree-form select:disabled{opacity:.6}.run-worktree-form>p{margin:0;color:var(--red);font-size:8px;line-height:1.4;overflow-wrap:anywhere}.run-worktree-form>div{display:grid;grid-template-columns:1fr 1fr;gap:7px}.run-worktree-form button{min-height:31px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}.run-worktree-form button.primary{border-color:var(--accent);color:var(--accent)}.run-worktree-form button:disabled{opacity:.5;cursor:not-allowed}
-@media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:calc(36px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{height:calc(44px*var(--ui-scale));grid-template-columns:18px minmax(0,1fr) 40px 40px!important;padding-right:4px}.project-row .project-row-menu,.project-row-run{display:grid!important;place-items:center;width:100%;min-width:40px;height:100%;min-height:44px;font-size:15px}.project-row-run{font-size:10px}.project-run-menu{left:6px!important;right:6px;width:auto;max-height:calc(100dvh - 12px)}.run-menu-section>button{min-height:44px}.run-worktree-form input,.run-worktree-form select{min-height:42px;font-size:16px}.run-worktree-form button{min-height:42px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}.project-action-source-layer{padding:0}.project-action-source{width:100vw;height:100dvh;max-height:none;border:0}.project-action-source-text{min-height:220px;font-size:12px}.project-action-inputs-layer{padding:0}.project-action-inputs{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-inputs form{flex:1;overflow:auto;align-content:start}.project-action-inputs input,.project-action-inputs select{min-height:42px;font-size:16px}}
+@media(max-width:760px){.mobile-toolbar{grid-template-columns:minmax(44px,1fr) minmax(0,2fr) auto minmax(44px,1fr)!important}.mobile-run-trigger{display:block;min-width:58px;height:calc(36px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--accent);font:9px 'Cascadia Mono',Consolas,monospace}.project-row{height:calc(44px*var(--ui-scale));grid-template-columns:18px minmax(0,1fr) 40px 40px!important;padding-right:4px}.project-row .project-row-menu,.project-row-run{display:grid!important;place-items:center;width:100%;min-width:40px;height:100%;min-height:44px;font-size:15px}.project-row-run{font-size:10px}.project-run-menu{width:min(calc(300px*var(--ui-scale)),calc(100vw - 28px));max-height:min(58dvh,calc(100dvh - 12px))}.run-menu-section>button{min-height:44px}.run-worktree-form input,.run-worktree-form select{min-height:42px;font-size:16px}.run-worktree-form button{min-height:42px}.project-action-trust-layer{padding:0}.project-action-trust{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-trust-body{flex:1;overflow:auto}.project-action-source-layer{padding:0}.project-action-source{width:100vw;height:100dvh;max-height:none;border:0}.project-action-source-text{min-height:220px;font-size:12px}.project-action-inputs-layer{padding:0}.project-action-inputs{width:100vw;height:100dvh;border:0;display:flex;flex-direction:column}.project-action-inputs form{flex:1;overflow:auto;align-content:start}.project-action-inputs input,.project-action-inputs select{min-height:42px;font-size:16px}}
 
 /* Compact sidebar commands and project resource editing. */
 .sidebar-footer{justify-content:flex-start;gap:8px}
@@ -1243,6 +1243,21 @@ body {
 .settings-tabs{min-height:0;overflow:auto;display:flex;flex-direction:column;padding:6px;border-right:1px solid var(--line);background:var(--bg)}
 .settings-tabs button{min-height:33px;border:0;border-left:2px solid transparent!important;background:transparent!important;text-align:left;color:var(--muted)}
 .settings-tabs button:before{content:'  '}.settings-tabs button:hover{color:var(--text);background:var(--panel2)!important}.settings-tabs button.active{border-left-color:var(--accent)!important;color:var(--text);background:var(--panel2)!important}.settings-tabs button.active:before{content:'> ';color:var(--accent)}
+/* Tab groups. The wrapper is `display:contents` so its buttons stay direct flex
+   children of the nav in both the desktop column and the mobile rail — a real box
+   here would break the layout in both directions. The heading is the only thing
+   the wrapper contributes, and the phone hides it rather than losing the width. */
+.settings-tab-group{display:contents}
+.settings-tab-group>span{padding:13px 8px 4px;color:var(--muted);font-size:8px;letter-spacing:.16em;text-transform:uppercase}
+.settings-tab-group:first-child>span{padding-top:4px}
+/* In-tab section rail: sticky at the top of the scroller on every device. These are
+   scroll anchors, never sub-tabs — every section of a tab stays mounted, which is
+   what keeps the search index able to see the whole tab, keeps Ctrl+F working, and
+   keeps the one Save transaction from hiding a dirty field behind a hidden pane. */
+.settings-section-rail{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:3px;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.settings-section-rail button{min-height:26px;padding:0 8px;border:1px solid transparent!important;background:transparent!important;color:var(--muted)}
+.settings-section-rail button:hover{color:var(--text);background:var(--panel2)!important}
+.settings-section-rail button.active{border-color:var(--line)!important;background:var(--panel2)!important;color:var(--text);box-shadow:inset 0 -2px 0 var(--green)}
 .settings-content{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;background:var(--panel)}
 .settings-content>section{min-width:0;padding:16px}.settings-content>section+section{border-top:1px solid var(--line)}
 .settings-content h3{padding-bottom:8px;border-bottom:1px solid var(--line)}
@@ -1296,7 +1311,7 @@ body {
 .note-chord-list small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .note-chord-list select{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 6px;background:var(--panel);color:var(--text);font:inherit}
 .note-chord kbd{font:inherit;color:var(--accent)}.note-chord em{margin-left:6px;font-style:normal;color:var(--muted)}
-@media(max-width:760px){.settings-panel>header{flex-wrap:wrap;gap:8px}.note-chord-list article{grid-template-columns:minmax(0,1fr) 150px;grid-template-areas:"chord control" "command control";gap:2px 9px}.note-chord-list .note-chord{grid-area:chord}.note-chord-list small{grid-area:command}.note-chord-list select{grid-area:control}.note-chord em{display:block;margin-left:0}.settings-panel>header>div.settings-search{flex:1 0 100%;order:3;max-width:none;margin-left:0}.settings-panel>header .settings-search>input{min-height:38px}.settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}.settings-panel>header .settings-search-results>button{min-height:46px}.settings-body{grid-template-columns:1fr!important;grid-template-rows:auto minmax(0,1fr)}.settings-tabs{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:4px}.settings-tabs button{flex:none;min-height:38px;border-left:0!important;border-bottom:2px solid transparent!important}.settings-tabs button.active{border-left:0!important;border-bottom-color:var(--green)!important}.settings-content label:not(.check),.settings-content label.check{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}.profile-browser{grid-template-columns:1fr;min-height:0}.profile-index{border-right:0;border-bottom:1px solid var(--line)}.profile-editor{padding:8px}.settings-content>section{padding:11px}.keybinding-heading{display:block}.keybinding-heading button{margin-top:7px}.keybinding-group article{grid-template-columns:minmax(0,1fr) 112px 36px}.keybinding-command small{display:none}.keybinding-capture{grid-template-columns:1fr auto}.keybinding-capture>span{grid-column:1/-1}}
+@media(max-width:760px){.settings-panel>header{flex-wrap:wrap;gap:8px}.note-chord-list article{grid-template-columns:minmax(0,1fr) 150px;grid-template-areas:"chord control" "command control";gap:2px 9px}.note-chord-list .note-chord{grid-area:chord}.note-chord-list small{grid-area:command}.note-chord-list select{grid-area:control}.note-chord em{display:block;margin-left:0}.settings-panel>header>div.settings-search{flex:1 0 100%;order:3;max-width:none;margin-left:0}.settings-panel>header .settings-search>input{min-height:38px}.settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}.settings-panel>header .settings-search-results>button{min-height:46px}.settings-body{grid-template-columns:1fr!important;grid-template-rows:auto minmax(0,1fr)}.settings-tabs{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:4px}.settings-tabs button{flex:none;min-height:38px;border-left:0!important;border-bottom:2px solid transparent!important}.settings-tabs button.active{border-left:0!important;border-bottom-color:var(--green)!important}.settings-tab-group>span{display:none}.settings-section-rail{flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:5px 11px}.settings-section-rail button{flex:none;min-height:34px;white-space:nowrap}.settings-content label:not(.check),.settings-content label.check{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}.profile-browser{grid-template-columns:1fr;min-height:0}.profile-index{border-right:0;border-bottom:1px solid var(--line)}.profile-editor{padding:8px}.settings-content>section{padding:11px}.keybinding-heading{display:block}.keybinding-heading button{margin-top:7px}.keybinding-group article{grid-template-columns:minmax(0,1fr) 112px 36px}.keybinding-command small{display:none}.keybinding-capture{grid-template-columns:1fr auto}.keybinding-capture>span{grid-column:1/-1}}
 
 /* Usage views derive overview, time-series, and model aggregates from daily cache rows. */
 .usage-view-tabs{display:flex;gap:3px;margin-bottom:7px;border-bottom:1px solid var(--line)}.usage-view-tabs button{border:0;border-bottom:2px solid transparent;background:transparent}.usage-view-tabs button.active{border-bottom-color:var(--accent);color:var(--text)}.usage-view-tabs button.active:before{content:'> ';color:var(--accent)}
@@ -2951,7 +2966,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-graph-glyph .lane-3{color:#c58af9}
 .git-graph-glyph .lane-4{color:#ff7996}
 .git-commit{min-width:0;display:grid;gap:2px}
-.git-commit-title{min-width:0;display:grid;grid-template-columns:58px minmax(0,1fr);gap:6px;align-items:baseline}
+/* The sha column is `max-content`, not a fixed width: an eight-character sha fills a 58px
+   track at larger UI scales, and the gap then reads as no gap at all. */
+.git-commit-title{min-width:0;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:10px;align-items:baseline}
 .git-commit-title strong{color:var(--accent);font-size:8px;font-weight:400}
 .git-commit-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
 .git-commit-refs{display:flex;flex-wrap:wrap;gap:3px}
@@ -3103,7 +3120,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-view-toggle button,.git-toolbar>button,.git-compare select{min-height:25px;border:0;background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
 .git-view-toggle button{padding:0 9px;border-right:1px solid var(--line)}
 .git-view-toggle button.active{color:var(--text);box-shadow:inset 0 -2px var(--accent)}
-.git-toolbar>button{border:1px solid var(--line);padding:0 7px}
+.git-toolbar>button,.git-toolbar-actions>button{border:1px solid var(--line);padding:0 7px}
+/* Pushed to the trailing edge as a group, so the view switch keeps the leading edge it
+   is read from. */
+.git-toolbar-actions{display:flex;align-items:center;gap:5px;margin-left:auto}
+.git-toolbar-actions>button{min-height:25px;background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.git-toolbar-actions>button:hover:not(:disabled){border-color:var(--accent);color:var(--text)}
+.git-toolbar-actions>button:disabled{opacity:.45;cursor:not-allowed}
+.git-toolbar-actions .git-refresh{min-width:25px;padding:0;font-size:11px;line-height:1}
 .git-compare{display:grid;gap:3px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
@@ -3114,6 +3138,25 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-review-tab .git-map-identity{grid-column:2;grid-row:1;align-self:baseline}
 .git-review-tab .git-map-chevron{grid-column:1;grid-row:2;align-self:baseline;text-align:left}
 .git-review-tab .git-map-metrics{grid-column:2;grid-row:2;align-self:baseline}
+/* A row's expand target and its session-link target are siblings, because a button
+   cannot contain a button. The summary keeps the whole row's width and the link sits at
+   the trailing edge, so the two never compete for the same tap. */
+.git-map-head,.git-commit-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center}
+.git-map-live,.git-commit-links,.git-session-open{border:1px solid transparent;background:transparent;color:var(--green);font:inherit;font-size:8px;white-space:nowrap;cursor:pointer}
+.git-map-live,.git-commit-links{align-self:center;min-height:24px;padding:0 7px;margin-right:7px;border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.git-commit-links{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.git-map-live:hover,.git-commit-links:hover{border-color:currentColor;background:var(--panel2)}
+/* The session's name in a provenance row *is* the link to it, so it keeps the name's
+   weight and colour and gains only an underline. */
+.git-session-open{padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.git-session-open:hover:not(:disabled){color:var(--text)}
+.git-session-open:disabled{color:var(--muted);text-decoration:none;cursor:default}
+/* Two lines per entry, so the fixed single-row height of a context menu button has to go:
+   the name alone does not say whether following it lands in a pane or in History. */
+.git-session-links button{height:auto;min-height:calc(34px*var(--ui-scale));display:flex;align-items:center;gap:7px;padding:4px 8px;text-align:left}
+.git-session-link-label{min-width:0;display:grid;gap:1px}
+.git-session-link-label strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.git-session-link-label small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
 .git-review-tab .git-change-group h4{align-items:center}
 .git-review-tab .git-change-group h4 small{color:var(--muted);font-weight:400;letter-spacing:0;text-align:right}
 .git-review-file-row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
@@ -3189,7 +3232,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-review-footer>span{margin-right:auto;color:var(--muted);font-size:9px}.git-review-footer label{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:8px}.git-review-footer button{padding:0 8px}
 .git-review-recovery{display:grid;gap:4px;padding:7px 10px;color:var(--amber);font-size:9px}.git-review-recovery textarea{min-height:90px;padding:6px;border:1px solid var(--amber);background:var(--bg);color:var(--text);font:inherit}
 @media(max-width:760px){
-  .git-view-toggle button,.git-toolbar>button,.git-compare select{min-height:36px}
+  .git-view-toggle button,.git-toolbar>button,.git-toolbar-actions>button,.git-compare select{min-height:36px}
+  .git-toolbar-actions .git-refresh{min-width:36px}
+  .git-map-live,.git-commit-links,.git-session-links button{min-height:36px}
   .git-review-file-main{min-height:38px;grid-template-columns:28px 22px minmax(0,1fr) max-content 38px}
   .git-review-modal{width:100vw;height:100dvh;border:0;border-radius:0}
   .git-review-layout{display:block;overflow:hidden}.git-review-files{display:none}.git-review-content{height:100%;padding-bottom:45px}
@@ -3239,6 +3284,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
      equal to that padding — they are a restatement of it, not a second opinion. */
   --session-row-inset-x:8px;
   --session-row-inset-y:5px;
+  /* The gap between the indicator's gutter column and the row's text column. A
+     variable because `.row-metric` — the box the width ladder's budget is measured
+     from — has to reproduce this row's text column exactly, and a second literal
+     `8px` in that rule would be a copy of the layout rather than the layout. */
+  --session-row-gap:8px;
 }
 .state-dot.state-indicator{
   /* Dense surfaces — tab strips, menus, pane headers — keep the former dot's
@@ -3341,17 +3391,47 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    colour is what keeps the fade right on a hovered, selected, or awaiting row —
    all three paint different backgrounds, and one of them pulses. */
 .row-actions{background-color:inherit;-webkit-mask-image:linear-gradient(to right,transparent,#000 12px);mask-image:linear-gradient(to right,transparent,#000 12px)}
-/* The bottom line does the opposite: neither section shrinks, the right one is
-   pushed over by `margin-left:auto` only while there is room, and the line
-   clips. So the two sections slide together as the sidebar narrows, meet at a
-   fixed gap, and then run off the right edge — rather than the right section
-   squeezing the left one out of existence, which is what `flex:1 1 auto` on the
-   left plus `flex:0 0 auto` on the right actually does. */
-.row-line.bottom{overflow:hidden}
-.row-line.bottom .row-section{flex:0 0 auto}
-.row-line.bottom .row-section.right{margin-left:auto;padding-left:10px}
+/* The bottom line now yields in the same direction as the top one: the RIGHT
+   section is laid out first and the LEFT section ellipsizes into what is left.
+
+   It used to be the reverse — neither section shrank, and the right one was
+   pushed off the line's edge and clipped. Measured at the 190px minimum, a
+   22-character worktree on the left held a fixed 116px while 49 of the model's
+   68px were cut off the right edge, mid-glyph, with no ellipsis: the box was
+   never squeezed, so `text-overflow` never engaged. A value the reader pinned to
+   the row's edge must not be deletable by a long value on the other side.
+
+   The failure the old rule was guarding against — a fixed right section squeezing
+   the left one out of existence — is prevented by `--row-token-floor` instead of
+   by absolute left precedence. The lopsided shrink factors are what sequence the
+   two: flexbox shrinks siblings in proportion, so 1000 against 1 makes the left
+   absorb the whole deficit until it reaches its floor, after which the right
+   begins to yield. Neither can reach zero, and neither overflows the line.
+
+   The floor is six characters of the line's own monospace type, matching the
+   token engine's `ROW_MIN_CHARS`: below it a truncated worktree stops
+   distinguishing itself from its siblings, and that is the width at which the
+   engine has already collapsed the token to its mark. */
+.row-line.bottom{overflow:hidden;--row-token-floor:6ch}
+.row-line.bottom .row-section.left{flex:1000 1 auto;min-width:0;overflow:hidden}
+.row-line.bottom .row-section.right{flex:0 1 auto;margin-left:auto;padding-left:10px;min-width:0}
+/* One token per section yields, for the reason the top line has the same rule:
+   flexbox shrinks every sibling in proportion, so a squeezed non-clipping token
+   spills its glyph visibly under its neighbour instead of ellipsizing. The one
+   that yields is the one furthest from the row's edge the section is anchored to
+   — the left section's last token, the right section's first — because the tokens
+   at the edges are the ones placement pinned there. */
+.row-line.bottom .row-section .row-token{flex:none}
+.row-line.bottom .row-section.left .row-token:last-child,
+.row-line.bottom .row-section.right .row-token:first-child{
+  flex:0 1 auto;overflow:hidden;min-width:min(var(--row-token-floor),100%)
+}
 .row-token{display:inline-flex;align-items:baseline;min-width:0;flex:0 1 auto}
 .row-section.left .row-token:last-child{overflow:hidden}
+/* A token collapsed to its field's mark. Unshrinkable and never ellipsized: a
+   mark has nothing to lose a tail from, and the whole point of the rung is that
+   it is the smallest honest thing the field can be. */
+.row-icon{flex:none;white-space:nowrap}
 .row-sep{color:#5c6f61;opacity:.7;white-space:pre;flex:none}
 .row-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-text.muted{color:#5c6f61}
@@ -3401,17 +3481,47 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   background:var(--blue);box-shadow:0 0 0 1.5px var(--panel);pointer-events:none
 }
 .session-row.active .ind-standing{box-shadow:0 0 0 1.5px #1a201a}
-/* Width shedding is NOT done here. Hiding a token with `display:none` removes
-   the token but not the separator already emitted beside it, which rendered a
-   narrowed row as `· apply_patch`. The token engine sheds instead, so the
-   separator invariant — only between tokens that drew — survives resizing.
-   See `shedForWidth` in sessionRowFields.ts. */
+/* Collapsing a token to its mark, and dropping one, are NOT done here. Hiding a
+   token with `display:none` removes the token but not the separator already
+   emitted beside it, which rendered a narrowed row as `· apply_patch`. The token
+   engine fits the line instead, so the separator invariant — only between tokens
+   that drew — survives resizing. Continuous truncation *is* done here, because
+   CSS measures exactly what a JS step would only quantise.
+   See `fitLine` in sessionRowFields.ts. */
+/* The box the engine's character budget is measured from: a zero-height stand-in
+   for one row's text column, inside the real container chain.
+
+   It exists because the budget was previously compared against the width of the
+   whole `<aside class="sidebar">`, which overstates the room by the indicator
+   gutter, the tree's and list's padding, and the scrollbar. At the default 254px
+   sidebar that is 49-63px depending on `--session-dot`, a setting the thresholds
+   could not see — so the shipped default degraded a token before anybody dragged
+   anything, and a user who enlarged the indicator got the same thresholds over
+   less room.
+
+   Every number here comes from the variables `.session-row` itself is built from,
+   so the measured column cannot drift from the drawn one. It deliberately does
+   NOT reuse the `.session-row` class: a second element carrying it changes what
+   `querySelector('.session-row')` returns for every other reader in the app and
+   in the renderer specs, which is too large a side effect for a measuring stick.
+
+   A `ResizeObserver` on the inner cell picks up the scrollbar appearing and the
+   indicator being resized as well as the drag, none of which resizes the sidebar
+   itself. */
+.row-metric-probe{height:0;overflow:hidden;visibility:hidden;pointer-events:none}
+.row-metric{
+  display:grid;grid-template-columns:var(--session-dot) minmax(0,1fr);
+  gap:var(--session-row-gap);padding-inline:var(--session-row-inset-x)
+}
 @media(prefers-reduced-motion:reduce){.state-dot.state-indicator,.ind-core{animation:none!important}}
 
 /* Settings → Appearance → Session rows. */
 .session-row-settings h4{margin:14px 0 4px;font-size:11px}
 .session-row-settings h5{margin:0 0 3px;color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
-.session-row-preview{width:100%;max-width:420px;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+/* Width comes from the panel's own control, not from a cap here: it used to be
+   pinned at 420px — wider than the sidebar can be dragged — so the panel showed
+   every setting except the one a reader cannot predict from the field list. */
+.session-row-preview{max-width:100%;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .session-row-preview .session-row{cursor:default}
 /* Slider plus a live readout, because a size in pixels is a number the user has
    to be able to say back — a bare track leaves "how big is it now" unanswerable

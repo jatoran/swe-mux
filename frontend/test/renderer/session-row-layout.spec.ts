@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test'
+import { expect, test, type Page } from 'playwright/test'
 
 /**
  * The state indicator's placement is pure CSS, so nothing else can catch it.
@@ -15,7 +15,40 @@ interface Box { x: number; y: number; width: number; height: number }
 const centerX = (box: Box) => box.x + box.width / 2
 const centerY = (box: Box) => box.y + box.height / 2
 
-async function geometry(page: import('playwright/test').Page) {
+/**
+ * Set the sidebar's width and wait for the width ladder to have been recomputed
+ * from it.
+ *
+ * The budget is measured in a `ResizeObserver` and the tokens are rebuilt from
+ * that measurement, so a width set in one frame does not reach the row until the
+ * next. The harness publishes a render counter for exactly this: waiting on the
+ * thing that has to happen beats waiting a guessed number of frames.
+ *
+ * Re-applying the width the sidebar already has resizes nothing, so the observer
+ * never fires and there is nothing to wait for. Waiting anyway would hang, which
+ * is what a caller measuring the same width twice — before and after a hover —
+ * actually does.
+ */
+async function resizeSidebar(page: Page, width: number) {
+  // The counter is read in the SAME evaluate that applies the width. Read in a
+  // second round trip it can already hold the value the resize produced, and the
+  // wait below then never sees it change.
+  const before = await page.evaluate(w => {
+    const sidebar = document.querySelector<HTMLElement>('.sidebar')!
+    const target = `${w}px`
+    if (sidebar.style.width === target) return null
+    const previous = document.documentElement.dataset.rowRender
+    sidebar.style.width = target
+    return previous ?? ''
+  }, width)
+  if (before === null) return
+  await page.waitForFunction(
+    previous => document.documentElement.dataset.rowRender !== previous,
+    before,
+  )
+}
+
+async function geometry(page: Page) {
   return page.evaluate(() => {
     const box = (element: Element | null) => {
       const rect = (element as HTMLElement).getBoundingClientRect()
@@ -129,24 +162,29 @@ test('the visible dot is larger than the 6px one it replaced', async ({ page }) 
 })
 
 /**
- * As the sidebar narrows the two bottom sections must slide together, meet at a
- * fixed gap, and then run off the right edge — clipped, not collapsed.
+ * Which section yields as the sidebar narrows, and what that looks like.
  *
- * The regression this pins: with the left section flexible and the right one
- * fixed, the right section squeezed the left one to nothing, so the branch and
- * diff vanished while the duration stayed put. That is the opposite of what a
- * narrowing sidebar should drop.
+ * This assertion set is the REVERSE of the one it replaces, deliberately. The old
+ * rule gave the left section absolute precedence: neither section shrank, and the
+ * right one was pushed off the line's edge and clipped. Measured at the 190px
+ * minimum, a 22-character worktree on the left held a fixed 116px while 49 of the
+ * model's 68px were cut off the right edge mid-glyph, with no ellipsis — the box
+ * was never squeezed, so `text-overflow` never engaged.
+ *
+ * The failure the old rule guarded against — a fixed right section squeezing the
+ * left one out of existence — is now prevented by `--row-token-floor` rather than
+ * by making the left unshrinkable. Both bounds are asserted here, so restoring
+ * either half of the old rule fails: the left must keep a floor, and the right
+ * must stay inside the line.
  */
-test('narrowing slides the sections together and clips, never squeezes the left out', async ({ page }) => {
+test('narrowing truncates the left section and never pushes the right off the row', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
-  await page.goto('/session-row-harness.html')
+  await page.goto('/session-row-harness.html?layout=worktree-model')
 
   const measure = async (width: number) => {
-    await page.evaluate(w => {
-      document.querySelector<HTMLElement>('.sidebar')!.style.width = `${w}px`
-    }, width)
+    await resizeSidebar(page, width)
     return page.evaluate(() => {
-      const row = document.querySelectorAll('.session-row')[0]
+      const row = document.querySelector('[data-row="working"]')!
       const line = row.querySelector('.row-line.bottom')!
       const box = (el: Element | null) => {
         if (!el) return null
@@ -154,38 +192,109 @@ test('narrowing slides the sections together and clips, never squeezes the left 
         return { x: r.x, width: r.width, right: r.right }
       }
       const left = line.querySelector('.row-section.left') as HTMLElement
+      const right = line.querySelector('.row-section.right') as HTMLElement
       return {
         line: box(line),
         left: box(left),
-        right: box(line.querySelector('.row-section.right')),
+        right: box(right),
         leftText: left.innerText.trim(),
-        // Equal means the section is showing all of its content; smaller means
-        // it was squeezed and is clipping its own tokens.
-        leftScroll: left.scrollWidth,
-        leftClient: left.clientWidth,
+        rightText: right.innerText.trim(),
+        leftWidth: left.getBoundingClientRect().width,
+        // A collapsed token renders the field's mark instead of its value.
+        leftIsIcon: !!left.querySelector('.row-icon'),
+        // Truthy only while the browser is actually ellipsizing the value, which is
+        // the rung between the full value and the mark.
+        leftEllipsized: (() => {
+          const text = left.querySelector('.row-text') as HTMLElement | null
+          return !!text && text.scrollWidth > text.clientWidth
+        })(),
       }
     })
   }
 
   const wide = await measure(420)
-  expect(wide.left!.width).toBeGreaterThan(0)
+  expect(wide.leftText).toBe('feat-tokenizer-rewrite')
+  expect(wide.rightText).toBe('5-codex')
   expect(wide.left!.right).toBeLessThanOrEqual(wide.right!.x + 0.5)
 
-  const narrow = await measure(200)
-  // The left section keeps every token it drew rather than being squeezed and
-  // clipping its own content — this is the assertion the old rules failed.
-  expect(narrow.leftText.length).toBeGreaterThan(0)
-  // Narrower *does* legitimately shrink this section — the container queries
-  // shed whole low-priority tokens. What must never happen is the section being
-  // squeezed below the tokens it still draws, which is self-clipping.
-  expect(narrow.leftClient).toBeGreaterThanOrEqual(narrow.leftScroll)
-  // They meet with a gap preserved, and never overlap.
+  // The regression: at the narrowest the sidebar can be dragged, the right
+  // section must be fully inside the line rather than clipped by its edge.
+  const narrow = await measure(190)
+  expect(narrow.rightText).toBe('5-codex')
+  expect(narrow.right!.right).toBeLessThanOrEqual(narrow.line!.right + 0.5)
+  expect(narrow.right!.x).toBeGreaterThanOrEqual(narrow.line!.x)
+  // And they still never overlap.
   expect(narrow.left!.right).toBeLessThanOrEqual(narrow.right!.x + 0.5)
-  // Overflow leaves the line to the right and is clipped, not wrapped.
-  expect(narrow.right!.right).toBeGreaterThan(narrow.line!.x)
+  // The left section is the one that gave up room, and it did it by ellipsizing
+  // rather than by being collapsed: two tokens still fit at this width once the
+  // yielding one may lose its tail, so the mark is not needed yet.
+  expect(narrow.leftWidth).toBeLessThan(wide.leftWidth)
+  expect(narrow.leftEllipsized).toBe(true)
+  expect(narrow.leftIsIcon).toBe(false)
+
+  // The line clips rather than wrapping, at every width.
   const lineStyle = await page.evaluate(() =>
     getComputedStyle(document.querySelector('.row-line.bottom')!).overflowX)
   expect(lineStyle).toBe('hidden')
+})
+
+/**
+ * The icon rung, which is only reachable when several fields are competing: two
+ * tokens fit at any draggable width once each section's yielding token may
+ * ellipsize, so a mark stands in for a value on a crowded line and nowhere else.
+ */
+test('a crowded line collapses low-priority values to their marks', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html?layout=crowded')
+  await resizeSidebar(page, 190)
+
+  const drawn = await page.evaluate(() => {
+    const line = document.querySelector('[data-row="working"] .row-line.bottom')!
+    const left = line.querySelector('.row-section.left') as HTMLElement
+    const right = line.querySelector('.row-section.right') as HTMLElement
+    return {
+      icons: [...left.querySelectorAll('.row-icon')].map(icon => icon.textContent),
+      leftRight: left.getBoundingClientRect().right,
+      rightX: right.getBoundingClientRect().x,
+      rightInside: right.getBoundingClientRect().right <= line.getBoundingClientRect().right + 0.5,
+      // Whatever survives on the right, the section is not empty: the engine may
+      // never delete the last token a section holds.
+      rightTokens: right.querySelectorAll('.row-token').length,
+      leftTokens: left.querySelectorAll('.row-token').length,
+    }
+  })
+  // The branch carries `⎇` and is the lowest-priority left field that owns a mark.
+  expect(drawn.icons).toContain('⎇')
+  expect(drawn.leftTokens).toBeGreaterThan(0)
+  expect(drawn.rightTokens).toBeGreaterThan(0)
+  expect(drawn.rightInside).toBe(true)
+  expect(drawn.leftRight).toBeLessThanOrEqual(drawn.rightX + 0.5)
+})
+
+/**
+ * The floor the old rule's failure mode is now prevented by. A right section laid
+ * out first must not be able to squeeze the left one to nothing, which is exactly
+ * what a fixed right beside a flexible left does without a `min-width`.
+ */
+test('the left section keeps a floor rather than being squeezed away', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 })
+  await page.goto('/session-row-harness.html?layout=worktree-model')
+  await resizeSidebar(page, 190)
+
+  const floor = await page.evaluate(() => {
+    const line = document.querySelector('[data-row="working"] .row-line.bottom')!
+    const left = line.querySelector('.row-section.left') as HTMLElement
+    const probe = document.createElement('span')
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre'
+    probe.textContent = '000000'
+    line.appendChild(probe)
+    const sixChars = probe.getBoundingClientRect().width
+    probe.remove()
+    return { leftWidth: left.getBoundingClientRect().width, sixChars }
+  })
+  // Six characters of the line's own type is the engine's `ROW_MIN_CHARS`; the
+  // section is at or above it, never collapsed to zero.
+  expect(floor.leftWidth).toBeGreaterThanOrEqual(floor.sixChars * 0.9)
 })
 
 /**
@@ -197,10 +306,8 @@ test('narrowing slides the sections together and clips, never squeezes the left 
  * are the ones with the longest names. Pure CSS, so nothing but a real layout
  * can answer it.
  */
-async function stripGeometry(page: import('playwright/test').Page, width: number) {
-  await page.evaluate(w => {
-    document.querySelector<HTMLElement>('.sidebar')!.style.width = `${w}px`
-  }, width)
+async function stripGeometry(page: Page, width: number) {
+  await resizeSidebar(page, width)
   return page.evaluate(() => {
     const row = document.querySelector('[data-row="standing"]')!
     const box = (el: Element | null) => {

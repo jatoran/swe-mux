@@ -122,21 +122,58 @@ export const SEPARATORS: Record<SeparatorId, { label: string; text: string }> = 
 
 export const SEPARATOR_IDS = Object.keys(SEPARATORS) as SeparatorId[]
 
+/**
+ * Characters a truncated value keeps before it stops being a value.
+ *
+ * Six is the floor rather than a target: below it a worktree reads `feat-t`,
+ * which two sibling checkouts in the same fleet will share, so the token is
+ * spending width to say something no longer distinguishing. A field with a mark
+ * of its own collapses to it at that point instead; one without is dropped.
+ */
+export const ROW_MIN_CHARS = 6
+
+/**
+ * Gauge cells. Four is enough to compare rows at a glance and cheap to scan.
+ *
+ * Shared with the width ladder rather than owned by the renderer: the engine has
+ * to know what a gauge costs to decide whether the line fits, and two copies of
+ * the number would let the estimate drift away from the thing being drawn.
+ */
+export const GAUGE_CELLS = 4
+/** Counts at or below this render as pips; above it, as a numeral. */
+export const MAX_PIPS = 4
+
 export interface RowFieldDescriptor {
   id: RowFieldId
   label: string
   /** What "notable" means for this field, shown beside the mode control. */
   notable: string
-  /** Lower sheds first when the sidebar is too narrow to hold every token. */
+  /** Lower degrades first when the line is too narrow to hold every token. */
   priority: number
   /** Identity fields the top line is built from; never available to the bottom line. */
   identity?: boolean
+  /**
+   * The mark this field collapses to when its truncated value would stop being
+   * one. Present only where the mark is unambiguous *within a row*: `model` has
+   * no honest icon, because the provider mark is already the `glyph` field and
+   * cannot tell opus from sonnet, so a model collapses to nothing and is dropped
+   * instead. A field earns this the day it earns a mark, not before.
+   *
+   * Deliberately independent of the `gitGlyphs` setting: that decides whether
+   * the mark is drawn *beside* the full value, which is decoration. This is the
+   * field's identity at the width where its value no longer fits, which is
+   * layout.
+   */
+  glyph?: string
+  /** Truncation floor, in characters. Defaults to `ROW_MIN_CHARS`. */
+  minChars?: number
 }
 
 /**
- * The field catalog. `priority` is also the width-shedding order: a narrow
- * sidebar drops whole tokens from the lowest priority up, rather than
- * ellipsizing every token at once into a row of prefixes.
+ * The field catalog. `priority` is also the degradation order: a line too narrow
+ * for every token collapses the lowest-priority ones to their marks, and only
+ * then starts dropping — rather than ellipsizing every token at once into a row
+ * of prefixes.
  */
 export const ROW_FIELDS: RowFieldDescriptor[] = [
   { id: 'title', label: 'Session title', notable: 'always has a value', priority: 100, identity: true },
@@ -154,8 +191,8 @@ export const ROW_FIELDS: RowFieldDescriptor[] = [
     priority: 78,
   },
   { id: 'context', label: 'Context used', notable: 'past 60%', priority: 75 },
-  { id: 'branch', label: 'Git branch', notable: 'differs from the project default', priority: 60 },
-  { id: 'worktree', label: 'Worktree', notable: 'the checkout is a linked worktree', priority: 62 },
+  { id: 'branch', label: 'Git branch', notable: 'differs from the project default', priority: 60, glyph: '⎇' },
+  { id: 'worktree', label: 'Worktree', notable: 'the checkout is a linked worktree', priority: 62, glyph: '⌂' },
   { id: 'diff', label: 'Lines changed (uncommitted)', notable: 'the working tree has changes', priority: 55 },
   { id: 'dirty', label: 'Changed files (uncommitted)', notable: 'at least one file is dirty', priority: 50 },
   { id: 'compareDiff', label: 'Lines changed (branch)', notable: 'the branch differs from its base', priority: 56 },

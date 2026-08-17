@@ -2517,7 +2517,7 @@ If the tiered idea is ever revisited, the shape is a cheap observer on `tool_res
 
 ### Backend — no write surface
 
-- [ ] Do **not** expose `POST /api/sessions/{sid}/scan-timeline/scan` or the backfill endpoint through MCP. Reads cost nothing, but a scan spends the human's gated budget against caps they set in Settings → Automation, and an agent that can trigger scans can exhaust `scan_timeline_daily_budget_usd` for every Project on the host.
+- [ ] Do **not** expose `POST /api/sessions/{sid}/scan-timeline/scan` or the backfill endpoint through MCP. Reads cost nothing, but a scan spends the human's gated budget against caps they set in Settings → Automation → Scan timeline, and an agent that can trigger scans can exhaust `scan_timeline_daily_budget_usd` for every Project on the host.
 - [ ] Add no generic record-dump tool. Every mux MCP tool stays a question, not a table (the Phase 7.10 rule).
 
 ### Backend — window-scoped semantic fields

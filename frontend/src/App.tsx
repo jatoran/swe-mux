@@ -20,6 +20,7 @@ import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
 import { agentTargetName } from './agentTargets'
+import { runDisplayName } from './sessionNames'
 import {
   defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
   projectCreateRoot, suggestFolderName, toggleInitScript,
@@ -167,12 +168,12 @@ import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape, StandingRender } from './sessionRowConfig'
 import {
-  applySessionDotSize, useObservedWidth, useRowClock, useSessionRowConfig, watchSessionDotProfile,
+  applySessionDotSize, useRowBudget, useRowClock, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
 import { serverNow } from './serverClock.ts'
 import {
   buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc,
-  sessionStandingMark, shedForWidth,
+  sessionStandingMark,
 } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
@@ -348,7 +349,7 @@ function startupTimingTitle(session:Session,client:ClientStartupTiming):string {
 }
 
 function historyName(entry:HistoryEntry):string {
-  return entry.auto_named!==0&&entry.generated_title?entry.generated_title:entry.name
+  return runDisplayName(entry)
 }
 
 export function App() {
@@ -384,6 +385,9 @@ export function App() {
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
   // '' browses every Project; a Project id prefilters the archive to it.
   const [historyScope,setHistoryScope]=useState('')
+  //: One conversation to open History straight into, when a surface named a specific
+  //: session rather than asking to browse.
+  const [historyEntry,setHistoryEntry]=useState('')
   const [historyOpen,setHistoryOpen]=useState(false)
   const [processScope,setProcessScope]=useState<string|null>(null)
   // The drawer tab's scope: '' is every Project, anything else is that Project. Kept here (not
@@ -439,19 +443,22 @@ export function App() {
     ()=>Object.fromEntries(Object.entries(queueSummary).map(([id,target])=>[id,target.pending])),
     [queueSummary],
   )
-  // Width-driven token shedding is measured, not queried in CSS: hiding a token
-  // with `display:none` leaves the separator JSX already emitted beside it.
+  // The width ladder is measured, not queried in CSS: hiding a token with
+  // `display:none` leaves the separator JSX already emitted beside it. What is
+  // measured is the `.row-metric` probe below, a stand-in for one row's text
+  // column — not this element, whose width overstates the room a row has by the
+  // indicator gutter, the tree's padding, and the scrollbar.
   const sidebarRef=useRef<HTMLElement>(null)
-  const rowWidth=useObservedWidth(sidebarRef)
-  const rowShed=shedForWidth(rowWidth)
+  const rowMetricRef=useRef<HTMLDivElement>(null)
+  const rowBudget=useRowBudget(rowMetricRef)
   // Device-local drafts are unioned into the row context rather than read at the
   // row: the daemon's ledger sees text typed from any client but not text staged
   // in this browser's own draft composer, which never reaches the PTY. Neither
   // source is a superset of the other.
   const localDrafts=useMemo(()=>mobileTerminalDraftStore.stamps(),[mobileDraftRevision])
   const rowContext=useMemo(
-    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowShed,localDrafts),
-    [sessions,rowQueueDepth,rowNow,rowShed,localDrafts],
+    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowBudget,localDrafts),
+    [sessions,rowQueueDepth,rowNow,rowBudget,localDrafts],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -3496,6 +3503,19 @@ export function App() {
   // that Project (the browser's own picker can still widen back to all).
   const showHistory = (scope:Project|null=null) => {
     setHistoryScope(scope?scope.id:'')
+    setHistoryEntry('')
+    setHistoryOpen(true)
+    setMainMenuOpen(false);setProjectMenu(null)
+  }
+
+  /** Open History on one conversation, which is where a session that has ended lives.
+   *
+   *  Unscoped on purpose: the row being opened is named by its id, and pre-filtering to a
+   *  Project would hide it whenever the conversation belongs to another one - the Git tab
+   *  can name a session from a worktree that is no longer in this Project's scope. */
+  const showHistoryEntry = (historyId:string) => {
+    setHistoryScope('')
+    setHistoryEntry(historyId)
     setHistoryOpen(true)
     setMainMenuOpen(false);setProjectMenu(null)
   }
@@ -5322,6 +5342,25 @@ export function App() {
           <button class="sidebar-tool" aria-label="Add a Project" title="Add a Project" onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/></button>
         </div>
         <div class="project-tree">
+          {/* The box the token engine's character budget is measured from: one
+              row's text column, at zero height, inside the real container chain.
+              The wrappers are the tree's own classes and `.row-metric` restates the
+              row's columns from the same variables, so the measured column cannot
+              drift from the drawn one — and the gutter is `--session-dot`, which
+              the user sets. It carries neither the `.session-row` class nor a
+              `data-group-id`/`data-reorder-id`, so no selector, drag, or drop
+              target elsewhere can resolve to it. */}
+          <div ref={rowMetricRef} class="row-metric-probe sidebar-project-list" aria-hidden="true">
+            <div class="project-group"><div class="session-list">
+              <div class="row-metric">
+                <span />
+                <span class="session-copy" data-metric="copy">
+                  <span class="row-line top"><span data-metric="top">0000000000</span></span>
+                  <span class="row-line bottom"><span data-metric="bottom">0000000000</span></span>
+                </span>
+              </div>
+            </div></div>
+          </div>
           {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
           {/* `data-group-id` is what a Project drag reads to decide which Group it is
               dropping into; the root list carries the empty string for "ungrouped".
@@ -5425,6 +5464,7 @@ export function App() {
         onNotificationsChanged={()=>void loadNotifications()}
         unread={notificationUnread}
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
+        onOpenHistoryEntry={historyId=>{if(mobileWorkspace)setClipboardOpen(false);showHistoryEntry(historyId)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
         onConfigureActions={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);openActionEditor()}}
         onManagePrompts={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
@@ -5792,7 +5832,7 @@ export function App() {
     {redeploying&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App redeploying"><div class="modal daemon-reload-modal"><h2>Rebuilding + redeploying app…</h2><p>The new bundle builds while the current app keeps running, then the app restarts around your live sessions. This takes a few minutes; the page reloads automatically. A failed build leaves the current app untouched.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions (a few minutes). A failed build leaves the current app running.</p><div class="modal-actions"><button onClick={()=>void startRedeploy()}>Rebuild + redeploy</button><button onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button></div></div></div>}
 
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 

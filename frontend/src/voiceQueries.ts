@@ -1,6 +1,7 @@
 import type { FleetSession } from './fleetStatus.ts'
 import { fleetPredicateMatches } from './fleetStatus.ts'
 import { normalizeSpokenText } from './voiceIntents.ts'
+import { sessionDisplayName } from './sessionNames.ts'
 import type { VoiceSessionAddress } from './voiceNavigation.ts'
 import type { Command } from './commands.ts'
 import {
@@ -225,13 +226,13 @@ export function sessionListPage(
     const number=address?.sessionNumber??start+index+1
     const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
     const boundary=index?'Next session. ':''
-    return `${boundary}${project}Session ${number}. Name, ${item.session.name}. Project, ${item.projectName}. Status, ${spokenSessionStatus(item, detailed)}.`
+    return `${boundary}${project}Session ${number}. Name, ${sessionDisplayName(item.session)}. Project, ${item.projectName}. Status, ${spokenSessionStatus(item, detailed)}.`
   }).join(' ')
   const detailItems=page.map((item,index)=>{
     const address=addressing?.addressFor(item)
     const number=address?.sessionNumber??start+index+1
     const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
-    return`${project}Session ${number} - ${item.session.name}\nProject: ${item.projectName}\nStatus: ${spokenSessionStatus(item,detailed)}`
+    return`${project}Session ${number} - ${sessionDisplayName(item.session)}\nProject: ${item.projectName}\nStatus: ${spokenSessionStatus(item,detailed)}`
   }).join('\n\n')
   const remaining=items.length-start-page.length
   const speechTail=remaining>0?`${remaining} more session${remaining===1?'':'s'}. Say, next page, to continue.`:'End of session list.'

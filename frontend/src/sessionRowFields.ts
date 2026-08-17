@@ -14,7 +14,7 @@ import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harn
 import { displayModelName } from './modelDisplay.ts'
 import type { Session } from './types'
 import {
-  ROW_FIELD_BY_ID, SEPARATORS,
+  MAX_PIPS, ROW_FIELD_BY_ID, ROW_MIN_CHARS, SEPARATORS,
   type RowAlign, type RowFieldId, type RowLine, type RowSlot, type SessionRowConfig,
 } from './sessionRowConfig.ts'
 
@@ -51,33 +51,51 @@ export interface SessionRowContext {
    */
   localDrafts: Record<string, number>
   /**
-   * How many low-priority tokens each section sheds for the current width.
+   * Room each line has, in characters of that line's own type.
    *
-   * Shedding lives here rather than in a container query because the separator
-   * invariant is a property of the *token list*: a CSS rule that hides a token
-   * with `display:none` leaves the separator that JSX already emitted beside it,
-   * so a narrowed row rendered as `· apply_patch` — a leading mark belonging to
-   * a token that is no longer there.
+   * Characters rather than pixels because the bottom line is monospace, so on
+   * the line that carries almost every degradable field the unit is exact rather
+   * than estimated. `rowBudget` derives it from a measured box; a zero budget
+   * means "not measured yet" and degrades nothing.
+   *
+   * The fitting lives here rather than in a container query because the
+   * separator invariant is a property of the *token list*: a CSS rule that hides
+   * a token with `display:none` leaves the separator that JSX already emitted
+   * beside it, so a narrowed row rendered as `· apply_patch` — a leading mark
+   * belonging to a token that is no longer there.
    */
-  shed: number
+  budget: RowBudget
 }
+
+/** Room per line, in characters. Zero means unmeasured. */
+export interface RowBudget { top: number; bottom: number }
+
+export const EMPTY_ROW_BUDGET: RowBudget = { top: 0, bottom: 0 }
 
 export function emptyRowContext(now = Date.now() / 1000): SessionRowContext {
   return {
     now, defaultBranch: {}, defaultModel: {}, multiAccount: false,
-    queueDepth: {}, checkoutSessions: {}, localDrafts: {}, shed: 0,
+    queueDepth: {}, checkoutSessions: {}, localDrafts: {}, budget: EMPTY_ROW_BUDGET,
   }
 }
 
-/** Width thresholds, widest first; the index is how many tokens are shed. */
-const SHED_STEPS = [270, 230, 195]
-
-/** Tokens to shed at `width` (container inline size, CSS px). */
-export function shedForWidth(width: number): number {
-  if (!width) return 0
-  let shed = 0
-  for (const step of SHED_STEPS) if (width <= step) shed += 1
-  return shed
+/**
+ * Characters a line can hold, from the width of the row's *text column* and the
+ * advance of that line's own font.
+ *
+ * Both numbers are measured (`sessionRowPrefs.useRowBudget`), never assumed. The
+ * thresholds this replaced were compared against the width of the whole sidebar,
+ * which overstates the room by the indicator gutter, the tree's padding, and the
+ * scrollbar — between 49 and 63 px at the default width depending on a setting
+ * (`--session-dot`) the thresholds could not see. The shipped default sidebar
+ * therefore shed a token from every section before anybody dragged anything.
+ */
+export function rowBudget(textWidth: number, charPx: { top: number; bottom: number }): RowBudget {
+  if (textWidth <= 0) return EMPTY_ROW_BUDGET
+  return {
+    top: charPx.top > 0 ? Math.floor(textWidth / charPx.top) : 0,
+    bottom: charPx.bottom > 0 ? Math.floor(textWidth / charPx.bottom) : 0,
+  }
 }
 
 export type RowTokenKind =
@@ -110,6 +128,20 @@ export interface RowToken {
   gauge?: { pct: number; peak: number }
   count?: number
   badges?: ActivityBadge[]
+  /**
+   * Which rung of the width ladder this token is drawn at.
+   *
+   * `full` prints the value and lets CSS ellipsize it down to `minChars`; `icon`
+   * replaces it with the field's mark. There is no `truncated` rung, because
+   * truncation is continuous and CSS already does it exactly — a JS step would
+   * only quantise what the browser measures precisely, and would have to be
+   * recomputed on every resize to do it worse.
+   */
+  display: 'full' | 'icon'
+  /** The mark `icon` draws. Absent on a field with no unambiguous one. */
+  glyph?: string
+  /** Characters this value keeps before the `icon` rung is preferable. */
+  minChars: number
 }
 
 export interface RowSection { align: RowAlign; separator: string; tokens: RowToken[] }
@@ -408,9 +440,21 @@ interface Candidate { token: RowToken; notable: boolean }
 function candidateFor(
   id: RowFieldId, session: Session, config: SessionRowConfig, context: SessionRowContext,
 ): Candidate | null {
-  const priority = ROW_FIELD_BY_ID[id].priority
-  const make = (partial: Omit<RowToken, 'id' | 'priority'>, notable: boolean): Candidate =>
-    ({ token: { id, priority, ...partial }, notable })
+  const field = ROW_FIELD_BY_ID[id]
+  // Every token starts on the top rung; `fitSection` is what moves it down. The
+  // ladder's shape belongs to the field, so it is stamped on here rather than
+  // looked up again at every step of the fit.
+  const make = (
+    partial: Omit<RowToken, 'id' | 'priority' | 'display' | 'glyph' | 'minChars'>,
+    notable: boolean,
+  ): Candidate => ({
+    token: {
+      id, priority: field.priority, display: 'full',
+      glyph: field.glyph, minChars: field.minChars ?? ROW_MIN_CHARS,
+      ...partial,
+    },
+    notable,
+  })
 
   switch (id) {
     case 'title':
@@ -633,30 +677,164 @@ function buildSection(
     if (slot.mode === 'notable' && !candidate.notable) continue
     tokens.push(candidate.token)
   }
-  return { align, separator, tokens: shedLowestPriority(tokens, context.shed) }
+  return { align, separator, tokens }
 }
 
 /**
- * Drop the `count` lowest-priority tokens, preserving the configured order of
- * those that survive. Shedding happens before the renderer sees the list, so
- * separators are still emitted only between tokens that actually draw.
+ * Marks and cell strips, in characters of the line they sit on.
  *
- * Identity tokens are never shed. The rule used to name the title alone, which
- * was the same rule for as long as identity meant "the title and the marks
- * beside it": everything else on that line was a prefix of the name. It stops
- * being the same rule for a flag, whose section may hold nothing else — a narrow
- * sidebar would then delete the only token in it, and the mark that says a
- * subagent is running would disappear at exactly the width that made the row
- * hard to read in the first place.
+ * Estimates, and only for the tokens that are not text: the bottom line is
+ * monospace, so a text token's cost is its length exactly, and CSS is the
+ * backstop for whatever these few miss.
  */
-function shedLowestPriority(tokens: RowToken[], count: number): RowToken[] {
-  if (count <= 0 || tokens.length <= 1) return tokens
-  const sheddable = tokens.filter(token => !ROW_FIELD_BY_ID[token.id]?.identity)
-  if (!sheddable.length) return tokens
-  const doomed = new Set(
-    [...sheddable].sort((a, b) => a.priority - b.priority).slice(0, count),
-  )
-  return tokens.filter(token => !doomed.has(token))
+const MARK_COST = 2
+const GAUGE_COST = 4
+const DIFF_BAR_COST = 5
+/** The mandatory space between the two sections (`.row-section.right` padding). */
+const SECTION_GAP = 2
+
+function tokenCost(token: RowToken, config: SessionRowConfig): number {
+  const prefix = token.prefix ? token.prefix.length + 1 : 0
+  if (token.display === 'icon') return prefix + (token.glyph?.length ?? 1)
+  switch (token.kind) {
+    case 'title':
+      // The name is always costed at the floor it ellipsizes to. It is the top
+      // line's yielding token by construction, and costing it in full would make
+      // every long-named row look overfull and start deleting facts that fit.
+      return token.minChars
+    case 'glyph': case 'broadcast': case 'draft':
+      return MARK_COST
+    case 'badges':
+      return Math.max(1, token.badges?.length ?? 1) * MARK_COST
+    case 'gauge':
+      return GAUGE_COST
+    case 'diff':
+      return prefix + (config.diffStyle === 'bar' ? DIFF_BAR_COST : token.text.length)
+    case 'count':
+      return prefix + (config.countStyle === 'pips' && (token.count ?? 0) <= MAX_PIPS
+        ? Math.max(1, token.count ?? 0)
+        : token.text.length)
+    default:
+      return prefix + token.text.length
+  }
+}
+
+/**
+ * What a section costs once CSS has taken everything it is allowed to take.
+ *
+ * Exactly ONE token per section ellipsizes, and which one is a CSS fact this has
+ * to agree with: the left section's last token and the right section's first —
+ * the ones furthest from the edge the section is anchored to. Its siblings are
+ * `flex:none`, so costing them at a floor they can never reach would let the
+ * engine believe a line fits that visibly does not.
+ *
+ * This is what puts a truncation rung *below* the full value and *above* the
+ * mark: while the line still fits with its yielding token ellipsized, nothing is
+ * collapsed or dropped at all, and the browser truncates continuously — exactly,
+ * at every intermediate pixel, which no JS step can match.
+ */
+function sectionCost(
+  tokens: readonly RowToken[], separator: string, config: SessionRowConfig, align: RowAlign,
+): number {
+  if (!tokens.length) return 0
+  const yielding = align === 'left' ? tokens.length - 1 : 0
+  let total = (tokens.length - 1) * separator.length
+  for (const [index, token] of tokens.entries()) {
+    const full = tokenCost(token, config)
+    const prefix = token.prefix ? token.prefix.length + 1 : 0
+    total += index === yielding && token.kind === 'text' && token.display === 'full'
+      ? Math.min(full, prefix + token.minChars)
+      : full
+  }
+  return total
+}
+
+/**
+ * Degrade the line's lowest-priority tokens until it fits `budget` characters.
+ *
+ * The ladder has three rungs and they are tried in this order, which is the whole
+ * design:
+ *
+ *  1. **truncated** — CSS ellipsizes the yielding token down to `ROW_MIN_CHARS`.
+ *     Nothing here does anything; `sectionCost` merely accounts for it. The
+ *     browser measures the available space exactly and truncates at every
+ *     intermediate pixel, which a JS step could only quantise, and worse.
+ *  2. **icon** — a token with a mark of its own collapses to it. An icon costs two
+ *     characters against a value's ten or twenty, so collapsing the line is far
+ *     cheaper than deleting from it and keeps every placed fact on screen, which
+ *     is the point of having placed the field.
+ *  3. **dropped** — for a field with no honest mark, and for a line so narrow that
+ *     even the marks do not fit.
+ *
+ * Within rungs 2 and 3 the order is ascending priority, so the field the reader
+ * ranked lowest is the first to lose its value and the first to leave.
+ *
+ * The line is fitted as a whole rather than section by section, because the two
+ * sections share one line and a per-section budget would be a guess at how CSS
+ * splits it. Which section *yields* is CSS's decision and is the opposite of what
+ * it used to be: the right section is laid out first and the left one ellipsizes
+ * into what remains, so a value the reader placed on the right can no longer be
+ * pushed off the row's edge by a long worktree name on the left.
+ *
+ * Two invariants bound it:
+ *  - identity tokens never degrade, so the title, the provider mark, and the flag
+ *    strip survive every width;
+ *  - a section is never emptied while it still holds a token. The count-based
+ *    shedding this replaced had no such floor — a two-token section at shed 2
+ *    lost both — so a sidebar dragged to 230 px rendered a blank bottom line, and
+ *    deleted an `always`-mode field to do it.
+ */
+function fitLine(line: RowLineTokens, budget: number, config: SessionRowConfig): RowLineTokens {
+  const separator = line.left.separator
+  let entries: Array<{ align: RowAlign; token: RowToken }> = [
+    ...line.left.tokens.map(token => ({ align: 'left' as RowAlign, token })),
+    ...line.right.tokens.map(token => ({ align: 'right' as RowAlign, token })),
+  ]
+  if (budget <= 0 || entries.length <= 1) return line
+
+  const overflow = () => {
+    const left = entries.filter(entry => entry.align === 'left').map(entry => entry.token)
+    const right = entries.filter(entry => entry.align === 'right').map(entry => entry.token)
+    const gap = left.length && right.length ? SECTION_GAP : 0
+    return sectionCost(left, separator, config, 'left')
+      + sectionCost(right, separator, config, 'right')
+      + gap - budget
+  }
+  const rebuild = (): RowLineTokens => ({
+    left: { ...line.left, tokens: entries.filter(entry => entry.align === 'left').map(entry => entry.token) },
+    right: { ...line.right, tokens: entries.filter(entry => entry.align === 'right').map(entry => entry.token) },
+  })
+  if (overflow() <= 0) return line
+
+  // Ids, not token objects: the collapse pass replaces tokens rather than
+  // mutating them, so an object captured here would be stale by the drop pass.
+  // A field occupies at most one slot, so its id identifies it on the line.
+  const order = [...line.left.tokens, ...line.right.tokens]
+    .filter(token => !ROW_FIELD_BY_ID[token.id]?.identity)
+    .sort((a, b) => a.priority - b.priority)
+    .map(token => token.id)
+
+  for (const id of order) {
+    if (overflow() <= 0) return rebuild()
+    const found = entries.find(entry => entry.token.id === id)
+    if (!found || found.token.display === 'icon') continue
+    const { glyph, minChars, kind } = found.token
+    if (!glyph || kind !== 'text') continue
+    // Against the truncation floor, not the full value: the rung below this one is
+    // "ellipsized to `minChars`", so a mark no shorter than that floor buys the
+    // line nothing and only costs the reader the value.
+    if (glyph.length >= minChars) continue
+    entries = entries.map(entry =>
+      (entry.token.id === id ? { ...entry, token: { ...entry.token, display: 'icon' as const } } : entry))
+  }
+  for (const id of order) {
+    if (overflow() <= 0) return rebuild()
+    const align = entries.find(entry => entry.token.id === id)?.align
+    if (!align) continue
+    if (entries.filter(entry => entry.align === align).length <= 1) continue
+    entries = entries.filter(entry => entry.token.id !== id)
+  }
+  return rebuild()
 }
 
 /**
@@ -672,10 +850,14 @@ export function buildSessionRowTokens(
   const line = (which: RowLine): RowLineTokens => {
     const source = which === 'top' ? config.top : config.bottom
     const separator = SEPARATORS[source.separator].text
-    return {
-      left: buildSection(source.left, 'left', separator, session, config, context),
-      right: buildSection(source.right, 'right', separator, session, config, context),
-    }
+    return fitLine(
+      {
+        left: buildSection(source.left, 'left', separator, session, config, context),
+        right: buildSection(source.right, 'right', separator, session, config, context),
+      },
+      which === 'top' ? context.budget.top : context.budget.bottom,
+      config,
+    )
   }
   return { top: line('top'), bottom: line('bottom') }
 }
@@ -718,7 +900,7 @@ export function deriveRowContext(
   sessions: readonly Session[],
   queueDepth: Record<string, number>,
   now: number,
-  shed = 0,
+  budget: RowBudget = EMPTY_ROW_BUDGET,
   localDrafts: Record<string, number> = {},
 ): SessionRowContext {
   const byProject = new Map<string, Session[]>()
@@ -746,6 +928,6 @@ export function deriveRowContext(
   }
   return {
     now, defaultBranch, defaultModel,
-    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, shed,
+    multiAccount: accounts.size > 1, queueDepth, checkoutSessions, localDrafts, budget,
   }
 }

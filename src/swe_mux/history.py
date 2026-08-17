@@ -7,7 +7,7 @@ import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +35,9 @@ T = TypeVar("T")
 log = logging.getLogger(__name__)
 _AGENT_BACKEND_ARGS = tuple(sorted(AGENT_BACKENDS))
 _AGENT_BACKEND_SQL = ",".join("?" for _ in _AGENT_BACKEND_ARGS)
+#: Ids per `history_naming_rows` statement. The id list is bound twice (id and
+#: note_id), so this stays well inside SQLite's default 999-variable ceiling.
+_NAMING_ROW_CHUNK = 400
 
 
 def _public_history_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -3015,6 +3018,52 @@ class HistoryIndex:
         def op() -> dict[str, Any] | None:
             row = self._db.execute("SELECT * FROM history WHERE id=?", (session_id,)).fetchone()
             return _public_history_row(row) if row else None
+
+        return await self._run(op)
+
+    async def history_naming_rows(self, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """Naming fields of many rows at once, keyed by both row id and session id.
+
+        The narrow read behind display names for ended sessions. A caller holding a
+        session id (Git provenance holds one per commit) needs the row that owns that
+        conversation, which is keyed by *run* id (``agent_run_id or session_id``) while
+        ``note_id`` carries the session that produced it. Both keys are returned so one
+        pass answers either lookup; the run-keyed entry wins when a session rolled over,
+        because that is the row the History browser opens.
+        """
+        wanted = [value for value in dict.fromkeys(ids) if value]
+        if not wanted:
+            return {}
+
+        def op() -> dict[str, dict[str, Any]]:
+            by_row_id: dict[str, dict[str, Any]] = {}
+            by_session_id: dict[str, dict[str, Any]] = {}
+            for start in range(0, len(wanted), _NAMING_ROW_CHUNK):
+                chunk = wanted[start : start + _NAMING_ROW_CHUNK]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self._db.execute(
+                    "SELECT id,note_id,name,auto_named FROM history "
+                    f"WHERE id IN ({placeholders}) OR note_id IN ({placeholders}) "
+                    "ORDER BY COALESCE(agent_run_seq,0) ASC,spawned_at ASC,id ASC",
+                    (*chunk, *chunk),
+                ).fetchall()
+                for row in rows:
+                    row_id = str(row["id"])
+                    session_id = str(row["note_id"] or "")
+                    entry: dict[str, Any] = {
+                        "id": row_id,
+                        "note_id": session_id,
+                        "name": str(row["name"] or ""),
+                        "auto_named": int(row["auto_named"]),
+                    }
+                    by_row_id[row_id] = entry
+                    # Ascending order, so a session that rolled over resolves to its
+                    # newest run - the conversation a reader means by that session.
+                    if session_id:
+                        by_session_id[session_id] = entry
+            # A row id is an exact answer and outranks the session-id fallback, which
+            # would otherwise redirect the first run of a rolled-over session to its last.
+            return {**by_session_id, **by_row_id}
 
         return await self._run(op)
 

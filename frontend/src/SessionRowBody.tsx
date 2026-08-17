@@ -1,25 +1,24 @@
 // Renders the token model produced by sessionRowFields.ts.
 //
-// Two structural rules live here and nowhere else:
+// Three structural rules live here and nowhere else:
 //
 //  - a separator is emitted only *between tokens that drew*, so a conditional
 //    field that hid leaves no dangling ` · ` and no doubled one;
-//  - the left and right sections never overlap. They are flex siblings with a
-//    mandatory gap; when the sidebar narrows, the left section sheds whole
-//    low-priority tokens rather than ellipsizing every token into a row of
-//    prefixes, and only then does what remains truncate.
+//  - the left and right sections never overlap, and on both lines the RIGHT one
+//    is laid out first: it is what the reader deliberately pinned to the row's
+//    edge, so it must not be pushed off that edge by a long value on the left.
+//    The left section takes what remains and ellipsizes into it;
+//  - a token drawn at the `icon` rung renders its field's mark and nothing else.
+//    The value is not lost — it is in the tooltip every token already carries —
+//    and the mark is drawn whatever `gitGlyphs` says, because at this width it is
+//    the field's identity rather than decoration.
 
 import { harnessDisplayName } from './harnessRegistry.ts'
 import { agentTargetName } from './agentTargets.ts'
 import { providerGlyph } from './ProviderAccounts'
 import type { RowSection, RowToken, SessionRowTokens } from './sessionRowFields.ts'
-import type { SessionRowConfig } from './sessionRowConfig.ts'
+import { GAUGE_CELLS, MAX_PIPS, type SessionRowConfig } from './sessionRowConfig.ts'
 import type { Session } from './types'
-
-/** Gauge cells. Four is enough to compare rows at a glance and cheap to scan. */
-const GAUGE_CELLS = 4
-/** Counts at or below this render as pips; above it, as a numeral. */
-const MAX_PIPS = 4
 
 function gaugeCells(pct: number, peak: number) {
   const filled = Math.max(1, Math.ceil(Math.min(1, pct) * GAUGE_CELLS))
@@ -57,6 +56,13 @@ function Prefix({ token }: { token: RowToken }) {
 }
 
 function TokenView({ token, session, config }: { token: RowToken; session: Session; config: SessionRowConfig }) {
+  if (token.display === 'icon' && token.glyph) {
+    // Ahead of every kind-specific branch, because the rung is a statement about
+    // the whole token: at this width the field is present and identified, and its
+    // value is in the tooltip. `role="img"` with the value as the label keeps that
+    // true for a screen reader, where no width pressure exists.
+    return <span class="row-icon" title={token.title || token.text} role="img" aria-label={token.title || token.text}>{token.glyph}</span>
+  }
   if (token.kind === 'title') {
     // Deliberately a <strong>: the sidebar's attention tiers (active / unread /
     // viewing / read) are expressed as `.session-copy strong` colour rules, and

@@ -11,6 +11,7 @@ import {
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
+import { sessionDisplayName } from './sessionNames'
 
 // The Actions drawer combines three catalogs that can act on the focused session:
 // the configured Drawer half of the action layout, the live skill inventory, and
@@ -212,7 +213,7 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   const disclosure = inventoryNote(inventory)
 
   return <div class="actions-tab">
-    <p class="drawer-status">{session ? `${session.name || session.id} · ${backend}` : 'no terminal focused'}</p>
+    <p class="drawer-status">{session ? `${sessionDisplayName(session) || session.id} · ${backend}` : 'no terminal focused'}</p>
     <ActionSection
       id="quick"
       title="Quick actions"

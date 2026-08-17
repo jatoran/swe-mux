@@ -19,6 +19,7 @@ import { MOBILE_QUERY, currentProfile, rawDomain, saveDomain, type SettingsProfi
 import {
   defaultSessionRowConfig, normalizeSessionRowConfig, type SessionRowConfig,
 } from './sessionRowConfig.ts'
+import { EMPTY_ROW_BUDGET, rowBudget, type RowBudget } from './sessionRowFields.ts'
 import { serverNow } from './serverClock.ts'
 
 const ROW_PROFILE: SettingsProfile = 'desktop'
@@ -98,27 +99,50 @@ export function useSessionRowConfig(): SessionRowConfig {
 export const ROW_CLOCK_INTERVAL_MS = 5_000
 
 /**
- * Observed inline size of an element, for width-driven token shedding.
+ * Room a row's two lines have, in characters of their own type.
  *
- * A `ResizeObserver` rather than a container query because shedding has to
- * happen in the token list, not in CSS: hiding a token with `display:none`
- * strips the token but leaves the separator JSX already emitted beside it.
- * Quantized to whole pixels so a drag emits one update per pixel at most.
+ * Measured off the `.row-metric` probe App.tsx renders in the sidebar — a
+ * zero-height stand-in for one row's text column, nested in the real container
+ * chain — because every alternative is a copy of the layout rather than the
+ * layout. Observing the sidebar element instead overstated the room by the
+ * indicator gutter, the tree's and list's padding, and the scrollbar: 49-63px at
+ * the default width depending on `--session-dot`, which the thresholds could not
+ * see. Observing the probe's inner cell also catches the scrollbar appearing and
+ * the indicator being resized, neither of which resizes the sidebar.
+ *
+ * A `ResizeObserver` rather than a container query because the decision has to
+ * happen in the token list, not in CSS: hiding a token with `display:none` strips
+ * the token but leaves the separator JSX already emitted beside it.
  */
-export function useObservedWidth(target: { current: HTMLElement | null }): number {
-  const [width, setWidth] = useState(0)
+export function useRowBudget(target: { current: HTMLElement | null }): RowBudget {
+  const [budget, setBudget] = useState<RowBudget>(EMPTY_ROW_BUDGET)
   useEffect(() => {
-    const element = target.current
-    if (!element || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(entries => {
-      const size = entries[0]?.contentRect.width
-      if (typeof size === 'number') setWidth(Math.round(size))
-    })
-    observer.observe(element)
-    setWidth(Math.round(element.getBoundingClientRect().width))
+    const host = target.current
+    if (!host || typeof ResizeObserver === 'undefined') return
+    const copy = host.querySelector<HTMLElement>('[data-metric="copy"]')
+    const top = host.querySelector<HTMLElement>('[data-metric="top"]')
+    const bottom = host.querySelector<HTMLElement>('[data-metric="bottom"]')
+    if (!copy || !top || !bottom) return
+    const sample = Math.max(1, top.textContent?.length || 1)
+    const read = () => {
+      const next = rowBudget(copy.clientWidth, {
+        top: top.getBoundingClientRect().width / sample,
+        bottom: bottom.getBoundingClientRect().width / sample,
+      })
+      // Identity is preserved when the numbers have not moved: the budget is an
+      // object on the row context, so a fresh one per observed pixel would
+      // rebuild every token in the sidebar for a value that did not change.
+      setBudget(current => (current.top === next.top && current.bottom === next.bottom ? current : next))
+    }
+    const observer = new ResizeObserver(read)
+    observer.observe(copy)
+    read()
+    // The bottom line's monospace face may still be loading, and a webfont
+    // arriving changes the advance without changing any box the observer watches.
+    void document.fonts?.ready.then(read).catch(() => {})
     return () => observer.disconnect()
   }, [target])
-  return width
+  return budget
 }
 
 /**

@@ -36,14 +36,44 @@ globalThis.fetch=async input=>{
     ],
     limit:80,has_more:false,
   })
-  if(url.startsWith('/api/git/provenance?'))return response({items:[]})
+  if(url.startsWith('/api/git/provenance?'))return response({items:[
+    {
+      id:'p-live',session_id:'session',session_name:'claude-0e7d93',display_name:'Fix sidebar Git lines',
+      history_id:'run-live',agent_run_id:'run-live',project_id:project.id,worktree_root:project.root,
+      commit_oid:worktreeHead,parent_oids:[mainHead],subject:'Fix sidebar Git lines',committed_at:1786800000,
+      relationship:'created',confidence:'exact',ambiguous:false,role:'committer',
+      match_method:'command_range',contributed_paths:['frontend/src/App.tsx'],source:'session_tool',observed_at:1786800001,
+    },
+    {
+      id:'p-ended',session_id:'gone',session_name:'claude-aa11bb',display_name:'Land the migration',
+      history_id:'run-ended',agent_run_id:'run-ended',project_id:project.id,worktree_root:project.root,
+      commit_oid:worktreeHead,parent_oids:[mainHead],subject:'Fix sidebar Git lines',committed_at:1786800000,
+      relationship:'contributed',confidence:'correlated',ambiguous:false,role:'contributor',
+      match_method:'tier0_write',contributed_paths:['frontend/src/style.css'],source:'tier0_write',observed_at:1786800002,
+    },
+  ]})
   throw new Error(`Unexpected harness request: ${url}`)
 }
 
+/** What a click on a session link asked the app to do, for the specs to read back. */
+const followed:string[]=[]
+Object.assign(globalThis,{__followed:followed})
+
 const session={
-  id:'session',name:'session',project_id:project.id,state:'running',cwd:project.root,
+  id:'session',name:'claude-0e7d93',generated_title:'Fix sidebar Git lines',agent_run_id:'run-live',
+  project_id:project.id,state:'running',cwd:project.root,
   runtime_cwd_live:true,runtime_cwd:'C:\\Users\\Jatora\\.mux\\worktrees\\swe-mux-29a044bb\\sidebar-session-git-lines-fix',
   git:{branch:'sidebar-session-git-lines-fix',dirty:33,ahead:444,behind:555},
 } as Session
 
-render(<aside class="utility-drawer" style="width:100%;height:100dvh"><GitTab project={project} sessions={[session]} onOpenFile={()=>undefined} onOpenWorktreeFile={()=>undefined} onProjectUpdated={()=>undefined}/></aside>,document.querySelector('#root')!)
+render(
+  <aside class="utility-drawer" style="width:100%;height:100dvh">
+    <GitTab
+      project={project} sessions={[session]}
+      onOpenFile={()=>undefined} onOpenWorktreeFile={()=>undefined} onProjectUpdated={()=>undefined}
+      onOpenSession={id=>followed.push(`session:${id}`)}
+      onOpenHistory={id=>followed.push(`history:${id}`)}
+    />
+  </aside>,
+  document.querySelector('#root')!,
+)

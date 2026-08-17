@@ -425,21 +425,72 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- **One tab names one subsystem.** Seventeen tabs are grouped into four runs, declared once
+  in `settingsTabs.ts` and rendered from that single order by both layouts:
+
+  | Group | Tabs |
+  | --- | --- |
+  | Workspace | General, Projects, Terminals, Git, Processes |
+  | Agents | Harnesses, Accounts, Prompt queue, Automation, Usage |
+  | Interface | Appearance, Input, Text editor, Voice |
+  | System | Alerts, Remote, Diagnostics |
+
+  A group is a contiguous *run* of the array, not a declared membership list, so a tab that
+  drifts away from its group produces a repeated heading rather than a silently miscategorised
+  tab. The desktop sidebar draws a heading wherever the group changes; the mobile rail renders
+  the same order flat with the headings suppressed, because a phone cannot spare the width and
+  the flat order already agrees with the grouped one. The group wrapper is `display:contents`
+  and `role="presentation"`: a real box breaks the desktop column and the mobile rail alike,
+  and a `tablist` admits only tabs, so the heading is a visual affordance and a screen reader
+  gets the same flat list the phone does.
+- Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
+  - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
+    provider credentials. Everything model-backed depends on that one key, so filing it inside
+    Automation made it unfindable from Voice, the scan timeline, or attention narration.
+  - **Auto-delivery and agent messaging** are the Prompt queue tab. They bound how a queued
+    message reaches an agent whichever harness it runs, so they are delivery policy rather than
+    harness configuration.
+  - **Global project ignores** are on Projects, beside the per-Project list they compose with,
+    rather than under process evidence. They filter the file tree and resource watchers, never Git.
+  - **System prerequisites, the three session-preserving reload actions, and the diagnostics
+    bundle** are the Diagnostics tab. None of them is remote configuration.
+  - **Scrollback** is on Terminals. `history_limit` is *not* scrollback — it is the history
+    browser's page size — so it sits with native-history indexing on Harnesses.
 - Automation enablement is not duplicated in Settings.
   The Automation dashboard owns the engine, Scan timeline, titler, summarizer, attention-observer, and custom-rule switches.
-  Settings retains OpenRouter credentials, models, budgets, execution bounds, retention, and advanced rule definitions.
-- Agents is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The section also holds native-history reconcile: the startup toggle and a `Scan now` control with progress and cancel (`features/history.md`).
-- The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Agents rather than duplicating the per-harness editors.
-- Git and processes exposes the absolute `worktree_root` used by the Project Run launcher.
+  Settings retains budgets, execution bounds, retention, and advanced rule definitions; the credential and models are on Accounts.
+- Harnesses is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The tab also holds native-history reconcile: the startup toggle, a `Scan now` control with progress and cancel, and the browser's page size (`features/history.md`). That is history indexing rather than harness configuration, but the scan is scoped to exactly the enabled harnesses, so the two are read together or not at all.
+- The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Harnesses rather than duplicating the per-harness editors.
+- Git exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
-- Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
+- Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device) and, within
+  that tab, on the **section it was last left on** (`mux.settings.section.v1`, a per-tab map).
   A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.
-  Only an unqualified open restores the remembered tab.
+  Only an unqualified open restores the remembered tab, and a pending search jump always beats a
+  remembered section because that caller named an exact control rather than a region.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.
+  Tab ids persisted by older builds are migrated rather than discarded (`LEGACY_TAB_IDS`), so a
+  device that last used `workspace` reopens on Git instead of reading as the panel forgetting.
   The panel is opened, scanned, and closed many times in a session, and landing on General
   every time re-charges the navigation that reached the tab someone actually lives in.
+- A tab of four or more sections carries a **sticky section rail** at the top of its scroller, on
+  desktop and mobile alike. It is scroll anchors, never sub-tabs, and that distinction is load-bearing:
+  every section of a tab stays mounted, so the search index can still see the whole tab, `Ctrl`+`F`
+  still works, and the single Save transaction can never hide a dirty field behind a pane the user
+  cannot see while a validation error at the top names it.
+  The rail is derived from the `<h3>` elements the tab actually rendered — a `MutationObserver`
+  keeps it correct as child panels (Accounts, Alerts, the WSL bridge) paint after their fetches —
+  so a new section joins the rail the moment it renders and there is no declared list to update.
+  Repeated headings are numbered (`railSectionIds`) because a remembered section id has to survive
+  a reload. Scroll-spy selects the last heading above the rail's underside, and hitting the bottom
+  of the scroller selects the final section, whose heading is usually too close to the end to
+  cross that line. A rail click holds the selection for the length of the scroll: without that
+  hold the late sections of a short tab are unpickable, because scrolling to one lands at the
+  bottom and the bottom rule immediately re-selects the last section.
+  On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
+  rather than growing into the content.
 - Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
@@ -448,27 +499,35 @@ responsive controls.
   reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
   form because Save writes them back unconditionally. Remote, voice, and firewall status stay
   separate non-blocking fetches.
-- The Remote tab renders the Tailscale connection state (not-installed, logged-out, connecting,
-  stopped, or connected-as-`<device>.ts.net`) with cause-pointing next-step text, a Windows-only
-  Defender Firewall panel with a one-click Repair button when a blocking or missing rule is
-  found, a collapsible phone setup checklist (Use Tailscale DNS on, Android Private DNS off or
-  automatic), and an Export diagnostics button that copies one bundle to the clipboard with a
-  selectable textarea fallback. The Voice tab's Mobile voice section shows the same connection
-  state and phone checklist beside the secure-address button. The firewall panel is hidden off a
-  frozen Windows build, and both tabs read the phone checklist from static copy because the
-  daemon cannot detect the phone's DNS state.
-- The Remote tab also carries a "Connect a phone" button opening a modal (`ConnectPhone.tsx`) with
-  a scannable QR of the connection URL (the `.ts.net` MagicDNS name, secure Serve address when up),
-  a system-prerequisites checklist (Git, Node, npm, Tailscale, each with a next step), and a
-  security-posture line stating that any tailnet device reaches the daemon with no login.
-- Settings -> Agents renders two per-harness instrumentation toggles under each harness: the mux MCP
+- The Remote tab is one section per concern: the Tailscale connection state (not-installed,
+  logged-out, connecting, stopped, or connected-as-`<device>.ts.net`) with cause-pointing
+  next-step text, a "Connect a phone" button, a Windows-only Defender Firewall panel with a
+  one-click Repair button when a blocking or missing rule is found, the WSL bridge, the secure
+  HTTPS address, and a phone setup checklist (Use Tailscale DNS on, Android Private DNS off or
+  automatic). The Voice tab's Mobile voice section deliberately repeats the connection state,
+  secure-address button, and phone checklist: someone setting up dictation should not have to
+  leave the tab, and Remote remains the canonical copy. Both tabs read the phone checklist from
+  static copy because the daemon cannot detect the phone's DNS state. The firewall and WSL panels
+  render nothing off a supported host, and because each now owns a heading, Settings states the
+  unsupported case rather than leaving a heading with nothing under it.
+- "Connect a phone" opens a modal (`ConnectPhone.tsx`) with a scannable QR of the connection URL
+  (the `.ts.net` MagicDNS name, secure Serve address when up), a system-prerequisites checklist
+  (Git, Node, npm, Tailscale, each with a next step), and a security-posture line stating that any
+  tailnet device reaches the daemon with no login.
+- The Diagnostics tab holds the standing system-prerequisites checklist, the three
+  session-preserving reload actions (`ui.reload`, `daemon.reload`, `app.redeploy`), and an Export
+  diagnostics button that copies one bundle to the clipboard with a selectable textarea fallback.
+  The reload buttons dispatch the app's own command registry rather than re-implementing the
+  paths, so a change to what "reload daemon" means reaches this panel for free, and a command the
+  host does not offer disables its button instead of failing when pressed.
+- Settings -> Harnesses renders two per-harness instrumentation toggles under each harness: the mux MCP
   server (offered only where the `mcp` capability is set) and "Instrument with mux hooks", whose
   off state shows an inline warning that a clean launch drops the harness to unobserved. Both note
   that the change applies on the next daemon restart. Each harness also shows its detected CLI
   version, flagged when it is newer than the version mux was tested against.
 - Settings -> Voice defaults microphone input off; enabling it shows a note that the first Talk
   downloads the local Whisper model, and the language/model inputs are framed as a first-use choice.
-  Settings -> Automation lists what one OpenRouter key unlocks, and the scan-timeline model is an
+  Settings -> Accounts lists what one OpenRouter key unlocks, and the scan-timeline model is an
   editable, changeable default rather than a fixed read-only value. The first-run panel discloses
   what mux injects per session and points at the next onboarding steps (project, CLI login, session,
   phone).
@@ -487,7 +546,10 @@ responsive controls.
   goes missing entirely. Labels, headings, buttons, option labels, placeholders, and the help
   paragraph following a control are all matched on; the index is rebuilt when a search begins
   or when the config it came from changes, never per keystroke.
-- Automation's cheap and standard model controls accept typed queries and filter the cached
+  The section rail is excluded from the index and from the jump's candidate scan alike: its
+  buttons repeat every heading, so indexing them would duplicate results and counting them as
+  candidates would shift the occurrence a recorded result points at.
+- The Accounts tab's cheap and standard model controls accept typed queries and filter the cached
   OpenRouter catalog live by model name or exact ID.
   Their listboxes scroll inside a bounded desktop or mobile height instead of expanding to the
   height of the catalog.
@@ -661,7 +723,7 @@ responsive controls.
   Mobile mounts only visible terminals so offscreen PTY sockets cannot consume mobile bandwidth.
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
   Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
-  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Agents rendered for any harness declaring `applies_width_envelope`, not by CLI name; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
+  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Harnesses rendered for any harness declaring `applies_width_envelope`, not by CLI name; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
   The corruption itself is repaired at its source by the settled-resize repaint pulse (`features/terminal-input.md`), which makes the child restate the screen the user stopped on; the envelope is now a width preference rather than the only defence, and `0` is a reasonable setting.
   A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
   That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.
@@ -1408,6 +1470,15 @@ responsive controls.
 - A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh
   generated title from the latest observed user request. A manual Rename remains authoritative and
   removes this action because automation never overwrites a user title.
+- **One session has one name on every surface.** The rule - a generated title wins only while the
+  session is still `auto_named` - lives in one place per side (`frontend/src/sessionNames.ts`,
+  `src/swe_mux/session_titles.py`) and every surface reads it: sidebar rows, workspace tabs, the
+  drawer's session-scoped headings, prompt and queue targets, the Git tab, voice, and History. A
+  surface that spells the rule out itself is the one that eventually disagrees with the sidebar,
+  which is what a heading still reading `claude-0e7d93` beside a titled pane looked like.
+  The two payload shapes disagree about types and are read through separate entry points: a live
+  session carries `auto_named` as a boolean, a run row carries SQLite's `0`/`1`, and an absent
+  field means auto-named in both.
 - A session showing a standing-activity badge (`⟳`, `≡`, `⑂`) offers **Clear standing activity**
   in its menu and the command palette. Those badges assert work the daemon cannot observe
   directly - live subagents, background shells, an armed wakeup - so any of them can outlive the
@@ -1950,13 +2021,37 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   A token that names a model *family* — `codex`, `kimi`, `o3`, `sonnet` — is not branding and stays.
   It replaced a hand-maintained per-family table, which printed the raw id for every model nobody had added yet: the sidebar showed `opus-5` beside `claude-fable-5`, and `sonnet-4-6` beside `gpt-5.6-sol`, in the same list.
 - **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
-- **Sections meet but never overlap.**
-  Neither bottom-line section shrinks; the right one is pushed over only while there is room, and the line clips.
-  So as the sidebar narrows the two slide together, meet at a fixed gap, and then run off the right edge — rather than the right section squeezing the left one out of existence, which is what a flexible left section beside a fixed right one actually does.
-- **Width shedding happens in the token engine, never in CSS.**
-  Below width thresholds the left section drops whole low-priority tokens, so the survivors stay fully legible instead of every token losing its tail at once.
-  It cannot be a container query: hiding a token with `display:none` removes the token but not the separator already emitted beside it, so a narrowed row rendered as `· apply_patch` — a leading mark belonging to a token that was gone.
-  The separator invariant is a property of the token list, so the list is what sheds; the width is measured with a `ResizeObserver`.
+- **Sections meet but never overlap, and the RIGHT one has precedence.**
+  On both lines the right section is laid out first and the left section ellipsizes into what remains.
+  A value the reader deliberately pinned to the row's edge must not be deletable by a long value on the other side.
+  The bottom line used to do the opposite: neither section shrank, and the right one was pushed off the line's edge and clipped.
+  Measured at the 190 px minimum, a 22-character worktree on the left held a fixed 116 px while 49 of the model's 68 px were cut off the right edge, mid-glyph and with no ellipsis — the box was never squeezed, so `text-overflow` never engaged.
+  The failure the old rule guarded against, a fixed right section squeezing the left one out of existence, is prevented by a `min-width` floor on the left instead of by making it unshrinkable.
+  Lopsided flex-shrink factors (1000 against 1) are what sequence the two: flexbox shrinks siblings in proportion, so the left absorbs the whole deficit until it reaches its floor, after which the right begins to yield.
+  Exactly one token per section yields — the left section's last, the right section's first, the ones furthest from the edge the section is anchored to — because a squeezed non-clipping sibling spills its glyph under its neighbour instead of ellipsizing.
+- **A field too wide for the row degrades down a three-rung ladder, in this order.**
+  1. **Truncated.** CSS ellipsizes the yielding token down to `ROW_MIN_CHARS` (6). Nothing in the engine acts; it only accounts for the rung. The browser measures the available space exactly and truncates at every intermediate pixel, which a JS step could only quantise, and worse.
+  2. **Its own mark.** Below that floor a field with an unambiguous glyph collapses to it — worktree `⌂`, branch `⎇` — and the value moves to the tooltip. An icon costs two characters against a value's ten or twenty, so collapsing the line is far cheaper than deleting from it and keeps every placed fact on screen, which is the point of having placed the field.
+  3. **Dropped.** For a field with no honest mark, and for a line so narrow that even the marks do not fit.
+  Six is the floor rather than a target: below it a worktree reads `feat-t`, which two sibling checkouts in one fleet will share, so the token is spending width to say something that no longer distinguishes.
+  The mark is drawn whatever `gitGlyphs` says — that setting decides whether a glyph decorates the full value; this rung is the field's identity at the width where its value no longer fits.
+  Not every field earns rung 2: `model` deliberately has no glyph, because the provider mark is already the `glyph` field and cannot tell opus from sonnet, so an icon there would claim to identify something it does not.
+  Within rungs 2 and 3 the order is ascending `priority`, so the field the reader ranked lowest is the first to lose its value and the first to leave.
+- **Rungs 2 and 3 happen in the token engine, never in CSS.**
+  A container query cannot do it: hiding a token with `display:none` removes the token but not the separator already emitted beside it, so a narrowed row rendered as `· apply_patch` — a leading mark belonging to a token that was gone.
+  The separator invariant is a property of the token list, so the list is what degrades.
+- **A section is never emptied while it still holds a token.**
+  The count-based shedding this replaced had no floor beyond "more than one token to begin with", so a two-token section at shed 2 lost both: a sidebar dragged to 230 px rendered a blank bottom line, and deleted an `always`-mode field to do it.
+- **The budget is measured in characters, off a probe shaped like a row's text column.**
+  `.row-metric` is a zero-height stand-in for one row's text column, nested in the real container chain and built from the same variables `.session-row` is (`--session-dot`, `--session-row-gap`, `--session-row-inset-x`), so the measured column cannot drift from the drawn one.
+  Characters rather than pixels because the bottom line is monospace: on the line that carries almost every degradable field the unit is exact rather than estimated.
+  It replaced pixel thresholds compared against the width of the whole `<aside class="sidebar">`, which overstates a row's room by the indicator gutter, the tree's and list's padding, and the scrollbar — 49 to 63 px at the default 254 px width depending on `--session-dot`, a setting the thresholds could not see.
+  The shipped default therefore degraded a token from every section before anybody dragged anything, and a user who enlarged the indicator got the same thresholds over less room.
+  A `ResizeObserver` on the probe's inner cell also catches the scrollbar appearing and the indicator being resized, neither of which resizes the sidebar at all.
+  The probe deliberately does **not** carry the `.session-row` class: a second element wearing it changes what `querySelector('.session-row')` returns for every other reader, which is too large a side effect for a measuring stick.
+- **The settings preview has its own width control, and measures its budget the same way.**
+  It used to render at a fixed 420 px — wider than the sidebar can be dragged — so the one behaviour a reader cannot predict from the field list was the one behaviour the panel never showed.
+  The width is device-local and unpersisted: it is an inspection control for this visit to the panel, not a property of the layout.
 - **The empty bottom line is kept on desktop and dropped on mobile.**
   Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
 - **One duration field, and within a turn it measures one thing.**

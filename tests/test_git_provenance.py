@@ -721,28 +721,138 @@ async def test_monitor_bulk_reference_move_is_ambiguous(
     history.close()
 
 
-async def test_provenance_api_validates_and_filters() -> None:
-    history = SimpleNamespace(
-        git_provenance=lambda **_kwargs: None,
-    )
+def _provenance_request(
+    query: MultiDict[str],
+    items: list[dict[str, Any]],
+    *,
+    live: dict[str, Any] | None = None,
+    naming_rows: dict[str, dict[str, Any]] | None = None,
+    titles: list[dict[str, Any]] | None = None,
+) -> SimpleNamespace:
+    """A request whose app carries the three stores identity decoration reads."""
 
-    async def rows(**kwargs: object) -> list[dict[str, object]]:
-        assert kwargs["project_id"] == "p"
-        assert kwargs["session_id"] == "s"
-        return [{"commit_oid": NEW, "role": "committer", "confidence": "exact"}]
+    async def rows(**_kwargs: object) -> list[dict[str, Any]]:
+        return items
 
-    history.git_provenance = rows
-    request = SimpleNamespace(
-        query=MultiDict({"project_id": "p", "session_id": "s"}),
+    async def naming(ids: object) -> dict[str, dict[str, Any]]:
+        return dict(naming_rows or {})
+
+    async def annotations(**_kwargs: object) -> list[dict[str, Any]]:
+        return list(titles or [])
+
+    return SimpleNamespace(
+        query=query,
         app={
             "projects": SimpleNamespace(projects={"p": SimpleNamespace(id="p")}),
-            "history": history,
+            "history": SimpleNamespace(git_provenance=rows, history_naming_rows=naming),
+            "sessions": SimpleNamespace(sessions=dict(live or {})),
+            "automation_store": SimpleNamespace(annotations=annotations),
         },
     )
+
+
+async def test_provenance_api_validates_and_filters() -> None:
+    captured: dict[str, object] = {}
+
+    async def rows(**kwargs: object) -> list[dict[str, Any]]:
+        captured.update(kwargs)
+        return [{"commit_oid": NEW, "role": "committer", "confidence": "exact"}]
+
+    request = _provenance_request(MultiDict({"project_id": "p", "session_id": "s"}), [])
+    request.app["history"].git_provenance = rows
     response = await server.git_provenance(request)
     payload = json.loads(response.body)
 
     assert response.status == 200
-    assert payload["items"] == [{"commit_oid": NEW, "role": "committer", "confidence": "exact"}]
+    assert captured["project_id"] == "p"
+    assert captured["session_id"] == "s"
+    assert payload["items"][0]["commit_oid"] == NEW
     assert payload["commits"][0]["commit_oid"] == NEW
     assert payload["commits"][0]["attribution"] == "exact"
+
+
+async def test_provenance_rows_carry_the_current_name_beside_the_recorded_one() -> None:
+    """The ledger keeps what the session was called; the reader sees what it is called.
+
+    Three resolutions in one read, because a fleet has all three at once: a live session
+    that has since been titled, an ended one whose name lives in History, and one mux has
+    no record of at all.
+    """
+    live_record = SimpleNamespace(
+        id="live", name="claude-0e7d93", agent_run_id="run-live", auto_named=True
+    )
+    request = _provenance_request(
+        MultiDict({"project_id": "p"}),
+        [
+            {
+                "commit_oid": NEW, "session_id": "live", "agent_run_id": "run-live",
+                "session_name": "claude-0e7d93", "role": "committer", "confidence": "exact",
+            },
+            {
+                "commit_oid": OLD, "session_id": "ended", "agent_run_id": "run-ended",
+                "session_name": "claude-aa11bb", "role": "committer", "confidence": "exact",
+            },
+            {
+                "commit_oid": SIBLING, "session_id": "forgotten", "agent_run_id": "",
+                "session_name": "claude-ffeedd", "role": "observer", "confidence": "correlated",
+            },
+        ],
+        live={"live": SimpleNamespace(record=live_record)},
+        naming_rows={
+            "run-ended": {
+                "id": "run-ended", "note_id": "ended", "name": "claude-aa11bb", "auto_named": 1
+            },
+        },
+        titles=[
+            {"agent_run_id": "run-live", "content": "Fix the parser"},
+            {"agent_run_id": "run-ended", "content": "Land the migration"},
+        ],
+    )
+    payload = json.loads((await server.git_provenance(request)).body)
+    by_commit = {item["commit_oid"]: item for item in payload["items"]}
+
+    assert by_commit[NEW]["display_name"] == "Fix the parser"
+    assert by_commit[NEW]["history_id"] == "run-live"
+    assert by_commit[OLD]["display_name"] == "Land the migration"
+    assert by_commit[OLD]["history_id"] == "run-ended"
+    # No live session and no History row: the recorded name is all there is, and the row
+    # names no conversation to open rather than pointing at one that does not exist.
+    assert by_commit[SIBLING]["display_name"] == "claude-ffeedd"
+    assert "history_id" not in by_commit[SIBLING]
+    # The snapshot is evidence and is never rewritten by the resolution.
+    assert by_commit[NEW]["session_name"] == "claude-0e7d93"
+
+
+async def test_a_renamed_session_keeps_its_name_over_a_later_generated_title() -> None:
+    request = _provenance_request(
+        MultiDict({"project_id": "p"}),
+        [
+            {
+                "commit_oid": NEW, "session_id": "live", "agent_run_id": "run-live",
+                "session_name": "release prep", "role": "committer", "confidence": "exact",
+            },
+            {
+                "commit_oid": OLD, "session_id": "ended", "agent_run_id": "run-ended",
+                "session_name": "hand-named", "role": "committer", "confidence": "exact",
+            },
+        ],
+        live={
+            "live": SimpleNamespace(
+                record=SimpleNamespace(
+                    id="live", name="release prep", agent_run_id="run-live", auto_named=False
+                )
+            )
+        },
+        naming_rows={
+            "run-ended": {
+                "id": "run-ended", "note_id": "ended", "name": "hand-named", "auto_named": 0
+            },
+        },
+        titles=[
+            {"agent_run_id": "run-live", "content": "Fix the parser"},
+            {"agent_run_id": "run-ended", "content": "Land the migration"},
+        ],
+    )
+    payload = json.loads((await server.git_provenance(request)).body)
+
+    assert [item["display_name"] for item in payload["items"]] == ["release prep", "hand-named"]
