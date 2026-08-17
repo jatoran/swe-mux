@@ -1236,7 +1236,11 @@ async def test_retention_compacts_old_quota_samples_and_bounds_process_evidence(
     phase2_path: Path,
 ) -> None:
     store = OperationalTelemetryStore(phase2_path, retention_days=1, process_retention_days=1)
-    old = time.time() - 3 * 86400
+    # Noon UTC three days back, not "now minus three days": the rollup groups by
+    # UTC day, so a wall-clock offset put the two samples in different day buckets
+    # whenever the suite ran within ten minutes of midnight UTC, and the test then
+    # failed for reasons that had nothing to do with retention.
+    old = (time.time() - 3 * 86400) // 86400 * 86400 + 43200
     for offset, used in ((0, 20.0), (600, 25.0)):
         await store.record_quota_sample(
             provider="codex",

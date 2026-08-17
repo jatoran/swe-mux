@@ -137,6 +137,36 @@ def test_contributor_join_prefers_content_and_falls_back_to_the_last_write() -> 
     assert "elsewhere" not in contributors
 
 
+def test_a_result_fact_contributes_only_when_its_content_proves_it() -> None:
+    """The codex shape: the write's only targeted fact is its result.
+
+    A codex `apply_patch` runs through the shell/exec tool, so the call classifies
+    as a command and only `patch_apply_end` carries the written path — with a hash
+    of the bytes it wrote. Other harnesses put their result message's hash there
+    instead, so a result is admitted on content equality alone, never on its path.
+    """
+    changes = (
+        GitCommitChange(path="src/one.py", status="M", blob="1" * 40),
+        GitCommitChange(path="src/two.py", status="M", blob="2" * 40),
+    )
+    facts = [
+        _write_fact("f1", "codex", "C:/repo/src/one.py", 10.0, content_hash="real-bytes"),
+        _write_fact("f2", "claude", "C:/repo/src/two.py", 11.0, content_hash="a success message"),
+    ]
+    for fact in facts:
+        fact["kind"] = "file_write_result"
+    candidates = candidate_writes(
+        changes, facts, worktree_root="C:/repo", session_roots={"codex": "C:/repo"}
+    )
+    contributors = resolve_contributors(candidates, {"src/one.py": "real-bytes"})
+
+    assert [item.session_id for item in contributors] == ["codex"]
+    assert contributors[0].content_matched is True
+    # The other result named a file in this checkout and was still not credited:
+    # its hash is a message about the write, not the write.
+    assert all(not candidate.positional for candidate in candidates)
+
+
 def test_contributor_join_places_a_relative_write_by_its_session_checkout() -> None:
     changes = (GitCommitChange(path="src/one.py", status="M", blob="1" * 40),)
     facts = [

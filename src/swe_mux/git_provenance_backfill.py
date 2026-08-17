@@ -324,8 +324,9 @@ def _read_project_inputs(
         write_facts = [
             dict(row)
             for row in db.execute(
-                "SELECT id,session_id,agent_run_id,target,content_hash,created_at "
-                "FROM tier0_facts WHERE project_id=? AND kind='file_write' "
+                "SELECT id,session_id,agent_run_id,kind,target,content_hash,created_at "
+                "FROM tier0_facts WHERE project_id=? "
+                "AND kind IN ('file_write','file_write_result') "
                 "AND target IS NOT NULL AND target!='' AND created_at>=? "
                 "ORDER BY created_at ASC",
                 (project["id"], since),

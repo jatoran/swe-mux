@@ -96,11 +96,16 @@ The sidebar marks a quantity whose root carries more than one live session
 - `ambiguous` is reserved for two named cases: several commits in one command's range that neither subject nor time can tell apart, and a reference that moved many commits at once (a merge or a rebase).
 - A HEAD transition first found by the checkout monitor records `observed` with `correlated` confidence.
   It proves that the session occupied that checkout when the transition was observed, not that the session ran the mutating command.
-- Contributors are matched from Tier 0 `file_write` facts against the commit's own changed files, read once per commit with `git diff-tree`.
+- Contributors are matched from Tier 0 write facts against the commit's own changed files, read once per commit with `git diff-tree`.
   A write is attributed to a file when its normalized target is one the commit changed and the write can be placed in that checkout: an absolute target inside the worktree places itself, and a relative one is placed by its session's checkout.
+- A write *result* fact is read too, but only as content evidence, never as placement.
+  A result hash is the CLI's rendering of what happened for most harnesses and the file's real bytes for a codex `patch_apply_end`, and nothing in the fact says which, so hash equality is what decides.
+  This is what keeps a codex write attributable at all: codex applies patches through its shell/exec tool, so its call records as a command and the result is the only fact carrying the written path.
 - A whole-file write is confirmed by content: the SHA-256 of the bytes Git stored equals the SHA-256 the adapter took of the bytes the agent wrote, and that contributor is `exact`.
-  Content confirmation is unavailable for an edit tool (which hashes the replacement fragment) and for a patch envelope (which hashes the patch), so those are matched by path and time and recorded as `correlated`.
+  Content confirmation is unavailable for an edit tool (which hashes the replacement fragment), so those are matched by path and time and recorded as `correlated`.
   A Git object id is never compared with a content hash; it is SHA-1 over a `blob <len>\0` header rather than a digest of the bytes.
+- Measured live per harness (`tests/test_live_git_attribution.py`, which drives the real CLIs): claude and pi confirm by content, codex confirms by content through its `patch_apply_end` result, and omp records a relative target with no content hash at all and is therefore matched by path.
+  Each harness's expected strength is declared in that canary, so a harness added to the registry fails the guard until its strength is stated rather than inheriting one silently.
 - Without a content match only the last write to a path counts, because an earlier write another session replaced is not in the commit.
 - The contributor set is plural by design.
   One session staging files and another running `git commit` resolves to committer B and contributors {A, B}, an answer no Git tool records because Git keeps one configured author.

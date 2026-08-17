@@ -37,8 +37,12 @@ opt-in and gated (`automation-enablement.md`). Vision: `../../development/CONTRO
   committed Git blob's bytes (`design/features/git.md`, contributor attribution): both are
   the file, so their SHA-256 digests match.
   It holds only for a write whose hash covers whole-file content: an edit tool hashes the
-  replacement fragment and a patch envelope hashes the patch, so most writes are matched by
-  path and time instead.
+  replacement fragment, so many writes are matched by path and time instead.
+  A codex write is the case that needs the result side: its `apply_patch` call runs through
+  the shell/exec tool and classifies as a `command`, so the written path and a hash of the
+  applied file contents appear only on the `file_write_result` fact.
+  A consumer that reads result facts must therefore treat them as content evidence alone —
+  every other harness puts a hash of its result *message* there.
   A Git object id is never comparable with a content hash — it is SHA-1 over a
   `blob <len>\0` header, not a digest of the bytes.
 - **Test outcome**: a structured `{framework, passed, failed, errors, skipped,

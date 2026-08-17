@@ -264,9 +264,17 @@ def candidate_writes(
     A fact qualifies for a path when its normalized target is that path *and* the
     write can be placed in this checkout. An absolute target that normalizes to a
     repository-relative path was written inside this worktree by construction; a
-    relative target (codex writes one) needs its session's checkout to say so. A
-    fact that satisfies neither is kept only as `confirmable`: it counts if, and
-    only if, its content turns out to be the bytes the commit stored.
+    relative target needs its session's checkout to say so. A fact that satisfies
+    neither is kept only as `confirmable`: it counts if, and only if, its content
+    turns out to be the bytes the commit stored.
+
+    A *result* fact is never positional, whatever its path. A result hash is the
+    CLI's rendering of what happened for most harnesses and the file's real bytes
+    for a codex `patch_apply_end`, and nothing in the fact says which — so it is
+    admitted as content evidence alone, and the hash equality is what decides. That
+    keeps codex attributable (its call classifies as a command, so the result is
+    its only targeted fact) without letting any harness's success message stand in
+    for a write.
     """
     by_path: dict[str, PathCandidates] = {}
     for change in changes:
@@ -284,8 +292,10 @@ def candidate_writes(
         if entry is None:
             continue
         absolute = os.path.isabs(target)
-        placed = (absolute and normalized != normalize_target(target)) or _under(
-            worktree_root, session_roots.get(str(fact.get("session_id") or "")) or ""
+        result = str(fact.get("kind") or "").endswith("_result")
+        placed = not result and (
+            (absolute and normalized != normalize_target(target))
+            or _under(worktree_root, session_roots.get(str(fact.get("session_id") or "")) or "")
         )
         if placed:
             entry.positional.append(fact)
