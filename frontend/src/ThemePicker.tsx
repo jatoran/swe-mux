@@ -7,12 +7,14 @@ function ThemeSwatches({name,customTheme}:{name:ThemeName;customTheme:CustomThem
   </span>
 }
 
-export function ThemePicker({value,customTheme,open,onOpenChange,onChange}:{
+export function ThemePicker({value,customTheme,open,onOpenChange,onChange,onPreview}:{
   value:ThemeName
   customTheme:CustomTheme
   open:boolean
   onOpenChange:(open:boolean)=>void
   onChange:(value:ThemeName)=>void
+  /** Show a theme without choosing it; `null` hands the screen back to `value`. */
+  onPreview?:(value:ThemeName|null)=>void
 }) {
   const root=useRef<HTMLDivElement>(null)
   const trigger=useRef<HTMLButtonElement>(null)
@@ -32,6 +34,20 @@ export function ThemePicker({value,customTheme,open,onOpenChange,onChange}:{
     if(wasOpen.current)trigger.current?.focus()
     wasOpen.current=false
   },[open,selectedIndex])
+
+  // Highlighting a theme shows it immediately, so the catalogue can be walked and
+  // seen rather than chosen blind, reopened, and chosen again. Nothing is committed:
+  // the draft moves only on `onChange`, and leaving the list any way at all — Enter,
+  // click, Escape, a click outside — hands the screen back to the chosen value.
+  // Escape is why this watches `open` rather than hooking the close handlers: the
+  // dismiss stack closes this level by setting the flag, without calling back.
+  // There is deliberately no unmount cleanup. Discarding unsaved settings already
+  // re-applies the *saved* theme on its way out, and a revert-to-draft firing after
+  // that would put the discarded choice back on screen.
+  useEffect(()=>{
+    if(!onPreview)return
+    onPreview(open?themeOptions[activeIndex]?.name??null:null)
+  },[open,activeIndex,onPreview])
 
   useEffect(()=>{
     if(!open)return

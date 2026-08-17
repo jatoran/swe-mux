@@ -10,6 +10,7 @@ import {
   processState, rollupLabel, sessionRollup,
 } from './processRows'
 import { combinedResourceTotals } from './resourceTotals'
+import { sessionDisplayName } from './sessionNames'
 
 type Listener = {host:string;port:number;loopback:boolean;url:string}
 type Connection = {local_host:string;local_port:number;remote_host:string;remote_port:number}
@@ -53,6 +54,10 @@ type Props={
   onAttached:(preview:Preview,project:Project)=>void
 }
 
+
+/** The session as the rest of the app names it, or its id when the session is already gone. */
+const sessionLabel=(session:Session|undefined,sessionId:string)=>
+  (session&&sessionDisplayName(session))||sessionId
 
 const normalizeProcesses=(processes:ProcessItem[])=>(processes||[]).map(item=>({
   ...item,
@@ -220,8 +225,8 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
     // earns its place once it aggregates more than the single row below it.
     const rollup=sessionRollup(group.processes)
     return <section class="process-session-group" key={group.session_id}>
-      <button class="process-session-heading" title={`${project?.name||'unknown project'} :: ${session?.name||group.session_id}`} onClick={()=>setSelectedSessionId(group.session_id)}>
-        <span><i class={`state-dot ${session?.state||'running'}`}/><strong>{session?.name||group.session_id}</strong></span>
+      <button class="process-session-heading" title={`${project?.name||'unknown project'} :: ${sessionLabel(session,group.session_id)}`} onClick={()=>setSelectedSessionId(group.session_id)}>
+        <span><i class={`state-dot ${session?.state||'running'}`}/><strong>{sessionLabel(session,group.session_id)}</strong></span>
         {rollup&&<small>{rollupLabel(rollup)}</small>}
       </button>
       {/* One line each, for the same reason the process rows are: the URL and its owner are
@@ -306,8 +311,8 @@ export function ProcessPanel({initialSessionId=null,initialProjectId=null,sessio
     onChange={event=>{setProjectScope(event.currentTarget.value);setSelectedSessionId(null)}}
   ><option value="">All projects</option>{projects.map(project=><option value={project.id}>{project.name}</option>)}</select>
 
-  return <div class="process-layer" onPointerDown={event=>{if(event.target===event.currentTarget)onClose()}}><section ref={panel} class="process-panel unified" role="dialog" aria-modal="true" aria-label={selectedSession?`Processes for ${selectedSession.name}`:'All processes'}>
-    <header><div>{selectedSessionId&&<button class="process-back" onClick={()=>setSelectedSessionId(null)}>← all processes</button>}<span>{selectedSessionId?'SESSION PROCESSES':'PROCESS FLEET'}</span><strong>{selectedSession?`${projects.find(item=>item.id===selectedSession.project_id)?.name||'project'} :: ${selectedSession.name} · PID ${selectedSession.pid}`:'All projects, sessions, and swe-mux infrastructure'}</strong></div><button aria-label="Close process inspector" onClick={onClose}>×</button></header>
+  return <div class="process-layer" onPointerDown={event=>{if(event.target===event.currentTarget)onClose()}}><section ref={panel} class="process-panel unified" role="dialog" aria-modal="true" aria-label={selectedSession?`Processes for ${sessionDisplayName(selectedSession)}`:'All processes'}>
+    <header><div>{selectedSessionId&&<button class="process-back" onClick={()=>setSelectedSessionId(null)}>← all processes</button>}<span>{selectedSessionId?'SESSION PROCESSES':'PROCESS FLEET'}</span><strong>{selectedSession?`${projects.find(item=>item.id===selectedSession.project_id)?.name||'project'} :: ${sessionDisplayName(selectedSession)} · PID ${selectedSession.pid}`:'All projects, sessions, and swe-mux infrastructure'}</strong></div><button aria-label="Close process inspector" onClick={onClose}>×</button></header>
     {selectedSession?<div class="process-toolbar"><input value={customUrl} aria-label="Loopback preview URL" placeholder="http://127.0.0.1:3000/" onInput={event=>setCustomUrl(event.currentTarget.value)} /><button disabled={!customUrl.trim()} title="Register a loopback URL you vouch for. Use this when the server is not attributable to this session, such as one running in WSL or Docker or started outside it." onClick={()=>void attach(selectedSession.id,customUrl,true)}>Add preview by URL</button>{endedToggle}<button onClick={()=>void load()}>Refresh</button></div>:<div class="process-fleet-summary">{scopeSelect}<span>{fleetTotals.processes} processes</span><span>CPU {fleetTotals.cpu_pct.toFixed(1)}%</span><span>memory {memoryLabel(fleetTotals.memory_bytes)}</span><span>network {fleetListeners} listeners · {fleetConnections} connections</span>{endedToggle}<button onClick={()=>void load()}>Refresh</button></div>}
     <div class="process-fleet-list">{error&&<p class="process-error" aria-live="assertive">{error}</p>}{!snapshot&&!error&&<p class="process-empty">Loading process trees…</p>}{snapshot&&!snapshot.available&&<p class="process-empty">{snapshot.diagnostic}</p>}{ownershipDiagnostics.length>0&&<details class="process-ownership-diagnostics"><summary>Ownership diagnostics ({ownershipDiagnostics.length} recent)</summary><ul>{ownershipDiagnostics.map((item,index)=><li key={`${item.ts}:${item.kind}:${item.pid||0}:${index}`}><strong>{item.kind.replaceAll('_',' ')}</strong><span>{item.pid?`PID ${item.pid}`:'process'}{item.session_id?` · session ${item.session_id}`:''}{item.other_session_id?` · conflicting session ${item.other_session_id}`:''}{item.parent_pid?` · parent PID ${item.parent_pid}`:''}{item.reason?` · ${item.reason}`:''} · {new Date(item.ts*1000).toLocaleString()}</span></li>)}</ul></details>}{renderDaemonGroup()}{projectProcessGroups.map(group=><section class="process-project-group" key={group.id}><h2>project::{group.label}</h2>{group.groups.map(renderGroup)}</section>)}{snapshot?.available&&!sessionGroups.length&&<p class="process-empty">No matching live sessions.</p>}</div>
   </section></div>

@@ -377,8 +377,16 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # It is the thirteenth 36px stop in a scroller that was already scrolling below ten, so the
     # header machinery is unchanged; the bar it passes is "does this surface belong beside a
     # terminal", and a per-session code change map read against the focused session does.
+    # Re-checked at fourteen (Schedule): a Project-scoped surface that sits with Processes and
+    # is the fourteenth 36px stop in a scroller that has been scrolling since ten, so the
+    # header machinery below is unchanged and the assertions here still hold. On the actual
+    # bar - "does this surface belong beside a terminal" - it does: what it offers is pause
+    # this, run it now, and is last night's scheduled session still open, and the last of
+    # those is only answerable with the workspace on screen. Its own geometry is pinned
+    # separately by `frontend/test/renderer/schedule-layout.spec.ts`, because the drawer
+    # column is the narrowest surface in the app and this tab is the densest row in it.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 13, ids
+    assert len(ids) == 14, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert "drawer-chrome" not in drawer
@@ -802,7 +810,11 @@ def test_daemon_spawned_panes_request_focus_rather_than_setting_it() -> None:
     """
     app = source("App.tsx")
 
-    for flow in ("resumeHistoryEntry", "branchSession", "resumeSession", "confirmSecondOpinion"):
+    # `runBranch` rather than `branchSession`: the latter now decides between opening
+    # the point picker and branching on the click, and it is `runBranch` that actually
+    # spawns and therefore owes the focus request - reached both directly and from the
+    # picker's confirm.
+    for flow in ("resumeHistoryEntry", "runBranch", "resumeSession", "confirmSecondOpinion"):
         body = re.search(rf"const {flow} = ?async[^\n]*\n(.*?)\n  \}}\n", app, re.DOTALL)
         assert body, f"{flow} is no longer a recognisable handler"
         assert "requestFocusView(" in body.group(1), f"{flow} must request focus, not set it"

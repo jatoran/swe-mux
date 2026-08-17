@@ -26,6 +26,41 @@ export interface StandingActivity {
   detail: string | null
 }
 
+/** What mux answers on this conversation's behalf. See `.docs/design/features/approvals.md`. */
+export type ApprovalMode = 'wait' | 'allowlisted' | 'allow_all'
+
+export interface ApprovalPolicy {
+  mode: ApprovalMode
+  /** The conversation the grant was made against; a mismatch reads as `wait`. */
+  run_id: string | null
+  expires_at: number | null
+  granted_at: number | null
+  set_by: string
+  rules: string[]
+  auto_approved: number
+  max_auto: number
+  last_decision_at: number | null
+  last_request: string | null
+  floor_deferred: number
+}
+
+/** `GET /api/sessions/{id}/approvals`, and the body every mutation returns. */
+export interface ApprovalStatus {
+  supported: boolean
+  enabled: boolean
+  ceiling: ApprovalMode
+  rules: string[]
+  rules_source: 'project' | 'default'
+  /** Present when no mode above `wait` can be selected, phrased for display. */
+  unavailable: string | null
+  ttl_seconds: number
+  max_auto: number
+  policy: ApprovalPolicy
+  /** What is actually in force now — an expired or re-keyed grant reads `wait`. */
+  effective_mode: ApprovalMode
+  modes: ApprovalMode[]
+}
+
 export interface Session {
   id: string; name: string; project_id: string; backend: string
   native_session_id: string; cwd: string; exe: string; args: string[]; pid: number
@@ -50,6 +85,8 @@ export interface Session {
   awaiting_reason?: AwaitingReason | null
   idle_reason?: IdleReason | null
   standing_activity?: StandingActivity[]
+  /** Absent from a daemon predating control-plane approvals, which reads as `wait`. */
+  approval_policy?: ApprovalPolicy
   process_job_assignment:string
   tokens_out: number; tokens_cache_read:number; tokens_cache_write:number; cost_usd:number
   provider?:string|null; provider_account_hashes?:Record<string,string>
@@ -124,6 +161,26 @@ export interface Session {
   voice_content?: VoiceContent | null
   /** Task/Project-Action shell whose exact spawn argv can be relaunched in place. */
   relaunchable?: boolean
+  /**
+   * Recovered from durable recovery data rather than from a running process: the
+   * daemon and its PTY owner both died without recording how this session ended,
+   * so it comes back visible-but-dead instead of vanishing from the sidebar and
+   * the layout. Always accompanied by `state: 'crashed'`, so anything that
+   * already gates on a terminal state needs no change; this only distinguishes a
+   * recovered session from one that merely exited.
+   */
+  cold?: boolean
+  cold_since?: number | null
+  cold_reason?: string | null
+  /** When the replayed terminal bytes were captured, bounding how stale they are. */
+  cold_terminal_at?: number | null
+  /**
+   * Why no terminal bytes were kept. An alternate-screen or repaint-heavy harness
+   * is excluded on purpose: its retained bytes are a differential frame stream
+   * that reconstructs to a blank or half-drawn screen, and repairing that needs a
+   * live child to pulse.
+   */
+  cold_terminal_skipped?: string | null
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
   /** Client-only copy for a pending pane whose preparation is more specific than startup. */

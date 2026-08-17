@@ -17,7 +17,11 @@ from `absent`: the supervisor process is alive and still holds live sessions, th
 just cannot reach them — reporting that as "no supervisor" hides sessions that are running
 and unkillable from here. `supervisor_unadopted` counts supervised sessions this daemon
 could not rebuild (snapshot drift, a crash inside the spawn-meta window); they keep running
-with no UI handle, so the count must be visible rather than only a log line. Shutdown exists only when the daemon
+with no UI handle, so the count must be visible rather than only a log line.
+It also reports `session_recovery: bool` and `cold_sessions`: sessions rebuilt from durable
+recovery data because their processes died with a daemon that never recorded how they ended
+(`features/session-recovery.md`). A non-zero count is the signal that something took the whole
+app down, which no other field says. Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
 in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
 `{mode: "quit"|"restart"}` (default `quit`) carries shutdown intent: `quit` reaps every session
@@ -233,6 +237,14 @@ PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
+GET     /schedules?project_id=                every schedule, or one Project's
+POST    /schedules/preview                    {definition}          next fire times, unsaved
+GET     /projects/{project_id}/schedules
+POST    /projects/{project_id}/schedules      {definition}
+PATCH   /schedules/{schedule_id}              {definition, revision?} | {enabled}
+DELETE  /schedules/{schedule_id}
+POST    /schedules/{schedule_id}/run          fire now, guards intact
+GET     /schedules/{schedule_id}/runs?limit=
 GET     /projects/{project_id}/project-context
 PUT     /projects/{project_id}/project-context {markdown, revision}
 GET     /sessions/{session_id}/scan-timeline
@@ -283,6 +295,14 @@ can show a dependency tree rather than a flat checkbox list. `PUT` replaces the 
 through the ordinary project-config write: `409 revision_conflict` on a stale revision,
 `409 automation_not_implemented` for a reserved id with no code behind it. The same table is
 also carried by the typed portable Project options (`features/automation-enablement.md`).
+
+The schedule routes are the scheduled-run surface (`features/scheduled-runs.md`).
+A definition belongs to exactly one Project, because a spawn does; the unscoped `GET` exists because "what fires tonight" spans Projects and is what the Schedule tab's fleet toggle reads.
+Writing one is always allowed and firing it is what permission gates, so every row carries `blocked` - a live answer (`project_missing`, `automation_disabled`, `install_disabled`), recomputed per request rather than stored, plus the recent `runs` behind it.
+`PATCH` with only `enabled` is the pause switch and keeps the definition; any other body is a full replacement validated exactly like a create, with `409 revision_conflict` on a stale revision.
+A rejected definition answers `400` with a machine `code` (`invalid_cron`, `invalid_interval`, `invalid_timezone`, `invalid_run_at`, `invalid_backend`, `invalid_follow_ups`) and a `fields` map, so the editor can mark the field rather than print a sentence.
+`POST /schedules/preview` answers the next five fire times for an unsaved definition: cron plus a timezone plus daylight saving has one implementation, in the daemon, and the editor must not grow a second one that disagrees with it twice a year.
+`POST .../run` is subject to every fire-time guard except lateness, so it cannot walk around the Project opt-in, the overlap policy, or the concurrency ceiling.
 
 The Project-context routes read and revision-check one fixed user-owned Markdown file.
 `GET` returns blank content and revision `missing` when it does not exist.
@@ -517,9 +537,13 @@ PATCH  /sessions/{id}
 POST   /sessions/{id}/read
 POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
+GET    /sessions/{id}/approvals
+PUT    /sessions/{id}/approvals                 {mode: wait|allowlisted|allow_all, set_by?}
+POST   /sessions/{id}/approvals/approve-once    {fingerprint?}
 DELETE /sessions/{id}
 POST   /sessions/{id}/input
-POST   /sessions/{id}/branch          {name?, target_session_id?, direction?}
+GET    /sessions/{id}/branch-points[?limit=]
+POST   /sessions/{id}/branch          {name?, target_session_id?, direction?, from_message_id?, mode?}
 POST   /sessions/{id}/broadcast-set
 POST   /broadcast/input
 POST   /sessions/{id}/attachments   multipart `file`; X-Mux-User-Gesture: terminal-attachment
@@ -530,24 +554,50 @@ GET    /sessions/{id}/skills[?refresh=1]
 GET    /sessions/{id}/agent-environment[?refresh=1]
 ```
 
-`POST /sessions/{id}/branch` forks a live agent conversation and returns
-`201 {session, source}` with the sibling pane already attached to the Project layout. It is a
-slow endpoint by design — it types a command into a running CLI and then waits for that CLI to
-report the result — and it emits `session_branched` carrying `original`, `branch_id`,
-`sibling_id`, `release`, `attempts`, and `duration_ms`. The refusals are all distinguishable, and
-none of them leaves a half-made pane behind:
+`GET /sessions/{id}/branch-points` lists where this conversation can be forked. Every "nothing to
+offer" case answers `200` with a `reason` rather than an error status, because opening the picker
+on a pane that has not spoken yet is an ordinary thing to do:
+
+```
+{session_id, backend, conversation_id, strategy, from_message, truncated,
+ reason: null|not_agent|no_transcript|unreadable|dialect_unsupported|strategy_has_no_points,
+ points: [{message_id, ordinal, role, ts, text, default_mode,
+           modes: {before: {eligible, reason}, after: {eligible, reason}}}]}
+```
+
+`default_mode` follows the role, because the two cuts are opposite acts on opposite kinds of
+message: a prompt is a thing to redo (`before`), an agent reply a thing to continue from
+(`after`). Eligibility is per point, not per harness — the same conversation offers a legal cut
+after one reply and an `unanswered_tool_calls` refusal after the next. `truncated` bounds only
+which cuts can be *named*: a fork always carries the conversation from its first byte.
+
+`POST /sessions/{id}/branch` forks the conversation and returns
+`201 {session, source, strategy, fork, seed_text}` with the new pane already attached to the
+Project layout. `from_message_id`/`mode` are accepted only by a `transcript_fork` harness and
+default to the newest point; `fork` reports `{conversation_id, from_message_id, mode, cut_offset,
+records_written, records_dropped, attachments_copied, bytes_written}`; `seed_text` is the prompt a
+`before` cut excluded, for the client to place in the new pane's composer. It emits
+`session_branched` carrying `original`, `branch_id`, `sibling_id`, `strategy`, `from_message_id`,
+`mode`, `records_written`, `attempts`, and `duration_ms`, and records a `branch` lineage edge. The
+refusals are all distinguishable, and none of them leaves a half-made pane behind:
 
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `not_agent` | 422 | The backend has no observable transcript |
 | `branch_unsupported` | 422 | The harness declares no `branch_strategy` |
-| `source_busy` | 409 | The pane is mid-turn or holding an approval dialog |
-| `source_not_live` | 409 | The pane has ended |
-| `source_composer_dirty` | 409 | Unsent composer text would swallow the command |
+| `branch_point_unsupported` | 422 | A point was named for a harness that can only fork from now |
+| `bad_mode` | 422 | `mode` was neither `before` nor `after` |
+| `source_busy` | 409 | `resume_child_thread` only: the pane is mid-turn or holding an approval dialog |
+| `source_not_live` | 409 | `resume_child_thread` only: the pane has ended |
+| `source_composer_dirty` | 409 | `resume_child_thread` only: unsent composer text would swallow the command |
 | `native_id_missing` | 409 | No conversation id to fork from yet |
-| `branch_timeout` | 504 | No fork transcript appeared; carries `source_state`, re-read at the timeout, because a turn that had begun but was not yet detected is the usual cause |
-| `branch_id_unresolved` | 409 | Branched, but nothing could name the fork; original stays in History |
-| `branch_sibling_failed` | 503 | Branched, but the original would not reopen after N attempts |
+| `no_transcript` / `unreadable` / `dialect_unsupported` / `no_messages` | 409 | Nothing forkable to read |
+| `branch_point_unknown` | 409 | The named message is not in the conversation's current window |
+| `unanswered_tool_calls` | 409 | A cut there would leave a tool call unanswered, and the provider rejects such a conversation |
+| `outside_window` | 409 | Nothing precedes that message to cut after |
+| `empty_prefix` / `source_too_large` / `fork_id_taken` / `source_unreadable` | 409 | The writer refused the source (`transcript_fork.ForkRefused`) |
+| `fork_write_failed` | 500 | The fork could not be written |
+| `branch_sibling_failed` | 503 | The branch exists but its pane would not stay up; carries `conversation_id` so it can be reopened from History |
 
 `POST /sessions/{id}/title/regenerate` accepts no body and returns `202 {ok:true}` after emitting
 an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex
@@ -584,6 +634,41 @@ are not states, so this cannot move `state`, `awaiting_reason`, or `delivery_sta
 assert activity. An unknown `kind` is rejected. Every clear is ledgered with evidence `manual` and
 drops the run-scoped launch bookkeeping, so a later duplicate completion cannot decrement a fresh
 annotation (`design/features/status-detection.md`).
+
+`GET`/`PUT /sessions/{id}/approvals` read and set what mux answers on this conversation's behalf
+(`design/features/approvals.md`). Both return the same body:
+
+```ts
+interface ApprovalStatus {
+  supported: boolean            // this harness can answer a permission request through a hook
+  enabled: boolean              // the install master switch
+  ceiling: ApprovalMode         // the strongest mode this Project permits
+  rules: string[]               // what `allowlisted` would resolve against right now
+  rules_source: 'project' | 'default'
+  unavailable: string | null    // why no mode above `wait` can be selected, phrased for display
+  ttl_seconds: number
+  max_auto: number
+  policy: ApprovalPolicy        // the stored grant
+  effective_mode: ApprovalMode  // what is actually in force
+  modes: ApprovalMode[]
+}
+```
+
+`policy.mode` and `effective_mode` are both present and answer different questions: an expired
+grant, or one made against a conversation since replaced, reports its stored mode *and* an
+effective `wait`, because "it lapsed" reads differently from "it was refused".
+
+`PUT` refuses with a named code rather than silently downgrading: `invalid_mode` (400),
+`approvals_unavailable` (409, the install switch, an unsupported harness, no live conversation,
+or a Project ceiling of `wait`), `above_ceiling` (409), and `empty_allowlist` (409). Setting
+`wait` is never refused — taking authority back must not depend on the install switch, the
+Project ceiling, or the conversation still being the one the grant was made against.
+
+`POST /sessions/{id}/approvals/approve-once` answers the approval the session is showing, once.
+It is not a mode. It re-checks the agent run, this session's own screen still classifying as an
+approval, and the supplied `fingerprint` when present, then writes one `\r`; it refuses with
+`no_approval` (409) or `fingerprint_changed` (409). The browser routes through the daemon rather
+than writing Enter itself because only the server can make those checks.
 
 ```ts
 interface SpawnRequest {
@@ -705,6 +790,7 @@ On initial attach, the daemon waits up to 250 ms for
 The handshake precedes the replay snapshot because the frame decides what the replay is: `since` is the ring position the client has already parsed up to, and when the ring provably still holds everything after it the attach is answered as a **delta** (`replay_start` with `reason:"delta"`, exactly the missed bytes, into a terminal the client does not reset) instead of a reset plus the bounded window.
 That is what keeps a pane's parsed scrollback across a reconnect — a tab switch, a minimize, a phone freeze, or a session-preserving daemon restart (ring positions survive supervisor adoption).
 Every doubt — no `since`, a gap the ring no longer covers, a gap larger than `attach_replay_bytes`, a position outside the stream — falls back to the full windowed replay, because a wrong delta corrupts a terminal silently while a wasted replay only costs a parse.
+A **cold session never serves a delta at all**: its ring was rebuilt from disk, so its positions describe a different stream from the one any client parsed before the crash, and a `since` from that stream can land inside range by coincidence (`features/session-recovery.md`).
 `replay_end` carries `position`, the ring position at the snapshot: that anchor plus every live binary byte the client receives afterwards is what it may offer as `since` next time.
 A `gap` frame (dropped chunks) invalidates the client's count until the resync's `replay_end` re-anchors it.
 A delta never allows terminal responses and never triggers the truncated-replay repaint pulse — the client's screen is exact after the append.
@@ -780,6 +866,13 @@ as `input_arbitration`, alongside the refused-claim count, the current geometry,
 leading device, and `claims`: the last two dozen decisions with the asking device, what it
 reported about itself, what the daemon believed, and the verdict. A counter says a claim was
 refused; only that log says which device asked and why it lost.
+
+Input to a session that has **ended** — including a cold one — is refused separately and before
+ownership is considered: `{type:"input_refused", reason:"session_ended"}` on the socket, and a 400
+on the HTTP paths. An ended pane stays open until it is dismissed, so it is a pane a person can
+click into; without this, `PtyHost.write` raises for its released or never-spawned pseudoterminal
+and the operator gets a 500 or a dropped socket instead of an explanation
+(`features/session-recovery.md`).
 
 `GET /api/sessions/{id}/state-log` also reports the conversation identity behind the state:
 `agent_run_id`, `agent_run_seq`, `native_session_id`, `agent_lifecycle_id`, and

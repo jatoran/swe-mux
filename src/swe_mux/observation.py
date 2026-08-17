@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, assert_never
 
 from .adapters.codex import codex_data_home
+from .approvals import ApprovalOutcome, decide, describe_request
 from .event_bus import EventBus
 from .harness import (
     Backend,
@@ -2263,6 +2264,93 @@ CODEX_AUTOMATIC_APPROVAL_REVIEWERS = frozenset({"auto_review"})
 CODEX_AUTOMATIC_APPROVAL_POLICIES = frozenset({"never", "on_request_auto_review"})
 
 
+def auto_approval_decision(
+    session: Session, payload: dict[str, Any]
+) -> tuple[str, ApprovalOutcome | None]:
+    """Whether mux answers this permission request itself.
+
+    Returns ``(reason, outcome)``. ``outcome`` is ``None`` whenever the control
+    plane declines to participate at all, which is the case for every session
+    until an operator switches a mode on. Everything here is pure and in-memory:
+    the agent's turn is blocked on this call, so it must not touch the
+    filesystem, the database, or the event loop.
+    """
+    if getattr(session, "observation_replay", False):
+        return "replay", None
+    record = session.record
+    if not descriptor(record.backend).hook_approval_decisions:
+        # Reporting an approval and answering one are different capabilities.
+        # A harness that only reports must never be handed a decision, or the
+        # daemon would believe it had answered a prompt still sitting on screen.
+        return "harness_cannot_decide", None
+    policy = record.approval_policy
+    mode = policy.effective_mode(record.agent_run_id or None, time.time())
+    if mode == "wait":
+        return "mode_wait", None
+    if policy.max_auto > 0 and policy.auto_approved >= policy.max_auto:
+        # Exhausted, not expired: the grant stays visible in the strip saying so,
+        # because "it stopped answering and I do not know why" is the reading
+        # that makes an operator distrust the feature.
+        return "grant_exhausted", None
+    tool_name = str(payload.get("tool_name") or "")
+    tool_input = payload.get("tool_input")
+    outcome = decide(
+        mode=mode,
+        rules=list(policy.rules),
+        tool_name=tool_name,
+        tool_input=tool_input,
+    )
+    return mode, outcome
+
+
+def _note_auto_approval(
+    session: Session,
+    outcome: ApprovalOutcome,
+    *,
+    mode: str,
+    request: str,
+    tool_use_id: str | None,
+) -> None:
+    """Ledger one control-plane decision and update the grant's counters.
+
+    Every allow is recorded because the decision *removes* the notification the
+    user would otherwise have got: with no record, an auto-approved action is
+    the one class of agent activity that leaves no trace anywhere in mux. Floor
+    deferrals are recorded too, because "the mode is on and it still asked me"
+    is otherwise indistinguishable from a bug.
+    """
+    policy = session.record.approval_policy
+    now = time.time()
+    if outcome.allowed:
+        policy.auto_approved += 1
+        policy.last_decision_at = now
+        policy.last_request = request
+    elif outcome.floor is not None:
+        policy.floor_deferred += 1
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is not None:
+        transitions.append(
+            {
+                "ts": now,
+                "kind": "approval_auto_decision",
+                "decision": outcome.decision,
+                "mode": mode,
+                "reason": outcome.reason,
+                "rule": outcome.matched_rule,
+                "floor": outcome.floor,
+                "request": request,
+                "tool_use_id": tool_use_id,
+                "grant_used": policy.auto_approved,
+            }
+        )
+    meta_sink = getattr(session, "meta_sink", None)
+    if meta_sink is not None:
+        try:
+            meta_sink()
+        except Exception:
+            log.debug("approval policy meta sink failed", exc_info=True)
+
+
 def _persist_approval_candidate(
     session: Session, candidate: dict[str, Any] | None
 ) -> None:
@@ -3443,7 +3531,15 @@ async def apply_hook_observation(
     event_type: str,
     payload: dict[str, Any],
     events: EventBus,
-) -> None:
+) -> dict[str, Any] | None:
+    """Apply one hook event, returning a decision the harness should read back.
+
+    The return value is non-None only for a decision-capable event this session's
+    approval mode actually answered (`approvals.DECISION_HOOK_EVENTS`); it is the
+    `hookSpecificOutput` object the hook ingress relays to the shim, which the
+    shim prints. Every other path returns None, which the CLI reads as "no
+    opinion" and resolves the way it would with no hook installed.
+    """
     scope = hook_event_scope(event_type, payload)
     # A foreign conversation's hook must not move this session's state — its
     # PermissionRequest raises an "awaiting approval" for a dialog that is not on
@@ -3473,7 +3569,7 @@ async def apply_hook_observation(
             kind=event_type,
             native_session_id=foreign_id,
         )
-        return
+        return None
     if scope == "subagent":
         # Lifecycle hooks manage the `subagents` annotation before the scope
         # early-return; the foreign-conversation filter above has already run,
@@ -3486,7 +3582,7 @@ async def apply_hook_observation(
             scope="subagent",
             kind=event_type,
         )
-        return
+        return None
 
     # Tool-activity and turn-start hooks only drive state as a fallback: when the
     # transcript observer is authoritative it already records the same boundaries
@@ -3535,7 +3631,7 @@ async def apply_hook_observation(
             # authority check, which returns early for every healthy session.
             _note_prompt_authorship(session)
         if _transcript_authoritative(session):
-            return
+            return None
         await _begin_root_turn(
             session,
             events,
@@ -3547,7 +3643,7 @@ async def apply_hook_observation(
         )
     elif event_type == "PreToolUse":
         if _transcript_authoritative(session):
-            return
+            return None
         await _begin_root_turn(session, events, source="hook", evidence="hook:PreToolUse")
         _observation_state(session)["turn_saw_activity"] = True
         tool = str(payload.get("tool_name") or payload.get("name") or "tool")
@@ -3590,15 +3686,15 @@ async def apply_hook_observation(
                 success=event_type != "PostToolUseFailure",
             )
         if _transcript_authoritative(session):
-            return
+            return None
         state = _observation_state(session)
         if session.record.state == "awaiting" and session.record.awaiting_reason == "approval":
             active_tool_use_id = str(state.get("active_approval_tool_use_id") or "")
             if active_tool_use_id and tool_use_id and tool_use_id != active_tool_use_id:
-                return
+                return None
             matching_tool = bool(active_tool_use_id and tool_use_id == active_tool_use_id)
             if not matching_tool and session_pty_state(session) == "approval":
-                return
+                return None
         await _transition(
             session, events, "working", source="hook", evidence=f"hook:{event_type}"
         )
@@ -3629,13 +3725,42 @@ async def apply_hook_observation(
                 detail=tool,
             )
         else:
+            tool_use_id = str(payload.get("tool_use_id") or "") or None
+            mode, auto_outcome = auto_approval_decision(session, payload)
+            if auto_outcome is not None:
+                request = describe_request(tool, payload.get("tool_input"))
+                _note_auto_approval(
+                    session, auto_outcome, mode=mode, request=request, tool_use_id=tool_use_id
+                )
+                if auto_outcome.allowed:
+                    # No stabilization timer, no `awaiting`, no sound, no push.
+                    # The request never becomes attention because it was never
+                    # left for the human — and mux knows the decision instant,
+                    # which is precisely the evidence the delegated-approval
+                    # heuristic has to infer from the screen when Codex's own
+                    # reviewer answers (see APPROVAL_AUTO_REVIEW_CEILING_SECONDS).
+                    await events.emit(
+                        "approval_auto_approved",
+                        session_id=session.record.id,
+                        source="control-plane",
+                        scope="root",
+                        detail=request,
+                        mode=mode,
+                        rule=auto_outcome.matched_rule,
+                    )
+                    _publish_update(session)
+                    return {
+                        "hookEventName": "PermissionRequest",
+                        "decision": "allow",
+                        "reason": f"swe-mux approval mode: {auto_outcome.reason}",
+                    }
             await _request_stabilized_approval(
                 session,
                 events,
                 detail=tool,
                 source="hook",
                 evidence=f"hook:{event_type}",
-                tool_use_id=str(payload.get("tool_use_id") or "") or None,
+                tool_use_id=tool_use_id,
             )
     elif event_type == "approval_resolved":
         cancel_pending_approval(session, "hook:approval_resolved")
@@ -3791,6 +3916,7 @@ async def apply_hook_observation(
             force=True,
             evidence="hook:SessionEnd",
         )
+    return None
 
 
 async def _transition(

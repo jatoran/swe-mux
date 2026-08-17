@@ -22,6 +22,7 @@ const BUCKET_LABELS:Record<string,string>={
   voice:'Voice clips',
   media:'Session media',
   sessions:'Adapter session state',
+  recovery:'Crash recovery checkpoints',
   trash:'Trash',
   other:'Other state',
 }

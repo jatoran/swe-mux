@@ -52,6 +52,10 @@ _NAMED_DIR_BUCKETS = {
     "voice": "voice",
     "media": "media",
     "sessions": "sessions",
+    # Terminal checkpoints for cold session recovery. Its own bucket rather than
+    # folded into `sessions`, because it is bounded by a separate budget and is
+    # the one people will want to see the size of after a run of crashes.
+    "recovery": "recovery",
     ".trash": "trash",
 }
 

@@ -4,6 +4,8 @@ import json
 import re
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, assert_never
@@ -293,8 +295,9 @@ def read_transcript_events(path: Path, max_bytes: int | None = None) -> list[dic
                 continue
             if isinstance(event, dict):
                 # Native ids are not guaranteed on every provider/version. A
-                # byte offset is unique and stable for an append-only run, and
-                # never leaves this module except as the opaque reader id below.
+                # byte offset is unique and stable for an append-only run. It
+                # leaves this module twice and only twice: as the opaque reader
+                # id below, and as a `CutPoint` span for the fork writer.
                 event[_SOURCE_OFFSET_KEY] = offset
                 event[_SOURCE_END_KEY] = handle.tell()
                 events.append(event)
@@ -1021,6 +1024,12 @@ def _conversation_records(
                 "text": text,
                 "preceding_tool_calls": len(pending_tools),
                 "preceding_tools": pending_tools,
+                # The byte span this message occupies in a file-backed transcript,
+                # `None` for a store-backed one. Only `conversation_cut_points`
+                # keeps them; the reader payload strips them, because a span is a
+                # writer's coordinate rather than something to render.
+                _SOURCE_OFFSET_KEY: event.get(_SOURCE_OFFSET_KEY),
+                _SOURCE_END_KEY: event.get(_SOURCE_END_KEY),
             }
         )
         pending_tools = tools
@@ -1068,6 +1077,10 @@ def _merge_assistant_segments(records: list[dict[str, Any]]) -> list[dict[str, A
             and not record["preceding_tool_calls"]
         ):
             previous["text"] = f"{previous['text']}\n\n{record['text']}"
+            # The span grows with the text. A fork cutting "after this reply" has to
+            # land past the last fragment folded in here; cutting at the first
+            # fragment's end would truncate the reply the reader was shown.
+            previous[_SOURCE_END_KEY] = record[_SOURCE_END_KEY]
             continue
         merged.append(dict(record))
     return merged
@@ -1108,11 +1121,132 @@ def conversation_view(
         messages = messages[-limit:]
         truncated = True
     return {
-        "messages": [{"ordinal": index, **message} for index, message in enumerate(messages)],
+        "messages": [
+            {"ordinal": index, **_without_source_span(message)}
+            for index, message in enumerate(messages)
+        ],
         "trailing_tool_calls": trailing_tools,
         "hidden": hidden,
         "truncated": truncated,
     }
+
+
+def _without_source_span(message: dict[str, Any]) -> dict[str, Any]:
+    """One reader message with its byte span removed."""
+    return {
+        key: value
+        for key, value in message.items()
+        if key not in {_SOURCE_OFFSET_KEY, _SOURCE_END_KEY}
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class CutPoint:
+    """One message a fork could be cut at, and what cutting there would leave.
+
+    ``source_end`` is the byte offset one past the last record this message
+    occupies, which is the only offset a fork is ever cut at: cutting on a record
+    boundary the reader can name is what keeps a fork's leaf a real conversational
+    record rather than whichever housekeeping line happened to follow it.
+
+    ``open_tool_calls`` is how many tool invocations are still unanswered at that
+    boundary. Non-zero means the cut is illegal rather than merely untidy: a
+    conversation whose last assistant turn asked for a tool and never received the
+    result is rejected by the provider outright, so a fork made there would not
+    load at all.
+    """
+
+    message_id: str
+    ordinal: int
+    role: str
+    ts: Any
+    source_start: int
+    source_end: int
+    open_tool_calls: int
+
+
+def conversation_cut_points(
+    path: Path | None,
+    backend: str,
+    *,
+    limit: int = CONVERSATION_DEFAULT_LIMIT,
+    native_id: str | None = None,
+) -> list[CutPoint] | None:
+    """Where a fork of this conversation could be cut, newest ``limit`` messages.
+
+    ``None`` when this dialect has no measured rule for what leaves a tool call
+    unanswered. That is a declared absence rather than a permissive default: a
+    caller that cannot tell a legal cut from an illegal one must refuse to fork,
+    not guess and write a conversation the provider will reject.
+
+    The window bounds only which cuts can be *named*, never what a fork contains.
+    Offsets are absolute, so a fork cut inside a bounded tail still carries the
+    whole conversation from its first byte.
+    """
+    scanner = _OPEN_TOOL_SCANNERS.get(transcript_dialect(backend) or "")
+    if scanner is None or path is None:
+        return None
+    size = path.stat().st_size
+    max_bytes = CONVERSATION_MAX_BYTES if size > CONVERSATION_MAX_BYTES else None
+    events = conversation_events(path, backend, max_bytes=max_bytes, native_id=native_id)
+    open_calls = scanner(events)
+    records, _hidden, _trailing = _conversation_records(events, backend)
+    messages = _merge_assistant_segments(records)[-limit:]
+    points: list[CutPoint] = []
+    for ordinal, message in enumerate(messages):
+        start = message.get(_SOURCE_OFFSET_KEY)
+        end = message.get(_SOURCE_END_KEY)
+        if start is None or end is None:
+            continue
+        points.append(
+            CutPoint(
+                message_id=str(message["message_id"]),
+                ordinal=ordinal,
+                role=str(message["role"]),
+                ts=message.get("ts"),
+                source_start=int(start),
+                source_end=int(end),
+                open_tool_calls=open_calls.get(int(end), 0),
+            )
+        )
+    return points
+
+
+def _claude_open_tool_calls(events: list[dict[str, Any]]) -> dict[int, int]:
+    """How many Claude tool calls are unanswered at each record boundary.
+
+    A call is opened by a ``tool_use`` block in an assistant record and closed by
+    the ``tool_result`` block naming it, which Claude writes as the next user
+    record. Subagent records are counted in the same set on purpose: their pairs
+    are self-contained, so they open and close within the span they occupy and
+    never leave a boundary looking dirty that is not.
+
+    A ``tool_result`` whose ``tool_use`` predates a bounded read closes nothing and
+    is ignored, which is why discarding an unknown id is silent rather than an
+    error.
+    """
+    open_ids: set[str] = set()
+    by_offset: dict[int, int] = {}
+    for event in events:
+        for block in _blocks((event.get("message") or {}).get("content")):
+            kind = block.get("type")
+            if kind == "tool_result":
+                open_ids.discard(str(block.get("tool_use_id") or ""))
+            elif kind == "tool_use" and block.get("id"):
+                open_ids.add(str(block["id"]))
+        end = event.get(_SOURCE_END_KEY)
+        if end is not None:
+            by_offset[int(end)] = len(open_ids)
+    return by_offset
+
+
+# Per dialect, because "what leaves a tool call unanswered" is the provider's rule
+# and not a shape shared across harnesses. A dialect absent here is a dialect mux
+# cannot yet fork: `conversation_cut_points` returns `None` rather than assuming
+# every boundary is clean.
+_OPEN_TOOL_SCANNERS: dict[str, Callable[[list[dict[str, Any]]], dict[int, int]]] = {
+    "claude": _claude_open_tool_calls,
+}
 
 
 _conversation_cache: OrderedDict[tuple[str, int, int, str, int], dict[str, Any]] = OrderedDict()

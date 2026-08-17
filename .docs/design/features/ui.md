@@ -186,6 +186,10 @@ responsive controls.
   equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
+  It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
+  tree it edits, and `menu → Projects…` between Utilities and Configure Actions. The header
+  button is discoverable only once the sidebar is open and its header is in view, while the
+  app menu is where every other app-wide surface is looked for.
 - The sidebar footer is two controls: `menu` at the left edge and the alerts bell at the right.
   It held four. `projects` moved into the `PROJECTS` header, beside the tree it edits, and the
   settings cog was removed: `menu → All Settings…` sits one row away from the button next to it,
@@ -589,6 +593,19 @@ responsive controls.
 - Appearance exposes one palette picker for the shared browser chrome and xterm theme.
   Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
   The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.
+  **Highlighting a theme applies it to the whole window immediately**, by arrow key or by
+  hover, so a catalogue of twenty-eight can be walked and seen instead of chosen blind,
+  reopened, and chosen again. It is a preview and not a choice: the draft moves only on
+  Enter or click, the dirty flag never fires, and the trigger keeps showing the chosen
+  theme rather than the highlighted one. Leaving the list any way at all hands the screen
+  back — Escape, a click elsewhere, or the one gesture that closes the list and the whole
+  panel together, which `Settings.tsx` owns rather than the picker precisely because the
+  picker is gone before its own revert could run. The revert targets the *authoritative*
+  theme rather than the draft's, since discarding unsaved settings has already put the
+  saved theme back on its way out.
+  The control is laid out as an ordinary field — label column, bounded control column —
+  rather than stacked full-width, which had made the one setting in the panel that spans
+  the label column read as a section heading.
   The built-in retro set includes Phosphor Blue, Phosphor Purple, Commodore 64, Amiga Workbench, CGA, Macintosh System 6, Game Boy, and Virtual Boy.
 - Appearance exposes **chrome scale**, one multiplier on the size of every surface, stored
   **separately for desktop and mobile**. Both default to `1.0`, so installing the build that
@@ -1290,8 +1307,18 @@ responsive controls.
   because the pane is memoized against callback props and could not otherwise see it: both the rail
   button and the drawer button read that broadcast instead of running a second timer, so their
   label can never disagree with what the next click does. On an exited or crashed session the
-  button relabels to Remove, matching the command's own fallback. The drawer deliberately stays
-  open on the arming click — closing it would leave nowhere to make the second one.
+  button relabels to Remove, matching the command's own fallback, and skips the confirm entirely:
+  confirmation guards against destroying work, and an ended session has none left to destroy — no
+  process to interrupt and no turn to lose, only a record the operator has finished reading. The
+  drawer deliberately stays open on the arming click — closing it would leave nowhere to make the
+  second one.
+- **An ended or recovered session's pane is openable and read-only.** Its row and tab keep the
+  same 0.62 dimming they always had; a *recovered* one adds a dotted underline, because the
+  difference between "you watched this exit" and "this came back from disk after a crash" decides
+  whether the way back is Resume, Restart, or nothing. A banner above the terminal says which it
+  is, how old the replayed content is, and — when there is none — why not, since an empty
+  recovered agent pane otherwise reads as a bug rather than the deliberate exclusion it is
+  (`features/session-recovery.md`).
 - Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
   rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
   most of a screen's worth of rail before the terminal keys begin — and their marks (offset
@@ -1299,6 +1326,15 @@ responsive controls.
   deliberately keeps its label**: a copy glyph cannot distinguish it from Copy reply, and the
   two sit side by side. Icon buttons size like keys (30/44 px) and carry an explicit
   `aria-label`, since the title attribute is not a name on touch.
+- **Branch opens a point picker where the daemon honours one** (`BranchPicker.tsx`, gated on the
+  published `branch_from_message`), and forks on the click where it does not — offering a choice
+  the daemon would then refuse is worse than offering none. The picker is a dialog of its own
+  rather than controls added to the Transcript tab: that tab is deliberately inert, copy being its
+  only verb, because it is where somebody reviews what an agent already did and a stray tap there
+  must not start a session. Rows run newest first, since a branch is normally a recent regret; each
+  states the cut it would make in the words of the act (a prompt is branched *before*, a reply
+  *after*); and a row whose cut is illegal stays visible with its reason inline, because the reader
+  can see the message and hiding why it is not offered leaves them guessing.
 - The Markdown editor carries a *second, separate* rail: Continuity's own, which the vendored
   editor renders only on touch-primary devices and persists per device in `localStorage`. swe-mux
   registers one host action on it (`mux:send-to-agent`) instead of projecting its `RailItem`
@@ -1363,7 +1399,7 @@ responsive controls.
 ## Utility drawer
 
 - The right-edge **utility drawer** is where the app's lookup and injection surfaces live, so they are one gesture on mobile or one visible click on desktop away instead of two menu levels deep.
-  The canonical default order is **Clipboard**, **Actions**, **Queue**, **Transcript**, **Timeline**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, and **Alerts**.
+  The canonical default order is **Clipboard**, **Actions**, **Queue**, **Transcript**, **Timeline**, **Agent**, **Files**, **Notes**, **Context**, **Git**, **Processes**, **Schedule**, and **Alerts**.
   Users may distribute those singleton tabs across a recursive arrangement, but the default order groups by what a tab acts on.
   Clipboard and Actions lead the session-scoped block because both can insert into the focused work surface, while Queue stages text for a focused agent and Transcript reads the same session back.
   Timeline and Agent close the session-scoped block with passive views of the selected session and CLI environment.
@@ -1374,7 +1410,10 @@ responsive controls.
   Like the drawer's note editor, it renders inside the drawer, and unlike it never opens a pane and never writes.
   Git closes the Project-scoped block without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
   See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
-  **Processes** closes that block for the same reason: it is Project-scoped and reports rather than opens.
+  **Processes** continues that block for the same reason: it is Project-scoped and reports rather than opens.
+  **Schedule** closes it, immediately after Processes, because the two answer the same question at different times: Processes is what this Project's sessions are running now, Schedule is what it will start later (`scheduled-runs.md`).
+  It is a tab rather than a modal because the decisions it offers - pause this, run it now, is last night's session still open - are judgements about live sessions, which are legible in the workspace behind the drawer.
+  Like Processes it carries its own Project/all-Projects scope instead of a companion modal, since "what fires tonight" spans Projects even though every schedule belongs to exactly one.
   Notifications is neither and sits last.
   Session history, usage, and automation stay modal, as do the process *inspector* and the *fleet queue*.
   They are wide, table-shaped surfaces that a ~380 px column serves badly, and none decides anything that has to be read off a terminal.
@@ -1484,7 +1523,8 @@ responsive controls.
 - **One session has one name on every surface.** The rule - a generated title wins only while the
   session is still `auto_named` - lives in one place per side (`frontend/src/sessionNames.ts`,
   `src/swe_mux/session_titles.py`) and every surface reads it: sidebar rows, workspace tabs, the
-  drawer's session-scoped headings, prompt and queue targets, the Git tab, voice, and History. A
+  drawer's session-scoped headings, prompt and queue targets, the Git tab, the Processes tab and
+  the process fleet inspector, the mobile draft composer, voice, and History. A
   surface that spells the rule out itself is the one that eventually disagrees with the sidebar,
   which is what a heading still reading `claude-0e7d93` beside a titled pane looked like.
   The two payload shapes disagree about types and are read through separate entry points: a live
@@ -1598,6 +1638,20 @@ responsive controls.
   state of its own — `note` reports empty/written/open, `queue` its pending count — so it was pure
   navigation, and on a phone it cost 40 px of a bar that also has to fit the session name and
   path. The session context menu and the palette still open the inspector directly.
+- **Schedule** is where a Project's scheduled agent runs are written, watched, paused, and run
+  on demand (`scheduled-runs.md`). Rows collapse to label, cadence, and countdown; the prompt
+  and the run history open on demand, because a 380 px column cannot show five schedules with
+  their bodies expanded. Three rules the surface keeps:
+  **it never computes a fire time** (cron plus a timezone plus daylight saving has one
+  implementation, in the daemon, and the editor previews through it, so what is promised before
+  saving is what will happen);
+  **it never renders a schedule that cannot fire as if it can** (a Project that has not opted
+  into `scheduled_runs`, or an install-wide switch that is off, is drawn on the row itself with
+  the way to fix it, because an armed-looking row that is silently inert is the failure this
+  surface exists to prevent);
+  and **a deliberate pause is not an alarm** - a paused schedule is dimmed but never counted as
+  needing attention.
+  The editor replaces the list rather than opening beside it, for the same width reason.
 - **Alerts** leads with ranked attention (`attention-ranking.md`): the fan-out headline, the
   daily interrupt budget, incidents grouped by channel, any behaviour-mined rule awaiting an
   explicit decision, and the count of what was held back and why. Ranking is the reading; the

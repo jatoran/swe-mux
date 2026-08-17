@@ -131,6 +131,18 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'copyReply', type: 'action', action: 'copyReply', label: 'Copy reply' },
   { id: 'copyResume', type: 'action', action: 'copyResume', label: 'Copy resume' },
   { id: 'branch', type: 'action', action: 'branch', label: 'Branch', agentOnly: true },
+  // Answers the approval the pane is showing right now. Deliberately *not* a
+  // voice alias: Talk keeps its own two-step challenge, which exists because a
+  // spoken caller cannot see the dialog it is confirming, and a one-tap
+  // duplicate reachable by voice would route around that guard.
+  {
+    id: 'approveOnce',
+    type: 'action',
+    action: 'approveOnce',
+    label: 'Approve',
+    agentOnly: true,
+    title: 'Approve the request this session is showing',
+  },
   { id: 'paste', type: 'action', action: 'paste', label: 'Paste', voicePhrases: ['paste', 'paste clipboard'] },
   // Clipboard history picker. Paired with Paste because it is the paste path on
   // touch, where reading the system clipboard is unreliable or refused outright.

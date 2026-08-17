@@ -2704,3 +2704,27 @@ async def test_a_pty_started_turn_emits_the_same_boundary_as_any_other(
     assert session.record.state == "working"
     assert session.observation_state["root_turn_active"] is True
     assert [name for name, _ in events if name == "turn_started"] == ["turn_started"]
+
+
+async def test_the_watchdog_skips_a_session_with_no_process(tmp_path: Path) -> None:
+    """Nothing the watchdog does can apply to a terminal session.
+
+    The terminal latch already refuses every transition it would attempt, so the
+    work was only ever wasted - but it stopped being *only* wasted once ended
+    panes started being retained and a crash could restore dozens of cold
+    sessions at boot, each re-reading a buffer that will never change, twice a
+    pass, forever.
+    """
+    from swe_mux.session import SessionManager
+
+    path = tmp_path / "native.jsonl"
+    _open_tail_transcript(path)
+    now = time.time() + 10.0
+    for state in ("exited", "crashed"):
+        session = _watchdog_session(path, now, b"> \n")
+        session.record.state = state
+        session.record.standing_activity = []
+        await SessionManager._watchdog_check_session(_fake_manager(), session, now)
+        # Untouched: no layer readings taken, no state moved, nothing published.
+        assert session.record.state == state
+        assert not getattr(session, "layer_readings", {})

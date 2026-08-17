@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +9,9 @@ import pytest
 
 from swe_mux import server
 from swe_mux.adapters import ClaudeAdapter
-from swe_mux.server import _branch_source_id, branch_session
+from swe_mux.server import _branch_source_id, branch_session, session_branch_points
+
+from .support.claude_transcript import SIDECAR_NAME, read_records, write_source
 
 
 @pytest.fixture(autouse=True)
@@ -23,39 +24,31 @@ def _fast_branch_timings(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(server, "BRANCH_SIBLING_SETTLE_SECONDS", 0.05)
     monkeypatch.setattr(server, "BRANCH_SIBLING_RETRY_BACKOFF_SECONDS", 0.0)
-    monkeypatch.setattr(server, "BRANCH_RELEASE_TIMEOUT_SECONDS", 0.3)
-    monkeypatch.setattr(server, "BRANCH_FORK_TIMEOUT_SECONDS", 2.0)
 
 
 class FakeBus:
-    """Enough of `EventBus` for the branch endpoint: fan-out and background emits."""
-
     def __init__(self) -> None:
-        self.queues: list[asyncio.Queue[Any]] = []
         self.emitted: list[tuple[str, dict[str, Any]]] = []
-        self.subscriptions = 0
-
-    def subscribe(self, *, name: str = "anonymous") -> asyncio.Queue[Any]:
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-        self.queues.append(queue)
-        self.subscriptions += 1
-        return queue
-
-    def unsubscribe(self, queue: asyncio.Queue[Any]) -> None:
-        if queue in self.queues:
-            self.queues.remove(queue)
 
     def emit_background(self, event_type: str, **payload: Any) -> None:
         self.emitted.append((event_type, payload))
 
-    def session_start(self, session_id: str, transcript_path: str) -> None:
-        event = SimpleNamespace(
-            session_id=session_id,
-            type="SessionStart",
-            payload={"transcript_path": transcript_path},
-        )
-        for queue in self.queues:
-            queue.put_nowait(event)
+
+class FakeLineageStore:
+    def __init__(self) -> None:
+        self.edges: list[dict[str, Any]] = []
+
+    async def add_lineage(
+        self, parent: str, child: str, relation: str, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        edge = {
+            "parent": parent,
+            "child": child,
+            "relation": relation,
+            "metadata": metadata or {},
+        }
+        self.edges.append(edge)
+        return edge
 
 
 def _request(record: Any) -> Any:
@@ -85,35 +78,6 @@ async def test_branch_rejects_non_agent_sessions() -> None:
     assert json.loads(response.body)["code"] == "not_agent"
 
 
-@pytest.mark.parametrize(
-    ("state", "pending", "code"),
-    [
-        ("working", False, "source_busy"),
-        ("awaiting", False, "source_busy"),
-        ("crashed", False, "source_not_live"),
-        ("idle", True, "source_composer_dirty"),
-    ],
-)
-async def test_branch_refuses_a_pane_that_is_not_ready_for_a_slash_command(
-    state: str, pending: bool, code: str
-) -> None:
-    """`/branch` is typed into somebody else's terminal, so it owes a readiness check.
-
-    Mid-turn the command lands in a CLI that is not reading commands; with an approval
-    up it answers the dialog; with unsent text in the composer it is appended to that
-    text and the pair is submitted as a prompt.
-    """
-    record = SimpleNamespace(
-        id="m1", backend="claude", native_session_id="m1",
-        project_id="default", name="claude", cwd=".", state=state,
-    )
-    request = _request(record)
-    request.app["sessions"].sessions["m1"].composer = SimpleNamespace(pending=pending)
-    response = await branch_session(cast(Any, request))
-    assert response.status == 409
-    assert json.loads(response.body)["code"] == code
-
-
 def test_branch_source_accepts_claude_native_id_equal_to_mux_id() -> None:
     # A fresh Claude session's native id equals its mux id (spawned via
     # --session-id); that is a valid transcript stem, not "missing".
@@ -136,270 +100,6 @@ def test_branch_source_none_for_codex_without_detected_rollout() -> None:
     assert _branch_source_id(source) is None
 
 
-class BranchHarness:
-    """A Claude pane wired to a fake CLI, event bus, and session manager."""
-
-    def __init__(self, tmp_path: Path, *, bus: FakeBus | None = None) -> None:
-        self.adapter = ClaudeAdapter("claude.exe")
-        self.cwd = tmp_path / "project"
-        self.cwd.mkdir(exist_ok=True)
-        self.original = "aaaaaaaa-1111-4a7b-8c9d-0e1f2a3b4c5d"
-        self.forked = "cccccccc-3333-4a7b-8c9d-0e1f2a3b4c5d"
-        self.transcripts = self.adapter.transcript_path(self.original, self.cwd).parent
-        self.transcripts.mkdir(parents=True, exist_ok=True)
-        (self.transcripts / f"{self.original}.jsonl").write_text("{}\n", encoding="utf-8")
-        self.bus = bus
-        self.rolled: list[dict[str, Any]] = []
-        self.spawned: list[dict[str, Any]] = []
-        self.stopped: list[str] = []
-        # One entry per spawn attempt: the state its record reports while settling.
-        self.spawn_states: list[str] = ["idle"]
-        self.writes: list[str] = []
-        self.fork_files: list[str] = [self.forked]
-        self.report_fork: str | None = self.forked
-
-        self.record = SimpleNamespace(
-            id="pane-1", backend="claude", native_session_id=self.original,
-            agent_run_id="run-original", project_id="default", name="device ownership",
-            cwd=str(self.cwd), run_cwd=str(self.cwd), state="idle",
-        )
-        self.session = SimpleNamespace(
-            record=self.record,
-            agent_lifecycle_id=self.original,
-            composer=SimpleNamespace(pending=False),
-            pty=SimpleNamespace(write=self._on_write),
-        )
-        self.manager = SimpleNamespace(
-            sessions={self.record.id: self.session},
-            resolve=lambda _identity: self.session,
-            adapters={"claude": self.adapter},
-            roll_agent_conversation=self._roll,
-            spawn=self._spawn,
-            stop=self._stop,
-        )
-        app: dict[str, Any] = {
-            "sessions": self.manager,
-            "projects": SimpleNamespace(
-                projects={
-                    "default": SimpleNamespace(
-                        name="Main", root=str(self.cwd),
-                        layout={"version": 2, "root": None}, layout_revision=0,
-                    )
-                },
-                update=self._update,
-            ),
-        }
-        if bus is not None:
-            app["events"] = bus
-        self.request = SimpleNamespace(
-            app=app, match_info={"sid": self.record.id}, can_read_body=False
-        )
-
-    def _on_write(self, data: str) -> None:
-        """What the CLI does with `/branch`: new transcript(s), then a delayed report."""
-        self.writes.append(data)
-        assert data == "/branch\r"
-        for stem in self.fork_files:
-            (self.transcripts / f"{stem}.jsonl").write_text("{}\n", encoding="utf-8")
-        if self.bus is not None and self.report_fork is not None:
-            self.bus.session_start(
-                self.record.id, str(self.transcripts / f"{self.report_fork}.jsonl")
-            )
-
-    async def _roll(self, sid: str, **kwargs: Any) -> bool:
-        self.rolled.append({"sid": sid, **kwargs})
-        return True
-
-    async def _spawn(self, **kwargs: Any) -> Any:
-        self.spawned.append(kwargs)
-        index = len(self.spawned) - 1
-        state = self.spawn_states[min(index, len(self.spawn_states) - 1)]
-        return SimpleNamespace(
-            record=SimpleNamespace(
-                id=f"pane-{index + 2}", state=state, exit_code=1 if state == "crashed" else None,
-                snapshot=lambda: {},
-            )
-        )
-
-    async def _stop(self, sid: str) -> None:
-        self.stopped.append(sid)
-
-    async def _update(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
-
-    async def run(self) -> Any:
-        return await branch_session(cast(Any, self.request))
-
-
-async def test_a_claude_branch_hands_the_original_conversation_to_the_sibling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The sibling continues the original conversation, so it inherits its run.
-
-    `/branch` moves the *source* pane onto a fresh conversation and frees the
-    original, which the sibling then reopens. Opening a second row there showed one
-    conversation as two entries over one file. The inheritance is only sound once the
-    source pane has let go of the run, so the confirmed fork id is applied to it
-    first.
-    """
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    harness = BranchHarness(tmp_path, bus=FakeBus())
-
-    response = await harness.run()
-
-    assert response.status == 201
-    # The source pane is retired onto the conversation the fork actually created,
-    # rather than keeping the original id until some hook happens to report it.
-    assert harness.rolled == [
-        {"sid": "pane-1", "native_id": harness.forked, "reason": "branched", "source": "branch"}
-    ]
-    assert harness.spawned[0]["resume_native_id"] == harness.original
-    assert harness.spawned[0]["adopt_run_id"] == "run-original"
-    assert harness.stopped == []
-
-
-async def test_branch_waits_for_the_cli_to_report_the_fork_before_reopening_the_original(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The CLI's report names the fork when the directory listing cannot.
-
-    Two transcripts appearing at once makes "which file is the fork" a guess, and the
-    listing rightly declines to make one. The source pane's own `SessionStart` is not
-    a guess, so the branch still completes — which also proves the release wait runs
-    before the sibling is spawned, since the id it supplies is required to spawn one.
-    """
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    bus = FakeBus()
-    harness = BranchHarness(tmp_path, bus=bus)
-    # A second agent starts in this cwd in the same instant.
-    harness.fork_files = [harness.forked, "dddddddd-4444-4a7b-8c9d-0e1f2a3b4c5d"]
-
-    response = await harness.run()
-
-    assert response.status == 201
-    assert harness.rolled[0]["native_id"] == harness.forked
-    assert harness.spawned[0]["adopt_run_id"] == "run-original"
-    assert [name for name, _ in bus.emitted] == ["session_branched"]
-    assert bus.emitted[0][1]["release"] == "reported"
-
-
-async def test_branch_refuses_rather_than_opening_a_second_row_on_one_conversation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An unidentifiable fork must not become two rows over one file.
-
-    Without the roll the source pane keeps claiming the original, so resuming it in a
-    sibling shows one conversation twice and indexes its file twice. The pane really is
-    branched by then, so the honest answer is to say so and leave the original in
-    History rather than to open something broken.
-    """
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    harness = BranchHarness(tmp_path, bus=FakeBus())
-    harness.fork_files = [harness.forked, "dddddddd-4444-4a7b-8c9d-0e1f2a3b4c5d"]
-    harness.report_fork = None  # the CLI never reports; nothing can name the fork
-
-    response = await harness.run()
-
-    assert response.status == 409
-    assert json.loads(response.body)["code"] == "branch_id_unresolved"
-    assert harness.spawned == []
-    assert harness.rolled == []
-
-
-async def test_branch_retries_a_sibling_that_exits_on_spawn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The resume is verified by running, not predicted by a signal.
-
-    Live on 2026-08-14 the sibling exited 1 about a second after spawn because the
-    source process had not finished releasing the conversation, and the operator was
-    handed a grey pane. A retry is the right response: the cause is a race, and the
-    next attempt is further from it.
-    """
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    harness = BranchHarness(tmp_path, bus=FakeBus())
-    harness.spawn_states = ["crashed", "idle"]
-
-    response = await harness.run()
-
-    assert response.status == 201
-    assert len(harness.spawned) == 2
-    # The pane that died is taken back out of the world rather than left attached.
-    assert harness.stopped == ["pane-2"]
-    assert json.loads(response.body)["session"] == {}
-
-
-async def test_branch_reports_a_sibling_that_never_comes_up(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A pane that will not stay up is removed and named, not attached and left grey."""
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    harness = BranchHarness(tmp_path, bus=FakeBus())
-    harness.spawn_states = ["crashed"]
-
-    response = await harness.run()
-
-    assert response.status == 503
-    body = json.loads(response.body)
-    assert body["code"] == "branch_sibling_failed"
-    assert body["attempts"] == server.BRANCH_SIBLING_ATTEMPTS
-    assert len(harness.spawned) == server.BRANCH_SIBLING_ATTEMPTS
-    assert len(harness.stopped) == server.BRANCH_SIBLING_ATTEMPTS
-
-
-async def test_branch_proceeds_when_the_cli_never_reports_but_the_fork_is_unambiguous(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A missing report degrades to the old behaviour rather than blocking the branch.
-
-    The release wait exists to make the first spawn attempt the one that works; the
-    retry is what guarantees correctness. So a hook that never arrives costs latency,
-    not the feature.
-    """
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    bus = FakeBus()
-    harness = BranchHarness(tmp_path, bus=bus)
-    harness.report_fork = None
-
-    response = await harness.run()
-
-    assert response.status == 201
-    assert harness.rolled[0]["native_id"] == harness.forked
-    assert bus.emitted[0][1]["release"] == "timeout"
-
-
-async def test_a_fork_that_never_lands_names_the_turn_that_swallowed_the_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The readiness gate is only as current as status detection.
-
-    Live on 2026-08-14 a turn had begun but still read `idle` when the gate ran, so the
-    command was written into a CLI that was thinking and was simply ignored. Nothing is
-    damaged by that — no sibling is spawned and no identity is rolled — but "try again"
-    alone leaves the operator with no idea what happened or when to retry.
-    """
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    harness = BranchHarness(tmp_path, bus=FakeBus())
-    harness.fork_files = []  # the CLI is busy; `/branch` goes nowhere
-    harness.report_fork = None
-
-    def start_a_turn(data: str) -> None:
-        harness.writes.append(data)
-        harness.record.state = "working"
-
-    harness.session.pty.write = start_a_turn
-
-    response = await harness.run()
-
-    assert response.status == 504
-    body = json.loads(response.body)
-    assert body["code"] == "branch_timeout"
-    assert body["source_state"] == "working"
-    assert "the agent started a turn" in body["error"]
-    assert harness.spawned == []
-    assert harness.rolled == []
-
-
 async def test_branch_rejects_codex_before_native_id_is_known() -> None:
     # Codex's native id is a placeholder equal to the mux id until its first
     # rollout is written; branching then would resume nothing.
@@ -410,3 +110,329 @@ async def test_branch_rejects_codex_before_native_id_is_known() -> None:
     response = await branch_session(cast(Any, _request(record)))
     assert response.status == 409
     assert json.loads(response.body)["code"] == "native_id_missing"
+
+
+class BranchHarness:
+    """A Claude pane over a real transcript on disk, with a stub session manager."""
+
+    def __init__(self, tmp_path: Path, *, body: dict[str, Any] | None = None) -> None:
+        self.adapter = ClaudeAdapter("claude.exe")
+        self.cwd = tmp_path / "project"
+        self.cwd.mkdir(parents=True, exist_ok=True)
+        self.transcripts = self.adapter.transcript_path("probe", self.cwd).parent
+        self.source_path = write_source(self.transcripts)
+        self.original = self.source_path.stem
+        self.spawned: list[dict[str, Any]] = []
+        self.stopped: list[str] = []
+        # One entry per spawn attempt: the state its record reports while settling.
+        self.spawn_states: list[str] = ["idle"]
+        self.bus = FakeBus()
+        self.lineage = FakeLineageStore()
+
+        self.record = SimpleNamespace(
+            id="pane-1", backend="claude", native_session_id=self.original,
+            agent_run_id="run-original", project_id="default", name="device ownership",
+            cwd=str(self.cwd), run_cwd=str(self.cwd), state="idle",
+        )
+        self.session = SimpleNamespace(
+            record=self.record,
+            agent_lifecycle_id=self.original,
+            composer=SimpleNamespace(pending=False),
+            transcript_path=self.source_path,
+            pty=SimpleNamespace(write=self._refuse_write),
+        )
+        self.manager = SimpleNamespace(
+            sessions={self.record.id: self.session},
+            resolve=lambda _identity: self.session,
+            adapters={"claude": self.adapter},
+            spawn=self._spawn,
+            stop=self._stop,
+        )
+        self.request = SimpleNamespace(
+            app={
+                "sessions": self.manager,
+                "events": self.bus,
+                "automation_store": self.lineage,
+                "projects": SimpleNamespace(
+                    projects={
+                        "default": SimpleNamespace(
+                            name="Main", root=str(self.cwd),
+                            layout={"version": 2, "root": None}, layout_revision=0,
+                        )
+                    },
+                    update=self._update,
+                ),
+            },
+            match_info={"sid": self.record.id},
+            can_read_body=body is not None,
+            query={},
+            json=self._body,
+        )
+        self._request_body = body or {}
+
+    def _refuse_write(self, data: str) -> None:
+        raise AssertionError(f"a transcript fork must not type into the pane: {data!r}")
+
+    async def _body(self) -> dict[str, Any]:
+        return self._request_body
+
+    async def _spawn(self, **kwargs: Any) -> Any:
+        self.spawned.append(kwargs)
+        index = len(self.spawned) - 1
+        state = self.spawn_states[min(index, len(self.spawn_states) - 1)]
+        return SimpleNamespace(
+            record=SimpleNamespace(
+                id=f"pane-{index + 2}",
+                state=state,
+                exit_code=1 if state == "crashed" else None,
+                agent_run_id=None,
+                native_session_id=kwargs.get("resume_native_id"),
+                snapshot=lambda: {},
+            )
+        )
+
+    async def _stop(self, sid: str) -> None:
+        self.stopped.append(sid)
+
+    async def _update(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def points(self) -> dict[str, Any]:
+        response = await session_branch_points(cast(Any, self.request))
+        return cast(dict[str, Any], json.loads(response.body))
+
+    async def run(self) -> Any:
+        return await branch_session(cast(Any, self.request))
+
+    def forked_records(self) -> list[dict[str, Any]]:
+        conversation = self.spawned[-1]["resume_native_id"]
+        return read_records(self.transcripts / f"{conversation}.jsonl")
+
+
+async def test_branch_points_offer_both_cuts_and_say_which_are_available(
+    tmp_path: Path,
+) -> None:
+    """Eligibility is per point, not per harness.
+
+    The same conversation offers a legal cut after one reply and an illegal one after
+    the next, purely because the second asked for a tool whose result had not yet
+    arrived. A picker that could not say which is which would offer a branch that
+    writes a conversation the provider rejects.
+    """
+    harness = BranchHarness(tmp_path)
+    payload = await harness.points()
+
+    assert payload["from_message"] is True
+    assert payload["strategy"] == "transcript_fork"
+    roles = [point["role"] for point in payload["points"]]
+    assert roles == ["user", "assistant", "assistant", "user", "assistant"]
+    # A user message is a thing to redo; an agent message is a thing to continue from.
+    assert [point["default_mode"] for point in payload["points"]] == [
+        "before", "after", "after", "before", "after",
+    ]
+    calling, answering = payload["points"][1], payload["points"][2]
+    assert calling["modes"]["after"] == {"eligible": False, "reason": "unanswered_tool_calls"}
+    assert answering["modes"]["after"] == {"eligible": True, "reason": None}
+    # Nothing precedes the oldest point in the window, so there is no record to cut
+    # after, and "before" is unavailable there rather than approximated with byte zero.
+    assert payload["points"][0]["modes"]["before"]["reason"] == "outside_window"
+    # `before` is answered from the *preceding* message, because that is the record
+    # the cut lands on. The message after the tool-calling reply therefore reports the
+    # same refusal the request would give, rather than offering a cut it would reject.
+    assert payload["points"][2]["modes"]["before"] == {
+        "eligible": False,
+        "reason": "unanswered_tool_calls",
+    }
+
+
+async def test_branch_points_carry_the_words_each_point_is_recognised_by(
+    tmp_path: Path,
+) -> None:
+    payload = await BranchHarness(tmp_path).points()
+    assert [point["text"] for point in payload["points"]] == [
+        "first prompt",
+        "looking into it",
+        "first answer",
+        "second prompt",
+        "second answer",
+    ]
+
+
+async def test_branching_before_a_prompt_replays_the_moment_it_was_about_to_be_sent(
+    tmp_path: Path,
+) -> None:
+    """The whole point of the feature: the side quest is gone and the prompt comes back.
+
+    The forked conversation ends at the reply that preceded the prompt, and the
+    prompt's own text is handed back so it can be sent differently rather than
+    retyped from memory.
+    """
+    harness = BranchHarness(tmp_path, body={})
+    points = await harness.points()
+    second_prompt = points["points"][3]
+    harness._request_body = {"from_message_id": second_prompt["message_id"], "mode": "before"}
+
+    response = await harness.run()
+
+    assert response.status == 201
+    body = json.loads(response.body)
+    assert body["seed_text"] == "second prompt"
+    assert body["fork"]["mode"] == "before"
+    texts = [
+        record["message"]["content"]
+        for record in harness.forked_records()
+        if record.get("type") == "user" and isinstance(record["message"]["content"], str)
+    ]
+    assert texts == ["first prompt"]
+
+
+async def test_the_source_pane_is_not_touched_by_a_transcript_fork(tmp_path: Path) -> None:
+    """Nothing is typed, nothing is rolled, and the source file is byte-identical.
+
+    This is the difference from the CLI-mediated branch it replaces, which typed a
+    slash command into a terminal the operator was holding and moved that pane onto a
+    different conversation.
+    """
+    harness = BranchHarness(tmp_path, body={})
+    before = harness.source_path.read_bytes()
+
+    response = await harness.run()
+
+    assert response.status == 201
+    assert harness.source_path.read_bytes() == before
+    assert harness.record.native_session_id == harness.original
+    assert harness.record.agent_run_id == "run-original"
+    # A fork resumes a conversation nothing has ever opened, so the sibling is a new
+    # conversation with its own row rather than an inheritor of the source's run.
+    assert harness.spawned[0]["resume_native_id"] != harness.original
+    assert "adopt_run_id" not in harness.spawned[0]
+
+
+@pytest.mark.parametrize("state", ["working", "awaiting", "crashed", "exited"])
+async def test_a_transcript_fork_does_not_care_what_the_pane_is_doing(
+    tmp_path: Path, state: str
+) -> None:
+    """The readiness gate belonged to typing into a terminal, and there is no typing.
+
+    A pane mid-turn, waiting on an approval, or already exited forks exactly as well
+    as an idle one, because the fork is a file the daemon writes rather than a request
+    the CLI has to be in a state to answer.
+    """
+    harness = BranchHarness(tmp_path, body={})
+    harness.record.state = state
+    harness.session.composer = SimpleNamespace(pending=True)
+
+    response = await harness.run()
+
+    assert response.status == 201
+
+
+async def test_a_point_with_an_unanswered_tool_call_is_refused(tmp_path: Path) -> None:
+    harness = BranchHarness(tmp_path, body={})
+    points = await harness.points()
+    harness._request_body = {"from_message_id": points["points"][1]["message_id"], "mode": "after"}
+
+    response = await harness.run()
+
+    assert response.status == 409
+    assert json.loads(response.body)["code"] == "unanswered_tool_calls"
+    assert harness.spawned == []
+
+
+async def test_a_branch_with_no_point_forks_from_the_end(tmp_path: Path) -> None:
+    """The rail's one-click branch stays one click: no point means the latest one."""
+    harness = BranchHarness(tmp_path, body={})
+
+    response = await harness.run()
+
+    assert response.status == 201
+    fork = json.loads(response.body)["fork"]
+    assert fork["mode"] == "after"
+    assert len(harness.forked_records()) == len(read_records(harness.source_path)) - 1
+
+
+async def test_the_fork_owns_its_sidecar_files(tmp_path: Path) -> None:
+    harness = BranchHarness(tmp_path, body={})
+    response = await harness.run()
+    assert response.status == 201
+    conversation = harness.spawned[0]["resume_native_id"]
+    assert (harness.transcripts / conversation / SIDECAR_NAME).is_file()
+    assert json.loads(response.body)["fork"]["attachments_copied"] == 1
+
+
+async def test_a_branch_records_where_it_was_cut(tmp_path: Path) -> None:
+    """The fork point outlives the request that made it.
+
+    Without the edge, a branch is indistinguishable from two unrelated conversations
+    that happen to share a prefix, and nothing can draw the tree.
+    """
+    harness = BranchHarness(tmp_path, body={})
+    points = await harness.points()
+    chosen = points["points"][2]
+    harness._request_body = {"from_message_id": chosen["message_id"], "mode": "after"}
+
+    await harness.run()
+
+    assert len(harness.lineage.edges) == 1
+    edge = harness.lineage.edges[0]
+    assert edge["parent"] == "run-original"
+    assert edge["relation"] == "branch"
+    assert edge["metadata"]["from_message_id"] == chosen["message_id"]
+    assert edge["metadata"]["mode"] == "after"
+    assert edge["metadata"]["source_conversation_id"] == harness.original
+
+
+async def test_a_sibling_that_never_comes_up_is_removed_and_named(tmp_path: Path) -> None:
+    """A pane that will not stay up is removed and reported, not attached and left grey."""
+    harness = BranchHarness(tmp_path, body={})
+    harness.spawn_states = ["crashed"]
+
+    response = await harness.run()
+
+    assert response.status == 503
+    body = json.loads(response.body)
+    assert body["code"] == "branch_sibling_failed"
+    # A fork resumes a conversation nothing else has ever opened, so there is no
+    # release to race and no attempt for a retry to be further from.
+    assert body["attempts"] == 1
+    assert harness.stopped == ["pane-2"]
+    assert harness.lineage.edges == []
+
+
+async def test_the_branch_event_says_where_the_cut_landed(tmp_path: Path) -> None:
+    harness = BranchHarness(tmp_path, body={})
+    await harness.run()
+    assert [name for name, _ in harness.bus.emitted] == ["session_branched"]
+    payload = harness.bus.emitted[0][1]
+    assert payload["strategy"] == "transcript_fork"
+    assert payload["original"] == harness.original
+    assert payload["mode"] == "after"
+    assert payload["records_written"] > 0
+
+
+async def test_a_harness_that_can_only_fork_from_now_refuses_a_point(tmp_path: Path) -> None:
+    """Silently ignoring the point would present a choice the daemon does not honour."""
+    harness = BranchHarness(tmp_path, body={"from_message_id": "offset:0"})
+    harness.record.backend = "codex"
+    harness.record.native_session_id = "01a00602-e70a-7a01-88e1-2fbebd4300ee"
+    harness.session.agent_lifecycle_id = harness.record.native_session_id
+
+    response = await harness.run()
+
+    assert response.status == 422
+    assert json.loads(response.body)["code"] == "branch_point_unsupported"
+
+
+async def test_a_harness_with_no_points_says_so_rather_than_offering_none(
+    tmp_path: Path,
+) -> None:
+    harness = BranchHarness(tmp_path)
+    harness.record.backend = "codex"
+    harness.record.native_session_id = "01a00602-e70a-7a01-88e1-2fbebd4300ee"
+    harness.session.agent_lifecycle_id = harness.record.native_session_id
+
+    payload = await harness.points()
+
+    assert payload["from_message"] is False
+    assert payload["reason"] == "strategy_has_no_points"
+    assert payload["points"] == []

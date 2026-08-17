@@ -467,11 +467,17 @@ async def test_unique_git_poll_deduplicates_roots(monkeypatch: pytest.MonkeyPatc
 
 
 class _FakeSession:
-    """The three attributes `GitMonitor._poll` touches on a session."""
+    """The attributes `GitMonitor._poll` touches on a session."""
 
-    def __init__(self, cwd: str, attached: bool, git: git_monitor.GitState) -> None:
+    def __init__(
+        self,
+        cwd: str,
+        attached: bool,
+        git: git_monitor.GitState,
+        state: str = "idle",
+    ) -> None:
         self.subscribers = [object()] if attached else []
-        self.record = SimpleNamespace(id=cwd, git=git, git_cwd=cwd)
+        self.record = SimpleNamespace(id=cwd, git=git, git_cwd=cwd, state=state)
         self.published = 0
 
     def publish_update(self) -> None:
@@ -518,6 +524,40 @@ async def test_detached_sessions_are_swept_so_stale_git_state_cannot_outlive_it(
     for _ in range(git_monitor.GitMonitor.DETACHED_SWEEP_EVERY - 1):
         await monitor._poll()
     assert detached.record.git.worktree is None, "the sweep must come back around"
+
+
+@pytest.mark.asyncio
+async def test_an_ended_sessions_git_reading_is_frozen_at_its_death(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every field on `GitState` describes the *checkout*, not the session.
+
+    Following it onward would attribute whatever somebody changed afterwards to a
+    session that could not have made it - and a retained ended pane keeps its
+    subscribers, so without the guard a dead row would poll Git forever.
+    """
+    reads: list[list[str]] = []
+
+    async def fake_read(cwds):  # type: ignore[no-untyped-def]
+        listed = list(cwds)
+        reads.append(listed)
+        fresh = git_monitor.GitReading(
+            git_monitor.GitState(branch="master", worktree=None), git_monitor.GitEvidence()
+        )
+        return {cwd: fresh for cwd in listed}
+
+    monkeypatch.setattr(git_monitor, "read_unique_git_readings", fake_read)
+    at_death = git_monitor.GitState(branch="feature", worktree="swe-mux")
+    ended = _FakeSession("C:/dead", True, at_death, state="exited")
+    cold = _FakeSession("C:/cold", True, at_death, state="crashed")
+    monitor = _monitor([ended, cold])
+
+    # The first tick is a full sweep, so nothing else can be excluding them.
+    await monitor._poll()
+
+    assert reads == [[]], "no checkout is read on behalf of a session with no process"
+    assert ended.record.git.worktree == "swe-mux"
+    assert cold.record.git.worktree == "swe-mux"
 
 
 @pytest.mark.asyncio

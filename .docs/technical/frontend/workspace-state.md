@@ -188,6 +188,10 @@ Both are required.
 `reconcileSessionSnapshots` rebuilds membership from the daemon's list, which still contains the session, so without the first filter any refresh landing mid-kill restores the row.
 `reconcileTerminals` only ever removes leaves, so the second filter is what keeps the leaf gone.
 
+The tombstone became the *only* thing that removes a leaf when ended sessions started keeping their panes.
+The live set handed to `reconcileTerminals` is now every session the daemon still holds, ended and cold ones included, so a session leaves the layout when it leaves the fleet — killed, or dismissed — rather than when it stops running.
+Before that, a session that ended on its own kept its sidebar row and lost its tab in the same instant, and the pruned layout was written back, so the pane showing what it printed was destroyed at exactly the moment somebody wanted to read it (`design/features/session-recovery.md`).
+
 The layout PATCH deliberately waits for the DELETE to succeed, which is the opposite of the ordinary optimistic-write rule and is the point.
 Nothing on screen depends on that write while the tombstone stands, and deferring it means a failed kill has no persisted state to undo: the next refresh finds the session live, restores the row and the leaf, and reports the failure.
 The write re-derives from `layoutValues.current` rather than replaying the snapshot taken before the wait, because a drag may have landed in between and `removeLeaf` on an already-absent ID is a no-op.
