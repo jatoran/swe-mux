@@ -1217,9 +1217,6 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
           <PhoneDnsChecklist />
-          <WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
-            onToggle={enabled=>void toggleWsl(enabled)} onProbe={()=>void probeWsl()}
-            onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} />
         </section>}
 
         {activeTab==='remote'&&<section>
@@ -1241,6 +1238,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
           <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address below.</p>
           <FirewallPanel status={firewall} busy={firewallBusy} message={firewallMessage} onRepair={()=>void repairFirewall()} />
+          <WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
+            onToggle={enabled=>void toggleWsl(enabled)} onProbe={()=>void probeWsl()}
+            onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} />
           <PhoneDnsChecklist />
           <strong>Optional HTTPS with Tailscale Serve</strong>
           <p>{remote?.diagnostic||'Checking the private HTTPS address…'}</p>
