@@ -2,4 +2,4 @@ version = 1
 session_control_grant = "granted"
 spawn_grant = "granted"
 ignore_patterns = [".pytest-codex-demote", ".pytest-tmp-project-refactor", "test-tmp-codex", ".tmp-orca"]
-automations = { declared_vs_verified = true, doc_debt = true, loop_detection = true, provenance_graph = true, raw_store = true, scan_timeline = true, session_control = true, tier0 = true }
+automations = { code_graph = true, declared_vs_verified = true, doc_debt = true, loop_detection = true, provenance_graph = true, raw_store = true, scan_timeline = true, session_control = true, tier0 = true }
