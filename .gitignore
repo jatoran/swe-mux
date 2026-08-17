@@ -76,6 +76,7 @@ _agents-orchestrator/
 .tmp-orca/
 .tmp-omp/
 .tmp-herdr/
+.tmp-cmux/
 .trash/
 
 # === Project-local swe-mux state ===
