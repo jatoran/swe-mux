@@ -18,6 +18,8 @@ import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns }
 import { currentProfile } from './deviceSettings'
 import { enableMobileVoice } from './mobileVoice'
 import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatus, type FirewallStatus } from './remoteConnection'
+import { WslBridgePanel } from './WslBridgePanel'
+import { type WslBridgeStatus } from './wslBridge'
 import { ConnectPhone } from './ConnectPhone'
 import { VoiceLatencyReport } from './VoiceLatencyReport'
 import { WakeWordTester } from './WakeWordTester'
@@ -253,6 +255,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [firewall,setFirewall]=useState<FirewallStatus | null>(null)
   const [firewallBusy,setFirewallBusy]=useState(false)
   const [firewallMessage,setFirewallMessage]=useState('')
+  const [wsl,setWsl]=useState<WslBridgeStatus | null>(null)
+  // Which WSL action is in flight: a distro name for an install, 'firewall' for
+  // the rule. One value rather than a flag per button, so two cannot run at once.
+  const [wslBusy,setWslBusy]=useState('')
+  const [wslProbing,setWslProbing]=useState(false)
+  const [wslMessage,setWslMessage]=useState('')
   const [diagnosticsBusy,setDiagnosticsBusy]=useState(false)
   const [diagnosticsMessage,setDiagnosticsMessage]=useState('')
   const [diagnosticsText,setDiagnosticsText]=useState('')
@@ -282,6 +290,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useEffect(() => {
     api<RemoteStatus>('GET','/api/remote/status').then(setRemote).catch(()=>setRemote(null))
     api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall).catch(()=>setFirewall(null))
+    // Without `probe`, so opening Settings never starts a stopped distribution.
+    api<WslBridgeStatus>('GET','/api/wsl/bridge').then(setWsl).catch(()=>setWsl(null))
     api<{prerequisites:Prerequisite[]}>('GET','/api/diagnostics/prerequisites').then(p=>setPrerequisites(p.prerequisites)).catch(()=>setPrerequisites(null))
     api<VoiceStatusInfo>('GET','/api/voice').then(setVoiceInfo).catch(()=>setVoiceInfo(null))
     api<LatencyReportPayload>('GET','/api/voice/stt-latency').then(setLatencyReport).catch(()=>setLatencyReport(null))
@@ -417,6 +427,57 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       }
     }catch(cause){setFirewallMessage(cause instanceof Error?cause.message:String(cause))}
     finally{setFirewallBusy(false)}
+  }
+
+  const refreshWsl=async(probe:boolean)=>{
+    try{setWsl(await api<WslBridgeStatus>('GET',`/api/wsl/bridge${probe?'?probe=1':''}`))}
+    catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
+  }
+
+  const probeWsl=async()=>{
+    if(wslProbing)return
+    setWslProbing(true);setWslMessage('Checking distributions; a stopped one is being started.')
+    try{await refreshWsl(true);setWslMessage('')}
+    finally{setWslProbing(false)}
+  }
+
+  const toggleWsl=async(enabled:boolean)=>{
+    // Written straight through rather than into the settings draft: this is a
+    // one-switch decision with its own explanation, and burying it in a Save
+    // button would leave the panel's other actions acting on a state the daemon
+    // does not have yet.
+    setWslMessage(enabled?'Enabling…':'Disabling…')
+    try{
+      await api('PUT','/api/config',{values:{wsl_bridge_enabled:enabled}})
+      await refreshWsl(false)
+      setWslMessage(enabled?'Enabled. Restart the daemon so it binds the WSL adapter.':'Disabled.')
+    }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
+  }
+
+  const installWslBridge=async(distro:string)=>{
+    if(wslBusy)return
+    setWslBusy(distro);setWslMessage(`Installing the bridge into ${distro}…`)
+    try{
+      // Raw fetch for the user-gesture header the daemon requires before it will
+      // write into a distribution.
+      const response=await fetch('/api/wsl/bridge/install',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'wsl-bridge-install'},body:JSON.stringify({distro})})
+      const result=await response.json().catch(()=>({}))
+      if(response.ok&&result.ok){await refreshWsl(true);setWslMessage(`Installed the bridge into ${distro}.`)}
+      else setWslMessage(result.reason||`The bridge could not be installed into ${distro}.`)
+    }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
+    finally{setWslBusy('')}
+  }
+
+  const repairWslFirewall=async()=>{
+    if(wslBusy)return
+    setWslBusy('firewall');setWslMessage('Requesting an elevated firewall rule; approve the Windows prompt.')
+    try{
+      const response=await fetch('/api/wsl/bridge/firewall/repair',{method:'POST',headers:{'Content-Type':'application/json','X-Mux-User-Gesture':'wsl-firewall-repair'}})
+      const result=await response.json().catch(()=>({}))
+      if(response.ok&&result.ok){await refreshWsl(true);setWslMessage('Added an inbound rule scoped to the WSL subnet.')}
+      else setWslMessage(result.reason==='cancelled'?'The Windows elevation prompt was declined; no rule was changed.':result.reason==='no_wsl_adapter'?'No WSL virtual adapter was found, so there is no subnet to scope a rule to.':result.reason==='unsupported'?'Firewall changes are only available in the packaged Windows app.':'The firewall rule could not be added.')
+    }catch(cause){setWslMessage(cause instanceof Error?cause.message:String(cause))}
+    finally{setWslBusy('')}
   }
 
   const exportDiagnostics=async()=>{
@@ -1156,6 +1217,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile voice':'Enable secure mobile voice'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure mobile voice</a>}</div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
           <PhoneDnsChecklist />
+          <WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
+            onToggle={enabled=>void toggleWsl(enabled)} onProbe={()=>void probeWsl()}
+            onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} />
         </section>}
 
         {activeTab==='remote'&&<section>

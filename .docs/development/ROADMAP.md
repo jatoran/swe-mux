@@ -2560,6 +2560,36 @@ created and confirmed present on this host.
 `reasons`, and `mux doctor` reports one row per distribution - because a bridge that is
 merely quiet is indistinguishable from one that is working.
 
+**A setup surface, because machinery nobody can reach is not a feature.** The first pass left
+`install_bridge` and `build_wsl_repair_script` written, tested and *called by nothing*: the
+only way to use the bridge was to hand-edit `config.toml`, restart, read a `mux doctor`
+sentence, and then write your own firewall rule. That is the same defect this phase spent its
+time removing - something that looks like a capability and is not - so it is closed here.
+
+`GET /api/wsl/bridge` answers **without** `wsl_bridge_enabled` being on, which is the whole
+point: a user cannot be asked to turn something on before anything will tell them whether it
+would work. It reports the adapter address and subnet, the rule name, `restart_required` (the
+flag changes which sockets the daemon binds, and that only happens at startup - previously
+silent), and one row per distribution. `?probe=1` inspects each distribution and is opt-in
+because inspecting one *starts* it, so it is a button rather than something opening Settings
+does. `POST /api/wsl/bridge/install` and `POST /api/wsl/bridge/firewall/repair` each require
+their own gesture header, for the reason the tailnet repair does: one writes into the user's
+distribution, the other raises a UAC prompt, and no background poll may reach either. The
+repair refuses with `no_wsl_adapter` rather than guessing a scope, because an invented scope
+would silently widen the rule past what the user agreed to.
+
+`WslBridgePanel.tsx` renders it beside the firewall panel it mirrors, and `wslBridge.ts` owns
+the blocker *ordering* - the order is the advice, so the firewall is named before the install,
+because an install that could never phone home fixes nothing.
+
+**The doctor check was fixed at the same time, and it had the same shape of bug.** It returned
+nothing unless the bridge was already enabled, so it was silent in exactly the situation it
+exists for: a host with WSL and a native agent inside it, where the user has no idea the bridge
+is possible. It now reports one row per distribution when the feature is off - as `ok`/`info`
+with "enable it in Settings", because an offer is not a fault - while still reporting a real
+blocker as `unavailable`. What it still does not do when off is *probe*, since a diagnostics
+read must not spend seconds booting a distribution nobody asked about.
+
 Outstanding for this item: an end-to-end hook from a bridged agent through the firewall rule
 to a live daemon. It needs the daemon actually binding the WSL adapter, which needs the
 frozen-app redeploy that is deliberately deferred (see the supervisor note below), so it is

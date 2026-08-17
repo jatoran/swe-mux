@@ -291,8 +291,13 @@ from .windows_firewall import (
     firewall_supported,
     inspect_firewall,
     repair_firewall,
+    repair_wsl_firewall,
 )
 from .worktree_setup import WorktreeSetupResult, run_worktree_setup
+from .wsl_bridge import WslBridgeError, wsl_adapter_subnet
+from .wsl_bridge import clear_status_cache as clear_wsl_status_cache
+from .wsl_bridge import install_bridge as install_wsl_bridge
+from .wsl_bridge import setup_status as wsl_setup_status
 
 log = logging.getLogger(__name__)
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -646,6 +651,9 @@ def create_app(
             web.post("/api/remote/mobile-voice/enable", enable_mobile_voice),
             web.get("/api/remote/firewall", firewall_status),
             web.post("/api/remote/firewall/repair", firewall_repair),
+            web.get("/api/wsl/bridge", wsl_bridge_status),
+            web.post("/api/wsl/bridge/install", wsl_bridge_install),
+            web.post("/api/wsl/bridge/firewall/repair", wsl_bridge_firewall_repair),
             web.get("/api/diagnostics/prerequisites", prerequisites_status),
             web.get("/api/config", get_config),
             web.get("/api/settings/bundle", settings_bundle),
@@ -2227,6 +2235,69 @@ async def firewall_repair(request: web.Request) -> web.Response:
     if not firewall_supported():
         return json_response({"ok": False, "reason": "unsupported"}, 409)
     result = await repair_firewall(config.port)
+    return json_response(result, 200 if result.get("ok") else 409)
+
+
+async def wsl_bridge_status(request: web.Request) -> web.Response:
+    """What the WSL bridge would need on this host, answerable before enabling it.
+
+    Deliberately does not require `wsl_bridge_enabled`. A user cannot be asked to
+    turn something on before anything will tell them whether it would work, and
+    the shipped diagnostic had exactly that shape - silent until after the decision
+    it existed to inform.
+
+    `?probe=1` inspects each distribution, which *starts* a stopped one and costs
+    seconds. Off by default so opening a settings page never does that unasked.
+    """
+    config: Config = request.app["config"]
+    probe = request.query.get("probe") in {"1", "true", "yes"}
+    payload = await asyncio.to_thread(
+        wsl_setup_status,
+        daemon_port=config.port,
+        enabled=bool(getattr(config, "wsl_bridge_enabled", False)),
+        probe=probe,
+    )
+    return json_response(payload)
+
+
+async def wsl_bridge_install(request: web.Request) -> web.Response:
+    """Materialize the distro-side bridge into one distribution.
+
+    A write into the user's distribution, so it takes an explicit gesture header
+    for the same reason the firewall repair does: nothing a background poll can
+    trigger should modify a machine.
+    """
+    if request.headers.get("X-Mux-User-Gesture") != "wsl-bridge-install":
+        return json_response(
+            {"error": "installing the bridge requires an explicit user action"}, 400
+        )
+    body = await request.json()
+    distro = str(body.get("distro") or "").strip()
+    if not distro:
+        return json_response({"error": "distro is required"}, 400)
+    config: Config = request.app["config"]
+    try:
+        status = await asyncio.to_thread(install_wsl_bridge, distro)
+    except WslBridgeError as exc:
+        return json_response({"ok": False, "reason": str(exc)}, 409)
+    # The freshly written bridge invalidates whatever the status cache held.
+    await asyncio.to_thread(clear_wsl_status_cache)
+    del config
+    return json_response({"ok": True, "bridge": status.as_dict()})
+
+
+async def wsl_bridge_firewall_repair(request: web.Request) -> web.Response:
+    """Elevated: add the inbound rule a bridged agent needs to reach the daemon.
+
+    Separate from the tailnet repair rather than folded into it, because the two
+    scopes are different and so is the consent: enabling the WSL bridge is not
+    agreement to phone access, or the reverse.
+    """
+    config: Config = request.app["config"]
+    if request.headers.get("X-Mux-User-Gesture") != "wsl-firewall-repair":
+        return json_response({"error": "firewall repair requires an explicit user action"}, 400)
+    subnet = await asyncio.to_thread(wsl_adapter_subnet)
+    result = await repair_wsl_firewall(config.port, subnet)
     return json_response(result, 200 if result.get("ok") else 409)
 
 
@@ -5414,23 +5485,60 @@ async def get_doctor_report(request: web.Request) -> web.Response:
 
 
 def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:
-    """Bridge status per WSL distribution, or nothing when the bridge is off.
+    """Bridge status per WSL distribution, including when the bridge is switched off.
 
-    Off the opt-in this returns an empty list rather than probing: starting a
-    stopped distribution takes seconds, and doing it from a diagnostics read the
-    user did not ask for would be a surprise with a visible cost.
+    The first version returned nothing unless `wsl_bridge_enabled` was already on,
+    which made the diagnostic silent in exactly the situation it exists for: a host
+    with WSL and a native agent in it, where the user has no idea the bridge is
+    possible. A check that only speaks after you have already found the feature is
+    not a check.
+
+    What stays true off the opt-in is that it does not *probe*. Inspecting a
+    distribution starts it, and a diagnostics read must not spend seconds booting
+    something the user did not ask about. So an off host reports one row per
+    distribution saying the bridge is available to enable, and a running
+    distribution is still inspected cheaply because it costs nothing extra.
     """
-    if not getattr(config, "wsl_bridge_enabled", False):
-        return []
-    from .profiles import _wsl_distros
-    from .wsl_bridge import cached_bridge_status, wsl_available
+    from .wsl_bridge import cached_bridge_status, list_distros, running_distros, wsl_available
 
     if not wsl_available():
         return []
-    return [
-        cached_bridge_status(distro, daemon_port=config.port).as_dict()
-        for distro in _wsl_distros()
-    ]
+    enabled = bool(getattr(config, "wsl_bridge_enabled", False))
+    running = running_distros()
+    rows: list[dict[str, Any]] = []
+    for distro in list_distros():
+        if enabled or distro in running:
+            # Reachability is only meaningful once the daemon is actually meant to
+            # be listening, so the port is passed only when the feature is on.
+            row = cached_bridge_status(
+                distro, daemon_port=config.port if enabled else None
+            ).as_dict()
+            # Stamped on every row, not just the ones skipped below: a running
+            # distribution on a host with the bridge switched off still has real
+            # findings, and without this the reader cannot tell whether "not
+            # available" means broken or simply not turned on.
+            row["enabled"] = enabled
+            if not enabled:
+                existing = row.get("reasons")
+                reasons = [str(item) for item in existing] if isinstance(existing, list) else []
+                row["reasons"] = ["the WSL agent bridge is switched off", *reasons]
+            rows.append(row)
+            continue
+        rows.append(
+            {
+                "distro": distro,
+                "available": False,
+                "enabled": False,
+                "harnesses": [],
+                "installed": False,
+                "reachable": None,
+                "reasons": [
+                    "the WSL agent bridge is off; enable it in Settings to run an agent "
+                    f"natively inside {distro} and have mux observe it"
+                ],
+            }
+        )
+    return rows
 
 
 async def patch_session(request: web.Request) -> web.Response:

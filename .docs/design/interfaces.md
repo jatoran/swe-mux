@@ -935,7 +935,30 @@ GET  /remote/status
 POST /remote/mobile-voice/enable   X-Mux-User-Gesture: mobile-voice-setup
 GET  /api/remote/firewall
 POST /api/remote/firewall/repair   X-Mux-User-Gesture: firewall-repair
+GET  /api/wsl/bridge                                   ?probe=1
+POST /api/wsl/bridge/install              X-Mux-User-Gesture: wsl-bridge-install
+POST /api/wsl/bridge/firewall/repair      X-Mux-User-Gesture: wsl-firewall-repair
 ```
+
+`wsl/bridge` is the setup surface for the WSL agent bridge, and it answers **without**
+`wsl_bridge_enabled` being on. That is the point rather than a convenience: a user cannot be
+asked to turn something on before anything will tell them whether it would work, and the
+first version of this diagnostic stayed silent until after the decision it existed to inform.
+It reports `supported`, `enabled`, the WSL adapter address and subnet, the firewall rule name,
+`restart_required` (the flag changes which sockets the daemon binds, and that only happens at
+startup), and one entry per distribution with whether it is running.
+
+`?probe=1` additionally inspects each distribution and attaches its `bridge` status. Off by
+default because inspecting a distribution *starts* it, which takes seconds - so it is a button
+in Settings rather than something opening the page does.
+
+Both mutating calls require their own gesture header, for the same reason the firewall repair
+does: one writes into the user's distribution and the other raises a UAC prompt, and neither
+may be reachable by a background poll. The WSL firewall rule is separate from the tailnet one
+by design - the scopes differ (the WSL virtual subnet versus `100.64.0.0/10`), and enabling
+the bridge is not consent to phone access, or the reverse. It refuses with `no_wsl_adapter`
+rather than guessing a scope when the adapter cannot be read, because an invented scope would
+silently widen the rule beyond what the user agreed to.
 
 The mobile-voice request is accepted only while the Tailscale listener is enabled and only from
 the explicit Talk/Settings action. It returns a secure URL only when the daemon has a verified

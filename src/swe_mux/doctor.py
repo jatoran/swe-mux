@@ -590,13 +590,35 @@ def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     a user to notice, so the only place the truth can appear is a diagnostic that
     goes looking.
 
-    Severity is `optional`: a host that has not opted into the bridge is not
-    broken, and neither is one whose distributions have no agent installed.
+    Severity is `optional` throughout: a host that has not opted into the bridge is
+    not broken, and neither is one whose distributions have no agent installed. What
+    the rows separate is *why* it is not working, because the three answers have
+    three different next actions - turn it on, install the bridge, or fix
+    reachability - and collapsing them into one "unavailable" tells a reader
+    nothing they can act on.
     """
     checks: list[dict[str, Any]] = []
     for bridge in bridges:
         distro = str(bridge.get("distro") or "?")
         reasons = [str(item) for item in (bridge.get("reasons") or [])]
+        if bridge.get("enabled") is False:
+            # The feature is off, which is the default and not a fault. Reported as
+            # `info` rather than `unavailable` so it reads as an offer rather than a
+            # problem - and reported at all because a user with WSL and an agent in
+            # it has no other way to learn the bridge exists.
+            checks.append(
+                _check(
+                    id=f"wsl_bridge:{distro}",
+                    category="wsl",
+                    title=f"WSL bridge ({distro})",
+                    status="ok",
+                    severity="info",
+                    detail="; ".join(reasons)
+                    or f"the WSL agent bridge is available for {distro} and is switched off",
+                    remedy="enable the WSL agent bridge in Settings",
+                )
+            )
+            continue
         if bridge.get("available") and bridge.get("installed"):
             checks.append(
                 _check(

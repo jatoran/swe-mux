@@ -54,6 +54,7 @@ from pathlib import Path, PurePosixPath
 from .harness import agent_harnesses, descriptor
 from .host_platform import IS_WINDOWS
 from .subprocess_flags import background_creation_flags
+from .windows_firewall import WSL_FIREWALL_RULE_NAME
 
 log = logging.getLogger(__name__)
 
@@ -463,6 +464,110 @@ def _bridge_installed(distro: str, home: str) -> bool:
         distro, f"test -f {_sh_quote(marker)} && echo yes", timeout=_WSL_QUICK_TIMEOUT_SECONDS
     )
     return result is not None and result.stdout.strip() == "yes"
+
+
+def list_distros() -> list[str]:
+    """Every installed distribution, excluding Docker's internal ones.
+
+    Shares the filter with `profiles._wsl_distros` rather than reimplementing it,
+    because a `docker-desktop` entry is an implementation detail of Docker and
+    offering it as a place to run an agent would be noise at best.
+    """
+    from .profiles import _wsl_distros
+
+    return _wsl_distros()
+
+
+def running_distros() -> set[str]:
+    """Which distributions are already running.
+
+    Worth knowing before probing: inspecting a stopped distribution *starts* it,
+    which takes seconds and is a surprise if the user only opened a settings page.
+    """
+    executable = shutil.which("wsl.exe")
+    if not executable:
+        return set()
+    try:
+        result = subprocess.run(
+            [executable, "--list", "--running", "--quiet"],
+            check=False,
+            capture_output=True,
+            timeout=_WSL_QUICK_TIMEOUT_SECONDS,
+            creationflags=background_creation_flags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    raw = result.stdout
+    text = raw.decode("utf-16-le", "replace") if b"\x00" in raw else raw.decode(errors="replace")
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def setup_status(
+    *, daemon_port: int, enabled: bool, probe: bool = False
+) -> dict[str, object]:
+    """Everything the setup surface needs to say what is missing and what to do.
+
+    Answerable **without** the feature being enabled, which is the whole point: a
+    user cannot be asked to turn something on before anything will tell them
+    whether it would work. The shipped diagnostic had exactly that shape and was
+    silent until after the decision it was supposed to inform.
+
+    `probe` is opt-in because inspecting a distribution starts it. The cheap call
+    lists what exists and what is already running; the probing call answers whether
+    each one can actually host a bridged agent.
+    """
+    if not wsl_available():
+        return {
+            "supported": False,
+            "enabled": enabled,
+            "reason": "wsl.exe is not available on this host",
+            "distros": [],
+        }
+    running = running_distros()
+    adapter = wsl_adapter_address()
+    subnet = wsl_adapter_subnet()
+    distros: list[dict[str, object]] = []
+    for name in list_distros():
+        entry: dict[str, object] = {"name": name, "running": name in running}
+        if probe:
+            entry["bridge"] = bridge_status(
+                name, daemon_port=daemon_port if enabled else None
+            ).as_dict()
+        distros.append(entry)
+    return {
+        "supported": True,
+        "enabled": enabled,
+        # The address the daemon must bind for a bridged agent to reach it. None
+        # under mirrored networking, where loopback already works from inside.
+        "adapter_address": adapter,
+        "adapter_subnet": subnet,
+        "daemon_port": daemon_port,
+        # Enabling the flag changes which sockets the daemon binds, and that only
+        # happens at startup. Saying so is the difference between "I turned it on
+        # and nothing happened" and a working bridge.
+        "restart_required": enabled and not _listening_on(adapter, daemon_port),
+        "firewall_rule": WSL_FIREWALL_RULE_NAME,
+        "distros": distros,
+    }
+
+
+def _listening_on(address: str | None, port: int) -> bool:
+    """Whether this daemon already answers on ``address``.
+
+    Asked from the Windows side, so it says whether the *listener* exists - not
+    whether a distribution can reach it, which the firewall also governs. The two
+    are reported separately because the fixes are different: one is a restart, the
+    other is a rule.
+    """
+    if not address:
+        return False
+    import socket
+
+    try:
+        with socket.create_connection((address, port), timeout=1.5):
+            return True
+    except OSError:
+        return False
 
 
 def install_bridge(distro: str) -> BridgeStatus:

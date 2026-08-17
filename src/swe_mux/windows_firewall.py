@@ -430,6 +430,46 @@ async def inspect_firewall(
     return interpret_inspection(port, program, parsed, serve_active=serve_active)
 
 
+async def repair_wsl_firewall(
+    port: int | None,
+    remote_subnet: str | None,
+    *,
+    program_path: str | None = None,
+    runner: PowerShellRunner | None = None,
+    timeout: float = ELEVATION_TIMEOUT_SECONDS,  # noqa: ASYNC109
+) -> dict[str, object]:
+    """Add the inbound Allow rule a bridged WSL agent needs (elevated).
+
+    Deliberately the same shape and the same elevation path as `repair_firewall`,
+    down to the return contract, so the two panels behave identically and a caller
+    cannot learn one and be surprised by the other.
+
+    `remote_subnet` is required rather than defaulted: the rule must be scoped to
+    the WSL adapter's own subnet, and inventing a scope when it cannot be read
+    would silently widen it to something the user never agreed to.
+    """
+    if not firewall_supported() or port is None:
+        return {"ok": False, "reason": "unsupported"}
+    if not remote_subnet:
+        return {"ok": False, "reason": "no_wsl_adapter"}
+    program = program_path or firewall_program_path()
+    run = runner or _run_powershell
+    inner = build_wsl_repair_script(port, program, remote_subnet)
+    outer = build_elevation_script(_windows_powershell_path(), _encode_powershell(inner))
+    try:
+        raw = await run(outer, timeout)
+        result = json.loads(raw.strip())
+    except (OSError, TimeoutError, ValueError, RuntimeError):
+        return {"ok": False, "reason": "failed"}
+    if not isinstance(result, dict):
+        return {"ok": False, "reason": "failed"}
+    if not result.get("launched") and result.get("nativeErrorCode") == _UAC_CANCELLED_ERROR:
+        return {"ok": False, "reason": "cancelled"}
+    if result.get("launched") and result.get("exitCode") == 0:
+        return {"ok": True, "reason": None}
+    return {"ok": False, "reason": "failed"}
+
+
 async def repair_firewall(
     port: int | None,
     *,
