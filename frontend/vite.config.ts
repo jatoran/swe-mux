@@ -33,6 +33,12 @@ function uiBuildIdentity(): Plugin {
 
 export default defineConfig({
   plugins: [preact(), uiBuildIdentity()],
+  // Dev-server only, and load-bearing for the renderer suite. The Change Map's layout
+  // runs in a module worker, so its dependency is discovered at *runtime* rather than
+  // by the entry scan — and vite answers a newly discovered dependency with a full
+  // page reload. That reload lands mid-test, wiping the page state a spec has already
+  // set up, and reads as a random failure with no relation to the change under test.
+  optimizeDeps: { include: ['sigma', 'graphology', 'graphology-layout-forceatlas2'] },
   server: { proxy: { '/api': 'http://127.0.0.1:8765', '/pty': { target: 'ws://127.0.0.1:8765', ws: true }, '/events': { target: 'ws://127.0.0.1:8765', ws: true } } },
   build: { outDir: '../src/swe_mux/static', emptyOutDir: true },
 })

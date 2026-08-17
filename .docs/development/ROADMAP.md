@@ -2384,6 +2384,42 @@ account for 5,511 of the 5,662 javascript symbols (two of them truncated), inclu
 vendored ONNX runtime. Minified identifiers are noise in symbol lookup and inflate blast
 radius, so build output should be excluded from graph ingestion the way it is from git.
 
+### Phase 7.9 follow-up — the change map made readable and navigable
+
+Three changes to the Surface 3 pane and its endpoint, prompted by scratchpad scripts appearing
+on the map as isolated dots. Details in `design/features/code-graph.md`; the endpoint contract is
+in `design/interfaces.md`.
+
+- [x] **Seeds obey the graph's own admission rules.** The endpoint filtered writes on file
+  extension alone while the engine additionally requires a path inside the checkout and outside
+  generated/vendored/hidden directories — so the map drew seeds the graph is structurally
+  incapable of ever linking. The drop is counted per distinct file and stated
+  (`excluded: {outside_root, unindexable}`, `empty_reason: "excluded"`), because a file the reader
+  knows they changed must not vanish silently. (`tests/test_change_map_endpoint.py`)
+- [x] **Unify re-anchors against each session's own checkout.** Sibling worktree sessions record
+  absolute paths under their own root, which the requesting session's root cannot strip; without
+  this the new filter would have dropped an entire session from the unified map. Candidate roots
+  are the requesting session's followed by each contributing session's `project_root` — no git
+  call on the hot path. (`tests/test_change_map_endpoint.py`)
+- [x] **Nodes carry an openable path.** Graph identities are casefolded and are not filesystem
+  paths: a case-sensitive host cannot open one, and a case-insensitive one opens it under a
+  second colliding pane identity. `resolve_display_paths` recovers real casing by directory
+  listing (never `stat`, which succeeds on the wrong case on Windows), and `worktree` names the
+  checkout it is relative to. A vanished file carries no `display_path` and the pane's button is
+  disabled rather than dead. (`tests/test_code_graph.py`,
+  `tests/test_change_map_endpoint.py`)
+- [x] **Hover and selection highlight a node's neighbourhood**, applied through Sigma's per-frame
+  reducers with the state in refs, so a hover is one repaint rather than a Preact render that
+  would re-seed the graph on every pointer move. The mobile list, which has no picture, spells the
+  neighbours out instead. (`frontend/test/changeMap.test.ts`,
+  `frontend/test/renderer/change-map-layout.spec.ts`, which drives the real canvas and reads back
+  Sigma's resolved display data.)
+
+One incidental fix: `vite.config.ts` now pre-bundles `sigma`, `graphology`, and
+`graphology-layout-forceatlas2`. The layout worker's dependency was discovered at runtime, and
+vite answers a newly discovered dependency with a full page reload that lands mid-test and reads
+as an unrelated random failure across the renderer suite.
+
 ## Phase 7.10 — Findings surface: annotation filters, the doc_debt tool, and the Insight tab
 
 The deterministic consumers (Phase 3.7) already produce findings as `automation_annotations` — loop, declared-vs-verified, doc-debt, provenance — but nothing surfaces them scoped and readable to the human, and only some are reachable by an agent.

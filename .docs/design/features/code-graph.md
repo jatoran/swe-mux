@@ -66,6 +66,34 @@ These are written as annotations only, never a PTY write, and render in the Phas
 - The **unify** toggle widens to the union of every session's edits since the baseline, colouring each session a distinct hue: the multi-session and multi-worktree change map the fact attribution makes possible.
 - `available` is false with a typed `disabled_reason` (`unsupported`, `no_project`, `automation_disabled`) rather than a fake empty graph.
 
+**A seed must be a file the graph could index.**
+The endpoint applies the engine's own admission rules to the write facts — inside the Project checkout (`is_project_relative`) and not under a generated, vendored, or hidden directory (`is_indexable_path`) — because the graph only ever contains files that pass both.
+A seed that fails either can never acquire an edge, never show a blast radius, and never be opened; drawing it anyway is what put scratchpad and temp-directory scripts on the map as permanently isolated dots.
+The omission is stated rather than silently applied: `excluded: {outside_root, unindexable}` counts the distinct files dropped, and a map with nothing left returns `empty_reason: "excluded"` instead of the misleading `"no_edits"`.
+
+**Unify re-anchors against each session's own checkout.**
+Sessions in one Project do not share a working tree, and a sibling worktree's writes are recorded as absolute paths under *its* root, which the requesting session's root cannot strip.
+Without re-anchoring, every one of them reads as outside-root and the whole session disappears from the unified map.
+The candidate roots are the requesting session's root followed by the `project_root` of every session that contributed a write; the first that yields a project-relative identity wins.
+
+**`path` is an identity, not a filesystem path; `display_path` is the openable one.**
+Every graph path is casefolded by `normalize_target`, which is what makes cross-tool comparison work and what makes it unusable for opening a file: a case-sensitive host cannot open `frontend/src/changemappane.tsx` at all, and a case-insensitive one opens it under a second, colliding pane identity — two editors and two save revisions on one file.
+`resolve_display_paths` recovers the real casing by listing each directory (never by `stat`, which succeeds on the wrong case on Windows and would silently keep it), memoised to one `scandir` per distinct directory per request.
+A node whose file no longer exists carries no `display_path` and the pane offers a disabled button rather than a dead link.
+The payload also names the checkout those paths are relative to: `worktree` is the session's own root when it differs from the Project root, so the client opens the worktree's copy rather than the primary checkout's.
+
+### Reading the map
+
+The pane is a drawer tab and a poppable workspace pane, drawn two ways: Sigma over graphology on desktop, and the same three roles as lists on mobile, where a WebGL canvas strands on the pixel ratio and a force layout is unreadable at 380px anyway.
+
+- **Focus.** Hovering a node previews its neighbourhood; clicking pins it until the node is clicked again, the stage is clicked, or the detail card is cleared.
+  A hover takes precedence while it lasts and falls back to the selection on leave, so the pinned highlight survives the pointer crossing the pane.
+  Everything outside the focused node's undirected neighbour set is dimmed by mixing its colour toward the pane background and dropping its label; only edges *incident to the focused node* light up, because an edge between two of its neighbours is not a link the focused file has.
+  The state lives in refs and is applied by Sigma's per-frame `nodeReducer`/`edgeReducer`, so a hover costs one repaint rather than a Preact render that would re-seed the graph on every pointer move.
+- **Open in a pane.** A selected node opens as an ordinary file pane, always through `display_path` and through `worktree` when the map names one.
+  The button is disabled, never hidden, when the file no longer exists — an absent path is information, not a reason to make the control vanish.
+- **Neighbours on mobile.** The list projection has no picture, so the detail card spells out what the selected file links to, ordered by role then path, each row selecting that file in turn.
+
 ## Additional derivations (same substrate)
 
 - Dead-code / orphan, import-cycle, and god-node detection ride the same graph as ordinary annotations (Surface 2).
@@ -93,7 +121,7 @@ automations = { raw_store = true, tier0 = true, code_graph = true }
 - Change-map endpoint: `src/swe_mux/server.py` (`session_change_map`)
 - Registry entry: `src/swe_mux/automation_registry.py`
 - Packaging: `packaging/swe_mux.spec`
-- Frontend change map: `frontend/src/ChangeMapPane.tsx`, `frontend/src/changeMapLayout.worker.ts`
+- Frontend change map: `frontend/src/ChangeMapPane.tsx`, `frontend/src/changeMap.ts`, `frontend/src/changeMapLayout.worker.ts`
 - Tests: `tests/test_code_graph.py`, `tests/test_code_graph_detectors.py`, `tests/test_mcp_code_graph.py`, `tests/test_change_map_endpoint.py`
 
 ## Relates to

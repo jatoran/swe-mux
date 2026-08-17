@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { api } from './api'
 import { MOBILE_QUERY } from './deviceSettings'
 import {
   DEFAULT_ROLE_PALETTE, HOP_CHOICES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_ORDER,
-  clampHops, disabledNote, edgeCounts, graphColor, groupNodesByRole, layoutRequest,
-  nodeColor, shortPath, usablePositions,
-  type ChangeMap, type LayoutResult, type RolePalette,
+  adjacency, clampHops, disabledNote, edgeCounts, excludedNote, focusedPath, graphColor,
+  groupNodesByRole, layoutRequest, mixHex, neighborNodes, neighborhood, nodeColor,
+  shortPath, usablePositions,
+  type ChangeMap, type ChangeMapNode, type LayoutResult, type RolePalette,
 } from './changeMap'
 import type { Project, Session } from './types'
 
@@ -33,6 +34,10 @@ type Props = {
   project?: Project
   /** Drawer only: pop this map out into its own workspace pane. */
   onPopOut?: () => void
+  /** Open a mapped file as a workspace pane. `path` is a node's `display_path`
+   *  (true-cased), and `worktree` is the map's checkout when it is not the
+   *  Project root — a worktree session's files are not in the primary checkout. */
+  onOpenFile?: (path: string, worktree: string | null) => void
 }
 
 const isMobile = () =>
@@ -52,16 +57,26 @@ function readPalette(): RolePalette {
   }
 }
 
-function readChrome(): { text: string; line: string } {
-  if (typeof document === 'undefined') return { text: '#e7eaf0', line: '#252b34' }
+type Chrome = { text: string; line: string; bg: string }
+
+function readChrome(): Chrome {
+  const fallback: Chrome = { text: '#e7eaf0', line: '#252b34', bg: '#090b0e' }
+  if (typeof document === 'undefined') return fallback
   const style = getComputedStyle(document.documentElement)
   return {
-    text: graphColor(style.getPropertyValue('--text'), '#e7eaf0'),
-    line: graphColor(style.getPropertyValue('--line'), '#252b34'),
+    text: graphColor(style.getPropertyValue('--text'), fallback.text),
+    line: graphColor(style.getPropertyValue('--line'), fallback.line),
+    bg: graphColor(style.getPropertyValue('--bg'), fallback.bg),
   }
 }
 
-export function ChangeMapPane({ session, project, onPopOut }: Props) {
+/** How far an out-of-focus node or edge is blended into the background. High
+ *  enough that the highlighted neighbourhood reads at a glance, low enough that
+ *  the rest of the map stays visible as context rather than disappearing. */
+const DIM_NODE = 0.82
+const DIM_EDGE = 0.55
+
+export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props) {
   const [data, setData] = useState<ChangeMap | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -83,6 +98,16 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
   const workerRef = useRef<Worker | null>(null)
   const workerFailedRef = useRef(false)
   const requestIdRef = useRef(0)
+
+  // The highlight lives in refs, not state. Sigma's reducers run per frame and read
+  // whatever these hold, so a hover costs one WebGL repaint instead of re-rendering
+  // the whole Preact subtree — which, on this pane, would re-run the data effect and
+  // re-seed the graph on every pointer move across the canvas.
+  const hoverRef = useRef<string | null>(null)
+  const selectedRef = useRef<string | null>(null)
+  const focusRef = useRef<{ path: string; nodes: Set<string> } | null>(null)
+  const linksRef = useRef<Map<string, Set<string>>>(new Map())
+  const chromeRef = useRef<Chrome>(readChrome())
 
   const sid = session?.id || ''
   const run = session?.agent_run_id || ''
@@ -134,6 +159,32 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
   const edges = data?.edges || []
   const showGraph = !mobile && !!data?.available && nodes.length > 0
 
+  // Undirected links, rebuilt only when the map itself changes. Both projections
+  // read it: the graph's highlight through `linksRef`, and the mobile detail card's
+  // neighbour list directly.
+  const links = useMemo(() => adjacency(edges), [data])
+  useEffect(() => { linksRef.current = links }, [links])
+
+  /** Recompute what the reducers draw and repaint once.
+   *
+   *  A hover previews on top of the selection and falls back to it on leave, so
+   *  the pinned highlight survives the pointer crossing the pane. `schedule`
+   *  coalesces to the next animation frame, which is what keeps dragging the
+   *  pointer across a dense cluster from queueing one full repaint per node. */
+  const applyFocus = () => {
+    const path = focusedPath(hoverRef.current, selectedRef.current)
+    const linked = neighborhood(path, linksRef.current)
+    focusRef.current = path && linked ? { path, nodes: linked } : null
+    rendererRef.current?.refresh({ schedule: true })
+  }
+  // The selection is state (it drives the detail card) and the reducers are not
+  // re-run by a Preact render, so the two are joined here rather than in the click
+  // handler — which would miss the mobile rows and the map-changed reset.
+  useEffect(() => {
+    selectedRef.current = selectedPath
+    applyFocus()
+  }, [selectedPath, showGraph, links])
+
   // The renderer's lifetime, kept apart from the data it draws so a refresh does not
   // reset the camera the reader just panned. Recreated only when the projection
   // changes or the WebGL context dies.
@@ -142,10 +193,44 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
     const host = containerRef.current
     if (!host) return
     const chrome = readChrome()
+    chromeRef.current = chrome
     const graph = new Graph({ type: 'directed', multi: false, allowSelfLoops: false })
     let renderer: Sigma
     try {
       renderer = new Sigma(graph, host, {
+        // The highlight, applied per frame. A null `focusRef` means nothing is
+        // focused and the map draws exactly as it did before, so the common case
+        // costs one comparison per node and allocates nothing.
+        nodeReducer: (node, attributes) => {
+          const focus = focusRef.current
+          if (!focus) return attributes
+          if (focus.nodes.has(node)) return { ...attributes, forceLabel: true, zIndex: 3 }
+          return {
+            ...attributes,
+            color: mixHex(String(attributes.color || ''), chromeRef.current.bg, DIM_NODE),
+            // Dropped rather than dimmed: a faint label at this size reads as noise,
+            // and the point of the highlight is that the neighbourhood's labels are
+            // the only ones left standing.
+            label: '',
+            zIndex: 0,
+          }
+        },
+        edgeReducer: (edge, attributes) => {
+          const focus = focusRef.current
+          if (!focus) return attributes
+          const [source, target] = graph.extremities(edge)
+          // Only edges *incident to the focused node* light up. An edge between two
+          // of its neighbours has both ends inside the highlighted set but is not a
+          // link the focused file has, and drawing it would overstate the reach.
+          if (source === focus.path || target === focus.path) {
+            return { ...attributes, color: chromeRef.current.text, size: 2, zIndex: 2 }
+          }
+          return {
+            ...attributes,
+            color: mixHex(
+              String(attributes.color || chromeRef.current.line), chromeRef.current.bg, DIM_EDGE),
+          }
+        },
         // The drawer column can be collapsed to zero width while this mounts; an
         // invalid container is a transient geometry state, not a reason to throw.
         allowInvalidContainer: true,
@@ -171,8 +256,11 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
     setRenderError('')
     graphRef.current = graph
     rendererRef.current = renderer
-    renderer.on('clickNode', ({ node }) => setSelectedPath(node))
+    // Clicking the focused node again releases it, the way the mobile list rows do.
+    renderer.on('clickNode', ({ node }) => setSelectedPath(current => current === node ? null : node))
     renderer.on('clickStage', () => setSelectedPath(null))
+    renderer.on('enterNode', ({ node }) => { hoverRef.current = node; applyFocus() })
+    renderer.on('leaveNode', () => { hoverRef.current = null; applyFocus() })
 
     // Sigma has no resize observation of its own and only watches the window, so a
     // drawer drag or a pane split would otherwise leave the canvas at its old size.
@@ -321,14 +409,22 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
     </section>
   }
 
+  const excluded = excludedNote(data.excluded)
+
   if (!nodes.length) return <section class="change-map-pane">
     {header}
     {controls}
     <div class="change-map-off">
-      <p>{data.empty_reason === 'no_edits'
-        ? 'No source edits in this session yet.'
-        : 'Nothing to map for this session yet.'}</p>
-      <p class="change-map-off-hint">The map fills in on the turn after this session writes a source file.</p>
+      {/* "Wrote nothing mappable" is a different answer from "wrote nothing", and
+          a session that only touched scratch files deserves the first one. */}
+      <p>{data.empty_reason === 'excluded'
+        ? 'Every source file this session edited sits outside the indexed project tree.'
+        : data.empty_reason === 'no_edits'
+          ? 'No source edits in this session yet.'
+          : 'Nothing to map for this session yet.'}</p>
+      {excluded
+        ? <p class="change-map-off-hint">{excluded}</p>
+        : <p class="change-map-off-hint">The map fills in on the turn after this session writes a source file.</p>}
     </div>
     {footer}
   </section>
@@ -349,6 +445,14 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
 
   const degrees = edgeCounts(edges)
   const selected = selectedPath ? nodes.find(node => node.path === selectedPath) || null : null
+  // Never `node.path`: that is a casefolded graph identity, and opening it would
+  // both fail outright on a case-sensitive host and, where it did not, claim a
+  // second pane identity for a file the Files browser already has open.
+  const openFile = (node: ChangeMapNode) =>
+    node.display_path && onOpenFile?.(node.display_path, data.worktree)
+  // Mobile only: on desktop the graph already draws this, and computing it there
+  // would be work whose result is never rendered.
+  const neighbors = mobile && selected ? neighborNodes(selected.path, links, nodes) : []
   const detail = selected && <div class="change-map-detail" role="status">
     <code>{selected.path}</code>
     <div>
@@ -359,7 +463,26 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
     {!!selected.sessions?.length && <small>edited by {selected.sessions
       .map(id => data.sessions.find(item => item.id === id)?.name || id.slice(0, 8))
       .join(', ')}</small>}
-    <button type="button" onClick={() => setSelectedPath(null)}>clear</button>
+    {/* The graph draws this; a list cannot, so the neighbours are spelled out where
+        there is no picture to read them from. */}
+    {!!neighbors.length && <ul class="change-map-neighbors" aria-label="Linked files">
+      {neighbors.map(node => <li key={node.path}>
+        <button type="button" class={`change-map-role role-${node.role}`}
+          onClick={() => setSelectedPath(node.path)}>
+          <b aria-hidden="true" />
+          <code>{node.path}</code>
+        </button>
+      </li>)}
+    </ul>}
+    <div class="change-map-detail-actions">
+      {onOpenFile && <button type="button" class="change-map-open"
+        disabled={!selected.display_path}
+        title={selected.display_path
+          ? `Open ${selected.display_path} as a workspace tab`
+          : 'This file no longer exists in the checkout'}
+        onClick={() => openFile(selected)}>open file</button>}
+      <button type="button" onClick={() => setSelectedPath(null)}>clear</button>
+    </div>
   </div>
 
   const body = mobile
@@ -387,16 +510,17 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
       </div>}
     </div>
 
-  // Two honest captions the reader needs to read the picture correctly: what the
-  // node cap dropped, and the common "seeds but no links" case where a session's
-  // edits sit outside the indexed tree (a worktree the project graph does not cover)
-  // or nothing imports them yet — without it, a ring of disconnected dots is a puzzle.
+  // Three honest captions the reader needs to read the picture correctly: what the
+  // node cap dropped, what the indexer's admission rules dropped, and the "seeds but
+  // no links" case where nothing imports the edited files yet — without them, a ring
+  // of disconnected dots (or a missing file you know you changed) is a puzzle.
   const status = <div class="change-map-status">
     {data.truncated && data.totals && <small class="change-map-truncated">
       Showing {data.totals.shown} of {data.totals.blast + data.totals.context + nodes.filter(n => n.role === 'seed').length} reachable files — blast radius capped for legibility.
     </small>}
+    {!!excluded && <small class="change-map-note-inline">{excluded}</small>}
     {!mobile && nodes.length > 0 && edges.length === 0 && <small class="change-map-note-inline">
-      No dependency links found for these files. They may be outside the indexed project tree (for example a worktree the graph does not cover), or nothing imports them yet.
+      No dependency links found for these files. Nothing in the indexed project tree imports or calls them yet.
     </small>}
   </div>
 

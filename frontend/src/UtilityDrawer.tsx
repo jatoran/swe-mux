@@ -317,6 +317,14 @@ export function UtilityDrawer(props: Props) {
           session={session}
           project={project}
           onPopOut={session ? () => props.onChangeMapOpenAsTab(session.id) : undefined}
+          // `onDone` on purpose: opening a file *is* acting on something other than
+          // the terminal underneath, so on mobile the drawer should get out of the
+          // way and show the pane it just opened.
+          onOpenFile={(path, worktree) => {
+            if (worktree) props.onOpenWorktreeFile(worktree, path)
+            else props.onOpenFile(path)
+            onDone()
+          }}
         />
       case 'agent':
         return <AgentEnvironmentTab session={session} />

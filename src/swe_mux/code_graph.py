@@ -32,6 +32,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -1250,6 +1251,101 @@ def is_indexable_path(path: str) -> bool:
         if segment in _SKIP_DIRS or segment.startswith("."):
             return False
     return True
+
+
+#: A Windows drive-qualified path. Identities arrive casefolded from
+#: ``normalize_target``, but the check is case-insensitive so a raw ``C:/…`` from
+#: any other caller is classified the same way rather than read as relative.
+_DRIVE_PREFIX = re.compile(r"^[a-z]:(?:/|$)", re.IGNORECASE)
+
+
+def is_project_relative(path: str) -> bool:
+    """Whether a normalized identity names a file *inside* its Project root.
+
+    ``normalize_target`` strips the root only when the path sits under it, so an
+    edit outside the checkout keeps its absolute form. That distinction is load
+    bearing twice over: the graph only ever indexes the project tree, so an
+    outside path can never acquire an edge and is drawn as a permanently isolated
+    dot; and the Project file endpoints refuse to serve anything outside the root,
+    so it can never be opened either.
+
+    Host-independent by construction. A POSIX daemon must still recognise the
+    ``c:/…`` identities a Windows-recorded fact carries (and vice versa), so this
+    tests both absolute spellings rather than deferring to ``os.path.isabs``,
+    which answers only for the host it runs on.
+    """
+    if not path:
+        return False
+    text = path.replace("\\", "/")
+    if text.startswith("/") or _DRIVE_PREFIX.match(text):
+        return False
+    return not any(segment == ".." for segment in text.split("/"))
+
+
+def resolve_display_paths(project_root: str, identities: Iterable[str]) -> dict[str, str]:
+    """True-cased, project-relative paths for casefolded graph identities.
+
+    Every path identity in the graph is casefolded (``normalize_target``), which
+    is what makes cross-tool comparison work and what makes an identity unusable
+    as a *filesystem* path: ``frontend/src/ChangeMapPane.tsx`` is stored as
+    ``frontend/src/changemappane.tsx``. A case-sensitive host cannot open that at
+    all, and a case-insensitive one opens it under a second, colliding pane
+    identity — two editors and two save revisions on one file. Recovering the real
+    casing is therefore a correctness requirement, not a cosmetic one.
+
+    Matching is done by listing each directory rather than by ``stat``: on Windows
+    a wrong-cased path *succeeds*, so a stat fast path would silently keep the
+    wrong casing and defeat the whole purpose. Listings are memoised per call, so
+    a whole change map costs one ``scandir`` per distinct directory.
+
+    Identities with no matching file are simply absent from the result — a file
+    the session wrote and then deleted has no path to offer.
+
+    Blocking filesystem work: call it from a thread.
+    """
+    listings: dict[str, dict[str, tuple[str, bool]]] = {}
+
+    def entries(directory: Path) -> dict[str, tuple[str, bool]]:
+        key = str(directory)
+        cached = listings.get(key)
+        if cached is None:
+            cached = {}
+            try:
+                with os.scandir(directory) as scan:
+                    for entry in scan:
+                        try:
+                            is_dir = entry.is_dir()
+                        except OSError:
+                            is_dir = False
+                        cached[entry.name.casefold()] = (entry.name, is_dir)
+            except OSError:
+                pass
+            listings[key] = cached
+        return cached
+
+    root = Path(project_root)
+    resolved: dict[str, str] = {}
+    for identity in identities:
+        if identity in resolved or not is_project_relative(identity):
+            continue
+        segments = [s for s in identity.replace("\\", "/").split("/") if s and s != "."]
+        if not segments:
+            continue
+        current = root
+        real: list[str] = []
+        for index, segment in enumerate(segments):
+            match = entries(current).get(segment.casefold())
+            # The last segment must be a file, every earlier one a directory —
+            # otherwise a directory named like the file would resolve happily and
+            # produce a path the file endpoint then rejects.
+            if match is None or match[1] != (index < len(segments) - 1):
+                real = []
+                break
+            real.append(match[0])
+            current = current / match[0]
+        if real:
+            resolved[identity] = "/".join(real)
+    return resolved
 
 
 def _read_and_parse(path: str, project_root: str) -> ParsedFile | None:

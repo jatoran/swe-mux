@@ -4898,8 +4898,16 @@ export function App() {
       // map to draw rather than an empty one — say so instead of reading as "no edits".
       if(!owner)return <section class="workspace-leaf-placeholder"><strong>session ended</strong><span>Its change map is no longer available.</span><button onClick={()=>void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'changemap',node.id))}>close tab</button></section>
       // Pinned to the leaf rather than following focus, and with no pop-out button of
-      // its own — the same panel the drawer tab shows, already popped out.
-      return <ChangeMapPane key={node.id} session={owner} project={activeProject}/>
+      // its own — the same panel the drawer tab shows, already popped out. The Project
+      // is the *owner's*, not the active one: a pinned map outlives the sidebar
+      // selection, and opening one of its files must land in the right checkout.
+      const mapProject=projects.find(item=>item.id===owner.project_id)||activeProject
+      return <ChangeMapPane key={node.id} session={owner} project={mapProject}
+        onOpenFile={(path,worktree)=>{
+          if(!mapProject)return
+          if(worktree)openWorktreeFile(mapProject,worktree,path)
+          else openProjectFile(mapProject,path)
+        }}/>
     }
     if (node.kind === 'preview') {
       const preview = previews[node.id]

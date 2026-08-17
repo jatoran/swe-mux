@@ -3,13 +3,29 @@
 // absolutely positioned canvases and reads the client box for its viewport), and the
 // mobile fallback is chosen from a media query. Both are layout facts, so they live here.
 import { render } from 'preact'
+import Sigma from 'sigma'
 import { ChangeMapPane } from '../../src/ChangeMapPane'
 import type { LayoutResult } from '../../src/changeMap'
 import type { Project, Session } from '../../src/types'
 import '../../src/style.css'
 
+/** Just enough of Sigma for a spec to place the pointer over a node and read back
+ *  what the reducers decided to draw.
+ *
+ *  `framedGraphToViewport`, not `graphToViewport`: the coordinates in the display
+ *  data have already been through Sigma's normalization, so the graph-space
+ *  converter normalizes them a second time and lands the pointer on empty canvas. */
+type SigmaProbe = {
+  getNodeDisplayData(key: string): { x: number; y: number; color: string; forceLabel?: boolean } | undefined
+  framedGraphToViewport(point: { x: number; y: number }): { x: number; y: number }
+}
+
 declare global {
-  interface Window { changeMapLayoutResults: LayoutResult[] }
+  interface Window {
+    changeMapLayoutResults: LayoutResult[]
+    changeMapOpened: { path: string; worktree: string | null }[]
+    changeMapSigma?: SigmaProbe
+  }
 }
 
 // Records what the layout worker answers, so a spec can prove ForceAtlas2 actually ran.
@@ -28,20 +44,48 @@ class RecordingWorker extends NativeWorker {
 }
 window.Worker = RecordingWorker as typeof Worker
 
+// The pane holds its Sigma instance privately, which is correct — but the highlight
+// is drawn by per-frame reducers and lands nowhere in the DOM, so the only way to
+// assert it is to read back what Sigma resolved. `refresh` is the one method the pane
+// is guaranteed to call, so wrapping it hands the spec the live renderer.
+const nativeRefresh = Sigma.prototype.refresh
+Sigma.prototype.refresh = function patchedRefresh(this: Sigma, ...args: Parameters<Sigma['refresh']>) {
+  window.changeMapSigma = this as unknown as SigmaProbe
+  return nativeRefresh.apply(this, args)
+}
+
+window.changeMapOpened = []
+
 const MAP = {
   session_id: 'claude-d92695',
   project_id: 'p1',
   baseline_head: '4417166ac1de',
   available: true,
   disabled_reason: null,
+  worktree: null,
+  // One edited file the graph refuses to index, so the caption that says so is on
+  // screen in the same run that asserts the geometry around it.
+  excluded: { outside_root: 1, unindexable: 0 },
   nodes: [
-    { path: 'src/swe_mux/server.py', role: 'seed', sessions: ['claude-d92695'] },
-    { path: 'src/swe_mux/code_graph.py', role: 'seed', sessions: ['claude-d92695'] },
-    { path: 'src/swe_mux/mcp.py', role: 'blast', hop: 1 },
-    { path: 'src/swe_mux/deterministic_consumers.py', role: 'blast', hop: 1 },
-    { path: 'src/swe_mux/cli.py', role: 'blast', hop: 2 },
-    { path: 'src/swe_mux/layouts.py', role: 'context' },
-    { path: 'src/swe_mux/config.py', role: 'context' },
+    // Mixed case on purpose: `path` is the casefolded graph identity and
+    // `display_path` is the only thing that may reach a file endpoint.
+    {
+      path: 'src/swe_mux/server.py', role: 'seed', sessions: ['claude-d92695'],
+      display_path: 'src/swe_mux/Server.py',
+    },
+    {
+      path: 'src/swe_mux/code_graph.py', role: 'seed', sessions: ['claude-d92695'],
+      display_path: 'src/swe_mux/code_graph.py',
+    },
+    { path: 'src/swe_mux/mcp.py', role: 'blast', hop: 1, display_path: 'src/swe_mux/mcp.py' },
+    {
+      path: 'src/swe_mux/deterministic_consumers.py', role: 'blast', hop: 1,
+      display_path: 'src/swe_mux/deterministic_consumers.py',
+    },
+    { path: 'src/swe_mux/cli.py', role: 'blast', hop: 2, display_path: 'src/swe_mux/cli.py' },
+    { path: 'src/swe_mux/layouts.py', role: 'context', display_path: 'src/swe_mux/layouts.py' },
+    { path: 'src/swe_mux/config.py', role: 'context', display_path: 'src/swe_mux/config.py' },
+    // No `display_path`: written, then deleted. Its button must be dead, not a 404.
     { path: 'src/swe_mux/store.py', role: 'context' },
   ],
   edges: [
@@ -75,4 +119,12 @@ const root = document.querySelector<HTMLDivElement>('#root')!
 root.style.display = 'flex'
 root.style.height = '100vh'
 root.style.width = '100%'
-render(<ChangeMapPane session={SESSION} project={PROJECT} onPopOut={() => {}} />, root)
+render(
+  <ChangeMapPane
+    session={SESSION}
+    project={PROJECT}
+    onPopOut={() => {}}
+    onOpenFile={(path, worktree) => { window.changeMapOpened.push({ path, worktree }) }}
+  />,
+  root,
+)

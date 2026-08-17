@@ -27,7 +27,7 @@ import threading
 import time
 import tomllib
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -8884,6 +8884,74 @@ _CHANGE_MAP_LOWER_BOUND = (
 )
 
 
+def _same_root(left: str, right: str) -> bool:
+    """Whether two checkout roots name the same directory, spelling aside."""
+
+    def shape(value: str) -> str:
+        return str(Path(value)).replace("\\", "/").rstrip("/").casefold()
+
+    return bool(left) and bool(right) and shape(left) == shape(right)
+
+
+def _change_map_seeds(
+    facts: Iterable[dict[str, Any]],
+    roots: Sequence[str],
+    default_session_id: str,
+) -> tuple[dict[str, set[str]], dict[str, int]]:
+    """Which written files become red seeds, and an honest count of what was dropped.
+
+    Two admission rules the map used to skip, both of which produced permanently
+    isolated dots. The graph only ever indexes files under the Project root, and
+    it refuses generated/vendored/hidden directories outright
+    (``is_indexable_path``) — so a seed failing either test can never acquire an
+    edge, can never show a blast radius, and can never be opened from the pane.
+    Drawing it anyway is what put scratchpad and temp-directory scripts on the map.
+
+    ``roots`` is the ordered set of checkout roots the facts may be recorded
+    against: the requesting session's own root first, then (in unify mode) the
+    root of every other session that contributed a write. Re-anchoring against all
+    of them is what keeps a sibling worktree's session on the unified map — its
+    writes are absolute paths under *its* checkout, which the requesting session's
+    root cannot strip, so without this they would all be dropped as outside-root.
+
+    Counts are of distinct files, not facts: a scratchpad script rewritten twenty
+    times is one omission to report, not twenty.
+    """
+    from . import code_graph as cg
+    from .deterministic_consumers import normalize_target
+
+    seeds: dict[str, set[str]] = {}
+    outside_root: set[str] = set()
+    unindexable: set[str] = set()
+    for fact in facts:
+        if fact.get("kind") not in ("file_write", "file_write_result"):
+            continue
+        target = fact.get("target")
+        identity: str | None = None
+        for root in roots:
+            candidate = normalize_target(target, root)
+            if candidate is None:
+                continue
+            # The first root that actually contains the file wins; failing that,
+            # keep the first spelling seen so an unanchorable path is still counted.
+            if cg.is_project_relative(candidate):
+                identity = candidate
+                break
+            if identity is None:
+                identity = candidate
+        if identity is None or cg.spec_for_path(identity) is None:
+            continue
+        if not cg.is_project_relative(identity):
+            outside_root.add(identity)
+            continue
+        if not cg.is_indexable_path(identity):
+            unindexable.add(identity)
+            continue
+        owner = str(fact.get("session_id") or default_session_id)
+        seeds.setdefault(identity, set()).add(owner)
+    return seeds, {"outside_root": len(outside_root), "unindexable": len(unindexable)}
+
+
 async def session_change_map(request: web.Request) -> web.Response:
     """The per-session code change map (Phase 7.9, Surface 3).
 
@@ -8894,7 +8962,7 @@ async def session_change_map(request: web.Request) -> web.Response:
     since the baseline, each session coloured a distinct hue.
     """
     from . import code_graph as cg
-    from .deterministic_consumers import RUN_FACT_WINDOW_SECONDS, normalize_target
+    from .deterministic_consumers import RUN_FACT_WINDOW_SECONDS
 
     session = request.app["sessions"].resolve(request.match_info["sid"])
     record = session.record
@@ -8908,6 +8976,14 @@ async def session_change_map(request: web.Request) -> web.Response:
         hops = 1
     hops = max(1, min(hops, cg.MAX_BLAST_HOPS))
     baseline_head = getattr(getattr(record, "git", None), "head", None)
+    # The checkout the map's files actually live in. It is the Project root for an
+    # ordinary session and the worktree root for a worktree session, and the two
+    # need different file endpoints — so the payload names it rather than letting
+    # the client assume the Project root and open the wrong copy. An unresolvable
+    # Project root claims nothing: the client's default (the Project's own file
+    # endpoint) is right far more often than a guess would be.
+    project_root = _project_root_for(request.app, pid, "")
+    worktree = root if root and project_root and not _same_root(root, project_root) else ""
     base: dict[str, Any] = {
         "session_id": record.id,
         "project_id": pid or None,
@@ -8915,6 +8991,8 @@ async def session_change_map(request: web.Request) -> web.Response:
         "nodes": [],
         "edges": [],
         "sessions": [],
+        "worktree": worktree or None,
+        "excluded": {"outside_root": 0, "unindexable": 0},
         "excludes_note": _CHANGE_MAP_EXCLUDES,
         "lower_bound_note": _CHANGE_MAP_LOWER_BOUND,
     }
@@ -8930,6 +9008,7 @@ async def session_change_map(request: web.Request) -> web.Response:
         return json_response({**base, "available": False, "disabled_reason": "automation_disabled"})
 
     since = time.time() - RUN_FACT_WINDOW_SECONDS
+    manager = request.app["sessions"]
     if unify:
         facts = await tier0.facts_for_project(pid, since=since)
     elif run_id:
@@ -8937,23 +9016,42 @@ async def session_change_map(request: web.Request) -> web.Response:
     else:
         facts = []
 
+    # The checkout roots the facts may be recorded against. One run's facts share a
+    # cwd, so the non-unified view needs only this session's root; the unified view
+    # spans every session in the Project, and a sibling worktree's writes are
+    # absolute paths this root cannot strip.
+    roots = [root]
+    if unify:
+        for fact in facts:
+            if fact.get("kind") not in ("file_write", "file_write_result"):
+                continue
+            owner_id = str(fact.get("session_id") or "")
+            other = manager.sessions.get(owner_id) if owner_id else None
+            if other is None:
+                continue
+            other_root = _record_project_root(request, other.record)
+            if other_root and not any(_same_root(other_root, known) for known in roots):
+                roots.append(other_root)
+
     # Per-session seed sets: this session (or every session, unified) mapped to the
     # source files it wrote. Concurrent other-session edits are excluded from the
     # non-unified view by construction, because facts_for_run is one run's facts.
-    seed_sessions: dict[str, set[str]] = {}
-    for fact in facts:
-        if fact.get("kind") not in ("file_write", "file_write_result"):
-            continue
-        identity = normalize_target(fact.get("target"), root)
-        if identity is None or cg.spec_for_path(identity) is None:
-            continue
-        owner = str(fact.get("session_id") or record.id)
-        seed_sessions.setdefault(identity, set()).add(owner)
+    seed_sessions, excluded = _change_map_seeds(facts, roots, record.id)
 
     seeds = sorted(seed_sessions)
     if not seeds:
+        # "Nothing written" and "everything written was unmappable" are different
+        # readings, and the second one is the honest answer for a session that only
+        # touched scratch files.
+        empty_reason = "excluded" if any(excluded.values()) else "no_edits"
         return json_response(
-            {**base, "available": True, "disabled_reason": None, "empty_reason": "no_edits"}
+            {
+                **base,
+                "available": True,
+                "disabled_reason": None,
+                "empty_reason": empty_reason,
+                "excluded": excluded,
+            }
         )
 
     subgraph = await store.subgraph(pid, seeds, hops=hops)
@@ -8969,7 +9067,6 @@ async def session_change_map(request: web.Request) -> web.Response:
         sid: f"hsl({(index * 360) // max(1, len(session_ids)) % 360}, 70%, 55%)"
         for index, sid in enumerate(session_ids)
     }
-    manager = request.app["sessions"]
     sessions_legend = []
     for sid in session_ids:
         other = manager.sessions.get(sid)
@@ -8987,6 +9084,19 @@ async def session_change_map(request: web.Request) -> web.Response:
                 entry["hue"] = hue_by_session.get(seed_owners[0])
         nodes.append(entry)
 
+    # Graph identities are casefolded, which makes them useless as filesystem paths.
+    # Recover the real casing once per map so a node can be opened in a pane at all
+    # (a case-sensitive host) and under the same pane identity the Files browser
+    # uses (a case-insensitive one). A node with no `display_path` no longer exists
+    # on disk and offers no button rather than a dead link.
+    display_paths = await asyncio.to_thread(
+        cg.resolve_display_paths, root, [str(entry.get("path") or "") for entry in nodes]
+    )
+    for entry in nodes:
+        shown = display_paths.get(str(entry.get("path") or ""))
+        if shown:
+            entry["display_path"] = shown
+
     return json_response(
         {
             **base,
@@ -8995,6 +9105,7 @@ async def session_change_map(request: web.Request) -> web.Response:
             "nodes": nodes,
             "edges": subgraph.get("edges", []),
             "sessions": sessions_legend if unify else [],
+            "excluded": excluded,
             # When the blast radius overflowed the node cap, say so and by how much,
             # so a truncated view never reads as the whole reach.
             "truncated": bool(subgraph.get("truncated")),

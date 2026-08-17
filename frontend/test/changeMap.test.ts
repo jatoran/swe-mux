@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   DEFAULT_ROLE_PALETTE, LAYOUT_ITERATIONS, MAX_HOPS, ROLE_ORDER,
-  clampHops, disabledNote, edgeCounts, graphColor, groupNodesByRole, hslToHex,
-  layoutRequest, nodeColor, nodeSize, seedPositions, shortPath, usablePositions,
+  adjacency, clampHops, disabledNote, edgeCounts, excludedNote, focusedPath, graphColor,
+  groupNodesByRole, hslToHex, layoutRequest, mixHex, neighborNodes, neighborhood, nodeColor,
+  nodeSize, seedPositions, shortPath, usablePositions,
   type ChangeMapEdge, type ChangeMapNode,
 } from '../src/changeMap.ts'
 import { changeMapLeafId, changeMapLeafSessionId, emptyLayout, leaves, openTab, parseLayout, paneStacks, removeLeaf, resourceLeaf, terminalLeaf } from '../src/layout.ts'
@@ -88,6 +89,84 @@ test('degree counts each connected pair once, in both directions', () => {
     { source: 'core.ts', target: 'a.ts', kind: 'calls' },
     { source: 'a.ts', target: 'a.ts', kind: 'calls' },
   ]), { 'a.ts': 1, 'core.ts': 1 })
+})
+
+test('adjacency is undirected and drops self-loops', () => {
+  // The map draws one line per connected pair, and "what is this file wired to" has
+  // no direction: the importers above a node matter as much as the imports below it.
+  const links = adjacency([
+    { source: 'a.ts', target: 'core.ts', kind: 'imports' },
+    { source: 'a.ts', target: 'core.ts', kind: 'calls' },
+    { source: 'core.ts', target: 'util.ts', kind: 'imports' },
+    { source: 'lonely.ts', target: 'lonely.ts', kind: 'calls' },
+  ])
+  assert.deepEqual([...(links.get('a.ts') || [])], ['core.ts'])
+  assert.deepEqual([...(links.get('core.ts') || [])].sort(), ['a.ts', 'util.ts'])
+  assert.deepEqual([...(links.get('util.ts') || [])], ['core.ts'])
+  assert.equal(links.has('lonely.ts'), false)
+})
+
+test('the highlight set is the focused node plus its links', () => {
+  const links = adjacency([
+    { source: 'a.ts', target: 'core.ts', kind: 'imports' },
+    { source: 'b.ts', target: 'core.ts', kind: 'imports' },
+    { source: 'far.ts', target: 'other.ts', kind: 'imports' },
+  ])
+  assert.deepEqual([...(neighborhood('core.ts', links) || [])].sort(), ['a.ts', 'b.ts', 'core.ts'])
+  // Null and empty are different renderings, and the difference is the whole point:
+  // null draws the map normally, while a focused node with no links must still dim
+  // everything else — that is exactly the reading that says a file is unreferenced.
+  assert.equal(neighborhood(null, links), null)
+  assert.deepEqual([...(neighborhood('orphan.ts', links) || [])], ['orphan.ts'])
+})
+
+test('a hover previews on top of the selection and falls back to it', () => {
+  assert.equal(focusedPath('hovered.ts', 'picked.ts'), 'hovered.ts')
+  assert.equal(focusedPath(null, 'picked.ts'), 'picked.ts')
+  assert.equal(focusedPath('hovered.ts', null), 'hovered.ts')
+  assert.equal(focusedPath(null, null), null)
+})
+
+test('a focused file lists its links by role, then path', () => {
+  const nodes = [
+    node('src/core.ts', 'seed'),
+    node('src/z.ts', 'blast', { hop: 1 }),
+    node('src/a.ts', 'blast', { hop: 1 }),
+    node('src/dep.ts', 'context'),
+    node('src/unrelated.ts', 'context'),
+  ]
+  const links = adjacency([
+    { source: 'src/z.ts', target: 'src/core.ts', kind: 'imports' },
+    { source: 'src/a.ts', target: 'src/core.ts', kind: 'calls' },
+    { source: 'src/core.ts', target: 'src/dep.ts', kind: 'imports' },
+  ])
+  assert.deepEqual(neighborNodes('src/core.ts', links, nodes).map(item => item.path),
+    ['src/a.ts', 'src/z.ts', 'src/dep.ts'])
+  assert.deepEqual(neighborNodes('src/unrelated.ts', links, nodes), [])
+  assert.deepEqual(neighborNodes(null, links, nodes), [])
+})
+
+test('what the map refused to draw is stated, not silently dropped', () => {
+  assert.equal(excludedNote({ outside_root: 0, unindexable: 0 }), '')
+  assert.equal(excludedNote(undefined), '')
+  const outside = excludedNote({ outside_root: 1, unindexable: 0 })
+  assert.match(outside, /^1 edited file not shown \(1 outside this checkout\)/)
+  const both = excludedNote({ outside_root: 2, unindexable: 3 })
+  assert.match(both, /^5 edited files not shown/)
+  assert.match(both, /2 outside this checkout, 3 in a generated, vendored, or hidden directory/)
+})
+
+test('dimming mixes toward the background rather than toward a fixed grey', () => {
+  // Sigma's WebGL parser has no opacity to fall back on: the colour it is handed is
+  // the colour it draws, and a fixed grey is either invisible or louder than the
+  // highlight across the eleven themes this app ships.
+  assert.equal(mixHex('#ffffff', '#000000', 0.5), '#808080')
+  assert.equal(mixHex('#f07178', '#090b0e', 0), '#f07178')
+  assert.equal(mixHex('#f07178', '#090b0e', 1), '#090b0e')
+  assert.equal(mixHex('#fff', '#000', 0.5), '#808080')
+  // Clamped, and non-hex passes through untouched rather than being mangled.
+  assert.equal(mixHex('#ffffff', '#000000', 5), '#000000')
+  assert.equal(mixHex('rgba(1,2,3,0.5)', '#000000', 0.5), 'rgba(1,2,3,0.5)')
 })
 
 test('labels shorten to the last two segments', () => {

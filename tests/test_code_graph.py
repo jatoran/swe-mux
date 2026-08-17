@@ -278,6 +278,59 @@ def test_is_indexable_path_excludes_worktrees_and_generated() -> None:
     assert not is_indexable_path("readme.md")  # unsupported extension
 
 
+def test_is_project_relative_rejects_both_absolute_spellings() -> None:
+    """Host-independent on purpose.
+
+    A fact recorded on Windows carries ``c:/…`` and one recorded on Linux carries
+    ``/home/…``; a POSIX daemon reading the first (or a Windows one reading the
+    second) must still recognise it as outside the checkout. ``os.path.isabs``
+    answers only for the host it runs on, which is why this does not use it.
+    """
+    from swe_mux.code_graph import is_project_relative
+
+    assert is_project_relative("src/swe_mux/server.py")
+    assert is_project_relative("app.py")
+    assert not is_project_relative("c:/users/dev/appdata/local/temp/scratch/probe.py")
+    assert not is_project_relative("/home/dev/scratch/probe.py")
+    assert not is_project_relative("c:\\users\\dev\\probe.py")
+    # Identities arrive casefolded, but a raw path from any other caller must not
+    # read as relative just because its drive letter is capitalised.
+    assert not is_project_relative("C:/Users/dev/probe.py")
+    assert not is_project_relative("../sibling/app.py")
+    assert not is_project_relative("")
+
+
+def test_resolve_display_paths_recovers_casing(tmp_path: Path) -> None:
+    """The identity is casefolded; the filesystem path is not.
+
+    Matching is by directory listing rather than by ``stat`` because on Windows a
+    wrong-cased ``stat`` succeeds — a fast path there would keep the wrong casing
+    and silently defeat the whole point.
+    """
+    from swe_mux.code_graph import resolve_display_paths
+
+    (tmp_path / "Frontend" / "src").mkdir(parents=True)
+    (tmp_path / "Frontend" / "src" / "ChangeMapPane.tsx").write_text("export {}\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+
+    resolved = resolve_display_paths(
+        tmp_path.as_posix(),
+        [
+            "frontend/src/changemappane.tsx",
+            "app.py",
+            "frontend/src/gone.tsx",
+            "c:/elsewhere/probe.py",
+            # A directory, not a file: resolving it would hand the client a path
+            # the file endpoint then rejects.
+            "frontend/src",
+        ],
+    )
+    assert resolved == {
+        "frontend/src/changemappane.tsx": "Frontend/src/ChangeMapPane.tsx",
+        "app.py": "app.py",
+    }
+
+
 async def test_maintain_skips_worktree_copies(tmp_path: Path) -> None:
     # A write under a nested worktree must not leak a copy of the repo into the
     # Project graph (the bug that ballooned the live edge table).
