@@ -77,8 +77,10 @@
   `match_method` names how the attribution was made and `contributed_paths_json` holds the commit files that session's observed writes account for, bounded to 200 paths.
   Existing rows migrate additively to `observer` with no method, which is exactly what they recorded; re-attribution is the explicit backfill's job, never a startup rewrite.
   The uniqueness key is `(session_id, agent_run_id, worktree_root, commit_oid)` with shell runs represented by the empty run id.
+  `worktree_root` is stored in one canonical spelling (forward slashes, no trailing separator) because it is part of that key: Git prints `D:/PROJECTS/x` and `pathlib` prints `D:\PROJECTS\x` for one directory, and both spellings made the daemon's row and the backfill's row for one session and one commit into two rows.
+  Opening a database written before that rule collapses the duplicates in favour of the stronger row.
   An internal evidence rank permits only equal or stronger observations to replace classification fields while preserving the earliest observation time.
-  Contributed paths are the one exception: they are evidence rather than classification, so an empty set never replaces a populated one at any rank.
+  Contributed paths are the one exception: they are evidence rather than classification, so they accumulate — an empty set never replaces a populated one, and a populated set fills a row that has none at any rank.
   Explicit transcript backfills use the same ranked upsert in batches of at most 1,000 rows, so rerunning an import cannot duplicate or weaken existing live evidence.
   Project removal retains Project and provenance rows as a tombstoned historical identity, and explicit History-entry deletion removes rows for that agent run.
 - `history_messages`: derived role-aware user/assistant text, provider-native optional timestamp, and nullable materialized `ts_epoch` used for indexed message-time boundaries.
