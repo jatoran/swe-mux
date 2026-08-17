@@ -212,6 +212,29 @@ async def test_edit_updates_edges(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_duplicate_symbol_names_do_not_abort_index(tmp_path: Path) -> None:
+    # A file that defines the same qualname more than once — @overload stubs, a
+    # TYPE_CHECKING branch, a property/setter pair — must not raise a UNIQUE
+    # violation that aborts the whole index. (Regression: the seed once died on the
+    # first such file and left the backend graph empty in production.)
+    (tmp_path / "over.py").write_text(
+        "from typing import overload\n"
+        "@overload\n"
+        "def f(x: int) -> int: ...\n"
+        "@overload\n"
+        "def f(x: str) -> str: ...\n"
+        "def f(x):\n    return x\n"
+    )
+    (tmp_path / "plain.py").write_text("def g():\n    return 1\n")
+    store = CodeGraphStore(tmp_path / "graph.db")
+    count = await index_project(store, "p1", str(tmp_path))
+    assert count == 2  # both files indexed; the overload file did not abort the pass
+    syms = await store.symbols_in("p1", "over.py")
+    assert [s["name"] for s in syms] == ["f"]  # deduped to one row
+    assert await store.definitions("p1", "g")  # the second file survived
+    store.close()
+
+
 async def test_deleted_file_removed_from_graph(tmp_path: Path) -> None:
     store, pid = await _seed(tmp_path)
     (tmp_path / "app.py").unlink()

@@ -767,13 +767,25 @@ class CodeGraphStore:
                 time.time(),
             ),
         )
-        db.executemany(
-            "INSERT INTO code_graph_symbols(project_id,path,name,kind,start_line,end_line) "
-            "VALUES(?,?,?,?,?,?)",
-            [
+        # One file can legitimately define the same qualname twice — @overload
+        # stubs, a TYPE_CHECKING branch, a property/setter pair. The symbols table
+        # keys on (project_id, path, name), so dedupe by name (first wins) before
+        # the insert; a raw executemany would raise UNIQUE and abort the whole
+        # index pass, which once left the backend graph empty in production.
+        # INSERT OR IGNORE is the belt-and-suspenders backstop.
+        seen_symbols: set[str] = set()
+        symbol_rows: list[tuple[Any, ...]] = []
+        for s in parsed.symbols:
+            if s.name in seen_symbols:
+                continue
+            seen_symbols.add(s.name)
+            symbol_rows.append(
                 (project_id, parsed.path, s.name, s.kind, s.start_line, s.end_line)
-                for s in parsed.symbols
-            ],
+            )
+        db.executemany(
+            "INSERT OR IGNORE INTO code_graph_symbols(project_id,path,name,kind,"
+            "start_line,end_line) VALUES(?,?,?,?,?,?)",
+            symbol_rows,
         )
         db.executemany(
             "INSERT INTO code_graph_edges(project_id,kind,src_path,src_symbol,dst_path,"
@@ -1167,10 +1179,15 @@ async def index_project(
             continue
         parsed_files.append(parsed)
         leaf_index[parsed.path] = {s.name.split(".")[-1] for s in parsed.symbols}
+    indexed = 0
     for parsed in parsed_files:
         edges = resolve_edges(parsed, project_root, known_symbols=leaf_index)
-        await store.replace_file(project_id, parsed, edges)
-    return len(parsed_files)
+        try:
+            await store.replace_file(project_id, parsed, edges)
+            indexed += 1
+        except Exception as exc:  # noqa: BLE001 - one bad file must not abort the seed
+            log.warning("code-graph: skipped %s during index: %s", parsed.path, exc)
+    return indexed
 
 
 async def maintain_files(
