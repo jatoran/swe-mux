@@ -653,6 +653,13 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   stateRef.current=session.state
   const backendRef=useRef(session.backend)
   backendRef.current=session.backend
+  // An ended or recovered pane has no child to receive keystrokes. The daemon
+  // refuses the write either way, so this is not what makes it safe — it is what
+  // stops a pane the operator is reading from filling the socket with input it
+  // will only be told about in a refusal, and from claiming the keyboard away
+  // from a live pane on another device while doing it.
+  const readOnlyRef=useRef(false)
+  readOnlyRef.current=session.state==='exited'||session.state==='crashed'
   const broadcastRef = useRef(broadcast)
   broadcastRef.current = broadcast
   // A warm pane is mounted and live while hidden, so "is this pane being looked at"
@@ -1924,6 +1931,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
       capture: TerminalInputCapture | null = null,
     ) => {
       if (socket?.readyState !== WebSocket.OPEN) return
+      // Protocol responses still go through: they answer a query that was in the
+      // replayed bytes, and the daemon drops them for a dead session anyway.
+      // Human input does not, and must not claim ownership on the way.
+      if (readOnlyRef.current && !protocolResponse) return
       // Typing is itself evidence this pane should own input. Without it a pane
       // displaced by another device stays silently muted until the user happens
       // to click inside it. A retry has already claimed, so it must not claim twice.

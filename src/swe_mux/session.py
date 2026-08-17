@@ -60,6 +60,7 @@ from .screen_mode import (
     StickyModeParser,
 )
 from .scrollback import SCREEN_TAIL_BYTES, ScrollbackBuffer
+from .session_recovery import RecoveredSession, SessionRecoveryStore
 from .spawn_contract import (
     base_session_env,
     infer_agent_executable_backend,
@@ -2048,6 +2049,11 @@ class Session:
         # hook secret, transcript path) into the supervisor so a future daemon
         # can rebuild this Session after a restart. None for in-process PTYs.
         self.meta_sink: Callable[[], None] | None = None
+        # Reads the same metadata blob for the durable recovery registry, which
+        # unlike the supervisor mirror survives the PTY owner's own death. Set
+        # for every session, supervised or in-process, because the case it covers
+        # (both processes gone) does not care which one owned the PTY.
+        self.recovery_meta: Callable[[], dict[str, Any]] | None = None
         # Called by the hook path the moment this session's conversation id is
         # proven, so the manager can confirm or discard a provisional transcript
         # binding. Sync: it schedules its own task rather than blocking the hook.
@@ -2112,6 +2118,14 @@ class Session:
         uncovered position with the whole buffer — correct for detection cursors,
         catastrophic for a client that would append it after a hole.
         """
+        if self.record.cold:
+            # A cold session's ring was rebuilt from disk, so its positions
+            # describe a *different* stream from the one any client parsed before
+            # the crash. A `since` from that stream can still land inside this
+            # range by coincidence, and a delta served across the boundary is
+            # appended to a terminal that was never reset - silent corruption, in
+            # the one case where the operator is reading the pane for evidence.
+            return False
         if since is None or not 0 <= since <= position:
             return False
         gap = position - since
@@ -2491,11 +2505,20 @@ class SessionManager:
         supervisor: SupervisorClient | None = None,
         attach_replay_bytes: int | None = None,
         status_timeline: StatusTimelineStore | None = None,
+        recovery: SessionRecoveryStore | None = None,
     ) -> None:
         self.adapters, self.reaper, self.history, self.events = adapters, reaper, history, events
         # Durable sink for the per-session transition ledgers; None in tests
         # that exercise the manager without persistence.
         self.status_timeline = status_timeline
+        # Durable registry that outlives this process and its PTY owner, so a
+        # session whose end nobody recorded comes back cold instead of vanishing.
+        # None in tests and whenever `session_recovery_enabled` is off.
+        self.recovery = recovery
+        # Cold sessions rebuilt at boot, and supervisor-owned sessions this daemon
+        # converted to cold after proving the supervisor's process was gone. Both
+        # are surfaced at /health so a recovery that fires is never only a log line.
+        self.cold_sessions_restored = 0
         self.max_scrollback = max_scrollback
         # Retention budget above, replay budget here: every Session this manager
         # builds is bound by it, whether spawned or adopted from the supervisor.
@@ -2801,6 +2824,7 @@ class SessionManager:
             session.scrollback.append(initial_output)
         self.sessions[sid] = session
         self._attach_ledger_sink(session)
+        self._attach_recovery(session)
         if isinstance(pty, RemotePtyHost):
             self._attach_meta_sink(session)
         transcript = adapter.transcript_path(native_id, resolved_cwd)
@@ -2857,6 +2881,15 @@ class SessionManager:
         """Persist spawn metadata after the live session is already attachable."""
 
         try:
+            # First, and before any history write: until this row exists the
+            # session is unrecoverable, and a crash inside that window is exactly
+            # what cold recovery is for. It is one small INSERT on the recovery
+            # store's own worker, while the history writes below share SQLite with
+            # transcript reconciliation and can queue behind a large import.
+            # `_mark_ended` awaits this whole task before closing the row, so the
+            # open and the close can never race.
+            if self.recovery is not None:
+                await self.recovery.open_session(session)
             await self.history.register_project_scope(project)
             if session.record.spawn_agent_run_id:
                 await self.history.resume_agent_run(session.record, transcript)
@@ -2938,6 +2971,21 @@ class SessionManager:
 
         session.meta_sink = push
         push()
+
+    def _attach_recovery(self, session: Session) -> None:
+        """Track a live session for the durable recovery registry.
+
+        The store samples rather than being nudged, so this is a standing
+        registration and not a sink. It hands over the *same* metadata blob the
+        supervisor mirror uses, minus the two credentials that must not rest on
+        disk (`session_recovery.redact_meta`), so the two recovery paths rebuild
+        a session from one description instead of two that can drift.
+        """
+        store = self.recovery
+        if store is None:
+            return
+        session.recovery_meta = lambda: self._session_meta(session)
+        store.attach(session)
 
     def _attach_ledger_sink(self, session: Session) -> None:
         """Wire the transition ledger into the durable status timeline.
@@ -3759,6 +3807,18 @@ class SessionManager:
             self.sessions[sid] = session
             self._attach_ledger_sink(session)
             self._attach_meta_sink(session)
+            # Adopted sessions rejoin the durable registry too, or a session that
+            # survived one restart would silently stop being checkpointed and its
+            # row would stop being updated - so the *next* crash, the one this
+            # exists for, would recover it from whatever the previous daemon last
+            # wrote. `open_session` is an upsert, which also restores a row that
+            # retention pruned or that a previous daemon closed in error.
+            if self.recovery is not None:
+                self._attach_recovery(session)
+                try:
+                    await self.recovery.open_session(session)
+                except Exception:
+                    log.exception("could not re-open the recovery row for %s", sid)
             if session.approval_candidate is not None:
                 # Local import avoids the observation -> session module cycle.
                 from .observation import restore_pending_approval
@@ -3820,6 +3880,153 @@ class SessionManager:
                 pid=record.pid,
             )
         return adopted
+
+    async def restore_cold_sessions(
+        self, *, project_exists: Callable[[str], bool] | None = None
+    ) -> int:
+        """Rebuild sessions whose end nobody was able to record.
+
+        Runs **after** supervisor adoption, and that order is the whole
+        correctness argument: a row still marked open describes a session this
+        daemon's predecessor never closed, and the only thing that distinguishes
+        "still running, just handed back by the supervisor" from "its process
+        died with the daemon" is whether adoption already claimed the id. Running
+        this first would show a live agent as a dead pane.
+
+        A cold session is deliberately an ordinary `Session` in the registry
+        rather than a parallel kind of thing: that is what puts it back in
+        `GET /api/sessions`, back in the sidebar, back in the persisted pane
+        layout (which the browser prunes against the live set), and within reach
+        of the Resume it already had. It carries `state="crashed"` so every
+        consumer that gates on a terminal state excludes it without being taught
+        anything, plus `cold=True` for the handful of places that must tell a
+        recovered session from one that merely exited.
+
+        No fanout, no ticker, no observer, no detection: there is no process to
+        observe. The session exists to be looked at, resumed, or dismissed.
+        """
+        store = self.recovery
+        if store is None:
+            return 0
+        try:
+            # Adopted sessions are excluded inside the query rather than filtered
+            # out here: reading a checkpoint is file I/O on the startup path, and
+            # after a session-preserving restart every open row belongs to a live
+            # adopted session.
+            rows = await store.open_rows(exclude=tuple(self.sessions))
+        except Exception:
+            log.exception("could not read the session recovery registry")
+            return 0
+        restored = 0
+        for row in rows:
+            if row.session_id in self.sessions:
+                # Adoption already rebuilt it from the supervisor: the process is
+                # alive and this row is simply the one it has been updating.
+                continue
+            if project_exists is not None and not project_exists(row.project_id):
+                # Nowhere to render it. Closing the row rather than leaving it
+                # open keeps it from being reconsidered on every later boot.
+                await store.close_session(row.session_id, "project_missing")
+                continue
+            try:
+                session = self._build_cold_session(row, reason="daemon_lost")
+            except Exception:
+                log.exception("could not rebuild cold session %s", row.session_id)
+                continue
+            self.sessions[row.session_id] = session
+            self._attach_ledger_sink(session)
+            restored += 1
+            await self.events.emit(
+                "session_cold_restored",
+                session_id=row.session_id,
+                source="daemon",
+                backend=session.record.backend,
+                reason="daemon_lost",
+                terminal_bytes=session.scrollback.size,
+                terminal_captured_at=session.record.cold_terminal_at,
+                terminal_skipped=session.record.cold_terminal_skipped,
+            )
+        self.cold_sessions_restored = restored
+        if restored:
+            log.warning(
+                "%d session(s) recovered cold: their processes are gone, and the "
+                "daemon that owned them never recorded how they ended",
+                restored,
+            )
+        return restored
+
+    def _build_cold_session(self, row: RecoveredSession, *, reason: str) -> Session:
+        """One recovered registry row as a dead-but-visible `Session`."""
+        record = SessionRecord.from_snapshot(dict(row.meta.get("record") or {}))
+        self._ensure_spawn_identity(record)
+        now = time.time()
+        record.state = "crashed"
+        record.state_since = now
+        record.state_detail = "recovered after an unexpected shutdown"
+        record.cold = True
+        record.cold_since = now
+        record.cold_reason = reason
+        record.cold_terminal_at = row.terminal.captured_at if row.terminal else None
+        record.cold_terminal_skipped = row.checkpoint_skipped
+        # Everything below described a running process. A dead one holds no
+        # standing engagements, has no open turn, is waiting on nothing, and its
+        # exit code is genuinely unknown - reporting the last one observed would
+        # be inventing a cause of death.
+        record.standing_activity = []
+        record.turn_started_at = None
+        record.active_turn_id = None
+        record.awaiting_reason = None
+        record.idle_reason = None
+        record.interrupt_pending_at = None
+        record.interrupt_pending_source = None
+        record.requested_end_reason = None
+        record.exit_code = None
+        record.runtime_cwd_live = False
+        adapter = self.adapters.get(record.backend) or self.adapters["shell"]
+        host = PtyHost(
+            record.exe,
+            tuple(record.args),
+            record.spawn_cwd or record.cwd,
+            cols=(row.terminal.geometry or (120, 30))[0] if row.terminal else 120,
+            rows=(row.terminal.geometry or (120, 30))[1] if row.terminal else 30,
+        )
+        # Prepared but never spawned: `PtyHost` with no child is already exactly
+        # the contract a cold session needs (`isalive()` False, `pid` -1,
+        # `release`/`stop` no-ops, writes refused), so this needs no second
+        # implementation of a host that does nothing.
+        host.prepare()
+        session = Session(
+            record,
+            host,
+            adapter,
+            self.max_scrollback,
+            # A fresh unguessable secret rather than the one this session ran
+            # with: that one is not persisted, and an empty string would
+            # *authenticate* - `compare_digest("", "")` is True, so a hook with no
+            # header would be accepted by a session that must accept nothing.
+            secrets.token_urlsafe(24),
+            mcp_token="",
+            attach_replay_bytes=self.attach_replay_bytes,
+        )
+        if row.terminal is not None and row.terminal.data:
+            # Position starts at the restored length, not at the pre-crash ring
+            # position: this is a new stream, and `_delta_covers` refuses deltas
+            # on a cold session for the same reason.
+            session.scrollback.seed(row.terminal.data, len(row.terminal.data))
+            # The same replay the adoption path performs, and for the same
+            # reason: the modes a child set once and never repeated are only
+            # recoverable by re-reading the bytes that set them, and without this
+            # the attach preamble would restore nothing.
+            session.screen.feed(row.terminal.data)
+            session.bracketed_paste.feed(row.terminal.data)
+            session.sticky_modes.feed(row.terminal.data)
+            session.osc_signals.feed(row.terminal.data)
+        transcript = row.meta.get("transcript_path")
+        if isinstance(transcript, str) and transcript:
+            # Read-only: nothing tails it, but the Transcript tab and Resume both
+            # navigate by it, and for an agent that file is the real recovery.
+            session.transcript_path = Path(transcript)
+        return session
 
     def _start_observer(self, session: Session, transcript: Path | None) -> None:
         if session.observer_task and not session.observer_task.done():
@@ -5484,6 +5691,14 @@ class SessionManager:
         )
 
         record = session.record
+        if record.state in TERMINAL_STATES:
+            # Nothing here can apply to a session with no process. The terminal
+            # latch already refuses every transition this would attempt, so the
+            # work was only ever wasted - but it stopped being *only* wasted once
+            # ended panes started being retained and a crash could restore dozens
+            # of cold sessions at boot, each re-reading a buffer that will never
+            # change, twice a pass, forever.
+            return
         if await SessionManager._check_ssh_boundary_state(self, session, now):
             return
         interrupt_requested_at = record.interrupt_pending_at
@@ -6546,6 +6761,20 @@ class SessionManager:
                 log.exception(
                     "could not flush status timeline for ended session %s",
                     session.record.id,
+                )
+        recovery = getattr(self, "recovery", None)
+        if recovery is not None:
+            # Closing the row is the whole clean-end marker: an end that is
+            # recorded is an end nobody has to guess at on the next boot. It runs
+            # after `_await_registration` above, so it can never close a row the
+            # spawn task has not opened yet, and it is deliberately last-ish -
+            # everything above it is what makes the end *durable*, and a row
+            # closed before them would hide a session whose history never landed.
+            try:
+                await recovery.close_session(session.record.id, final_reason)
+            except Exception:
+                log.exception(
+                    "could not close recovery row for ended session %s", session.record.id
                 )
 
     async def stop(self, sid: str, *, reason: str = "killed") -> None:

@@ -283,6 +283,13 @@ and reattachable browser viewports.
   tick would persist a spurious exit for an agent that is still running. If the supervisor is
   unreachable at spawn time the daemon falls back to today's in-process ConPTY, whose lifetime
   is daemon-bound as before.
+- **The supervisor is the primary recovery path, not the only one.** It cannot survive its own
+  death: its kill-on-close Job takes every process tree with it, and both the authoritative
+  scrollback and the mirrored metadata are process memory. A supervisor crash, a force close, a
+  power loss, or `pty_supervisor_enabled` off therefore leave the next daemon with no idea those
+  sessions existed. A durable registry behind the mirror brings them back as **cold sessions** -
+  visible, dead, and resumable - and the same layer is what lets an ended pane stay readable at all.
+  Contract, format, and bounds: `features/session-recovery.md`.
 - A spawn mirrors the session's initial metadata with the spawn RPC itself, not only through
   the debounced meta sink: a daemon crash inside that ~0.5s window otherwise left the
   supervisor holding a live session with empty metadata, permanently unadoptable and
@@ -410,6 +417,7 @@ and reattachable browser viewports.
 - `src/swe_mux/supervisor_client.py`
 - `src/swe_mux/scrollback.py` (`tail_bytes()` reads the end without joining; `tail()` is
   the replay budget; `bytes()` is full retention)
+- `src/swe_mux/session_recovery.py`
 - `src/swe_mux/git_projects.py`
 - `src/swe_mux/spawn_contract.py`
 - `src/swe_mux/adapters/`
@@ -418,6 +426,7 @@ and reattachable browser viewports.
 
 ## Relates to
 
+- `session-recovery.md`: what survives when the PTY owner dies too.
 - `projects.md`: canonical ownership and Project registration.
 - `project-resources.md`: Project-owned notes.
 - `history.md`: durable agent-run lifecycle.

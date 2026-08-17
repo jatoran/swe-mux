@@ -1290,8 +1290,18 @@ responsive controls.
   because the pane is memoized against callback props and could not otherwise see it: both the rail
   button and the drawer button read that broadcast instead of running a second timer, so their
   label can never disagree with what the next click does. On an exited or crashed session the
-  button relabels to Remove, matching the command's own fallback. The drawer deliberately stays
-  open on the arming click — closing it would leave nowhere to make the second one.
+  button relabels to Remove, matching the command's own fallback, and skips the confirm entirely:
+  confirmation guards against destroying work, and an ended session has none left to destroy — no
+  process to interrupt and no turn to lose, only a record the operator has finished reading. The
+  drawer deliberately stays open on the arming click — closing it would leave nowhere to make the
+  second one.
+- **An ended or recovered session's pane is openable and read-only.** Its row and tab keep the
+  same 0.62 dimming they always had; a *recovered* one adds a dotted underline, because the
+  difference between "you watched this exit" and "this came back from disk after a crash" decides
+  whether the way back is Resume, Restart, or nothing. A banner above the terminal says which it
+  is, how old the replayed content is, and — when there is none — why not, since an empty
+  recovered agent pane otherwise reads as a bug rather than the deliberate exclusion it is
+  (`features/session-recovery.md`).
 - Copy reply, Branch, and Paste render as icons alone; every other action keeps its text. The
   rail is width-starved — those three cost 74 px each on desktop and 96 px on a phone, which is
   most of a screen's worth of rail before the terminal keys begin — and their marks (offset

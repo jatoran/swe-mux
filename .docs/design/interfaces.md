@@ -17,7 +17,11 @@ from `absent`: the supervisor process is alive and still holds live sessions, th
 just cannot reach them — reporting that as "no supervisor" hides sessions that are running
 and unkillable from here. `supervisor_unadopted` counts supervised sessions this daemon
 could not rebuild (snapshot drift, a crash inside the spawn-meta window); they keep running
-with no UI handle, so the count must be visible rather than only a log line. Shutdown exists only when the daemon
+with no UI handle, so the count must be visible rather than only a log line.
+It also reports `session_recovery: bool` and `cold_sessions`: sessions rebuilt from durable
+recovery data because their processes died with a daemon that never recorded how they ended
+(`features/session-recovery.md`). A non-zero count is the signal that something took the whole
+app down, which no other field says. Shutdown exists only when the daemon
 was launched with desktop control, accepts IP-loopback peers only, compares the generated token
 in constant time, and returns `202 {status: "shutting_down", mode}`. An optional JSON body
 `{mode: "quit"|"restart"}` (default `quit`) carries shutdown intent: `quit` reaps every session
@@ -697,6 +701,7 @@ On initial attach, the daemon waits up to 250 ms for
 The handshake precedes the replay snapshot because the frame decides what the replay is: `since` is the ring position the client has already parsed up to, and when the ring provably still holds everything after it the attach is answered as a **delta** (`replay_start` with `reason:"delta"`, exactly the missed bytes, into a terminal the client does not reset) instead of a reset plus the bounded window.
 That is what keeps a pane's parsed scrollback across a reconnect — a tab switch, a minimize, a phone freeze, or a session-preserving daemon restart (ring positions survive supervisor adoption).
 Every doubt — no `since`, a gap the ring no longer covers, a gap larger than `attach_replay_bytes`, a position outside the stream — falls back to the full windowed replay, because a wrong delta corrupts a terminal silently while a wasted replay only costs a parse.
+A **cold session never serves a delta at all**: its ring was rebuilt from disk, so its positions describe a different stream from the one any client parsed before the crash, and a `since` from that stream can land inside range by coincidence (`features/session-recovery.md`).
 `replay_end` carries `position`, the ring position at the snapshot: that anchor plus every live binary byte the client receives afterwards is what it may offer as `since` next time.
 A `gap` frame (dropped chunks) invalidates the client's count until the resync's `replay_end` re-anchors it.
 A delta never allows terminal responses and never triggers the truncated-replay repaint pulse — the client's screen is exact after the append.
@@ -772,6 +777,13 @@ as `input_arbitration`, alongside the refused-claim count, the current geometry,
 leading device, and `claims`: the last two dozen decisions with the asking device, what it
 reported about itself, what the daemon believed, and the verdict. A counter says a claim was
 refused; only that log says which device asked and why it lost.
+
+Input to a session that has **ended** — including a cold one — is refused separately and before
+ownership is considered: `{type:"input_refused", reason:"session_ended"}` on the socket, and a 400
+on the HTTP paths. An ended pane stays open until it is dismissed, so it is a pane a person can
+click into; without this, `PtyHost.write` raises for its released or never-spawned pseudoterminal
+and the operator gets a 500 or a dropped socket instead of an explanation
+(`features/session-recovery.md`).
 
 `GET /api/sessions/{id}/state-log` also reports the conversation identity behind the state:
 `agent_run_id`, `agent_run_seq`, `native_session_id`, `agent_lifecycle_id`, and

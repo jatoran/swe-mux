@@ -7,6 +7,8 @@ import {
 } from './harnessRegistry'
 import { HANDSHAKE_TIMEOUT_MS, retryDelay, watchLiveness } from './liveness'
 import { TerminalPane } from './TerminalPane'
+import { EndedPaneBanner } from './EndedPaneBanner'
+import { canRestartCold, coldSessionSummary, isColdSession } from './coldSession.ts'
 import { recordPaneVisits, warmPaneBudget, warmPaneIds } from './warmPanes'
 import { windowsPtyCompatibility, type TerminalRendererPreference, type WindowsPtyCompatibility } from './terminalRenderer'
 import { ProjectResource } from './ProjectResource'
@@ -206,6 +208,7 @@ const isAgent = (session: Session) => isAgentBackend(session.backend)
 function isEndedSession(session: Session) {
   return session.state === 'exited' || session.state === 'crashed'
 }
+
 
 function railVoiceConfirmation(entry: RailVoiceEntry): string {
   const name=entry.phrases[0]||entry.item.label
@@ -1385,7 +1388,15 @@ export function App() {
       setRegistryLoaded(true)
       setLayoutMap(current => {
         const next = { ...current }
-        const live = new Set(visibleSessions.filter(session => !['exited', 'crashed'].includes(session.state)).map(session => session.id))
+        // Every session the daemon still holds keeps its leaf, ended ones
+        // included. A session that ends on its own used to keep its sidebar row
+        // and lose its tab in the same instant, so the pane showing what it
+        // printed was destroyed at exactly the moment somebody wanted to read
+        // it — and the pruned layout was written back, so it did not come back.
+        // A session leaves the layout when it leaves the fleet: killed, or
+        // dismissed. `sessionKills` already excludes in-flight kills from this
+        // set, which is what removes a closed tab immediately.
+        const live = new Set(visibleSessions.map(session => session.id))
         const livePreviews = new Set(nextPreviews.items.map(item => item.id))
         for (const project of nextProjects) {
           // This GET may have been snapshotted before an in-flight layout PATCH
@@ -3177,7 +3188,11 @@ export function App() {
   }
 
   const requestKill = (session: Session) => {
-    if (confirmKillId === session.id) void killNow(session)
+    // Confirmation guards against destroying work, and an ended session has
+    // none left to destroy: there is no process to interrupt and no turn to
+    // lose, only a record the operator is finished reading. Making them click
+    // twice to clear a dead row is friction with nothing behind it.
+    if (confirmKillId === session.id || isEndedSession(session)) void killNow(session)
     else setConfirmKillId(session.id)
   }
 
@@ -4001,11 +4016,17 @@ export function App() {
       const result=resolveSessionReference(query.reference,projectResult?.item||undefined)
       if(result.candidates.length)return ambiguousSessions(result.candidates,result.error)
       if(!result.item)return{detail:result.error,speech:result.error}
-      if(isEndedSession(result.item.session))return{detail:'That session has ended and cannot be opened.',speech:'That session has ended and cannot be opened.'}
       const ran=runCommand(commandRegistryRef.current,`session.focus:${result.item.session.id}`)
       const address=voiceSessionAddress(result.item)
+      // An ended session opens now — read-only — so the confirmation says what
+      // was opened rather than refusing. Saying so out loud matters more here
+      // than on screen: the pane's own banner is not something a hands-free
+      // operator is looking at, and typing at a dead pane is the mistake.
+      const ended=isEndedSession(result.item.session)
+        ?isColdSession(result.item.session)?' It was recovered after a crash and is read-only.':' It has ended and is read-only.'
+        :''
       const speech=ran==='ran'
-        ?`Opened ${address?`Project ${address.projectNumber}, Session ${address.sessionNumber}, `:''}${sessionName(result.item.session)} in ${result.item.projectName}.`
+        ?`Opened ${address?`Project ${address.projectNumber}, Session ${address.sessionNumber}, `:''}${sessionName(result.item.session)} in ${result.item.projectName}.${ended}`
         :'That session cannot be opened.'
       return{detail:speech,speech}
     }
@@ -4245,6 +4266,10 @@ export function App() {
     { id: 'session.kill', label: active && isEndedSession(active) ? 'Remove focused session from sidebar' : 'Kill focused session', category: 'session', available: !!active, disabledReason: 'No focused session', run: () => active && requestKill(active) },
     { id: 'session.killImmediate', label: commandSession && isEndedSession(commandSession) ? 'Remove selected session from sidebar' : 'Kill selected session immediately', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void killNow(commandSession) },
     { id: 'session.relaunch', label: 'Relaunch focused task terminal', category: 'session', available: !!active && !!active.relaunchable, disabledReason: 'Relaunch is available for task-launched terminals', run: () => active && void relaunchSession(active) },
+    // Same endpoint, different framing: for a recovered shell this is not
+    // "run that task again" but "give me this terminal back", which is the only
+    // way back for a session with no conversation to resume.
+    { id: 'session.restartCold', label: 'Restart recovered terminal', category: 'session', available: !!commandSession && canRestartCold(commandSession), disabledReason: 'Select a recovered terminal session', run: () => commandSession && void relaunchSession(commandSession) },
     { id: 'session.pinAttention', label: active?.pinned_attention ? 'Unpin focused session attention' : 'Pin focused session attention', category: 'session', available: !!active && isAgent(active), disabledReason: 'Attention pinning requires a focused agent', run: () => active && void api<Session>('PATCH', `/api/sessions/${active.id}`, { pin: !active.pinned_attention }).then(updateSession) },
     { id: 'voice.toggleTalk', label: conversation.active||conversation.phase!=='off'?'Stop hands-free conversation':'Start hands-free conversation', category: 'voice', available: !!voiceStatus?.stt_enabled, disabledReason: 'Enable microphone conversation in Settings first', run: () => conversation.toggle() },
     { id: 'voice.toggleTargetPin', label: conversation.pinned?'Voice dictation: follow workspace focus':'Voice dictation: pin current target', category: 'voice', available: !!conversation.target, disabledReason: 'Focus an agent or text surface first', run: () => conversation.togglePin() },
@@ -4300,7 +4325,11 @@ export function App() {
         return{detail:'Voice approval cancelled. The tool prompt is unchanged.',speech:'Approval cancelled.'}
       },
     }},
-    { id: 'session.open', label: 'Open selected session in focused pane', category: 'session', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void selectSession(commandSession) },
+    // Ended and recovered sessions open too. The pane is read-only, and reading
+    // what a session printed before it died is the entire reason its row is
+    // still there — refusing to open it left the row as a label with nothing
+    // behind it.
+    { id: 'session.open', label: 'Open selected session in focused pane', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void selectSession(commandSession) },
     { id:'session.nextInProject',label:'Go to next session in current Project',category:'session',available:!!activeProject&&!!active,disabledReason:'Focus a session in a Project first',run:()=>{const target=relativeVoiceSession(1);if(target)void selectSession(target)},voice:{
       phrases:['go to next session','next session','open next session'],
       execute:async()=>{
@@ -4329,8 +4358,8 @@ export function App() {
     { id: 'session.toggleRead', label: commandSession && isUnread(commandSession, ackedTurns) ? 'Mark selected session read' : 'Mark selected session unread', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Read state is tracked for live agent sessions', run: () => commandSession && void toggleSessionRead(commandSession) },
     { id: 'session.copyId', label: 'Copy selected session ID', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.id).catch(() => setError('Clipboard access was blocked.')) ; setContextMenu(null) } },
     { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(workingCwd(commandSession)).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
-    { id: 'session.openSplitHorizontal', label: 'Open selected session in split right', category: 'pane', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void openInSplit(commandSession, 'horizontal') },
-    { id: 'session.openSplitVertical', label: 'Open selected session in split below', category: 'pane', available: !!commandSession && !['exited', 'crashed'].includes(commandSession.state), disabledReason: 'No live session selected', run: () => commandSession && void openInSplit(commandSession, 'vertical') },
+    { id: 'session.openSplitHorizontal', label: 'Open selected session in split right', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void openInSplit(commandSession, 'horizontal') },
+    { id: 'session.openSplitVertical', label: 'Open selected session in split below', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && void openInSplit(commandSession, 'vertical') },
     { id: 'session.groupStack', label: 'Stack selected session with focused terminal', category: 'pane', available: !!commandSession&&!!activeId&&commandSession.id!==activeId&&commandSession.project_id===projectId, disabledReason: 'Choose two live sessions in the same project', run:()=>commandSession&&activeId&&void updateLayout(projectId,groupTerminalsInStack(activeLayout,activeId,commandSession.id)) },
     { id: 'session.reveal', label: 'Reveal selected working directory', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void api('POST', '/api/reveal', { path: commandSession.cwd }); setContextMenu(null) } },
     { id: 'session.customSplit', label: 'New custom terminal in selected session split', category: 'pane', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) { setContextMenu(null); openLauncher(commandSession.project_id, 'horizontal') } } },
@@ -4882,7 +4911,7 @@ export function App() {
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
           // the real name is the surface where you actually need to tell panes apart.
           const label=session?sessionName(session):child.id
-          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
+          return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab ${session?.pending?'pending-terminal-tab':''} ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>{if(!session?.pending)beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}}><button role="tab" aria-label={`${label} session tab`} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''} ${session?.state||''} ${session&&isColdSession(session)?'cold':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(session&&!session.pending)openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(child.id)}{label}</button>{closeTab(child,label,session)}</div>
         })}
       </OverflowRail><div class="stack-active">{node.children
         .filter(child=>child.id===activeChild.id||(child.kind==='terminal'&&warmTerminalIds.includes(child.id)))
@@ -5002,11 +5031,17 @@ export function App() {
             session context menu and palette still open the inspector directly. */}<button aria-label={`More actions for ${sessionName(session)}`} title="Session actions" onClick={event=>{const rect=event.currentTarget.getBoundingClientRect();openPaneMenu({clientX:rect.right,clientY:rect.bottom,stopPropagation:()=>event.stopPropagation()})}}>⋯</button></div>
       </div>
       {voiceOverlayNode}
+      {isEndedSession(session)&&<EndedPaneBanner
+        session={session}
+        onResume={isAgent(session)?()=>void resumeSession(session):undefined}
+        onRestart={canRestartCold(session)?()=>void relaunchSession(session):undefined}
+        onOpenTranscript={hasHarnessTranscript(session.backend)?()=>void openTranscriptForSession(session.id):undefined}
+      />}
       <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onConfigureWidth={()=>openSettings('Terminals')} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
-      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${confirmKillId===id?'Confirm close':'Close'} terminal: ${sessionName(session)}`} title={confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
+      <div data-tutorial="tab-drag-source" class="stack-tab-shell"><button role="tab" aria-label={`${sessionName(session)} session tab`} aria-selected="true" class={`tab-main active ${session.state} ${isColdSession(session)?'cold':''}`} onClick={()=>setActiveId(id)} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openSessionMenu(session,event.clientX,event.clientY,'tab')}}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(id)}{sessionName(session)}</button><button class={`tab-close ${confirmKillId===id?'confirming':''}`} aria-label={`${isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm close terminal':'Close terminal'}: ${sessionName(session)}`} title={isEndedSession(session)?'Remove session':confirmKillId===id?'Confirm kill terminal':'Close and kill terminal'} onClick={event=>{event.stopPropagation();requestKill(session)}}>{confirmKillId===id?'✓':'×'}</button></div>
     </OverflowRail><div class="stack-active">{terminalPane}</div></section>
   }
 
@@ -5097,7 +5132,7 @@ export function App() {
     const attention=!agent||activeId===session.id?''
       :visibleSessionIds.includes(session.id)?'viewing'
       :isUnread(session,ackedTurns)?'unread':'read'
-    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${session.pending?'pending-terminal-row':''}`} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
+    return <div class="session-entry"><button data-sidebar-session-id={session.id} data-sidebar-project-id={session.project_id} data-sidebar-reorder={placement==='paned'&&!session.pending?undefined:'off'} class={`session-row ${activeId === session.id ? 'active' : ''} ${agent?'agent':''} ${attention} ${session.state} ${isColdSession(session)?'cold':''} ${session.pending?'pending-terminal-row':''}`} title={isColdSession(session)?coldSessionSummary(session):undefined} onPointerDown={event=>{if(!session.pending)beginSessionPointerDrag(event,session)}} onContextMenu={event => { event.preventDefault();if(!session.pending&&!mobileWorkspace)openSessionMenu(session,event.clientX,event.clientY,'sidebar') }} onClick={() => {if(suppressDragClickRef.current===`session:${session.id}`){suppressDragClickRef.current=null;return}void selectSession(session)}}>
       {sessionStateDot(session,rowConfig.dotShape,sessionContextArc(session,rowConfig),sessionStandingMark(session,rowConfig))}
       <SessionRowBody session={session} tokens={rowTokens(session)} config={rowConfig}/>
       {!session.pending&&<span class="row-actions" onPointerDown={event=>event.stopPropagation()} onClick={event => event.stopPropagation()}><button class={confirmKillId === session.id ? 'confirming' : ''} title={confirmKillId === session.id ? (isEndedSession(session) ? 'Confirm remove' : 'Confirm kill') : (isEndedSession(session) ? 'Remove from sidebar' : 'Kill')} onClick={() => runNamedCommand(`session.requestKill(${session.id})`)}>{confirmKillId === session.id ? '✓' : '×'}</button></span>}
@@ -5614,6 +5649,7 @@ export function App() {
       {isAgent(contextMenu.session)&&contextMenu.session.auto_named!==false&&!isEndedSession(contextMenu.session)&&<button onClick={() => runNamedCommand('session.regenerateTitle')}>Regenerate title</button>}
       {contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>}
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
+      {canRestartCold(contextMenu.session) && <button onClick={() => runNamedCommand('session.restartCold')}>Restart terminal</button>}
       {activityBadges(contextMenu.session).length>0&&<button onClick={() => runNamedCommand('session.clearStandingActivity')}>Clear standing activity</button>}
       {isAgent(contextMenu.session)&&!isEndedSession(contextMenu.session)&&<button onClick={()=>runNamedCommand('session.toggleRead')}>{isUnread(contextMenu.session,ackedTurns)?'Mark as read':'Mark as unread'}</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>

@@ -134,6 +134,16 @@ regression is valuable because these user-visible paths historically exposed lea
   batched on its own worker, with time-based retention (`status_timeline_retention_days`).
   Writes are `INSERT OR IGNORE` against the `(session_id, agent_run_id, seq)` key, so a
   replayed batch after a failed flush cannot duplicate rows.
+- `src/swe_mux/session_recovery.py` — the durable session registry (`session_recovery` table):
+  one row per session with the redacted metadata blob it can be rebuilt from and an open marker,
+  sampled onto its own worker on an interval.
+  Its **terminal bytes are files, not rows**, and its file work runs through a separate `_run_io`
+  helper on the same worker but *outside* `database_operation_lock`: that lock is per database
+  file and shared with the history, automation, telemetry, and voice workers, so writing a few
+  hundred kilobytes of scrollback under it would make an unrelated history write wait on this
+  store's disk I/O.
+  Row-then-files ordering on delete, because a directory no row names is swept at boot while a row
+  naming files that are gone would have a restore report content it cannot produce.
 - `src/swe_mux/tier0_store.py`, `src/swe_mux/deterministic_consumers.py`
 - `src/swe_mux/project_context.py` writes no SQLite rows.
   The Project-owned Markdown file is its only active store.

@@ -49,6 +49,14 @@
   in the record snapshot, so supervisor adoption round-trips it across daemon restarts;
   drift-tolerant like the rest of `from_snapshot` (unknown keys dropped, malformed
   annotations skipped). Contract and detection sources: `features/status-detection.md`.
+- `SessionRecord.cold` and its `cold_since` / `cold_reason` / `cold_terminal_at` /
+  `cold_terminal_skipped` companions: this session was rebuilt from durable recovery data rather
+  than observed, because its process died with a daemon that never recorded how it ended.
+  Deliberately a flag beside `state="crashed"` rather than a new `SessionState`: every consumer
+  that gates on `state in {"exited","crashed"}` must exclude a cold session, and the flag makes
+  that structural instead of an audit. `cold_terminal_at` bounds how stale the replayed screen is
+  and is absent when there is none; `cold_terminal_skipped` names why bytes were never kept, which
+  is what lets a deliberately empty pane say so (`features/session-recovery.md`).
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 
@@ -113,6 +121,12 @@
   `status_timeline_retention_days` (default 30), and queried by time range for
   post-mortems (`features/status-detection.md` § durable timeline,
   `development/STATUS_INCIDENT_RUNBOOK.md`).
+- `session_recovery`: one row per session this daemon has run, holding the redacted metadata blob
+  it can be rebuilt from and an **open marker**. `closed_at IS NULL` means nobody was able to
+  record how that session ended, which is the whole signal a cold restore reads. Credentials are
+  never persisted (`hook_secret`, `mcp_token` are dropped), terminal bytes live in files rather
+  than in this table, and rows are bounded by `session_recovery_retention_days` (closed) and
+  `session_recovery_max_sessions` (open). See `features/session-recovery.md`.
 - `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
   with `content_hash`, canonical `fingerprint`, the owning `agent_run_id`/`project_id`, and a
   `source_seq` pointer into the event log. Test results additionally carry structured

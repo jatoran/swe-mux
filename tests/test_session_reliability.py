@@ -22,7 +22,18 @@ def _fake_session(max_bytes: int = 32) -> Any:
     fake = cast(Any, Session.__new__(Session))
     fake.scrollback = ScrollbackBuffer(max_bytes)
     fake.subscribers = set()
-    fake.record = cast(Any, type("Record", (), {"snapshot": lambda self: {"state": "running"}})())
+    fake.record = cast(
+        Any,
+        type(
+            "Record",
+            (),
+            # `cold` is read by the delta-attach decision: a recovered session's
+            # ring was rebuilt from disk, so its positions describe a different
+            # stream and a delta across that boundary would corrupt the terminal.
+            # These fixtures are all live sessions.
+            {"snapshot": lambda self: {"state": "running"}, "cold": False},
+        )(),
+    )
     fake.revision = 0
     # Replay is exact here: these fixtures pin the *retention* contract, and a
     # replay budget would silently trim the very boundaries they assert on.

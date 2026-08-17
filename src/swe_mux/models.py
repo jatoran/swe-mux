@@ -318,6 +318,29 @@ class SessionRecord:
     client_startup_timing_ms: dict[str, float] = field(default_factory=dict)
     completion_mode: Literal["interactive", "one_shot"] = "interactive"
     exit_code: int | None = None
+    # Restored from durable recovery data rather than from a process: the daemon
+    # and its PTY owner both died without recording how this session ended, so it
+    # comes back visible-but-dead instead of vanishing from the sidebar and the
+    # layout. Deliberately a flag alongside `state="crashed"` rather than a new
+    # `SessionState`: dozens of consumers gate on `state in {"exited","crashed"}`,
+    # and a cold session must be excluded from every one of them (delivery,
+    # auto-delivery, attention, identity claims, MCP) by construction. Only the
+    # UI and the revive paths ever need to know the difference.
+    cold: bool = False
+    #: When this session was recovered, and what its recovery data could tell us.
+    #: `cold_reason` names why it is cold (`daemon_lost`, `supervisor_lost`);
+    #: `cold_terminal_at` is when its last terminal checkpoint was taken, which
+    #: bounds how stale the replayed screen is, and is None when there is none.
+    cold_since: float | None = None
+    cold_reason: str | None = None
+    cold_terminal_at: float | None = None
+    #: Why no terminal bytes were kept for this session, when none were. An
+    #: alternate-screen or repaint-heavy harness is excluded on purpose: its
+    #: retained bytes are a differential frame stream that reconstructs to a
+    #: blank or half-drawn screen, and repairing that needs a live child to
+    #: pulse. Naming the reason is what lets the pane say so instead of looking
+    #: broken.
+    cold_terminal_skipped: str | None = None
     # The end reason to persist when this session terminates, set by a deliberate
     # end operation before it sends the exit sequence (Phase 7.6). It lets an
     # agent-initiated graceful end record `agent_ended` even when the CLI exits on

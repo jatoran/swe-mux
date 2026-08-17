@@ -135,6 +135,10 @@ RESTART_FIELDS = {
     "automation_queue_size",
     "openrouter_request_timeout_seconds",
     "pty_supervisor_enabled",
+    # The recovery store is constructed once at daemon start, and turning it off
+    # while sessions are already tracked would leave their rows open forever -
+    # every one of them coming back as cold on the next boot.
+    "session_recovery_enabled",
     # Adapters are constructed once at daemon start, so the per-harness MCP and
     # instrumentation gates only re-read on the next restart. Marking them
     # restart-required keeps the UI honest rather than reporting a hot apply that
@@ -468,6 +472,23 @@ class Config:
     # live sessions survive a daemon restart. Off by default while the split
     # proves itself; in-process spawning remains the automatic fallback.
     pty_supervisor_enabled: bool = False
+    # Cold session recovery: keep a durable registry of live sessions so ones
+    # whose daemon *and* PTY owner both died come back as visible-but-dead rows
+    # rather than vanishing. On by default - the supervisor covers a daemon
+    # restart, and this covers everything that kills both.
+    session_recovery_enabled: bool = True
+    # Terminal bytes kept per session for a cold restore, so a recovered pane
+    # shows what it printed. 0 keeps the registry (the part that brings sessions
+    # back) and stores no bytes at all. Deliberately far below `scrollback_bytes`:
+    # a cold pane is a post-mortem, not a session, and only harnesses whose
+    # retained bytes are a real transcript are checkpointed in the first place.
+    session_recovery_checkpoint_bytes: int = 256 * 1024
+    # How long recovery data for an *ended* session is kept. Cold sessions
+    # themselves are bounded by count below, not by this.
+    session_recovery_retention_days: int = 7
+    # Hard cap on how many recoverable sessions are retained, newest first.
+    # Without it a machine that crashes repeatedly accumulates cold rows forever.
+    session_recovery_max_sessions: int = 40
     # Startup default for the daemon's root-logger level (rotating daemon.log +
     # console). Runtime changes go through POST /api/debug/log-level or a
     # config-file edit; neither requires a restart.
@@ -1024,6 +1045,12 @@ def _validate(config: Config) -> None:
         errors["scrollback_bytes"] = "must be between 1 KiB and 1 GiB"
     if not 1024 <= config.attach_replay_bytes <= 1024 * 1024 * 1024:
         errors["attach_replay_bytes"] = "must be between 1 KiB and 1 GiB"
+    if not 0 <= config.session_recovery_checkpoint_bytes <= 64 * 1024 * 1024:
+        errors["session_recovery_checkpoint_bytes"] = "must be between 0 and 64 MiB"
+    if not 0 <= config.session_recovery_retention_days <= 365:
+        errors["session_recovery_retention_days"] = "must be between 0 and 365 days"
+    if not 0 <= config.session_recovery_max_sessions <= 1000:
+        errors["session_recovery_max_sessions"] = "must be between 0 and 1000 sessions"
     if not 0.25 <= config.git_poll_seconds <= 3600:
         errors["git_poll_seconds"] = "must be between 0.25 and 3600 seconds"
     if not isinstance(config.worktree_root, str):

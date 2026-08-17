@@ -248,6 +248,7 @@ from .session_attachments import (
     store_session_attachment,
 )
 from .session_control import SessionControlService
+from .session_recovery import SessionRecoveryStore
 from .settings_store import SettingsStore
 from .spawn_contract import (
     SpawnRequest,
@@ -1039,6 +1040,17 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
     # (status-detection.md § durable timeline). Pruned by its own flush loop.
+    session_recovery = (
+        SessionRecoveryStore(
+            config.database_path,
+            config.data_dir / "recovery",
+            checkpoint_bytes=config.session_recovery_checkpoint_bytes,
+            retention_days=config.session_recovery_retention_days,
+            max_cold_sessions=config.session_recovery_max_sessions,
+        )
+        if config.session_recovery_enabled
+        else None
+    )
     status_timeline = StatusTimelineStore(
         config.database_path, retention_days=config.status_timeline_retention_days
     )
@@ -1115,6 +1127,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         supervisor=supervisor_client,
         attach_replay_bytes=config.attach_replay_bytes,
         status_timeline=status_timeline,
+        recovery=session_recovery,
     )
     if supervisor_client is not None:
         try:
@@ -1133,6 +1146,32 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                     "could not reset misattributed provider telemetry for session %s",
                     repaired_session_id,
                 )
+    if session_recovery is not None:
+        # Strictly after adoption: an open recovery row for a session the
+        # supervisor just handed back describes a *live* process, and restoring
+        # it as cold would present a running agent as a dead pane.
+        try:
+            restored = await sessions.restore_cold_sessions(
+                project_exists=lambda project_id: project_id in projects.projects
+            )
+            if restored:
+                log.info("restored %d cold session(s) from recovery data", restored)
+        except Exception:
+            log.exception("cold session restore failed")
+        try:
+            # A `discard` that died between deleting the row and the files, or a
+            # quarantined database, both leave directories nothing will ever read.
+            await session_recovery.sweep_orphan_directories(await session_recovery.known_ids())
+        except Exception:
+            log.exception("could not sweep orphan recovery directories")
+    try:
+        # Runs after both recovery paths have claimed what they can, so it can
+        # only close rows that genuinely have no live pane behind them.
+        closed = await history.close_orphaned_runs(_live_history_run_ids(sessions))
+        if closed:
+            log.info("closed %d history run(s) left open by an unclean shutdown", closed)
+    except Exception:
+        log.exception("could not close orphaned history runs")
 
     # The monitor's branch-scoped diff is measured against the same base the Git
     # drawer uses, so the sidebar and the drawer cannot report a session's branch
@@ -1458,6 +1497,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     )
     background.start(STATE_WATCHDOG_LOOP, sessions.state_watchdog_loop)
     status_timeline.start()
+    if session_recovery is not None:
+        session_recovery.start()
     push_sender = PushSender(
         push_store,
         settings_store,
@@ -1530,6 +1571,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         usage=usage,
         telemetry=telemetry,
         status_timeline=status_timeline,
+        session_recovery=session_recovery,
         storage_usage=StorageUsage(
             config.data_dir,
             lambda: [
@@ -1650,6 +1692,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # After sessions.shutdown(): the terminal ledger entries it appends are the
     # final drain's whole point.
     await status_timeline.stop()
+    if session_recovery is not None:
+        # Also after shutdown, and for the mirror-image reason: a `quit` closes
+        # every session's row on the way out, and a `detach` leaves the surviving
+        # sessions' rows open on purpose — they are still running, and the next
+        # daemon reaches them through the supervisor rather than through here.
+        await session_recovery.stop()
     await telemetry.stop()
     await tier0.stop()
     await clipboard.stop()
@@ -1659,6 +1707,8 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     voice_store.close()
     telemetry.close()
     status_timeline.close()
+    if session_recovery is not None:
+        session_recovery.close()
     tier0.close()
     clipboard.close()
     reaper.close()
@@ -1840,6 +1890,13 @@ async def health(request: web.Request) -> web.Response:
             # a crash inside the spawn-meta window). They keep running under the
             # supervisor with no UI handle, so the count must be visible.
             "supervisor_unadopted": unadopted,
+            # Sessions rebuilt from durable recovery data because their processes
+            # died with a daemon that never recorded how they ended. A number
+            # here is the signal that something took the whole app down.
+            "cold_sessions": (
+                sum(1 for s in sessions.sessions.values() if s.record.cold) if sessions else 0
+            ),
+            "session_recovery": request.app.get("session_recovery") is not None,
         }
     )
 
@@ -5401,6 +5458,29 @@ async def diagnostics_export(request: web.Request) -> web.Response:
         "network_usage": meter.snapshot(),
         "status_health": fleet_status_health(sessions.sessions.values()),
         "status_timeline_sink": store.stats(),
+        # Counters only. The recovery store also holds terminal bytes, which are
+        # whatever the child printed and therefore never leave the machine in an
+        # export - the same reason scrollback itself is not in this bundle.
+        "session_recovery_sink": (
+            recovery_store.stats()
+            if (recovery_store := request.app.get("session_recovery")) is not None
+            else None
+        ),
+        "cold_sessions": [
+            {
+                "id": session.record.id,
+                "name": session.record.name,
+                "backend": session.record.backend,
+                "project_id": session.record.project_id,
+                "cold_since": session.record.cold_since,
+                "cold_reason": session.record.cold_reason,
+                "terminal_captured_at": session.record.cold_terminal_at,
+                "terminal_skipped": session.record.cold_terminal_skipped,
+                "terminal_bytes": session.scrollback.size,
+            }
+            for session in sessions.sessions.values()
+            if session.record.cold
+        ],
         "logs": {
             "daemon": _log_tail(config.data_dir / "daemon.log"),
             "redeploy": _log_tail(config.data_dir / "redeploy.log"),
@@ -5730,6 +5810,13 @@ async def delete_session(request: web.Request) -> web.Response:
         if key[1] == session.record.id:
             attachment_locks.pop(key, None)
     await _discard_session_media(request.app, session.record.id)
+    recovery: SessionRecoveryStore | None = request.app.get("session_recovery")
+    if recovery is not None:
+        # Dismissal is the one thing that deletes recovery data. An ordinary end
+        # only *closes* the row, because "this session finished" and "I am done
+        # looking at this session" are different statements, and only the second
+        # one is a reason to throw away what it printed.
+        await recovery.discard(session.record.id)
     request.app["events"].emit_background(
         "session_removed",
         session_id=session.record.id,
@@ -5751,11 +5838,26 @@ async def relaunch_session(request: web.Request) -> web.Response:
     environment are spawn inputs in their own right, not something recoverable from
     the argv. Only sessions the daemon marked relaunchable qualify; agent and plain
     shell sessions are rejected so this never touches their lifecycle.
+
+    A **cold** shell is the one deliberate widening of that rule. The gate exists
+    to keep this away from a live lifecycle, and a cold session has none: its
+    process died with the daemon that owned it, and re-running its recorded argv
+    is the only way back. Cold *agents* stay excluded - replaying an agent's argv
+    would start a fresh conversation while re-injecting the old one's
+    `--session-id`, where the operator asked to return to the conversation. That
+    is Resume's job, and a cold agent already has it.
     """
     manager: SessionManager = request.app["sessions"]
     old = manager.resolve(request.match_info["sid"])
-    if not old.record.relaunchable:
+    cold_shell = bool(old.record.cold and old.record.backend == "shell")
+    # The recovered-agent case first, so it gets its own answer rather than the
+    # generic refusal: the operator asked for a way back and there is one.
+    if old.record.cold and not cold_shell:
+        raise ValueError("a recovered agent session is resumed, not relaunched")
+    if not old.record.relaunchable and not cold_shell:
         raise ValueError("session is not relaunchable")
+    if not old.record.exe:
+        raise ValueError("no recorded command to relaunch")
     body = {
         "project_id": old.record.project_id,
         "backend": "shell",
@@ -5769,7 +5871,10 @@ async def relaunch_session(request: web.Request) -> web.Response:
         body["cwd"] = old.record.spawn_cwd
     # Spawn the replacement first: if it raises, the original is left fully intact.
     session = await _spawn_from_body(request.app, body)
-    session.record.relaunchable = True
+    # A cold shell was never a task terminal, so relaunching one must not promote
+    # it into one: the flag drives a Relaunch affordance that only makes sense for
+    # a step whose argv the daemon vouches for.
+    session.record.relaunchable = old.record.relaunchable
     session.publish_update()
     old_id = old.record.id
     if old.record.state not in {"exited", "crashed"}:
@@ -5780,6 +5885,10 @@ async def relaunch_session(request: web.Request) -> web.Response:
         if key[1] == old_id:
             attachment_locks.pop(key, None)
     await _discard_session_media(request.app, old_id)
+    recovery: SessionRecoveryStore | None = request.app.get("session_recovery")
+    if recovery is not None:
+        # The replacement supersedes it, which is the operator being done with it.
+        await recovery.discard(old_id)
     return json_response({"session": session.record.snapshot(), "replaced": old_id}, 201)
 
 
@@ -6223,6 +6332,19 @@ def _note_composer_write(events: EventBus, session: Any, data: str | bytes, sour
     )
 
 
+def session_accepts_input(session: Any) -> bool:
+    """Whether this session still has a child that could receive keystrokes.
+
+    An ended pane stays visible until it is dismissed, and a cold one is visible
+    from the moment the daemon starts, so both are panes a person can click into
+    and type at. Neither has a PTY: `PtyHost.write` raises for a released or
+    never-spawned pseudoterminal, which arrives as a 500 on the HTTP paths and as
+    a dropped socket on the WebSocket one. Refusing here makes it an ordinary,
+    explainable "this session has ended" instead.
+    """
+    return str(getattr(session.record, "state", "")) not in {"exited", "crashed"}
+
+
 def _record_operator_input(
     events: EventBus, session: Any, data: str, *, source: str, input_owner: bool = True
 ) -> None:
@@ -6235,6 +6357,8 @@ def _record_operator_input(
     validated against. The WS path does its own (throttled) accounting; this is
     the shared path for everything else.
     """
+    if not session_accepts_input(session):
+        raise ValueError("session has ended and cannot accept input")
     session.pty.write(data)
     now = time.monotonic()
     session.input_revision += 1
@@ -8285,6 +8409,20 @@ def _live_agent_run_ids(manager: SessionManager) -> frozenset[str]:
         for session in manager.sessions.values()
         if session.record.backend in AGENT_BACKENDS
         and session.record.state not in {"exited", "crashed"}
+    )
+
+
+def _live_history_run_ids(manager: SessionManager) -> frozenset[str]:
+    """Every history row a live pane is still writing to, agent or shell.
+
+    Broader than `_live_agent_run_ids` on purpose: the startup sweep that closes
+    runs abandoned by a crash must not close a *shell's* row either, and a cold
+    session is excluded because its process is exactly what is gone.
+    """
+    return frozenset(
+        session.record.agent_run_id or session.record.id
+        for session in manager.sessions.values()
+        if session.record.state not in {"exited", "crashed"}
     )
 
 
@@ -11808,6 +11946,11 @@ async def _handle_terminal_input(
                 }
             )
         return
+    if not session_accepts_input(session):
+        # An ended or cold pane is read-only. Answered rather than dropped, so a
+        # client typing into one learns why instead of watching characters vanish.
+        await ws.send_json({"type": "input_refused", "reason": "session_ended"})
+        return
     server_received_at_ms = int(time.time() * 1000)
     session.pty.write(data)
     now = time.monotonic()
@@ -12132,6 +12275,9 @@ async def _handle_pty_client_message(
         # dropped rather than echoed back, since there is no frame shape to replay.
         if session.input_owner != connection_id:
             _note_input_rejected(request, session, len(message.data))
+            return
+        if not session_accepts_input(session):
+            await ws.send_json({"type": "input_refused", "reason": "session_ended"})
             return
         session.pty.write(message.data)
         now = time.monotonic()

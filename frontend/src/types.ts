@@ -124,6 +124,26 @@ export interface Session {
   voice_content?: VoiceContent | null
   /** Task/Project-Action shell whose exact spawn argv can be relaunched in place. */
   relaunchable?: boolean
+  /**
+   * Recovered from durable recovery data rather than from a running process: the
+   * daemon and its PTY owner both died without recording how this session ended,
+   * so it comes back visible-but-dead instead of vanishing from the sidebar and
+   * the layout. Always accompanied by `state: 'crashed'`, so anything that
+   * already gates on a terminal state needs no change; this only distinguishes a
+   * recovered session from one that merely exited.
+   */
+  cold?: boolean
+  cold_since?: number | null
+  cold_reason?: string | null
+  /** When the replayed terminal bytes were captured, bounding how stale they are. */
+  cold_terminal_at?: number | null
+  /**
+   * Why no terminal bytes were kept. An alternate-screen or repaint-heavy harness
+   * is excluded on purpose: its retained bytes are a differential frame stream
+   * that reconstructs to a blank or half-drawn screen, and repairing that needs a
+   * live child to pulse.
+   */
+  cold_terminal_skipped?: string | null
   /** Client-only optimistic row/tab shown while POST /api/sessions is in flight. */
   pending?: boolean
   /** Client-only copy for a pending pane whose preparation is more specific than startup. */

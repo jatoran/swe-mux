@@ -40,6 +40,7 @@
 - Attention ranking, interrupt budget, and narration: `features/attention-ranking.md`
 - Git awareness and worktrees: `features/git.md`
 - Sessions: `features/sessions.md`
+- Crash recovery for sessions the PTY supervisor could not keep alive: `features/session-recovery.md`
 - Multi-device terminal input and shared geometry: `features/terminal-input.md`
 - Device presence (which device the human is at): `features/device-presence.md`
 - Project registry and Groups: `features/projects.md`

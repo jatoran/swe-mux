@@ -3,6 +3,14 @@
 - Changing process/session lifecycle or package boundaries: `design/architecture.md`,
   `design/features/sessions.md`, `design/features/backends.md`,
   `design/features/delivery-readiness.md`
+- Changing what survives a crash rather than a restart - the durable session registry, terminal
+  checkpoints, cold sessions, or whether an ended pane stays readable:
+  `design/features/session-recovery.md`, `design/features/sessions.md`, `design/data-model.md`,
+  `design/interfaces.md`, `technical/backend/packages.md`, `technical/backend/sqlite.md`,
+  `technical/frontend/packages.md`.
+  The rule the split exists to enforce: the PTY supervisor is the *primary* recovery path and stays
+  near-frozen, so nothing here may be written from the supervisor process - a change there reaps
+  every live session (`development/archive/SESSION_PRESERVING_RELOAD.md` §8).
 - Changing the harness registry, descriptors, capability levels, adapter families, or adding a
   harness: `design/features/backends.md`; completed abstraction record:
   `development/archive/HARNESS_ABSTRACTION_AND_OMP.md`; per-surface parity classification and
