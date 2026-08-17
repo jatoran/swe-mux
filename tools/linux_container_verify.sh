@@ -31,6 +31,7 @@ tar -C /repo \
   --exclude=./frontend/node_modules \
   --exclude=./.tmp-orca \
   --exclude=./.claude \
+  --exclude=./.runtime \
   --exclude=__pycache__ \
   -cf - . | tar -C /work -xf -
 cd /work
