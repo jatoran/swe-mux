@@ -72,9 +72,11 @@ const PROJECTS = [
   { id: 'p2', name: 'vaultspaces', position: 1 },
 ] as unknown as Project[]
 
+// One titled and still auto-named, one renamed by hand: the inspector names both the way the
+// sidebar does, so the two rows also cover the rule's only branch.
 const SESSIONS = [
-  { id: 'claude-d92695', name: 'claude-d92695', project_id: 'p1', state: 'working', pid: 89460 },
-  { id: 'codex-a13f', name: 'codex-a13f', project_id: 'p2', state: 'idle', pid: 701 },
+  { id: 'claude-d92695', name: 'claude-d92695', generated_title: 'Fix the parser', project_id: 'p1', state: 'working', pid: 89460 },
+  { id: 'codex-a13f', name: 'release prep', generated_title: 'Land the migration', auto_named: false, project_id: 'p2', state: 'idle', pid: 701 },
 ] as unknown as Session[]
 
 document.body.style.margin = '0'

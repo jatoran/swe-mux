@@ -136,6 +136,14 @@ already-completed/crashed one (restart in place). Agent and plain shell sessions
 relaunchable, so their rails are unaffected; editing the task definition itself still goes through
 the Run menu and its normal trust check.
 
+A **cold shell** is the one session the endpoint accepts without the flag
+(`features/session-recovery.md`). The flag exists to keep relaunch away from a live lifecycle, and a
+recovered session has none: its process died with the daemon that owned it, and re-running the
+recorded argv is the only way back. The replacement does not inherit `relaunchable`, because that
+drives an affordance meant for a task step whose argv the daemon vouches for. Cold *agents* are
+still refused with their own answer - replaying an agent's argv would start a fresh conversation
+while re-injecting the old one's `--session-id`, so Resume is the way back there.
+
 Substituted inputs travel in the retained argv, so relaunching an action that asked for a value
 repeats the run that happened rather than prompting again.
 

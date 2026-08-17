@@ -164,6 +164,8 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
         completion_mode="one_shot",
         state="running",
         relaunchable=True,
+        cold=False,
+        backend="shell",
         spawn_cwd=r"D:\project\frontend",
         spawn_env={"PORT": "45603"},
     )
@@ -219,7 +221,7 @@ async def test_relaunch_replays_task_shell_and_retires_the_old_session(
 
 
 async def test_relaunch_refuses_a_non_relaunchable_session(tmp_path: Path) -> None:
-    record = SimpleNamespace(id="agent", relaunchable=False)
+    record = SimpleNamespace(id="agent", relaunchable=False, cold=False, backend="claude")
     session = SimpleNamespace(record=record)
 
     class SessionsStub:
@@ -238,6 +240,90 @@ async def test_relaunch_refuses_a_non_relaunchable_session(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError):
+        await relaunch_session(cast(Any, request))
+
+
+async def test_a_recovered_shell_relaunches_without_becoming_a_task_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one deliberate widening of the relaunchable gate.
+
+    That gate exists to keep this away from a live lifecycle, and a cold session
+    has none. But re-running a recovered shell's command must not promote it into
+    a task terminal: `relaunchable` drives an affordance that only makes sense for
+    a step whose argv the daemon vouches for.
+    """
+    old_record = SimpleNamespace(
+        id="cold-shell",
+        project_id="default",
+        name="build",
+        exe="pwsh.exe",
+        args=["-NoLogo"],
+        completion_mode="interactive",
+        state="crashed",
+        relaunchable=False,
+        cold=True,
+        backend="shell",
+        spawn_cwd=r"D:\project",
+        spawn_env={},
+    )
+    old = SimpleNamespace(record=old_record)
+    new_record = SimpleNamespace(
+        id="restarted", relaunchable=True, snapshot=lambda: {"id": "restarted"}
+    )
+    new = SimpleNamespace(record=new_record, publish_update=lambda: None)
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {old_record.id: old}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+        async def stop(self, _identity: str) -> None:
+            raise AssertionError("a session with no process must never be stopped")
+
+    manager = SessionsStub()
+
+    async def fake_spawn(_app: Any, _body: dict[str, Any]) -> Any:
+        manager.sessions[new_record.id] = new
+        return new
+
+    monkeypatch.setattr("swe_mux.server._spawn_from_body", fake_spawn)
+    request = SimpleNamespace(
+        app={"sessions": manager, "config": SimpleNamespace(data_dir=tmp_path)},
+        match_info={"sid": old_record.id},
+    )
+
+    response = await relaunch_session(cast(Any, request))
+
+    assert response.status == 201
+    assert new_record.relaunchable is False
+    assert old_record.id not in manager.sessions
+
+
+async def test_a_recovered_agent_is_resumed_rather_than_relaunched(tmp_path: Path) -> None:
+    """Replaying an agent's argv would start a fresh conversation while
+    re-injecting the old one's `--session-id`, where the operator asked to return
+    to the conversation."""
+    record = SimpleNamespace(
+        id="cold-agent", relaunchable=False, cold=True, backend="claude", exe="claude"
+    )
+    session = SimpleNamespace(record=record)
+
+    class SessionsStub:
+        def __init__(self) -> None:
+            self.sessions = {record.id: session}
+
+        def resolve(self, identity: str) -> Any:
+            return self.sessions[identity]
+
+    request = SimpleNamespace(
+        app={"sessions": SessionsStub(), "config": SimpleNamespace(data_dir=tmp_path)},
+        match_info={"sid": record.id},
+    )
+
+    with pytest.raises(ValueError, match="resumed, not relaunched"):
         await relaunch_session(cast(Any, request))
 
 

@@ -543,6 +543,9 @@ async def test_supervisor_adoption_repairs_legacy_identity_and_persists_it(
     manager.sessions = {}
     manager.max_scrollback = 128
     manager.attach_replay_bytes = None
+    # Adoption rejoins the durable recovery registry; this fixture pins identity
+    # repair, so it runs with recovery off.
+    manager.recovery = None
     manager.adapters = {
         "shell": SimpleNamespace(name="shell"),
         "codex": SimpleNamespace(

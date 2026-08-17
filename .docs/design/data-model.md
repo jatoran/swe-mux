@@ -49,6 +49,25 @@
   in the record snapshot, so supervisor adoption round-trips it across daemon restarts;
   drift-tolerant like the rest of `from_snapshot` (unknown keys dropped, malformed
   annotations skipped). Contract and detection sources: `features/status-detection.md`.
+- `SessionRecord.cold` and its `cold_since` / `cold_reason` / `cold_terminal_at` /
+  `cold_terminal_skipped` companions: this session was rebuilt from durable recovery data rather
+  than observed, because its process died with a daemon that never recorded how it ended.
+  Deliberately a flag beside `state="crashed"` rather than a new `SessionState`: every consumer
+  that gates on `state in {"exited","crashed"}` must exclude a cold session, and the flag makes
+  that structural instead of an audit. `cold_terminal_at` bounds how stale the replayed screen is
+  and is absent when there is none; `cold_terminal_skipped` names why bytes were never kept, which
+  is what lets a deliberately empty pane say so (`features/session-recovery.md`).
+- `SessionRecord.approval_policy`: the live auto-approval grant —
+  `ApprovalPolicy {mode: wait|allowlisted|allow_all, run_id, expires_at, granted_at, set_by,
+  rules, auto_approved, max_auto, last_decision_at, last_request, floor_deferred}`.
+  Keyed on `agent_run_id` and always carrying an expiry for a non-`wait` mode, both checked at
+  read time by `effective_mode` rather than swept: a sweep that does not run leaves authority
+  standing. `rules` is the Project's allowlist as it stood when the grant was made, so the
+  decision needs no file I/O on the agent's blocked turn and an edit to the committed file
+  cannot widen a grant already standing. On the record rather than in SQLite so it rides the
+  supervisor snapshot through a session-preserving restart, which is routine here; restored
+  `allowlisted` with no rules drops to `wait` rather than becoming an empty allowlist. Full
+  contract: `features/approvals.md`.
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 
@@ -106,13 +125,20 @@
   entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
   `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
   `foreign_conversation_hook_ignored`, `transition_refused`, `reopen_blocked`,
-  `observer_fault`, hook-spool records) keyed `(session_id, agent_run_id, seq)` with `ts`,
+  `observer_fault`, `approval_auto_decision`, `approval_mode_set`, `approval_mode_revoked`,
+  hook-spool records) keyed `(session_id, agent_run_id, seq)` with `ts`,
   `kind`, and the entry payload verbatim as JSON. Run-keyed so a conversation rollover's
   successor rows never mix with its predecessor's. Written behind the in-memory rings by a
   batched sink (never on the transition path), pruned by
   `status_timeline_retention_days` (default 30), and queried by time range for
   post-mortems (`features/status-detection.md` § durable timeline,
   `development/STATUS_INCIDENT_RUNBOOK.md`).
+- `session_recovery`: one row per session this daemon has run, holding the redacted metadata blob
+  it can be rebuilt from and an **open marker**. `closed_at IS NULL` means nobody was able to
+  record how that session ended, which is the whole signal a cold restore reads. Credentials are
+  never persisted (`hook_secret`, `mcp_token` are dropped), terminal bytes live in files rather
+  than in this table, and rows are bounded by `session_recovery_retention_days` (closed) and
+  `session_recovery_max_sessions` (open). See `features/session-recovery.md`.
 - `tier0_facts`: deterministic no-model fact capture (file writes, commands, tests, git, tools)
   with `content_hash`, canonical `fingerprint`, the owning `agent_run_id`/`project_id`, and a
   `source_seq` pointer into the event log. Test results additionally carry structured
@@ -200,6 +226,23 @@
   writes `1` explicitly. A column default would also land on rows inserted by an opt-out and
   on the reserved pause row, where "on" is not what was meant, so the per-run default belongs
   in the one code path that grants a run rather than in the DDL.
+- `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start an
+  agent session on their own, and their run history.
+  A definition is a deferred `SpawnRequest` (`project_id`, `backend`, `profile_id`, `cwd`,
+  `session_name`, `prompt`) plus a trigger (`trigger_kind` `cron|interval|once` with `cron`,
+  `interval_seconds`, `run_at`, `timezone`), the policies (`catch_up`, `overlap`,
+  `daily_run_cap`), `follow_ups_json` (the messages pre-queued behind the seed prompt), a
+  `revision` for the same optimistic-concurrency contract the Project files use, and the
+  cached trigger state (`next_fire_at`, `last_fire_at`, `last_session_id`, `last_outcome`).
+  **These rows are deliberately machine-local rather than portable Project config**: a
+  schedule committed to a repository would arm itself in every clone and worktree, the same
+  boundary Project Action trust draws.
+  `schedule_runs` records one row per occurrence with `fire_key`, `due_at`, `outcome`
+  (`started|spawned|skipped|failed|missed`), `reason`, `session_id`, and `origin`
+  (`timer|manual`).
+  `(schedule_id, fire_key)` is **unique, and that index is the idempotency mechanism**: the
+  row is inserted before the spawn, so a daemon that dies mid-fire cannot start the same
+  occurrence twice on restart.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.
@@ -228,6 +271,14 @@
   model, generation, token and cost usage, latency, provider, finish reason, HTTP status,
   retryability, and response content type and length.
   Provider response content is not stored.
+- `session_lineage(parent_run_id, child_run_id, relation, metadata_json)`: how one run came from
+  another, unique per triple. `relation` is one of `resume`, `handoff`, `continuation`, `review`,
+  `branch`. A `branch` edge is the only record that a fork happened: the branch is a separate
+  conversation in its own file, so without the edge it is indistinguishable from an unrelated
+  conversation that happens to share a prefix. Its metadata carries the strategy, both
+  conversation ids, and the message and cut the fork was made at, so the fork point outlives the
+  request. The edge is written after the branch's pane is proved up, and a failure to write it is
+  logged rather than raised — losing the edge degrades the lineage view, not the conversation.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
   feature-specific contracts. `AutomationStore` has an additive migration path; the
   annotations rebuild that relaxed `agent_run_id` to nullable is gated on the new column
@@ -255,6 +306,16 @@
   directly (`granted`) or writes the Phase 5 inert draft (`draft`); authority is by target
   Project, so an agent spawns into a Project the operator granted. The install caps the granted
   path with `agent_spawn_hourly_budget` (default 10).
+  Two further fields govern control-plane approvals (`features/approvals.md`): `approval_allow`,
+  the `Tool` / `Tool(pattern)` rules a session's `allowlisted` mode resolves against, and
+  `approval_ceiling` (`"wait"` | `"allowlisted"` | `"allow_all"`) capping the strongest mode any
+  session here may hold. The rules live in the Project file because "reading this repo's
+  `.claude` config is fine" is a property of the codebase, and because a rules editor is the
+  wrong thing to hand someone in the moment they want to switch a mode on. Unset `approval_allow`
+  means the built-in `approvals.DEFAULT_ALLOW_RULES`; an explicit `[]` is a different and real
+  answer ("approve nothing automatically here") and is preserved on write rather than dropped.
+  A malformed config yields ceiling `"wait"`, because an unreadable ceiling is not evidence of
+  permission. Neither field can reach past the floor in `approvals.py`.
   Legacy `resource_open_mode` input remains parseable for compatibility but is omitted from current
   effective/public options.
 - `<project>/.swe-mux/observations.json`: the Project's capture inbox — a bounded list of
@@ -288,7 +349,11 @@
   The header is stripped on read and rebuilt on save, matched byte-exactly, and written LF-only.
 - `<project>/.swe-mux/notes/legacy/`: recoverable source archive for migrated pre-collection
   session-note files, including empty legacy artifacts that are not promoted to notes.
-- `<project>/.swe-mux/notes/.gitignore`: generated `*` rule that excludes the entire Project-owned note tree, including current notes, legacy session notes, and migration archives, from Git.
+- `<project>/.swe-mux/notes/trash/`: deleted Project notes, moved here rather than unlinked,
+  keeping their identity header and their filename with a short suffix on collision.
+  Nothing reads this tree: it is outside `items/`, so it never re-enters a listing or the
+  note count, and no sweep removes it.
+- `<project>/.swe-mux/notes/.gitignore`: generated `*` rule that excludes the entire Project-owned note tree, including current notes, deleted notes, legacy session notes, and migration archives, from Git.
 - `<data_dir>/notes/items/scratchpad.md`: global Scratchpad Markdown with a `global-notes` identity header.
   The file is absent until the first save and is independent of Project registration, deletion, and Git state.
 - `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and

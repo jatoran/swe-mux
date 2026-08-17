@@ -92,6 +92,12 @@ separately opt-in.
   from the transport (loopback → `user`, remote device → `remote_user`), the MCP tools from
   the caller's token. Observer/rule senders create inert drafts only; an `agent` sender may
   arrive armed only because the *receiving* session granted it (`agent-messaging.md`).
+  A scheduled run stages its follow-up messages as `rule` senders against the session it just
+  started, with any per-message delay written as an ordinary `not_before` constraint rather
+  than a timer that feature owns (`scheduled-runs.md`).
+  Bind-on-first-run is what makes that safe: each message keys to the new session *and* the
+  first agent run it gets, so a message written for tonight's scheduled conversation can never
+  land in a different one.
 - **Stranding triggers.** `session_exited` / `session_crashed` / `backend_demoted` events;
   send-time identity failures; and the startup reconcile after supervisor adoption (target
   missing, ended, or running a different bound run). Stranded items offer copy, explicit

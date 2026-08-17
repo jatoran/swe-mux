@@ -738,7 +738,13 @@ class GitMonitor:
         return [
             session
             for session in self.sessions.sessions.values()
-            if (session.subscribers or everything)
+            # An ended session's reading is frozen at its death, deliberately.
+            # Every field here describes the *checkout*, so following it onward
+            # would attribute whatever somebody changed afterwards to a session
+            # that could not have made it — and a retained ended pane keeps its
+            # subscribers, so without this a dead row would poll Git forever.
+            if getattr(session.record, "state", None) not in {"exited", "crashed"}
+            and (session.subscribers or everything)
             and getattr(session.record, "runtime_boundary", "local") == "local"
         ]
 

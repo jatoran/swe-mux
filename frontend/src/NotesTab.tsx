@@ -9,7 +9,9 @@ import {
   SCRATCHPAD_TAB_ID,
   canonicalNoteTabId,
   fallbackNoteTab,
+  lastNoteInProject,
   noteTabAfterDelete,
+  projectNoteCounts,
   projectNoteTabId,
   stableProjectNoteTabs,
 } from './noteTabs'
@@ -24,6 +26,12 @@ import type { Project } from './types'
 //
 // Every row is the same Project-owned Note type. Notes are created here rather than
 // being coupled to terminal lifetime or history identity.
+//
+// A rail tab and a browser row open the same actions menu (right-click, touch long-press,
+// or the keyboard's context-menu key), so managing a note never requires finding it in the
+// browser first. Deleting is recoverable — the daemon moves the file to the Project's note
+// trash — which is what lets that menu carry a delete at all; the one thing it refuses is
+// emptying a Project's collection.
 
 export type ProjectNoteSummary = {
   note_id:string;project_id:string;project_name:string
@@ -49,6 +57,10 @@ type Props={
 
 const sizeLabel=(bytes:number)=>bytes>=1024?`${Math.round(bytes/1024)} KiB`:`${bytes} B`
 const LONG_PRESS_MS=550
+// Deletion is recoverable, so the confirmation says where the note goes rather than
+// claiming a permanence the daemon no longer implements.
+const DELETE_HINT='Click again to move this note to the Project note trash'
+const PROTECTED_HINT='A Project keeps at least one note. Rename this one, or create another note first.'
 const noteKey=(note:Pick<ProjectNoteSummary,'project_id'|'note_id'>)=>`${note.project_id}:${note.note_id}`
 type NoteMenu={note:ProjectNoteSummary;x:number;y:number}
 type NoteTitlePrompt={mode:'create'|'rename';title:string;note?:ProjectNoteSummary}
@@ -79,7 +91,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const generation=useRef(0)
   const menuPanel=useRef<HTMLDivElement>(null)
   const longPress=useRef<number|null>(null)
-  const pressOrigin=useRef<{x:number;y:number}|null>(null)
+  const pressWatch=useRef<(()=>void)|null>(null)
   const touchPress=useRef(false)
   const suppressClick=useRef(false)
   const menuOpenedAt=useRef(0)
@@ -115,7 +127,10 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     }
   },[scopeId])
 
-  useEffect(()=>()=>{if(longPress.current!==null)window.clearTimeout(longPress.current)},[])
+  useEffect(()=>()=>{
+    if(longPress.current!==null)window.clearTimeout(longPress.current)
+    pressWatch.current?.()
+  },[])
 
   useEffect(()=>{
     if(!menu)return
@@ -177,6 +192,9 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   const projectItems=useMemo(()=>stableProjectNoteTabs(
     (scopedItems||[]).filter(item=>item.project_id===project?.id)
   ),[scopedItems,project?.id])
+  // Counted over the loaded collection rather than the search results, so filtering to one
+  // row never makes an ordinary note look like a Project's last one.
+  const noteCounts=useMemo(()=>projectNoteCounts(scopedItems||[]),[scopedItems])
   const selectedTabId=canonicalNoteTabId(selectedResourceId)
 
   // A stale remembered id can follow a deletion or an older on-disk build. Resolve it only
@@ -210,33 +228,57 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
 
   const cancelLongPress=()=>{
     if(longPress.current!==null)window.clearTimeout(longPress.current)
-    longPress.current=null;pressOrigin.current=null
+    longPress.current=null
+    pressWatch.current?.();pressWatch.current=null
   }
   const openMenu=(note:ProjectNoteSummary,x:number,y:number)=>{
     setDeleteConfirm('')
     menuOpenedAt.current=performance.now()
     setMenu({note,x,y})
   }
+  // The pending press is watched on `window`, not on the pressed element. A rail tab sits
+  // inside `OverflowRail`, which captures the pointer for its own horizontal pan the moment
+  // a touch lands, retargeting every later pointer event to the rail — an element-local
+  // move/up handler would then never fire, and this timer would open a menu partway through
+  // someone's scroll.
   const beginLongPress=(note:ProjectNoteSummary,event:JSX.TargetedPointerEvent<HTMLElement>)=>{
     touchPress.current=event.pointerType==='touch'
     if(!touchPress.current)return
     cancelLongPress()
-    const {clientX,clientY}=event
-    pressOrigin.current={x:clientX,y:clientY}
+    const {clientX,clientY,pointerId}=event
+    const moved=(later:PointerEvent)=>{
+      if(later.pointerId!==pointerId)return
+      if(Math.hypot(later.clientX-clientX,later.clientY-clientY)>10)cancelLongPress()
+    }
+    const ended=(later:PointerEvent)=>{if(later.pointerId===pointerId)cancelLongPress()}
+    window.addEventListener('pointermove',moved,true)
+    window.addEventListener('pointerup',ended,true)
+    window.addEventListener('pointercancel',ended,true)
+    pressWatch.current=()=>{
+      window.removeEventListener('pointermove',moved,true)
+      window.removeEventListener('pointerup',ended,true)
+      window.removeEventListener('pointercancel',ended,true)
+    }
     longPress.current=window.setTimeout(()=>{
       longPress.current=null;suppressClick.current=true
+      cancelLongPress()
       navigator.vibrate?.(20)
       openMenu(note,clientX,clientY)
     },LONG_PRESS_MS)
-  }
-  const trackLongPress=(event:JSX.TargetedPointerEvent<HTMLElement>)=>{
-    const origin=pressOrigin.current
-    if(origin&&(Math.abs(event.clientX-origin.x)>10||Math.abs(event.clientY-origin.y)>10))cancelLongPress()
   }
   const openContextMenu=(note:ProjectNoteSummary,event:JSX.TargetedMouseEvent<HTMLElement>)=>{
     event.preventDefault();event.stopPropagation();cancelLongPress()
     if(touchPress.current)suppressClick.current=true
     openMenu(note,event.clientX,event.clientY)
+  }
+  // Right-click and long-press are pointer gestures; a keyboard needs its own way in, and
+  // the rail tabs have no inline actions to fall back on the way browser rows do.
+  const openMenuFromKeyboard=(note:ProjectNoteSummary,event:JSX.TargetedKeyboardEvent<HTMLButtonElement>)=>{
+    if(event.key!=='ContextMenu'&&!(event.key==='F10'&&event.shiftKey))return false
+    event.preventDefault()
+    const box=event.currentTarget.getBoundingClientRect()
+    openMenu(note,box.left,box.bottom)
+    return true
   }
   const suppressLongPressClick=(event:JSX.TargetedMouseEvent<HTMLElement>)=>{
     if(!suppressClick.current)return
@@ -244,6 +286,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
   }
   const deleteProjectNote=async(note:ProjectNoteSummary)=>{
     const key=noteKey(note)
+    if(lastNoteInProject(note,noteCounts))return
     if(deleteConfirm!==key){setDeleteConfirm(key);return}
     const fallback=note.project_id===project?.id
       ?noteTabAfterDelete(selectedResourceId,note.note_id,projectItems)
@@ -267,12 +310,15 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     const key=noteKey(note)
     const confirming=deleteConfirm===key
     const busy=deleting===key
+    const guarded=lastNoteInProject(note,noteCounts)
     return <>
       <button
-        class={`note-delete ${confirming?'confirming':''}`}
-        aria-label={confirming?`Confirm deletion of ${note.title}`:`Delete ${note.title}`}
-        title={confirming?'Click again to permanently delete this note':'Delete note'}
-        disabled={busy}
+        class={`note-delete ${confirming?'confirming':''} ${guarded?'protected':''}`}
+        aria-label={guarded
+          ?`${note.title} is the only note in ${note.project_name} and cannot be deleted`
+          :confirming?`Confirm deletion of ${note.title}`:`Delete ${note.title}`}
+        title={guarded?PROTECTED_HINT:confirming?DELETE_HINT:'Delete note'}
+        disabled={busy||guarded}
         onBlur={()=>setDeleteConfirm(current=>current===key?'':current)}
         onClick={()=>void deleteProjectNote(note)}
       >{busy?'…':confirming?'delete?':'×'}</button>
@@ -304,13 +350,13 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
     key={noteKey(note)}
     onContextMenu={event=>openContextMenu(note,event)}
     onPointerDown={event=>beginLongPress(note,event)}
-    onPointerMove={trackLongPress}
-    onPointerUp={cancelLongPress}
-    onPointerCancel={cancelLongPress}
-    onPointerLeave={cancelLongPress}
     onClickCapture={suppressLongPressClick}
   >
-    <button onClick={()=>openNote(note,'drawer')} title={`Open ${note.title} in this panel · right-click or hold for actions`}>
+    <button
+      onClick={()=>openNote(note,'drawer')}
+      onKeyDown={event=>{openMenuFromKeyboard(note,event)}}
+      title={`Open ${note.title} in this panel · right-click or hold for actions`}
+    >
       <strong>{note.title}</strong>
       <span>{new Date(note.updated_at*1000).toLocaleString()} · {sizeLabel(note.bytes)}</span>
       <small>{note.excerpt}</small>
@@ -356,9 +402,15 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
             aria-selected={active}
             tabIndex={active?0:-1}
             class={active?'active':''}
-            title={note.title}
+            title={`${note.title} · right-click or hold for actions`}
             onClick={()=>openNote(note,'drawer')}
-            onKeyDown={event=>{if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)}}
+            onContextMenu={event=>openContextMenu(note,event)}
+            onPointerDown={event=>beginLongPress(note,event)}
+            onClickCapture={suppressLongPressClick}
+            onKeyDown={event=>{
+              if(openMenuFromKeyboard(note,event))return
+              if(event.key==='ArrowLeft'||event.key==='ArrowRight')focusAdjacentTab(event,event.key==='ArrowLeft'?-1:1)
+            }}
           >{note.title}</button>
         })}
       </OverflowRail>
@@ -406,7 +458,7 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
             </section>}
         </div>}
       </div>
-      <p class="notes-footnote">Scratchpad is global. Project notes stay in creation order and remain in the tab rail.</p>
+      <p class="notes-footnote">Scratchpad is global. Project notes stay in creation order and remain in the tab rail. Deleting one moves it to <code>.swe-mux/notes/trash/</code>; a Project always keeps its last note.</p>
     </section>}
     {menu&&<div
       class="context-menu note-row-menu"
@@ -423,9 +475,13 @@ export function NotesTab({project,allProjects,onAllProjects,onOpenNote,onOpenScr
       <button
         role="menuitem"
         class={`danger ${deleteConfirm===noteKey(menu.note)?'confirming':''}`}
-        disabled={deleting===noteKey(menu.note)}
+        disabled={deleting===noteKey(menu.note)||lastNoteInProject(menu.note,noteCounts)}
+        title={lastNoteInProject(menu.note,noteCounts)?PROTECTED_HINT:DELETE_HINT}
         onClick={()=>void deleteProjectNote(menu.note)}
       >{deleting===noteKey(menu.note)?'Deleting…':deleteConfirm===noteKey(menu.note)?'Confirm delete':'Delete note'}</button>
+      <p class="context-note">{lastNoteInProject(menu.note,noteCounts)
+        ?PROTECTED_HINT
+        :'Deleted notes move to the Project note trash and can be restored from disk.'}</p>
     </div>}
     {titlePrompt&&<div class="modal-layer note-title-layer" onPointerDown={event=>{if(event.target===event.currentTarget&&!titleBusy){setTitlePrompt(null);setTitleError('')}}}>
       <form ref={titlePanel} class="modal note-title-modal" role="dialog" aria-modal="true" aria-label={titlePrompt.mode==='create'?'Create note':'Rename note'} onPointerDown={event=>event.stopPropagation()} onSubmit={event=>void submitTitle(event)}>

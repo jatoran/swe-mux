@@ -52,8 +52,13 @@
   creates a new Project-owned session at the target root and atomically updates its layout.
   A conversation a live session currently claims is refused (`409 conversation_live`, naming
   the owning session): resuming it would put two live sessions on one conversation — the
-  cross-attribution the identity invariant forbids. Branch is the flow for forking a live
-  conversation; rows whose pane has since rolled onward resume fine.
+  cross-attribution the identity invariant forbids. Branch is the flow for opening a second
+  conversation from a live one; rows whose pane has since rolled onward resume fine.
+- **A branch is a new conversation, so it opens a new row.** A `transcript_fork` branch resumes a
+  conversation file mux has just written and nothing has ever held, so it inherits no run and
+  claims no existing entry - the opposite of a resume, which continues its conversation's row.
+  The two are related by a `branch` lineage edge naming the message the fork was cut at
+  (`sessions.md`), which is the only record that they share a prefix at all.
 - **A conversation held by a process mux does not own is refused too**
   (`409 conversation_held`, naming the holder's kind, pid and job).
   A CLI opens a conversation once and answers a second opener by exiting, so such a resume
@@ -220,6 +225,7 @@
 - `src/swe_mux/history_backfill.py`
 - `src/swe_mux/history_scan.py`
 - `src/swe_mux/transcript_view.py`
+- `src/swe_mux/transcript_fork.py`
 - `frontend/src/TranscriptTab.tsx`, `frontend/src/transcriptView.ts`
 - `src/swe_mux/operational_telemetry.py`
 - `frontend/src/HistoryBrowser.tsx`

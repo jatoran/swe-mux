@@ -24,7 +24,7 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `continuous_title`, `cross_session_interlocks`, `absence_report`, `attention_ranking`,
   `model_narration`, `observation_inbox`, `screenshot_to_agent`, `session_control`,
   `phase_transitions`, `timeline_handoff`, `catch_me_up`, `live_blockers`,
-  `semantic_history_search`).
+  `semantic_history_search`, `scheduled_runs`).
   `observation_inbox` is a persisted compatibility id whose current label and surface are
   spawn-request review in Fleet Queue; the standalone human Observation Inbox is retired.
 - **Memory-read opt-ins (Phase 7.5)**: each cross-session memory MCP read is gated by the
@@ -41,6 +41,11 @@ Project that did not opt in. Roadmap/vision context: `../../development/CONTROL_
   `session_control_grant` config field is raised to `granted` (`mux-mcp.md`, `data-model.md`).
   The same automation gates the Project's `spawn_grant`, which does the identical draft/granted
   split for agent-initiated `mux.requestSpawn` into that Project.
+- **`scheduled_runs`** gates a capability rather than a read, like `session_control`, so it
+  depends on no substrate (`requires ()`) and is off by default. Permission alone starts
+  nothing: the schedules themselves are machine-local rows in the daemon's database, so a
+  clone that inherits this opt-in has none of them, and the install-wide switch and
+  concurrency ceiling still bound what does fire (`scheduled-runs.md`).
 - **Consumer that spends**: `model_narration` and `continuous_title` are the consumers that cost
   model calls. `model_narration` depends on `attention_ranking`, so with ranking off there is
   nothing to narrate and no path to a call (`attention-ranking.md`). `continuous_title` (Phase 7.7

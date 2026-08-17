@@ -4,7 +4,9 @@ import {
   SCRATCHPAD_TAB_ID,
   canonicalNoteTabId,
   fallbackNoteTab,
+  lastNoteInProject,
   noteTabAfterDelete,
+  projectNoteCounts,
   projectNoteTabId,
   stableProjectNoteTabs,
 } from '../src/noteTabs.ts'
@@ -26,6 +28,21 @@ test('selection restoration canonicalizes migrated session-note ids', () => {
   assert.equal(fallbackNoteTab('note:missing', ordered), projectNoteTabId('first-a'))
   assert.equal(fallbackNoteTab(SCRATCHPAD_TAB_ID, ordered), SCRATCHPAD_TAB_ID)
   assert.equal(fallbackNoteTab(null, []), SCRATCHPAD_TAB_ID)
+})
+
+test('a Project protects its last note, counted per Project across a mixed listing', () => {
+  const listing = [
+    { project_id: 'alpha', note_id: 'a1' },
+    { project_id: 'alpha', note_id: 'a2' },
+    { project_id: 'beta', note_id: 'b1' },
+  ]
+  const counts = projectNoteCounts(listing)
+
+  assert.deepEqual([...counts], [['alpha', 2], ['beta', 1]])
+  assert.equal(lastNoteInProject(listing[0], counts), false)
+  assert.equal(lastNoteInProject(listing[2], counts), true)
+  // An uncounted Project claims nothing rather than claiming protection.
+  assert.equal(lastNoteInProject({ project_id: 'gamma' }, counts), false)
 })
 
 test('deleting the selected tab chooses its next neighbour, then its previous neighbour', () => {

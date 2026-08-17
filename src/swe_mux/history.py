@@ -7,7 +7,7 @@ import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -611,9 +611,14 @@ class HistoryIndex:
                 f"AND (exit_reason IS NULL OR exit_reason NOT IN ({_QUARANTINE_REASON_SQL}))",
                 _AGENT_BACKEND_ARGS,
             )
+        # Unpromoted shell rows are pruned once they are *finished*. They used to
+        # be deleted unconditionally on every start, which quietly erased the
+        # durable record of every shell that was still running when the daemon
+        # went down - the exact rows a post-crash recovery reads, and the reason
+        # shell crash forensics were unavailable at all.
         self._db.execute(
             "DELETE FROM history WHERE backend='shell' AND agent_visible=0 AND "
-            "(transcript_path IS NULL OR transcript_path='')"
+            "exited_at IS NOT NULL AND (transcript_path IS NULL OR transcript_path='')"
         )
         artifact_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(artifacts)").fetchall()
@@ -1302,6 +1307,45 @@ class HistoryIndex:
             self._db.commit()
 
         await self._run(op)
+
+    async def close_orphaned_runs(self, live_run_ids: Collection[str]) -> int:
+        """Close rows left open by a shutdown that never got to record an end.
+
+        Nothing else does this. A hard crash - the machine, the app, or the
+        daemon and its PTY owner together - leaves every running session's row
+        with `exited_at IS NULL` **forever**, so those runs keep reading as
+        in-progress in History and in everything that aggregates open runs, on
+        every subsequent boot, for the life of the database.
+
+        Run at startup, after both recovery paths have claimed what they can, so
+        `live_run_ids` is the complete set of rows a pane in this process is
+        still writing to. Everything else with no end recorded belongs to a
+        process that is gone. The end is stamped from the row's own last known
+        activity rather than from now, because dating a crash at the moment
+        somebody happened to restart the app would silently stretch every
+        affected run's duration by however long the machine was off.
+        """
+        keep = {str(run_id) for run_id in live_run_ids}
+
+        def op() -> int:
+            rows = [
+                str(row["id"])
+                for row in self._db.execute(
+                    "SELECT id FROM history WHERE exited_at IS NULL AND external=0"
+                ).fetchall()
+                if str(row["id"]) not in keep
+            ]
+            if not rows:
+                return 0
+            self._db.executemany(
+                "UPDATE history SET exited_at=COALESCE(last_message_at,spawned_at),"
+                "exit_reason='crashed',final_state='crashed' WHERE id=?",
+                [(row_id,) for row_id in rows],
+            )
+            self._db.commit()
+            return len(rows)
+
+        return await self._run(op)
 
     async def session_ended(self, session: SessionRecord, reason: str) -> None:
         # Same keying as update_session_metadata: the exit closes the pane's

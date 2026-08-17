@@ -86,7 +86,7 @@ test('the collapse host is the stack in the drawer top-right corner', () => {
 test('missing shipped tabs join their canonical predecessor without moving existing tabs', () => {
   const layout = normalizeDrawerLayout({ type: 'stack', id: 'one', tabs: ['notifications', 'files', 'clipboard'] })
   assert.deepEqual(drawerTabs(layout), [
-    'notifications', 'files', 'notes', 'context', 'git', 'processes',
+    'notifications', 'files', 'notes', 'context', 'git', 'processes', 'schedule',
     'clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent',
   ])
 })

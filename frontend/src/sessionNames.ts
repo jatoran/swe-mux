@@ -14,14 +14,21 @@
 // Both default to "auto-named" when the field is absent, which is what a row predating the
 // column means.
 
-import type { Session } from './types'
+/**
+ * The three fields the rule reads, rather than the whole `Session`. Structural on purpose:
+ * `Session` satisfies it, and so do the narrow session shapes the DOM-free row modules
+ * declare for themselves, which would otherwise have to restate the rule to stay pure.
+ */
+export type NamedSession = { name?: string; auto_named?: boolean; generated_title?: string }
 
 /** A history/automation run row, which is the same naming question against SQLite integers. */
 export type NamedRun = { name?: string; auto_named?: number; generated_title?: string }
 
 /** The display name of a live session. */
-export function sessionDisplayName(session: Session): string {
-  return session.auto_named !== false && session.generated_title ? session.generated_title : session.name
+export function sessionDisplayName(session: NamedSession): string {
+  return session.auto_named !== false && session.generated_title
+    ? session.generated_title
+    : session.name || ''
 }
 
 /** The display name of an ended run, as History and the automation dashboard hold it. */
