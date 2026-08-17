@@ -557,6 +557,53 @@ async def test_optional_message_search_schema_failure_does_not_block_history(
         history.close()
 
 
+async def test_naming_rows_answer_by_run_id_and_by_session_id(tmp_path: Path) -> None:
+    """The lookup behind display names for sessions the fleet no longer holds.
+
+    A session that rolled over owns more than one row, so the two keys must not collide.
+    An id that is itself a row always resolves to *that* row - a caller holding a run id
+    means that exact conversation, and a session's first run is keyed by the session id.
+    An id that only ever appears as an owner resolves to that session's newest run, which
+    is what a reader means by naming the session and nothing else.
+    """
+    history = HistoryIndex(tmp_path / "mux.db")
+    try:
+        first = session("s1", "claude", tmp_path, "project-id")
+        await history.session_started(first, None)
+
+        rolled = session("s1", "claude", tmp_path, "project-id")
+        rolled.name = "release prep"
+        rolled.auto_named = False
+        rolled.agent_run_id = "run-2"
+        rolled.agent_run_seq = 1
+        await history.session_promoted(rolled, str(tmp_path / "run-2.jsonl"))
+
+        # A session with no row of its own: every run it owns is keyed by a run id.
+        runs = (("run-3", "first pass"), ("run-4", "second pass"))
+        for seq, (run_id, name) in enumerate(runs, start=1):
+            run = session("s2", "claude", tmp_path, "project-id")
+            run.name = name
+            run.auto_named = False
+            run.agent_run_id = run_id
+            run.agent_run_seq = seq
+            await history.session_promoted(run, str(tmp_path / f"{run_id}.jsonl"))
+
+        rows = await history.history_naming_rows(["s1", "run-2", "s2", "never-existed"])
+
+        # `s1` is a row id as well as a session id, and the exact row wins.
+        assert rows["s1"]["id"] == "s1"
+        assert rows["s1"]["auto_named"] == 1
+        assert rows["run-2"]["name"] == "release prep"
+        assert rows["run-2"]["auto_named"] == 0
+        # `s2` is only ever an owner, so it resolves to that session's newest run.
+        assert rows["s2"]["id"] == "run-4"
+        assert rows["s2"]["name"] == "second pass"
+        assert "never-existed" not in rows
+        assert await history.history_naming_rows([]) == {}
+    finally:
+        history.close()
+
+
 async def test_history_time_bounds_are_chronological_when_native_lines_are_not(
     tmp_path: Path,
 ) -> None:

@@ -16,6 +16,7 @@
 // Explicit `.ts` extension: this module is reachable from the node test runner, whose
 // type-stripping ESM loader does not resolve extensionless specifiers.
 import type { Session } from './types.ts'
+import { sessionDisplayName } from './sessionNames.ts'
 
 /** One record of `git worktree list --porcelain`, as `server.py`'s `_parse_worktrees` emits it:
  *  `key value` lines become strings, valueless flag lines become `true`. */
@@ -76,7 +77,14 @@ export type GitGraph = { lines: GitGraphLine[]; limit: number; hasMore: boolean 
 export type GitProvenance = {
   id: string
   sessionId: string
+  /** What the session was called when the commit was observed: durable evidence. */
   sessionName: string
+  /** What that session is called *now*, by the same rule as the sidebar. The daemon
+   *  resolves it live (session manager, then History); it falls back to `sessionName`
+   *  for a session that left no History row behind. */
+  displayName: string
+  /** History row of this session's conversation, when one exists to open. */
+  historyId: string | null
   agentRunId: string | null
   projectId: string
   worktreeRoot: string
@@ -264,6 +272,12 @@ export function parseGitProvenance(raw: unknown): GitProvenance[] {
       id: row.id,
       sessionId: row.session_id,
       sessionName: row.session_name,
+      // An older daemon sends neither, so the snapshot remains the name of record and
+      // the row simply is not clickable through to History.
+      displayName: typeof row.display_name === 'string' && row.display_name
+        ? row.display_name
+        : row.session_name,
+      historyId: typeof row.history_id === 'string' && row.history_id ? row.history_id : null,
       agentRunId: typeof row.agent_run_id === 'string' ? row.agent_run_id : null,
       projectId: row.project_id,
       worktreeRoot: row.worktree_root,
@@ -346,7 +360,7 @@ export function repoSessions(sessions: Session[], projectId: string): SessionGit
     .filter(session => session.project_id === projectId && isLive(session))
     .map(session => ({
       id: session.id,
-      name: session.name || session.id,
+      name: sessionDisplayName(session) || session.id,
       cwd: sessionGitCwd(session),
       branch: session.git?.branch || '',
       dirty: session.git?.dirty || 0,

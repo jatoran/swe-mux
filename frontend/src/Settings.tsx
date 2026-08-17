@@ -30,6 +30,11 @@ import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
+import {
+  railSectionIds, rememberedSections, rememberedTab, rememberSection, rememberTab,
+  sameRailSections, SECTION_RAIL_MIN, settingsTabGroups, settingsTabs, tabForSection,
+  type SettingsRailSection, type SettingsTab,
+} from './settingsTabs'
 import type { InitScript } from './projectCreate'
 import type { PromptTemplate } from './PromptLibrary'
 import type { LaunchProfile, Project, ProjectBackend } from './types'
@@ -154,50 +159,15 @@ type SettingsBundle = {
   errors:Record<string,string>
 }
 
-const settingsTabs = [
-  {id:'general',label:'General'},
-  {id:'terminals',label:'Terminals'},
-  {id:'workspace',label:'Git & processes'},
-  {id:'notes',label:'Notes'},
-  {id:'agents',label:'Agents'},
-  {id:'accounts',label:'Accounts'},
-  {id:'input',label:'Input'},
-  {id:'usage',label:'Usage'},
-  {id:'automation',label:'Automation'},
-  {id:'notifications',label:'Alerts'},
-  {id:'voice',label:'Voice'},
-  {id:'remote',label:'Remote'},
-  {id:'appearance',label:'Appearance'},
-] as const
-type SettingsTab = typeof settingsTabs[number]['id']
+/** How long a rail click owns the active section before scroll-spy resumes. Long
+ *  enough to cover a smooth scroll, short enough that a manual scroll during it is
+ *  not noticeably ignored. */
+const SCROLL_CLAIM_MS = 800
+
 // Search entries harvested from a tab's real DOM while it was on screen. Module
 // scope, not component state: a tab visited in one Settings session stays fully
 // searchable in the next one, for as long as the page lives.
 const liveTabEntries = new Map<SettingsTab,SettingsSearchEntry[]>()
-const tabForSection = (section:string):SettingsTab => ({
-  Terminals:'terminals',
-  Agents:'agents',Accounts:'accounts',Input:'input','Git and history':'workspace','Usage analytics':'usage',
-  Notes:'notes',
-  Automation:'automation','Hooks and notifications':'notifications',Notifications:'notifications',Alerts:'notifications',Voice:'voice','Remote and security':'remote',Appearance:'appearance',
-}[section] as SettingsTab|undefined)||'general'
-
-// Which tab Settings opens on when nothing asked for a specific one. Persisted per
-// device rather than held in App state so it survives a reload - Settings is opened,
-// scanned, and closed dozens of times a session, and landing on General every time
-// re-costs the navigation that brought you to the tab you actually live in. An
-// explicit `initialSection` (Voice from the TTS chip, Accounts from the switcher,
-// …) always wins: that caller knows where the user needs to be.
-const SETTINGS_TAB_KEY='mux.settings.tab.v1'
-const rememberedTab = ():SettingsTab => {
-  let stored:string|null=null
-  try { stored=localStorage.getItem(SETTINGS_TAB_KEY) } catch { return 'general' }
-  // Validated against the live tab list, so a tab that is renamed or removed
-  // degrades to General instead of rendering an empty panel.
-  return settingsTabs.some(tab=>tab.id===stored)?stored as SettingsTab:'general'
-}
-const rememberTab = (tab:SettingsTab) => {
-  try { localStorage.setItem(SETTINGS_TAB_KEY,tab) } catch { /* private mode */ }
-}
 
 // The note editor's own binding table, enumerated from the editor package so the
 // list can never drift from what it actually binds. `isBrowserSafe` is false for
@@ -272,6 +242,8 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [scanJob, setScanJob] = useState<HistoryScanJob|null>(null)
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>initialSection?tabForSection(initialSection):rememberedTab())
+  const [railSections,setRailSections] = useState<SettingsRailSection[]>([])
+  const [activeSection,setActiveSection] = useState('')
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
   const [noteChordQuery,setNoteChordQuery] = useState('')
   const [closeIntent,setCloseIntent] = useState<CloseIntent|null>(null)
@@ -332,10 +304,111 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(()=>rememberTab(activeTab),[activeTab])
 
-  // Native-history scan status: fetch once when the Agents tab opens, then poll while
-  // a scan is running so its progress and completion land without a manual refresh.
+  // ---- In-tab section rail -------------------------------------------------
+  // The rail is scroll anchors, never sub-tabs. Every section of a tab stays
+  // mounted, which is what keeps the search index able to see the whole tab, keeps
+  // Ctrl+F working, and keeps the single Save transaction from ever hiding a dirty
+  // field behind a tab you cannot see while its validation error names it.
+  const contentEl = ():HTMLElement|null => panel.current?.querySelector<HTMLElement>('.settings-content')||null
+  // How far below the scroller's top edge a section counts as arrived: the rail is
+  // sticky and covers that band, so measuring against the true top would select a
+  // heading the rail is sitting on top of.
+  const railAnchor = (content:HTMLElement):number =>
+    (content.querySelector<HTMLElement>('.settings-section-rail')?.offsetHeight||0)+10
+
+  // A section chosen by clicking holds the rail until the scroll settles. Without
+  // this the late sections of a short tab are unpickable: scrolling to one lands at
+  // the bottom of the scroller, where the bottom-of-scroller rule immediately
+  // re-selects the final section, so the chip you clicked lights up and jumps away.
+  const scrollClaim = useRef(0)
+
+  const scrollToSection = useCallback((id:string,behavior:ScrollBehavior='smooth'):void => {
+    const content=contentEl()
+    const heading=content?.querySelector<HTMLElement>(`h3[data-settings-section="${CSS.escape(id)}"]`)
+    if(!content||!heading)return
+    const offset=heading.getBoundingClientRect().top-content.getBoundingClientRect().top+content.scrollTop
+    scrollClaim.current=performance.now()
+    content.scrollTo({top:Math.max(0,offset-railAnchor(content)),behavior})
+    setActiveSection(id)
+  },[])
+
+  // Derived from the headings the tab actually rendered, never from a declared
+  // list: a new `<section><h3>` joins the rail the moment it renders, and a renamed
+  // one renames itself. Child panels (Accounts, Alerts, the WSL bridge) fetch before
+  // they paint their headings, so a MutationObserver keeps the rail correct where a
+  // one-shot read would miss them. Attributes are deliberately not observed — the
+  // read stamps `data-settings-section` on each heading, which would re-trigger it.
   useEffect(()=>{
-    if(activeTab!=='agents')return
+    setRailSections([])
+    setActiveSection('')
+    if(!draft)return
+    const content=contentEl()
+    if(!content)return
+    let frame=0
+    const read=()=>{
+      frame=0
+      const headings=[...content.querySelectorAll<HTMLElement>('h3')]
+      const sections=railSectionIds(headings.map(heading=>heading.textContent||''))
+      let at=0
+      for(const heading of headings){
+        if(!(heading.textContent||'').trim())continue
+        heading.dataset.settingsSection=sections[at]?.id||''
+        at+=1
+      }
+      setRailSections(current=>sameRailSections(current,sections)?current:sections)
+    }
+    read()
+    const observer=new MutationObserver(()=>{ if(!frame)frame=requestAnimationFrame(read) })
+    observer.observe(content,{childList:true,subtree:true})
+    return()=>{observer.disconnect();if(frame)window.cancelAnimationFrame(frame)}
+  },[activeTab,draft!==null])
+
+  // Scroll-spy. Skipped entirely on a tab too short to render a rail, so no tab
+  // pays for a listener that has nothing to highlight.
+  useEffect(()=>{
+    const content=contentEl()
+    if(!content||railSections.length<SECTION_RAIL_MIN)return
+    let frame=0
+    const measure=()=>{
+      frame=0
+      if(performance.now()-scrollClaim.current<SCROLL_CLAIM_MS)return
+      const headings=[...content.querySelectorAll<HTMLElement>('h3[data-settings-section]')]
+      if(!headings.length)return
+      const top=content.getBoundingClientRect().top
+      const edge=railAnchor(content)+1
+      let current=headings[0]
+      for(const heading of headings)if(heading.getBoundingClientRect().top-top<=edge)current=heading
+      // The final section is usually shorter than the viewport, so its heading never
+      // crosses the anchor line; hitting the bottom selects it explicitly rather than
+      // leaving the rail one section behind for the rest of the scroll.
+      if(content.scrollTop+content.clientHeight>=content.scrollHeight-2)current=headings[headings.length-1]
+      setActiveSection(current.dataset.settingsSection||'')
+    }
+    measure()
+    const onScroll=()=>{ if(!frame)frame=requestAnimationFrame(measure) }
+    content.addEventListener('scroll',onScroll,{passive:true})
+    return()=>{content.removeEventListener('scroll',onScroll);if(frame)window.cancelAnimationFrame(frame)}
+  },[activeTab,railSections])
+
+  // Restore the remembered section once the rail for this tab exists. A pending
+  // search jump always wins: that caller named an exact control, not a section.
+  const restoredFor = useRef('')
+  useEffect(()=>{
+    if(!railSections.length||restoredFor.current===activeTab)return
+    restoredFor.current=activeTab
+    if(jump||railSections.length<SECTION_RAIL_MIN)return
+    const remembered=rememberedSections()[activeTab]
+    if(remembered&&remembered!==railSections[0].id&&railSections.some(section=>section.id===remembered)){
+      scrollToSection(remembered,'auto')
+    }
+  },[activeTab,railSections,jump,scrollToSection])
+
+  useEffect(()=>{ if(activeSection)rememberSection(activeTab,activeSection) },[activeTab,activeSection])
+
+  // Native-history scan status: fetch once when the Harnesses tab opens, then poll
+  // while a scan is running so its progress and completion land without a refresh.
+  useEffect(()=>{
+    if(activeTab!=='harnesses')return
     let live=true
     const poll=async()=>{
       try{
@@ -509,7 +582,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   useEffect(() => {
     if(!draft)return
     const timer=window.setTimeout(()=>{
-      const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
+      const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors):not(.settings-section-rail)')
       if(!mounted?.length)return
       const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
       const label=settingsTabs[index]?.label||activeTab
@@ -526,7 +599,11 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     if(!jump)return
     const root=panel.current?.querySelector('.settings-content')
     if(!root)return
+    // The section rail is excluded from the index, so it must be excluded here
+    // too: its buttons repeat every heading, and counting them as candidates
+    // would shift the occurrence a result was recorded against.
     const candidates=[...root.querySelectorAll<HTMLElement>(kindSelector[jump.entry.kind])]
+      .filter(item=>!item.closest('.settings-section-rail'))
     const index=matchIndex(candidates.map(item=>item.textContent||''),jump.entry.key,jump.entry.occurrence)
     const target=index>=0?candidates[index]:null
     if(!target)return
@@ -849,14 +926,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       <div class="settings-search"><input type="search" disabled placeholder="Search settings…" aria-label="Search settings (loading)" /></div>
       <button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
+      {/* Grouped for the desktop sidebar, flat for the mobile rail, from one array.
+          The wrapper is `display:contents` so its buttons stay direct flex children
+          of the nav in both layouts, and `role=presentation` because a tablist
+          admits only tabs — the heading is a visual affordance, and a reader gets
+          the same flat list the phone does. */}
       <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-        {settingsTabs.map(tab=><button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
+        {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
+          <span aria-hidden="true">{group.group}</span>
+          {group.tabs.map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
+        </div>)}
       </nav>
       <div class="settings-content"><section class="settings-loading" role="status" aria-live="polite">{status}</section></div>
     </main>
     <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
   </section></div>
   const modelOptions=(selected:string)=>includeSelectedModel(provider?.models.models||[],selected)
+  // Diagnostics reuses the app's own command registry rather than re-implementing
+  // the three reload paths, so a change to what "reload daemon" means reaches this
+  // panel for free. The registry arrives as a prop; a command that is absent (an
+  // older host, a build without the desktop shell) disables its button.
+  const appCommand=(id:string)=>voiceCommands.find(command=>command.id===id&&command.available)
+  const runAppCommand=(id:string)=>{ void appCommand(id)?.run() }
   // One function renders every tab, and it takes the tab id as an argument
   // instead of reading `activeTab` from state, so the search index can build the
   // vnode tree of a tab that is not mounted. Building vnodes only allocates plain
@@ -864,43 +955,82 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // lets the index be derived from the same JSX that renders the form rather than
   // from a hand-maintained duplicate list of every setting.
   const tabContent = (activeTab: SettingsTab) => <Fragment>
-        {activeTab==='general'&&<section><h3>General</h3>
-          <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
-          <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}>{allBackendNames().map(name=><option value={name}>{name==='shell'?'Shell':harnessDisplayName(name)}</option>)}</select></label>
-          <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
-          <label>History limit<input type="number" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
-          {/* Setup commands offered when a Project is registered. They are yours, typed
-              here, stored on this machine — nothing is ever read out of a repository, so
-              there is no trust prompt and no fingerprint to approve. */}
-          <div class="settings-init-scripts">
-            <div class="settings-init-scripts-head"><div><strong>Project setup commands</strong><p>Offered as unchecked options in Add project. Each selected command opens its own one-shot terminal at the new Project root, started in this order.</p></div><button onClick={addInitScript}>+ Add command</button></div>
-            {initScripts().map((script,index)=><div class="settings-init-script" key={script.id}>
-              <label>Name<input value={script.label} placeholder="Initialize git" onInput={e=>updateInitScript(index,{label:e.currentTarget.value})} /></label>
-              <label>Command<textarea value={script.command} placeholder="git init && git commit --allow-empty -m init" onInput={e=>updateInitScript(index,{command:e.currentTarget.value})} /></label>
-              <div class="settings-init-script-actions">
-                <label class="check"><span>Checked by default</span><input type="checkbox" checked={!!script.default_enabled} onChange={e=>updateInitScript(index,{default_enabled:e.currentTarget.checked})} /></label>
-                <button disabled={index===0} onClick={()=>moveInitScript(index,-1)}>↑</button>
-                <button disabled={index===initScripts().length-1} onClick={()=>moveInitScript(index,1)}>↓</button>
-                <button class="danger" onClick={()=>removeInitScript(index)}>Remove</button>
-              </div>
-            </div>)}
-            {!initScripts().length&&<p>No setup commands yet. Add one to have it offered whenever you register a Project.</p>}
-          </div>
-          <div class="settings-tutorial-reset"><div><strong>Getting started tutorial</strong><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
+        {activeTab==='general'&&<Fragment>
+          <section><h3>Defaults</h3>
+            <label>Startup directory<input value={draft.startup_cwd} onInput={e=>change('startup_cwd',e.currentTarget.value)} /></label>
+            <label>Default backend<select value={draft.default_backend} onChange={e=>change('default_backend',e.currentTarget.value)}>{allBackendNames().map(name=><option value={name}>{name==='shell'?'Shell':harnessDisplayName(name)}</option>)}</select></label>
+            <p>What a new session starts as, and where it starts, when nothing more specific applies. A Project's own default overrides both.</p>
+          </section>
+
+          <section><h3>Getting started tutorial</h3>
+            <div class="settings-tutorial-reset"><div><p>Replay the guided tour of Projects, provider accounts, tabs, pane splits, resources, and the main navigation.</p></div><button onClick={()=>requestClose('tutorial')}>Reset &amp; run tutorial</button></div>
+          </section>
+
           {/* Config-file actions live here rather than in the footer: they act on the
               whole configuration, not the visible tab, so repeating them under every
               tab implied a per-tab scope they never had — and on a phone they pushed
               Cancel/Save into a horizontally scrolling footer. */}
-          <div class="settings-config-actions"><div><strong>Configuration file</strong><p>Stored in <code>{draft.data_dir}</code>. The export is sanitized of credentials. Restoring defaults rewrites the saved configuration at once — it is not staged behind <em>Save changes</em>, and it discards unsaved edits.</p></div>
-            <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>void reset()}>Restore defaults</button></div>
-          </div>
-        </section>}
+          <section><h3>Configuration file</h3>
+            <div class="settings-config-actions"><div><p>Stored in <code>{draft.data_dir}</code>. The export is sanitized of credentials. Restoring defaults rewrites the saved configuration at once — it is not staged behind <em>Save changes</em>, and it discards unsaved edits.</p></div>
+              <div><button onClick={()=>void api('POST','/api/reveal',{path:draft.data_dir})}>Reveal config directory</button><button onClick={exportConfig}>Export sanitized</button><button class="danger" onClick={()=>void reset()}>Restore defaults</button></div>
+            </div>
+          </section>
+        </Fragment>}
 
-        {activeTab==='terminals'&&<section class="profile-settings"><h3>Terminals</h3>
-          <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
-        <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback. A harness's width limit lives with the harness, under Agents.</p>
-          <label>Global default terminal profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
-          <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
+        {/* Per-Project options are NOT here: the Projects registry is the single
+            per-Project editor (menu → Manage projects, or a Project's context menu →
+            Project settings…). This tab is the global half only, and each section
+            names the per-Project field it composes with. */}
+        {activeTab==='projects'&&<Fragment>
+          {/* Setup commands offered when a Project is registered. They are yours, typed
+              here, stored on this machine — nothing is ever read out of a repository, so
+              there is no trust prompt and no fingerprint to approve. */}
+          <section><h3>Project setup commands</h3>
+            <div class="settings-init-scripts">
+              <div class="settings-init-scripts-head"><div><strong>Offered when you add a Project</strong><p>Offered as unchecked options in Add project. Each selected command opens its own one-shot terminal at the new Project root, started in this order.</p></div><button onClick={addInitScript}>+ Add command</button></div>
+              {initScripts().map((script,index)=><div class="settings-init-script" key={script.id}>
+                <label>Name<input value={script.label} placeholder="Initialize git" onInput={e=>updateInitScript(index,{label:e.currentTarget.value})} /></label>
+                <label>Command<textarea value={script.command} placeholder="git init && git commit --allow-empty -m init" onInput={e=>updateInitScript(index,{command:e.currentTarget.value})} /></label>
+                <div class="settings-init-script-actions">
+                  <label class="check"><span>Checked by default</span><input type="checkbox" checked={!!script.default_enabled} onChange={e=>updateInitScript(index,{default_enabled:e.currentTarget.checked})} /></label>
+                  <button disabled={index===0} onClick={()=>moveInitScript(index,-1)}>↑</button>
+                  <button disabled={index===initScripts().length-1} onClick={()=>moveInitScript(index,1)}>↓</button>
+                  <button class="danger" onClick={()=>removeInitScript(index)}>Remove</button>
+                </div>
+              </div>)}
+              {!initScripts().length&&<p>No setup commands yet. Add one to have it offered whenever you register a Project.</p>}
+            </div>
+          </section>
+
+          <section><h3>Global project ignores</h3>
+            <label>Ignore patterns<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label>
+            <p>One glob per line. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p>
+            <p>Every Project adds its own list on top of this one, under <strong>Manage projects → Repository options → Additional ignore patterns</strong>. The two compose; neither replaces the other.</p>
+          </section>
+
+          <section><h3>Project resources</h3>
+            <p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p>
+            <p>Everything scoped to one Project — its root, default backend and profile, worktree command, prompt-library scope, and automation opt-in — lives in <strong>Manage projects</strong> rather than here.</p>
+          </section>
+        </Fragment>}
+
+        {activeTab==='terminals'&&<Fragment>
+          <section><h3>Rendering</h3>
+            <label>Renderer<select value={draft.terminal_renderer} onChange={e=>change('terminal_renderer',e.currentTarget.value as Config['terminal_renderer'])}><option value="auto">Auto (WebGL with DOM fallback)</option><option value="webgl">Prefer WebGL</option><option value="dom">DOM compatibility mode</option></select></label>
+            <p>Mobile viewports and Claude sessions always use the built-in DOM renderer. Auto also uses DOM for terminals that repaint scrollback. A harness's width limit lives with the harness, under Harnesses.</p>
+          </section>
+
+          <section><h3>Scrollback</h3>
+            <label>Scrollback bytes<input type="number" value={draft.scrollback_bytes} onInput={e=>change('scrollback_bytes',Number(e.currentTarget.value))} /></label>
+            <p>How much output a session keeps for replay when a client attaches. Larger keeps more history reachable after a reconnect and costs memory per live session.</p>
+          </section>
+
+          <section><h3>Default profile</h3>
+            <label>Global default terminal profile<select value={draft.default_shell_profile} onChange={e=>change('default_shell_profile',e.currentTarget.value)}>{draft.shell_profiles.filter(profile=>profile.enabled&&profile.backend==='shell').map(profile=><option value={profile.id}>{profile.label}</option>)}</select></label>
+            <p>A launch profile names an executable, arguments, and environment for one backend. A <strong>shell</strong> profile is a terminal. An <strong>agent</strong> profile starts a harness with extra arguments, so one Project can offer Claude and Claude (plan) side by side; pick which one a Project starts by default in Projects → Options.</p>
+          </section>
+
+          <section class="profile-settings"><h3>Launch profiles</h3>
           <div class="profile-browser">
             <div class="profile-index" aria-label="Configured launch profiles">
               {draft.shell_profiles.map(profile=><button class={selectedProfileId===profile.id?'active':''} onClick={()=>setSelectedProfileId(selectedProfileId===profile.id?null:profile.id)}><span>{profileTag(profile)}</span><strong>{profile.label}</strong><small>{profile.id} · {profile.backend==='shell'?'shell':harnessDisplayName(profile.backend)} · {profile.enabled?'on':'off'}</small></button>)}
@@ -934,15 +1064,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             </article>}
             {!selectedProfile&&<div class="profile-placeholder"><span>TERMINAL::PROFILES</span><strong>Select a profile to inspect or edit it.</strong><p>Nothing is expanded until you choose one.</p></div>}
           </div>
-        </section>}
-
-        {/* Per-Project options are NOT here: the Projects registry is the single
-            per-Project editor (menu → Manage projects, or a Project's context menu →
-            Project settings…). This tab is the global half only. */}
-        {activeTab==='workspace'&&<Fragment>
-          <section><h3>Git and worktrees</h3><label>Worktree root<input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/></label><p>New Run worktrees are grouped below this absolute directory by Project and branch. Clear the field to restore <code>{draft.data_dir}{draft.data_dir.includes('\\')?'\\':'/'}worktrees</code>. Existing worktrees and manually edited Run paths are not moved.</p><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label></section>
-          <section><h3>Project and process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><label>Global project ignores<textarea value={draft.project_ignore_patterns.join('\n')} onInput={e=>change('project_ignore_patterns',parseIgnorePatternDraft(e.currentTarget.value))}/></label><p>One glob per line. A name such as <code>node_modules</code> matches that folder at any depth. These rules affect the file tree and resource watchers, not Git.</p></section>
+          </section>
         </Fragment>}
+
+        {activeTab==='git'&&<section><h3>Git and worktrees</h3><label>Worktree root<input value={draft.worktree_root} onInput={e=>change('worktree_root',e.currentTarget.value)}/></label><p>New Run worktrees are grouped below this absolute directory by Project and branch. Clear the field to restore <code>{draft.data_dir}{draft.data_dir.includes('\\')?'\\':'/'}worktrees</code>. Existing worktrees and manually edited Run paths are not moved.</p><label>Git poll seconds<input type="number" step=".25" value={draft.git_poll_seconds} onInput={e=>change('git_poll_seconds',Number(e.currentTarget.value))} /></label><p>A Project's own worktree setup command lives in <strong>Manage projects → Git and worktrees</strong>. Which Git fields a session row shows is under <strong>Appearance → Session rows</strong>.</p></section>}
+
+        {activeTab==='processes'&&<section><h3>Process evidence</h3><label>Process inspector poll seconds<input type="number" min=".5" max="60" step=".5" value={draft.process_poll_seconds} onInput={e=>change('process_poll_seconds',Number(e.currentTarget.value))}/></label><label>Suspected-orphan grace seconds<input type="number" min="1" max="3600" value={draft.process_orphan_grace_seconds} onInput={e=>change('process_orphan_grace_seconds',Number(e.currentTarget.value))}/></label><label>Process evidence retention days<input type="number" min="1" max="3650" value={draft.process_evidence_retention_days} onInput={e=>change('process_evidence_retention_days',Number(e.currentTarget.value))}/></label><p>Process evidence uses PID plus creation time and command fingerprint. Surviving descendants are flagged after the grace period and are never killed automatically.</p><p>What is running right now, and what it is serving, is the drawer's <strong>Processes</strong> tab rather than a setting.</p></section>}
 
         {/* One editor renders every Markdown surface (notes,
             Markdown files from Files), so everything here applies to all of them.
@@ -958,6 +1085,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <p>Raw text keeps every editing feature — undo, multi-cursor, list continuation, autosave — and only stops the Markdown projection, so headings, emphasis, links, and task markers stay as the characters you typed.</p>
             <label>Tab key<select value={draft.note_tab_behavior} onChange={e=>change('note_tab_behavior',e.currentTarget.value as Config['note_tab_behavior'])}><option value="indent">Indent and outdent lines</option><option value="focus">Move focus out of the editor</option></select></label>
             <p>Indenting is the default; Escape then Tab still leaves the editor either way, so the keyboard is never trapped.</p>
+          </section>
+
+          <section><h3>Typography</h3>
             <label>Font family<input value={draft.note_font_family} placeholder="editor default: ui-monospace, Cascadia Mono, Consolas" onInput={e=>change('note_font_family',e.currentTarget.value)}/></label>
             <label>Font size<input type="number" min="0" max="48" value={draft.note_font_size_px} onInput={e=>change('note_font_size_px',Number(e.currentTarget.value))}/></label>
             <label>Line height<input type="number" min="0" max="3" step="0.05" value={draft.note_line_height} onInput={e=>change('note_line_height',Number(e.currentTarget.value))}/></label>
@@ -993,10 +1123,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             </div>
           </section>
 
-          <section><h3>Project resources</h3><p>Project notes, Files, file editors, terminals, and previews all open as tabs in the focused pane. Drag any tab between panes or onto a pane edge to create a split.</p></section>
         </Fragment>}
 
-        {activeTab==='agents'&&<section class="settings-harnesses"><h3>Agents</h3>
+        {activeTab==='harnesses'&&<Fragment>
+          <section class="settings-harnesses"><h3>Harnesses</h3>
           <p>Which harnesses appear in the launchers, and how each one starts. Enabling follows detection until you choose otherwise: turn a detected harness off to hide it, or turn one on before it is installed. A disabled harness still opens from an existing session, the command line, or the API, and its past conversations stay searchable in History.</p>
           {allHarnessesIncludingDisabled().map(harness=><div class="settings-harness" key={harness.name}>
             <div class="settings-harness-head">
@@ -1017,10 +1147,18 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               <label>Width limit<select value={String(draft.claude_max_columns)} onChange={e=>change('claude_max_columns',Number(e.currentTarget.value) as ClaudeMaxColumns)}>{CLAUDE_MAX_COLUMN_STEPS.map(step=><option value={String(step)}>{claudeMaxColumnsLabel(step)}</option>)}</select></label>
               <p class="profile-hint">{harness.display_name}'s renderer can leave stale and duplicated cells when its width changes by a lot, so a pane dragged past this many columns adds margin instead of resizing the terminal again. Raise it for wide diffs and long log lines; choose No limit to let it fill its pane like every other session. Phone and other compact panes are never limited.</p>
             </Fragment>}
-            <p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminal. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
+            <p class="profile-hint">Applies to every {harness.display_name} session. For one named alternative instead, add a launch profile under Terminals. Reserved: {(harness.reserved_launch_args||[]).join(' ')||'none'}.</p>
           </div>)}
-          <div class="keybinding-heading"><div><strong>NATIVE HISTORY</strong><p>swe-mux can index conversations a CLI wrote on its own, so they are searchable and resumable alongside the sessions it launched. The startup scan is scoped to the enabled harnesses above. A real machine can hold tens of thousands of transcripts, so a first import is opt-in and interruptible rather than a silent startup stall.</p></div></div>
+          </section>
+
+          {/* History indexing rather than harness configuration, but inseparable from
+              it: the scan is scoped to exactly the harnesses enabled above, so the two
+              are read together or not at all. */}
+          <section><h3>Conversation history</h3>
+          <p>swe-mux can index conversations a CLI wrote on its own, so they are searchable and resumable alongside the sessions it launched. The startup scan is scoped to the enabled harnesses. A real machine can hold tens of thousands of transcripts, so a first import is opt-in and interruptible rather than a silent startup stall.</p>
           <label class="check"><span>Reconcile native history on startup</span><input type="checkbox" checked={draft.reconcile_external_history} onChange={e=>change('reconcile_external_history',e.currentTarget.checked)} /></label>
+          <label>History page size<input type="number" min="1" max="10000" value={draft.history_limit} onInput={e=>change('history_limit',Number(e.currentTarget.value))} /></label>
+          <p>How many conversations one page of the history browser asks for. It bounds a request, not what is stored.</p>
           <div class="settings-history-scan">
             <div class="settings-history-scan-head">
               <div><strong>Scan native history now</strong><p>Indexes past conversations from the enabled harnesses without waiting for a restart. A first import can take a while on a machine with a large history, so it runs in the background and can be cancelled.</p></div>
@@ -1038,7 +1176,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
                 :`Scan failed: ${scanJob.error||'unknown error'}`
             }</p>}
           </div>
-          <div class="keybinding-heading"><div><strong>PROMPT QUEUE::AUTO-DELIVERY</strong><p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p></div></div>
+          </section>
+        </Fragment>}
+
+        {/* Delivery policy, not harness configuration: these bound how a queued
+            message reaches an agent, whichever harness that agent is running. */}
+        {activeTab==='queue'&&<Fragment>
+          <section><h3>Auto-delivery</h3>
+          <p>When this install-wide switch is on, every new observed agent conversation starts with bounded auto-delivery enabled. Armed messages still wait until the agent has held a safe-to-interrupt state for the whole stability window. A conversation can be turned off from its queue pane, and its grant lapses on its own once nobody has used that conversation for a while.</p>
           <label class="check"><span>Allow auto-delivery for agent conversations</span><input type="checkbox" checked={draft.auto_delivery_enabled} onChange={e=>change('auto_delivery_enabled',e.currentTarget.checked)} /></label>
           <label>Stability window seconds<input type="number" min="2" max="600" step="0.5" value={draft.auto_delivery_stable_seconds} onInput={e=>change('auto_delivery_stable_seconds',Number(e.currentTarget.value))} /></label>
           <label>Consecutive automatic sends before the grant disables itself<input type="number" min="1" max="50" value={draft.auto_delivery_max_consecutive} onInput={e=>change('auto_delivery_max_consecutive',Number(e.currentTarget.value))} /></label>
@@ -1047,27 +1192,59 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
           <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
           <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them.</p>
-          <div class="keybinding-heading"><div><strong>AGENT MESSAGING</strong><p>Bounds on messages agents address to each other. A message still enters the target's queue under every rule above; these limit how far one thread may travel.</p></div></div>
+          </section>
+
+          <section><h3>Agent messaging</h3>
+          <p>Bounds on messages agents address to each other. A message still enters the target's queue under every auto-delivery rule; these limit how far one thread may travel.</p>
           <label class="check"><span>Allow agent-to-agent messages</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
           <label>Relay hops before a thread must be restarted by a human<input type="number" min="1" max="10" value={draft.agent_message_max_chain_depth} onInput={e=>change('agent_message_max_chain_depth',Number(e.currentTarget.value))} /></label>
           <label>Messages in one thread<input type="number" min="1" max="100" value={draft.agent_message_max_thread_turns} onInput={e=>change('agent_message_max_thread_turns',Number(e.currentTarget.value))} /></label>
           <label>Messages one session may originate per hour<input type="number" min="1" max="1000" value={draft.agent_message_hourly_budget} onInput={e=>change('agent_message_hourly_budget',Number(e.currentTarget.value))} /></label>
           <label>Pending messages allowed per target<input type="number" min="1" max="100" value={draft.agent_message_pending_per_target} onInput={e=>change('agent_message_pending_per_target',Number(e.currentTarget.value))} /></label>
           <p>Hops bound how far a hand-off propagates: each new session a thread reaches counts one, and reaching back to a session already upstream is refused outright as a ring. A relay that needs to go further is a fresh thread a human starts, not a limit to raise until it disappears.</p>
-        </section>}
+          </section>
+        </Fragment>}
 
-        {activeTab==='accounts'&&<AccountSettings/>}
+        {/* The OpenRouter key is a provider credential, so it lives with the other
+            provider credentials rather than inside the one feature that happened to
+            need it first. Everything model-backed depends on it, and the model
+            defaults it unlocks are chosen here for the same reason. */}
+        {activeTab==='accounts'&&<Fragment>
+          <AccountSettings/>
+          <section><h3>OpenRouter</h3>
+            <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
+            <p class="profile-hint">One OpenRouter key unlocks every model-backed feature: automation observers, the scan timeline, spoken TTS summaries, attention narration, the conversation titler and summarizer, and the Project context card. Without it these features stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
+            <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
+            <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
+            <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
+          </section>
 
-        {activeTab==='input'&&<section class="input-settings"><h3>Input</h3>
+          <section><h3>Models</h3>
+            <p>The routed models every model-backed feature draws from. A feature that wants its own model (attention narration, spoken summaries) overrides one of these rather than replacing them.</p>
+            <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
+            <label for="cheap-model-picker">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/></label>
+            <label for="standard-model-picker">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
+            <label>Scan timeline model<input value={draft.scan_timeline_model} spellcheck={false} placeholder="deepseek/deepseek-v4-flash" onInput={event=>change('scan_timeline_model',event.currentTarget.value)} /><small>Changeable default: an exact OpenRouter model id (defaults to DeepSeek V4 Flash latest alias). Needs the key above.</small></label>
+          </section>
+        </Fragment>}
+
+        {activeTab==='input'&&<Fragment>
+          <section class="input-settings"><h3>Pointer</h3>
           <label class="check"><span>Middle-click paste</span><input type="checkbox" checked={draft.middle_click_paste} onChange={e=>change('middle_click_paste',e.currentTarget.checked)} /></label>
           <label class="check"><span>Broadcast by default</span><input type="checkbox" checked={draft.broadcast_default} onChange={e=>change('broadcast_default',e.currentTarget.checked)} /></label>
-          <div class="keybinding-heading"><div><strong>MOBILE::TERMINAL</strong><p>Touch settings apply on coarse-pointer devices. Text input goes directly to the focused terminal.</p></div></div>
+          </section>
+
+          <section class="input-settings"><h3>Mobile terminal</h3>
+          <p>Touch settings apply on coarse-pointer devices. Text input goes directly to the focused terminal.</p>
           <label>Vertical drag<select value={draft.mobile_vertical_drag} onChange={e=>change('mobile_vertical_drag',e.currentTarget.value as Config['mobile_vertical_drag'])}><option value="smart">Smart: app wheel or scrollback</option><option value="terminal">Terminal scrollback only</option><option value="application">Application wheel</option><option value="disabled">Disabled</option></select></label>
           <label>Scroll direction<select value={draft.mobile_scroll_direction} onChange={e=>change('mobile_scroll_direction',e.currentTarget.value as Config['mobile_scroll_direction'])}><option value="natural">Natural touch</option><option value="wheel">Mouse wheel</option></select></label>
           <label>Scroll sensitivity<input type="number" min="0.25" max="4" step="0.25" value={draft.mobile_scroll_sensitivity} onInput={e=>change('mobile_scroll_sensitivity',Number(e.currentTarget.value))} /></label>
           <label>Long press<select value={draft.mobile_long_press} onChange={e=>change('mobile_long_press',e.currentTarget.value as Config['mobile_long_press'])}><option value="context_menu">Select terminal text</option><option value="disabled">Disabled</option></select></label>
           <label class="check"><span>Copy terminal selection automatically</span><input type="checkbox" checked={draft.terminal_auto_copy_selection} onChange={e=>change('terminal_auto_copy_selection',e.currentTarget.checked)}/></label>
-          <div class="keybinding-heading"><div><strong>CLIPBOARD::HISTORY</strong><p>Every copy made <em>inside</em> swe-mux is kept in a shared ring you can insert from on any device (panel: <code>clipboard.open</code>, by default a two-finger swipe left on touch). The OS clipboard is never read or polled, so copies from other applications do not appear. The ring lives in memory only unless you save it to disk — a durable list of copied text accumulates credentials, and it is readable by anyone who can reach this daemon.</p></div></div>
+          </section>
+
+          <section class="input-settings"><h3>Clipboard history</h3>
+          <p>Every copy made <em>inside</em> swe-mux is kept in a shared ring you can insert from on any device (panel: <code>clipboard.open</code>, by default a two-finger swipe left on touch). The OS clipboard is never read or polled, so copies from other applications do not appear. The ring lives in memory only unless you save it to disk — a durable list of copied text accumulates credentials, and it is readable by anyone who can reach this daemon.</p>
           <label class="check"><span>Keep clipboard history</span><input type="checkbox" checked={draft.clipboard_history_enabled} onChange={e=>change('clipboard_history_enabled',e.currentTarget.checked)}/></label>
           <label class="check"><span>Save history to disk (survives daemon restarts)</span><input type="checkbox" checked={draft.clipboard_history_persist} onChange={e=>change('clipboard_history_persist',e.currentTarget.checked)}/></label>
           <label class="check"><span>Skip secret-shaped copies (API keys, tokens, JWTs, private keys)</span><input type="checkbox" checked={draft.clipboard_history_redact_secrets} onChange={e=>change('clipboard_history_redact_secrets',e.currentTarget.checked)}/></label>
@@ -1075,36 +1252,37 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Retention hours (0 keeps until evicted)<input type="number" min="0" max="8760" value={draft.clipboard_history_retention_hours} onInput={e=>change('clipboard_history_retention_hours',Number(e.currentTarget.value))}/></label>
           <label>Maximum characters per entry<input type="number" min="256" max="1000000" value={draft.clipboard_history_entry_max_chars} onInput={e=>change('clipboard_history_entry_max_chars',Number(e.currentTarget.value))}/></label>
           <p>Longer copies are skipped rather than stored truncated, so a history entry never pastes a silently partial payload. Turning history off clears the ring; turning saving off deletes what was already written. Pinned entries survive eviction, retention, and Clear.</p>
-          <div class="keybinding-heading"><div><strong>TOUCH::GESTURES</strong><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
+          </section>
+
+          <section class="input-settings">
+          <div class="keybinding-heading"><div><h3>Touch gestures</h3><p>Map mobile swipe and multi-finger gestures to commands. Vertical <em>single</em>-finger drags stay reserved for terminal scrolling, but two-finger vertical swipes are mappable; edge swipes are left to the OS (back / home).</p></div><button onClick={()=>change('mobile_gestures',{...defaultMobileGestureSettings})}>Restore gesture defaults</button></div>
           {GESTURE_SLOTS.map(slot=><label>{GESTURE_LABELS[slot]}<select value={draft.mobile_gestures?.[slot]??''} onChange={e=>change('mobile_gestures',{...draft.mobile_gestures,[slot]:e.currentTarget.value})}><option value="">Disabled</option>{bindingCommands.map(command=><option value={command.id}>{command.label}</option>)}</select></label>)}
           <label class="check"><span>Swipe-away closes an open panel: either horizontal direction closes the left sidebar; swiping right closes the right side panel instead of running that swipe's binding</span><input type="checkbox" checked={draft.mobile_gesture_swipe_away_close!==false} onChange={e=>change('mobile_gesture_swipe_away_close',e.currentTarget.checked)}/></label>
           <label class="check"><span>Swipe back closes an open overlay: while a dialog is open, swiping right closes one level (the transcript inside session history returns to the results). Off restores the older behaviour where a dialog ignored every swipe; the Android back gesture keeps working either way</span><input type="checkbox" checked={draft.mobile_gesture_overlay_back!==false} onChange={e=>change('mobile_gesture_overlay_back',e.currentTarget.checked)}/></label>
-          <div class="keybinding-heading"><div><strong>KEYBOARD::SHORTCUTS</strong><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
+          </section>
+
+          <section class="input-settings">
+          <div class="keybinding-heading"><div><h3>Keyboard shortcuts</h3><p>Click a command, then press the new shortcut. Changes apply when Settings is saved.</p></div><button onClick={()=>{setBindings({...bindingDefaults});setCapturingCommand(null);setBindingError('')}}>Restore shortcut defaults</button></div>
           {capturingCommand&&<div class="keybinding-capture" role="status"><span>PRESS KEYS FOR</span><strong>{bindingCommands.find(command=>command.id===capturingCommand)?.label||capturingCommand}</strong><button onClick={()=>{setCapturingCommand(null);setBindingError('')}}>Cancel</button></div>}
           {bindingError&&<p class="keybinding-error" role="alert">{bindingError}</p>}
           <div class="keybinding-list">
             {[...new Set(bindingCommands.map(command=>command.category))].map(category=><section class="keybinding-group" aria-label={`${category} shortcuts`}><h4>{category}</h4>{bindingCommands.filter(command=>command.category===category).map(command=>{const chord=bindingForCommand(command.id);return <article class={capturingCommand===command.id?'capturing':''}><button class="keybinding-command" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} title={command.id}><span>{command.label}</span><small>{command.id}</small></button><button class="keybinding-chord" onClick={()=>{setCapturingCommand(command.id);setBindingError('')}} aria-label={`Set shortcut for ${command.label}`}><kbd>{chord?displayChord(chord):'not set'}</kbd></button><button class="keybinding-clear" disabled={!chord} onClick={()=>clearBinding(command.id)} aria-label={`Clear shortcut for ${command.label}`}>×</button></article>})}</section>)}
           </div>
           <details class="keybinding-policy"><summary>Reserved shortcut policy</summary><ul>{bindingPolicy.rules.map(rule=><li>{rule}</li>)}</ul><div><strong>BROWSER</strong>{bindingPolicy.browser_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>DESKTOP APP</strong>{bindingPolicy.desktop_only.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>APPLICATION</strong>{bindingPolicy.application_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div><div><strong>TERMINAL</strong>{bindingPolicy.terminal_reserved.map(chord=><kbd>{displayChord(chord)}</kbd>)}</div></details>
-        </section>}
+          </section>
+        </Fragment>}
 
-        {activeTab==='usage'&&<section><h3>Usage and operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. One refresh discovers every historical source supported by the installed ccusage version.</p><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section>}
+        {activeTab==='usage'&&<Fragment><section><h3>Operational telemetry</h3><p>The dashboard combines optional ccusage history with durable provider quota samples, reset evidence, probabilistic mux correlation, tools, explicit skills, and compactions.</p><div class="theme-actions"><button class="primary" onClick={onOpenUsage}>Open telemetry dashboard</button><button disabled={!config?.ccusage_enabled || usage?.refreshing || usageRefreshMessage.startsWith('Refreshing')} onClick={()=>void refreshUsage()}>{usageRefreshMessage.startsWith('Refreshing')?'Refreshing…':'Refresh historical usage'}</button><button onClick={()=>void clearUsage()}>Clear ccusage cache</button></div><label>Operational telemetry retention days<input type="number" min="1" max="3650" value={draft.operational_telemetry_retention_days} onInput={e=>change('operational_telemetry_retention_days',Number(e.currentTarget.value))}/></label><label>Provider quota poll minutes<input type="number" min="5" max="1440" value={draft.provider_quota_poll_minutes} onInput={e=>change('provider_quota_poll_minutes',Number(e.currentTarget.value))}/></label><label class="check"><span>Refresh active quota after eligible root turns</span><input type="checkbox" checked={draft.provider_quota_turn_refresh_enabled} onChange={e=>change('provider_quota_turn_refresh_enabled',e.currentTarget.checked)}/></label><label>Minimum minutes between turn-triggered refreshes<input type="number" min="1" max="1440" value={draft.provider_quota_turn_refresh_min_minutes} onInput={e=>change('provider_quota_turn_refresh_min_minutes',Number(e.currentTarget.value))}/></label><p>Turn-triggered refresh is globally rate limited, selected-account only, and never assumes provider data updates immediately. Unexpected-reset sounds are optional per device in the account switcher.</p></section><section><h3>Historical ccusage</h3><p class={usageRefreshMessage.startsWith('Refresh failed')?'settings-inline-error':''} aria-live="polite">{usageRefreshMessage || (usage ? `${usage.collector.id}: ${usage.collector.status}${usage.collector.error?` (${usage.collector.error})`:''}` : 'usage status unavailable')}</p>{draft.ccusage_enabled&&!config?.ccusage_enabled&&<p>Save these settings before refreshing.</p>}<label class="check"><span>Enable ccusage refresh</span><input type="checkbox" checked={draft.ccusage_enabled} onChange={e=>change('ccusage_enabled',e.currentTarget.checked)} /></label><label>Background refresh minutes<input type="number" min="0" max="1440" value={draft.ccusage_refresh_minutes} onInput={e=>change('ccusage_refresh_minutes',Number(e.currentTarget.value))} /></label><label>Install/update command<input readonly value={usage?.install_command||'npm install -g ccusage@latest'} onFocus={event=>event.currentTarget.select()} /></label><button onClick={()=>void navigator.clipboard.writeText(usage?.install_command||'npm install -g ccusage@latest')}>Copy install command</button><p>The `latest` tag is resolved when you install or update. One refresh discovers every historical source supported by the installed ccusage version.</p><details class="settings-advanced"><summary>Advanced collector command</summary><label>ccusage collector command<textarea value={draft.usage_command.join('\n')} onInput={e=>change('usage_command',e.currentTarget.value.split('\n').filter(Boolean))} /></label>{Object.entries(draft.usage_commands).map(([name,command])=><label>{name} legacy source override<textarea value={command.join('\n')} onInput={e=>change('usage_commands',{...draft.usage_commands,[name]:e.currentTarget.value.split('\n').filter(Boolean)})} /></label>)}</details></section></Fragment>}
 
-        {activeTab==='automation'&&<section><h3>Automation</h3>
-          <p>Enable and disable automation in the Automation dashboard. Settings holds provider, model, budget, execution, and advanced rule configuration.</p>
+        {activeTab==='automation'&&<Fragment>
+          <section><h3>Automation engine</h3>
+          <p>Enable and disable automation in the Automation dashboard. Settings holds model, budget, execution, and advanced rule configuration; the OpenRouter key and the models every observer routes to are under <strong>Accounts</strong>.</p>
           <div class="theme-actions"><button class="primary" onClick={onOpenAutomation}>Open Automation dashboard</button></div>
           <p class="settings-warning">Privacy boundary: each enabled observer sends only its selected bounded transcript slice to OpenRouter and the routed model provider. swe-mux does not crawl project files.</p>
-          <h3>OpenRouter</h3>
-          <p><span class={`state-dot ${provider?.secret.configured?'idle':'running'}`}/> key::{provider?.secret.configured?'configured':'not configured'} · source::{provider?.secret.source||'none'} · endpoint::{provider?.origin||'fixed OpenRouter API'}</p>
-          <p class="profile-hint">One OpenRouter key unlocks every model-backed feature: automation observers, the scan timeline, spoken TTS summaries, attention narration, the conversation titler and summarizer, and the Project context card. Without it these features stay off rather than failing. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.</p>
-          <label>API key<input type="password" autocomplete="off" value={openRouterKey} placeholder={provider?.secret.configured?'write only · enter to replace':'sk-or-…'} onInput={event=>setOpenRouterKey(event.currentTarget.value)} /></label>
-          <div class="theme-actions"><button disabled={!openRouterKey} onClick={()=>void providerKeyAction('test')}>Test entered key</button><button class="primary" disabled={!openRouterKey} onClick={()=>void providerKeyAction('set')}>Test + set/replace</button><button disabled={!provider?.secret.configured} onClick={()=>void providerKeyAction('clear')}>Clear stored key</button></div>
-          <p aria-live="polite">{providerMessage||'The key is write-only and never appears in config, exports, logs, or browser reads.'}</p>
-          <div class="theme-actions"><button disabled={!provider?.secret.configured} onClick={()=>void refreshModels()}>Refresh models</button><span>{provider?.models.models.length||0} models{provider?.models.stale?' · stale':''}{provider?.models.error?` · ${provider.models.error}`:''}</span></div>
-          <label for="cheap-model-picker">Cheap model<ModelPicker id="cheap-model-picker" value={draft.openrouter_cheap_model} options={modelOptions(draft.openrouter_cheap_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_cheap_model',value)}/></label>
-          <label for="standard-model-picker">Standard model<ModelPicker id="standard-model-picker" value={draft.openrouter_standard_model} options={modelOptions(draft.openrouter_standard_model)} emptyLabel="Select exact model…" onChange={value=>change('openrouter_standard_model',value)}/></label>
-          <label>Scan timeline model<input value={draft.scan_timeline_model} spellcheck={false} placeholder="deepseek/deepseek-v4-flash" onInput={event=>change('scan_timeline_model',event.currentTarget.value)} /><small>Changeable default: an exact OpenRouter model id (defaults to DeepSeek V4 Flash latest alias). Needs the key above.</small></label>
-          <h3>Budgets + execution</h3>
+          <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
+          </section>
+
+          <section><h3>Budgets and execution</h3>
           <label>Daily token budget<input type="number" value={draft.automation_daily_token_budget} onInput={event=>change('automation_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Daily dollar budget<input type="number" step="0.01" value={draft.automation_daily_budget_usd} onInput={event=>change('automation_daily_budget_usd',Number(event.currentTarget.value))}/></label>
           <label>Per-rule daily tokens<input type="number" value={draft.automation_rule_daily_token_budget} onInput={event=>change('automation_rule_daily_token_budget',Number(event.currentTarget.value))}/></label>
@@ -1115,14 +1293,18 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
-          <h3>Scan timeline</h3>
-          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps above. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars.</p>
+          </section>
+
+          <section><h3>Scan timeline</h3>
+          <p>Scan timeline samples continuously rather than firing once per session, so it has its own limits instead of sharing the per-rule caps. These apply to every Project; there is no per-project budget. The dollar budget is the one worth adjusting - at the default model's price the tokens run out well before the dollars. Its model is chosen under <strong>Accounts</strong>.</p>
           <label>Daily dollar budget<input type="number" min="0" max="1000" step="0.25" value={draft.scan_timeline_daily_budget_usd} onInput={event=>change('scan_timeline_daily_budget_usd',Number(event.currentTarget.value))}/><small>Across every Project and session, reset daily (UTC).</small></label>
           <label>Daily token budget<input type="number" min="512" max="100000000" value={draft.scan_timeline_daily_token_budget} onInput={event=>change('scan_timeline_daily_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Tokens per conversation<input type="number" min="512" max="20000000" value={draft.scan_timeline_run_token_budget} onInput={event=>change('scan_timeline_run_token_budget',Number(event.currentTarget.value))}/></label>
           <label>Hourly scan cap<input type="number" min="1" max="100000" value={draft.scan_timeline_hourly_call_cap} onInput={event=>change('scan_timeline_hourly_call_cap',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" min="256" max="8192" value={draft.scan_timeline_max_output_tokens} onInput={event=>change('scan_timeline_max_output_tokens',Number(event.currentTarget.value))}/><small>The record schema allows about 2,600 characters; too low truncates the response and loses the record.</small></label>
-          <h3>Attention</h3>
+          </section>
+
+          <section><h3>Attention</h3>
           <p>Ranking decides which findings are worth interrupting you for. The daily budget is a hard bound counted per incident, so several detectors describing one event spend one slot. Cheap-to-resolve work never spends any. Ranked items appear in Alerts and are never pushed to a device.</p>
           <label>Daily interrupts<input type="number" min="0" max="100" value={draft.attention_daily_interrupt_budget} onInput={event=>change('attention_daily_interrupt_budget',Number(event.currentTarget.value))}/></label>
           <label>Hourly burst cap<input type="number" min="0" max="100" value={draft.attention_hourly_interrupt_cap} onInput={event=>change('attention_hourly_interrupt_cap',Number(event.currentTarget.value))}/></label>
@@ -1131,9 +1313,12 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label class="check"><span>Model narration on ranked items</span><input type="checkbox" checked={draft.attention_narration_enabled} onChange={event=>change('attention_narration_enabled',event.currentTarget.checked)}/></label>
           <label for="narration-model-picker">Narration model<ModelPicker id="narration-model-picker" value={draft.attention_narration_model} options={modelOptions(draft.attention_narration_model)} emptyLabel="Use the cheap model…" onChange={value=>change('attention_narration_model',value)}/></label>
           <label>Narration daily dollars<input type="number" step="0.01" min="0" max="100" value={draft.attention_narration_daily_budget_usd} onInput={event=>change('attention_narration_daily_budget_usd',Number(event.currentTarget.value))}/></label>
+          </section>
+
+          <section><h3>Advanced rules</h3>
           <details class="settings-advanced"><summary>Advanced rules.toml editor</summary><p>Canonical machine-owned rules only. Repository .swe-mux/rules.toml files remain diagnostic and inert.</p><label>rules.toml<textarea value={rules} onInput={event=>setRules(event.currentTarget.value)} /></label></details>
-          <p aria-live="polite">engine::{automation?.diagnostic?'error':'ready'} · rules::{automation?.rules.length||0} · queue::{automation?.queue.size||0}/{automation?.queue.capacity||0} · dropped::{automation?.queue.dropped||0}{automation?.legacy.active?' · legacy hooks compatibility active':''}</p>
-        </section>}
+          </section>
+        </Fragment>}
 
         {activeTab==='notifications'&&<NotificationAlertSettings/>}
 
@@ -1156,7 +1341,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
             <label>SAPI rate (-10 slow … 10 fast)<input type="number" min="-10" max="10" value={draft.tts_sapi_rate} onInput={e=>change('tts_sapi_rate',Number(e.currentTarget.value))} /></label>
           </>}
           <h3>Spoken summary</h3>
-          <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Automation.</p>
+          <p>Summaries call OpenRouter with the last turn only, record spend beside observer calls, and stop at the daily budget. Configure the key under Accounts.</p>
           <label>Summary model<select value={draft.tts_summary_model} onChange={e=>change('tts_summary_model',e.currentTarget.value)}><option value="">Use automation cheap model</option>{modelOptions(draft.tts_summary_model).map(model=><option value={model.id}>{model.name} · {model.id}</option>)}</select></label>
           <label>Summary max tokens<input type="number" min="64" max="2000" value={draft.tts_summary_max_tokens} onInput={e=>change('tts_summary_max_tokens',Number(e.currentTarget.value))} /></label>
           <label>Daily summary budget (USD)<input type="number" step="0.01" min="0" max="100" value={draft.tts_daily_budget_usd} onInput={e=>change('tts_daily_budget_usd',Number(e.currentTarget.value))} /></label>
@@ -1190,7 +1375,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
               }} /></label>
             })}
           </div>
-          <h3>Complete voice command reference</h3>
+          <h3>Command reference</h3>
           <p>Say a configured wake word before every command. <code>Project N</code> uses the visible sidebar order. <code>Session N</code> uses the selected Project. Braced values such as <code>{'{text}'}</code> are spoken content, not literal words.</p>
           <div class="voice-command-reference">
             {completeVoiceCatalog.map((section,index)=><details open={index===0} key={section.id}>
@@ -1219,44 +1404,90 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <PhoneDnsChecklist />
         </section>}
 
-        {activeTab==='remote'&&<section>
-          <h3>Remote and security</h3>
+        {activeTab==='remote'&&<Fragment>
+          <section><h3>Tailnet listener</h3>
           <p class="settings-inline-error">Any device on this tailnet reaches this daemon with no login, and an admitted device has full terminal and code-execution authority. Do not enable the tailnet listener on a shared tailnet.</p>
           <label class="check"><span>Listen on Tailscale IPv4</span><input type="checkbox" checked={draft.tailnet_enabled} onChange={event=>change('tailnet_enabled',event.currentTarget.checked)} /></label>
           <p>Changing the listener requires a daemon restart. swe-mux binds localhost plus the specific Tailscale address—never every LAN interface.</p>
           <TailscaleConnection status={remote} />
-          <div class="theme-actions"><button onClick={()=>setConnectPhoneOpen(true)}>Connect a phone…</button></div>
-          {prerequisites&&<div class="settings-prerequisites">
-            <strong>System prerequisites</strong>
-            <p class="profile-hint">These back specific features. Each fails gracefully when absent, so a missing one reads as unconfigured, not broken.</p>
-            <ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.present?'prereq-ok':'prereq-missing'}>
-              <span>{prereq.present?'✓':'✗'} {prereq.label}</span>
-              <small>{prereq.purpose}{prereq.present&&prereq.path?` · ${prereq.path}`:''}</small>
-              {!prereq.present&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
-            </li>)}</ul>
-          </div>}
           <dl><dt>Local URL</dt><dd>{remote?.listen_url||`http://${draft.host}:${draft.port}`}</dd><dt>Direct tailnet</dt><dd>{remote?.direct_available?'active':draft.tailnet_enabled?'Tailscale address unavailable':'disabled'}</dd>{remote?.tailnet_urls.map(url=><Fragment key={url}><dt>Tailnet URL</dt><dd><a href={url} target="_blank" rel="noreferrer">{url}</a></dd></Fragment>)}</dl>
-          <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address below.</p>
-          <FirewallPanel status={firewall} busy={firewallBusy} message={firewallMessage} onRepair={()=>void repairFirewall()} />
-          <WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
-            onToggle={enabled=>void toggleWsl(enabled)} onProbe={()=>void probeWsl()}
-            onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} />
-          <PhoneDnsChecklist />
-          <strong>Optional HTTPS with Tailscale Serve</strong>
-          <p>{remote?.diagnostic||'Checking the private HTTPS address…'}</p>
+          <p>Direct tailnet HTTP is encrypted in transit by Tailscale. Mobile microphone access additionally requires the private HTTPS address.</p>
+          </section>
+
+          <section><h3>Connect a phone</h3>
+          <p>Walks one device through admission: the address to open, the Tailscale state it needs, and a scannable code for it.</p>
+          <div class="theme-actions"><button onClick={()=>setConnectPhoneOpen(true)}>Connect a phone…</button></div>
+          {connectPhoneOpen&&<ConnectPhone onClose={()=>setConnectPhoneOpen(false)} />}
+          </section>
+
+          {/* Both panels render nothing on a host that does not support them. Now that
+              each owns a heading, that would leave a heading promising content that is
+              not there, so the unsupported case says so instead of going quiet. */}
+          <section><h3>Firewall</h3>
+          {firewall?.supported
+            ?<FirewallPanel status={firewall} busy={firewallBusy} message={firewallMessage} onRepair={()=>void repairFirewall()} />
+            :<p>Firewall inspection and repair are only available in the packaged Windows app.</p>}
+          </section>
+
+          <section><h3>WSL bridge</h3>
+          {wsl?.supported
+            ?<WslBridgePanel status={wsl} busy={wslBusy} message={wslMessage} probing={wslProbing}
+              onToggle={enabled=>void toggleWsl(enabled)} onProbe={()=>void probeWsl()}
+              onInstall={distro=>void installWslBridge(distro)} onRepairFirewall={()=>void repairWslFirewall()} />
+            :<p>This host has no WSL, so there is no distribution to run an agent inside.</p>}
+          </section>
+
+          <section><h3>Secure HTTPS access</h3>
+          <p>Optional HTTPS with Tailscale Serve. {remote?.diagnostic||'Checking the private HTTPS address…'}</p>
           {remote?.funnel_detected&&<p class="settings-inline-error">Tailscale Funnel appears enabled. Public ingress is unsupported; swe-mux only configures private tailnet access.</p>}
           <div class="theme-actions"><button class="primary" disabled={mobileVoiceBusy||!draft.tailnet_enabled} onClick={()=>void setupMobileVoice()}>{mobileVoiceBusy?'Setting up…':remote?.mobile_voice_configured?'Repair secure mobile access':'Enable secure mobile access'}</button>{remote?.mobile_voice_url&&<a href={remote.mobile_voice_url} target="_blank" rel="noreferrer">Open secure address</a>}<button onClick={()=>{void api<RemoteStatus>('GET','/api/remote/status').then(setRemote);void api<FirewallStatus>('GET','/api/remote/firewall').then(setFirewall)}}>Recheck</button></div>
           {mobileVoiceMessage&&<p class={mobileVoiceMessage.toLowerCase().includes('failed')?'settings-inline-error':''} aria-live="polite">{mobileVoiceMessage}</p>}
           <p>No public Funnel access is enabled. Regular mobile access remains available at the direct 100.x tailnet URL; Tailscale access policy controls which devices can connect.</p>
-          <h3>Diagnostics</h3>
+          </section>
+
+          <section><h3>Phone DNS</h3>
+          <PhoneDnsChecklist />
+          </section>
+        </Fragment>}
+
+        {/* Support tooling, not remote configuration: what the host is missing, how to
+            push new code into the running app, and one bundle to hand over when
+            something is wrong. */}
+        {activeTab==='diagnostics'&&<Fragment>
+          <section><h3>System prerequisites</h3>
+          <p class="profile-hint">These back specific features. Each fails gracefully when absent, so a missing one reads as unconfigured, not broken.</p>
+          {prerequisites
+            ?<div class="settings-prerequisites"><ul>{prerequisites.map(prereq=><li key={prereq.id} class={prereq.present?'prereq-ok':'prereq-missing'}>
+              <span>{prereq.present?'✓':'✗'} {prereq.label}</span>
+              <small>{prereq.purpose}{prereq.present&&prereq.path?` · ${prereq.path}`:''}</small>
+              {!prereq.present&&<small><code>{prereq.install_command}</code> · <a href={prereq.download_url} target="_blank" rel="noreferrer">download</a></small>}
+            </li>)}</ul></div>
+            :<p>Prerequisite status is unavailable.</p>}
+          </section>
+
+          {/* The same three commands the app menu carries, reachable from Settings
+              because this is where you already are when a change has not appeared.
+              Each is session-preserving: none of them reaps a live agent or terminal. */}
+          <section><h3>Rebuild and reload</h3>
+          <p>Every one of these keeps live sessions: the PTY supervisor owns them and outlives the daemon and the app. None of them is a way to stop swe-mux.</p>
+          <div class="settings-config-actions"><div><p><strong>Reload UI</strong> re-fetches this page only. <strong>Reload daemon</strong> restarts the backend in place. <strong>Rebuild + redeploy</strong> rebuilds the desktop app from source and swaps it in, which takes several minutes and is the only one that ships a change into the frozen app.</p></div>
+            <div>
+              <button disabled={!appCommand('ui.reload')} onClick={()=>runAppCommand('ui.reload')}>Reload UI</button>
+              <button disabled={!appCommand('daemon.reload')} onClick={()=>runAppCommand('daemon.reload')}>Reload daemon (keep sessions)</button>
+              <button disabled={!appCommand('app.redeploy')} onClick={()=>runAppCommand('app.redeploy')}>Rebuild + redeploy app</button>
+            </div>
+          </div>
+          </section>
+
+          <section><h3>Export diagnostics</h3>
           <p>Export a single copyable bundle of connection state, firewall status, network counters, sanitized config (no secrets), and recent daemon logs. Share it when reporting a connection problem.</p>
           <div class="theme-actions"><button class="primary" disabled={diagnosticsBusy} onClick={()=>void exportDiagnostics()}>{diagnosticsBusy?'Collecting…':'Export diagnostics'}</button></div>
           {diagnosticsMessage&&<p aria-live="polite">{diagnosticsMessage}</p>}
           {diagnosticsText&&<label>Diagnostics bundle<textarea readOnly rows={10} value={diagnosticsText} onClick={event=>event.currentTarget.select()} /></label>}
-          {connectPhoneOpen&&<ConnectPhone onClose={()=>setConnectPhoneOpen(false)} />}
-        </section>}
+          </section>
+        </Fragment>}
 
-        {activeTab==='appearance'&&<section><h3>Appearance</h3>
+        {activeTab==='appearance'&&<section><h3>Theme</h3>
           <div class="theme-field">
             <span>Theme</span>
             <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} />
@@ -1275,7 +1506,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
           <p class="settings-scale-active">This window is using the <strong>{currentProfile()==='mobile'?'mobile':'desktop'}</strong> value — the other one will not change anything you can see from here.</p>
           <p>The desktop browser and the phone keep separate scales, because they rarely want the same density. Both are editable from either device, so you can size the phone from here rather than on the phone. A window picks its value by width, at the same point the mobile layout takes over, so a desktop window dragged narrow adopts the mobile scale.</p>
-          <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Notes</strong>.</p></section>}
+          <p><kbd>Ctrl</kbd>+mouse wheel, <kbd>Ctrl</kbd>+<kbd>+</kbd>, and <kbd>Ctrl</kbd>+<kbd>-</kbd> move the active value one step; <kbd>Ctrl</kbd>+<kbd>0</kbd> resets it to 100%. Scale moves the text of every menu, tab, sidebar row, panel, and terminal together with the row and bar heights that hold it, so nothing clips at a larger size. Padding, icons, and touch targets deliberately stay put. The note editor keeps its own typography under <strong>Text editor</strong>.</p></section>}
   </Fragment>
 
   // Rebuilt on the first keystroke of a search and then reused until the search
@@ -1290,7 +1521,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     // notification panels) becomes searchable — a component vnode is a function
     // reference, not markup. Those harvests are kept for the page session, so a
     // tab reached once stays fully searchable from every other tab afterwards.
-    const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors)')
+    const mounted=panel.current?.querySelectorAll('.settings-content > *:not(.settings-errors):not(.settings-section-rail)')
     if(mounted?.length){
       const index=settingsTabs.findIndex(tab=>tab.id===activeTab)
       const label=settingsTabs[index]?.label||activeTab
@@ -1332,10 +1563,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       <button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     {!!query.trim()&&<div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
     <main class="settings-body">
+      {/* Grouped for the desktop sidebar, flat for the mobile rail, from one array.
+          The wrapper is `display:contents` so its buttons stay direct flex children
+          of the nav in both layouts, and `role=presentation` because a tablist
+          admits only tabs — the heading is a visual affordance, and a reader gets
+          the same flat list the phone does. */}
       <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-        {settingsTabs.map(tab=><button role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
+        {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
+          <span aria-hidden="true">{group.group}</span>
+          {group.tabs.map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
+        </div>)}
       </nav>
       <div class="settings-content">
+        {railSections.length>=SECTION_RAIL_MIN&&<nav class="settings-section-rail" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} sections`}>
+          {railSections.map(section=><button type="button" key={section.id} class={activeSection===section.id?'active':''} aria-current={activeSection===section.id?'true':undefined} onClick={()=>scrollToSection(section.id)}>{section.label}</button>)}
+        </nav>}
         {Object.keys(errors).length > 0 && <section class="settings-errors" aria-live="assertive"><h3>Validation errors</h3>{Object.entries(errors).map(([field,message])=><p><strong>{field}</strong> — {message}</p>)}</section>}
 
         {tabContent(activeTab)}

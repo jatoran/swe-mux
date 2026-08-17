@@ -237,13 +237,19 @@ export function ProjectRunMenu({project,profiles,anchor,onClose,onLaunch,onCusto
         <button role="menuitem" aria-label="Open custom terminal launcher" disabled={!!busy} onClick={onCustom}><span aria-hidden="true">⋯</span><div><strong>Custom terminal…</strong></div></button>
       </div>
       <div class="run-menu-section"><small>ISOLATED CHECKOUT</small><button role="menuitem" aria-label="Create a worktree and start a session" disabled={!!busy} onClick={openWorktree}><span aria-hidden="true">⑂</span><div><strong>New worktree session…</strong></div></button></div>
-      {loading?<p>Reading Project tasks…</p>:groups.map(group=><div class="run-menu-section" key={group.source}><small>{sourceLabel[group.source]}</small>{group.items.map(action=><button role="menuitem" key={action.id} disabled={!!busy} title={[action.description,...action.steps.map(step=>step.command)].filter(Boolean).join('\n')} onClick={()=>execute(action)}>{/* Hollow triangle for an action whose file is not approved, filled once it is:
-    monospace-safe unlike an emoji, and it reads as "not armed". Deliberately the
-    only hint in the row. Spelling it out in the subtitle pushed out the thing a
-    reader actually chooses between, the description, and did so on every action
-    at once, because a Project with a new actions file has none approved yet.
-    The trust prompt is where the state gets explained, in full, with a diff. */}
-<span>{busy===action.id?'…':isTrusted(action)?'▶':'▷'}</span><div><strong>{action.label}</strong><em>{[action.description,action.steps.length>1?`${action.steps.length} terminals`:'',action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')}</em></div></button>)}</div>)}
+      {loading?<p>Reading Project tasks…</p>:groups.map(group=><div class="run-menu-section" key={group.source}><small>{sourceLabel[group.source]}</small>{group.items.map(action=>{
+    /* Only the run shape sits beside the title. The description is agent-facing prose
+       and it is laid out `flex:none`, so it took the whole row and ellipsised the name
+       a human picks by - on package scripts, where the description is the script body,
+       the name vanished entirely. It stays on the row's tooltip, in the trust prompt,
+       and above the inputs form. */
+    const hint=[action.steps.length>1?`${action.steps.length} terminals`:'',action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')
+    /* Hollow triangle for an action whose file is not approved, filled once it is:
+       monospace-safe unlike an emoji, and it reads as "not armed". Deliberately the
+       only trust hint in the row; the trust prompt is where the state gets explained,
+       in full, with a diff. */
+    return <button role="menuitem" key={action.id} disabled={!!busy} title={[action.description,...action.steps.map(step=>step.command)].filter(Boolean).join('\n')} onClick={()=>execute(action)}><span>{busy===action.id?'…':isTrusted(action)?'▶':'▷'}</span><div><strong>{action.label}</strong>{hint&&<em>{hint}</em>}</div></button>
+  })}</div>)}
       {!loading&&groups.length===0&&<p>No Project tasks found.</p>}
       <div class="run-menu-section"><small>AUTHOR</small><button role="menuitem" aria-label="Edit this Project's actions file" disabled={!!busy} onClick={openSource}><span aria-hidden="true">✎</span><div><strong>{catalog?.files?.find(item=>item.path==='.swe-mux/actions.toml')?.present?'Edit Project Actions…':'New Project Action…'}</strong><em>.swe-mux/actions.toml</em></div></button></div>
       {!!catalog?.diagnostics.length&&<details><summary>Import diagnostics ({catalog.diagnostics.length})</summary>{catalog.diagnostics.map((item,index)=><p key={`${index}:${item}`}>{item}</p>)}</details>}

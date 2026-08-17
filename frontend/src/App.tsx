@@ -20,6 +20,7 @@ import { ContinuityBanner } from './ContinuityBanner'
 import { DirectoryPicker } from './DirectoryPicker'
 import { folderNameFromPath } from './pathNames'
 import { agentTargetName } from './agentTargets'
+import { runDisplayName } from './sessionNames'
 import {
   defaultInitScriptSelection, emptyProjectCreateDraft, projectCreateFolder, projectCreateReady,
   projectCreateRoot, suggestFolderName, toggleInitScript,
@@ -348,7 +349,7 @@ function startupTimingTitle(session:Session,client:ClientStartupTiming):string {
 }
 
 function historyName(entry:HistoryEntry):string {
-  return entry.auto_named!==0&&entry.generated_title?entry.generated_title:entry.name
+  return runDisplayName(entry)
 }
 
 export function App() {
@@ -384,6 +385,9 @@ export function App() {
   const [redeployConfirmOpen, setRedeployConfirmOpen] = useState(false)
   // '' browses every Project; a Project id prefilters the archive to it.
   const [historyScope,setHistoryScope]=useState('')
+  //: One conversation to open History straight into, when a surface named a specific
+  //: session rather than asking to browse.
+  const [historyEntry,setHistoryEntry]=useState('')
   const [historyOpen,setHistoryOpen]=useState(false)
   const [processScope,setProcessScope]=useState<string|null>(null)
   // The drawer tab's scope: '' is every Project, anything else is that Project. Kept here (not
@@ -3499,6 +3503,19 @@ export function App() {
   // that Project (the browser's own picker can still widen back to all).
   const showHistory = (scope:Project|null=null) => {
     setHistoryScope(scope?scope.id:'')
+    setHistoryEntry('')
+    setHistoryOpen(true)
+    setMainMenuOpen(false);setProjectMenu(null)
+  }
+
+  /** Open History on one conversation, which is where a session that has ended lives.
+   *
+   *  Unscoped on purpose: the row being opened is named by its id, and pre-filtering to a
+   *  Project would hide it whenever the conversation belongs to another one - the Git tab
+   *  can name a session from a worktree that is no longer in this Project's scope. */
+  const showHistoryEntry = (historyId:string) => {
+    setHistoryScope('')
+    setHistoryEntry(historyId)
     setHistoryOpen(true)
     setMainMenuOpen(false);setProjectMenu(null)
   }
@@ -5439,6 +5456,7 @@ export function App() {
         onNotificationsChanged={()=>void loadNotifications()}
         unread={notificationUnread}
         onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('That session is no longer live.');return}void selectSession(session)}}
+        onOpenHistoryEntry={historyId=>{if(mobileWorkspace)setClipboardOpen(false);showHistoryEntry(historyId)}}
         onOpenSettings={section=>{if(mobileWorkspace)setClipboardOpen(false);openSettings(section)}}
         onConfigureActions={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);openActionEditor()}}
         onManagePrompts={()=>{if(mobileWorkspace||transientDrawerTab)setClipboardOpen(false);setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true)}}
@@ -5806,7 +5824,7 @@ export function App() {
     {redeploying&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="App redeploying"><div class="modal daemon-reload-modal"><h2>Rebuilding + redeploying app…</h2><p>The new bundle builds while the current app keeps running, then the app restarts around your live sessions. This takes a few minutes; the page reloads automatically. A failed build leaves the current app untouched.</p></div></div>}
     {redeployConfirmOpen&&<div class="modal-layer daemon-reload-layer" role="alertdialog" aria-modal="true" aria-label="Confirm redeploy" onClick={()=>setRedeployConfirmOpen(false)}><div class="modal daemon-reload-modal" onClick={event=>event.stopPropagation()}><h2>Rebuild + redeploy app?</h2><p>Rebuilds the frozen desktop app from source and restarts it around your live sessions (a few minutes). A failed build leaves the current app running.</p><div class="modal-actions"><button onClick={()=>void startRedeploy()}>Rebuild + redeploy</button><button onClick={()=>setRedeployConfirmOpen(false)}>Cancel</button></div></div></div>}
 
-    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
+    {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
     {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 

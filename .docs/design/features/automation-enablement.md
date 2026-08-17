@@ -84,7 +84,7 @@ enabled-and-working:
 - `scan_timeline` also carries `scan_timeline_auto_enable` and the Project context editor in
   this editor, because both are Project-wide and the per-run toggle in the drawer is not.
 - Spending limits are **not** per-project. Scan timeline's budgets are global settings
-  (Settings → Automation); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
+  (Settings → Automation → Scan timeline); this editor is opt-in only. A `scan_timeline_daily_budget_usd`
   left in an existing Project file parses, is ignored, and is dropped on the next write.
   Project permission never enables a run; the current conversation must still be enabled from
   its Timeline tab.

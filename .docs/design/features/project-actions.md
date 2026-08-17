@@ -11,7 +11,7 @@ The browser immediately creates and focuses a client-only unpanned pending sessi
 Its full-workspace setup surface leaves the durable pane tree unchanged, so selecting another session removes setup from view without disturbing existing splits.
 The pending row is replaced in place by the daemon session when setup and spawn finish.
 Moving elsewhere during setup is respected: completion updates the pending location without reclaiming focus.
-Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git and processes.
+Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git.
 The resulting absolute path remains editable before creation, and changing the setting does not move existing worktrees.
 Whitespace entered in the branch field becomes `-`, keeping the Git branch and suggested filesystem path aligned.
 
@@ -248,6 +248,14 @@ Built-ins are the launchable agent harnesses and their launch profiles, `Shell`,
 `Custom terminal…`, and `New worktree session…`; imported actions follow in source sections.
 An action whose file is not approved carries a lock marker rather than a play marker, so the
 prompt that follows is expected rather than a surprise.
+
+An action row is its **title** plus its run shape (`2 terminals`, `asks for input`).
+The description is not laid out beside the title.
+It is agent-facing prose, and beside a title it took the row's whole width and ellipsised the name a human chooses by - on a package script, whose description is the script body, the name disappeared entirely.
+It stays on the row's tooltip, in the trust prompt, and above the inputs form.
+
+On a phone the menu is bounded rather than full-bleed: one readable column wide and at most 58% of the viewport tall, scrolling inside itself, so a Project with many actions is still a menu rather than the whole screen.
+`fitScrollingMenuInViewport` (`frontend/src/menuPosition.ts`) then lifts a menu anchored to the bottom toolbar back on-screen.
 
 ## Key files
 

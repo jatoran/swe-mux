@@ -1268,6 +1268,9 @@ Git supplies the graph prefixes and the browser renders them without reconstruct
 `GET /git/provenance?project_id=ID[&session_id=ID][&agent_run_id=ID][&commit=FULL_OID][&limit=N]` returns `{items, commits}` from the durable session-to-commit evidence ledger.
 `project_id` is required and must name a registered Project, `limit` is 1 to 500 with a default of 200, and repeated `commit` parameters select multiple full 40-to-64-character object IDs.
 Every item carries its durable id, session id and captured label, nullable agent run id, Project, exact worktree root, full commit OID, parent OIDs, copied subject and commit time, previous HEAD, relationship, confidence, ambiguity flag, role, match method, contributed paths, source, nullable source event sequence and tool-call id, and first/latest observation times.
+Each item is additionally decorated on read with `display_name`, the session's current name under the rule every surface uses, resolved from the live session when the fleet holds it and from its History row otherwise, and with `history_id`, the conversation a reader can open.
+The stored `session_name` is left untouched: it is evidence of what the session was called at capture time, while `display_name` is what it is called now.
+`history_id` is absent when neither a live session nor a History row exists, so a caller can tell "no conversation to open" from one it could open.
 Rows are newest-first by their first observation time.
 `commits` rolls the same rows up per commit into `{commit_oid, subject, committed_at, worktree_root, committer, contributors[], attribution}`, so a reader gets who made a commit and whose work is in it without a second request.
 `attribution` is `exact` when a committer was isolated, `correlated` when only contributions or occupancy are known, and `ambiguous` for a commit whose work mux never observed.

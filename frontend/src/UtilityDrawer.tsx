@@ -26,6 +26,7 @@ import { OverflowRail } from './RailScroller'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
 import type { Project, ProjectBackend, Session } from './types'
 import { hasHarnessTranscript } from './harnessRegistry'
+import { sessionDisplayName } from './sessionNames'
 
 // Host for the right-edge utility drawer. Two renderings, one component:
 //
@@ -75,6 +76,8 @@ type Props = {
   sessions: Session[]
   onSendPrompt: (target: SendToAgentTarget, text: string) => Promise<SendToAgentResult>
   onOpenSession: (sessionId: string) => void
+  /** Open one conversation in the History overlay, for a session that has ended. */
+  onOpenHistoryEntry: (historyId: string) => void
   onOpenSettings: (section: string) => void
   onConfigureActions: () => void
   onManagePrompts: () => void
@@ -338,7 +341,7 @@ export function UtilityDrawer(props: Props) {
       case 'context':
         return <AgentContextTab project={project} session={session} />
       case 'git':
-        return <GitTab project={project} sessions={props.sessions} onOpenFile={props.onOpenFile} onOpenWorktreeFile={props.onOpenWorktreeFile} onSendToAgent={props.onSendToAgent} onProjectUpdated={props.onProjectUpdated} />
+        return <GitTab project={project} sessions={props.sessions} onOpenFile={props.onOpenFile} onOpenWorktreeFile={props.onOpenWorktreeFile} onSendToAgent={props.onSendToAgent} onProjectUpdated={props.onProjectUpdated} onOpenSession={sessionId=>{props.onOpenSession(sessionId);onDone()}} onOpenHistory={props.onOpenHistoryEntry} />
       case 'processes':
         return <ProcessesTab
           snapshot={props.processSnapshot}
@@ -360,7 +363,10 @@ export function UtilityDrawer(props: Props) {
   }
   const scopeContext = (tab: DrawerTabId) => {
     const scope = drawerTab(tab).scope
-    if (scope === 'session') return session ? `Session: ${session.name}` : 'No focused session'
+    // The display name, not the raw one: this heading names the same session the sidebar
+    // and the tab strip name, and a drawer that still said `claude-0e7d93` after a title
+    // arrived read as a different session than the pane it describes.
+    if (scope === 'session') return session ? `Session: ${sessionDisplayName(session)}` : 'No focused session'
     if (scope === 'project') return project ? `Project: ${project.name}` : 'No active Project'
     return 'Application-wide'
   }

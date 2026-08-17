@@ -30,6 +30,73 @@ for(const width of [180,240,360]){
   })
 }
 
+test('a worktree\'s live sessions are their own target, and lead to the session',async({page})=>{
+  await page.setViewportSize({width:360,height:640})
+  await page.goto('/git-map-harness.html')
+  const live=page.locator('.git-map-live')
+  await expect(live).toHaveText('1 live')
+  // Outside the expand button: a button inside a button is invalid, and the click that
+  // opened this list must not also toggle the row it came from.
+  expect(await live.evaluate(element=>!!element.closest('.git-map-summary'))).toBe(false)
+  await expect(page.locator('.git-map-detail')).toHaveCount(0)
+
+  await live.click()
+  await expect(page.locator('.git-map-detail')).toHaveCount(0)
+  const menu=page.locator('.git-session-links')
+  // The session is named the way the sidebar names it, not by its spawned id.
+  await expect(menu.locator('.git-session-link-label strong')).toHaveText('Fix sidebar Git lines')
+  const box=await menu.boundingBox()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.y+box!.height).toBeLessThanOrEqual(640)
+
+  await menu.getByRole('menuitem').first().click()
+  await expect(menu).toHaveCount(0)
+  expect(await page.evaluate(()=>(globalThis as unknown as {__followed:string[]}).__followed)).toEqual(['session:session'])
+})
+
+test('a commit\'s session links open without expanding it, and an ended session goes to History',async({page})=>{
+  await page.setViewportSize({width:360,height:640})
+  await page.goto('/git-map-harness.html')
+  await page.getByRole('button',{name:'Log',exact:true}).click()
+  const row=page.locator('.git-graph-row').filter({hasText:'Fix sidebar Git lines'})
+  const links=row.locator('.git-commit-links')
+  await expect(links).toHaveText('2 session links')
+  expect(await links.evaluate(element=>!!element.closest('.git-commit-summary'))).toBe(false)
+
+  await links.click()
+  await expect(row.locator('.git-commit-detail')).toHaveCount(0)
+  const entries=page.locator('.git-session-links .git-session-link-label strong')
+  await expect(entries).toHaveText(['Fix sidebar Git lines','Land the migration'])
+
+  // The second session is not in the fleet, so its work is read in History instead.
+  await page.locator('.git-session-links').getByRole('menuitem').nth(1).click()
+  expect(await page.evaluate(()=>(globalThis as unknown as {__followed:string[]}).__followed)).toEqual(['history:run-ended'])
+})
+
+test('a provenance row names the current session and links to it',async({page})=>{
+  await page.setViewportSize({width:360,height:640})
+  await page.goto('/git-map-harness.html')
+  await page.getByRole('button',{name:'Provenance',exact:true}).click()
+  const names=page.locator('.git-provenance .git-session-open')
+  await expect(names).toHaveText(['Fix sidebar Git lines','Land the migration'])
+  await names.nth(0).click()
+  expect(await page.evaluate(()=>(globalThis as unknown as {__followed:string[]}).__followed)).toEqual(['session:session'])
+})
+
+test('the Git toolbar keeps its actions together at the trailing edge',async({page})=>{
+  await page.setViewportSize({width:360,height:640})
+  await page.goto('/git-map-harness.html')
+  const geometry=await page.evaluate(()=>{
+    const box=(selector:string)=>document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().toJSON()
+    return {toolbar:box('.git-toolbar'),toggle:box('.git-view-toggle'),actions:box('.git-toolbar-actions')}
+  })
+  expect(geometry.toggle.right).toBeLessThanOrEqual(geometry.actions.left)
+  expect(geometry.actions.right).toBeLessThanOrEqual(geometry.toolbar.right + 0.5)
+  // Glyph only, but still named for a screen reader and for voice control.
+  await expect(page.locator('.git-refresh')).toHaveText('↻')
+  await expect(page.locator('.git-refresh')).toHaveAttribute('aria-label','Refresh')
+})
+
 test('Git Map gives ahead its own cool emphasis',async({page})=>{
   await page.setViewportSize({width:240,height:500})
   await page.goto('/git-map-harness.html')
