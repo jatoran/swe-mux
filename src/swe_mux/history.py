@@ -179,6 +179,18 @@ CREATE INDEX IF NOT EXISTS idx_git_provenance_commit
 """
 
 _MESSAGE_SEARCH_TABLES = ("history_messages_fts", "history_messages_trigram")
+
+
+def canonical_worktree_root(value: str) -> str:
+    """One spelling for a checkout, because it is part of a uniqueness key.
+
+    Git prints `D:/PROJECTS/swe-mux` and `pathlib` prints `D:\\PROJECTS\\swe-mux`
+    for the same directory. With both spellings in the table the daemon's row and
+    the backfill's row for one session and one commit are two rows, and the commit
+    then reads as having contributed to itself twice. Separator only: case is left
+    alone so the value still names the directory as its owner spells it.
+    """
+    return value.replace("\\", "/").rstrip("/")
 _GIT_PROVENANCE_UPSERT = (
     "INSERT INTO git_provenance("
     "id,session_id,session_name,agent_run_id,project_id,worktree_root,commit_oid,"
@@ -211,11 +223,14 @@ _GIT_PROVENANCE_UPSERT = (
     "THEN excluded.role ELSE git_provenance.role END,"
     "match_method=CASE WHEN excluded.evidence_rank>=git_provenance.evidence_rank "
     "THEN excluded.match_method ELSE git_provenance.match_method END,"
-    # Paths are evidence, not classification: a later pass that identified fewer
-    # of them must not erase the ones an earlier pass proved, so an empty set
-    # never replaces a populated one regardless of rank.
+    # Paths are evidence, not classification, so they accumulate rather than
+    # follow the rank gate: an empty set never replaces a populated one, and a
+    # populated set fills a row that has none however weak the evidence that found
+    # them. A committer row written before its contributors were resolved is
+    # exactly that row.
     "contributed_paths_json=CASE WHEN excluded.contributed_paths_json!='[]' "
-    "AND excluded.evidence_rank>=git_provenance.evidence_rank "
+    "AND (git_provenance.contributed_paths_json='[]' "
+    "OR excluded.evidence_rank>=git_provenance.evidence_rank) "
     "THEN excluded.contributed_paths_json ELSE git_provenance.contributed_paths_json END,"
     "evidence_rank=MAX(git_provenance.evidence_rank,excluded.evidence_rank),"
     "observed_at=MIN(git_provenance.observed_at,excluded.observed_at),"
@@ -445,6 +460,42 @@ class HistoryIndex:
             self._executor, run_sqlite_operation, self._db, self._operation_lock, fn
         )
 
+    def _canonicalize_provenance_roots(self) -> None:
+        """Collapse rows whose checkout differs only by path separator.
+
+        The daemon recorded git's `D:/PROJECTS/x` while the backfill recorded
+        pathlib's `D:\\PROJECTS\\x`, and the checkout is part of the uniqueness
+        key, so one session ended up with two rows for one commit. Writes are
+        canonical now; this repairs what the two spellings already produced.
+
+        The stronger row survives a collision, by the same evidence rank the upsert
+        uses. The weaker row's contributed paths go with it — they are re-derivable
+        by the backfill, and keeping a duplicate to preserve them would leave the
+        defect in place.
+        """
+        mixed = self._db.execute(
+            "SELECT 1 FROM git_provenance WHERE worktree_root LIKE '%\\%' LIMIT 1"
+        ).fetchone()
+        if mixed is None:
+            return
+        self._db.execute(
+            "DELETE FROM git_provenance WHERE id IN ("
+            "SELECT weaker.id FROM git_provenance weaker JOIN git_provenance stronger "
+            "ON weaker.session_id=stronger.session_id "
+            "AND weaker.agent_run_id=stronger.agent_run_id "
+            "AND weaker.commit_oid=stronger.commit_oid "
+            "AND REPLACE(weaker.worktree_root,'\\','/')="
+            "REPLACE(stronger.worktree_root,'\\','/') "
+            "AND weaker.id!=stronger.id "
+            "AND (weaker.evidence_rank<stronger.evidence_rank "
+            "OR (weaker.evidence_rank=stronger.evidence_rank AND weaker.id>stronger.id)))"
+        )
+        self._db.execute(
+            "UPDATE git_provenance SET worktree_root=REPLACE(worktree_root,'\\','/') "
+            "WHERE worktree_root LIKE '%\\%'"
+        )
+        log.info("canonicalized git provenance checkout paths")
+
     def _migrate_schema(self) -> None:
         """Apply additive migrations to databases created by earlier releases."""
         columns = {row["name"] for row in self._db.execute("PRAGMA table_info(history)").fetchall()}
@@ -588,6 +639,7 @@ class HistoryIndex:
                 "ALTER TABLE git_provenance ADD COLUMN contributed_paths_json "
                 "TEXT NOT NULL DEFAULT '[]'"
             )
+        self._canonicalize_provenance_roots()
         project_columns = {
             row["name"] for row in self._db.execute("PRAGMA table_info(projects)").fetchall()
         }
@@ -2081,6 +2133,7 @@ class HistoryIndex:
         row_id = uuid.uuid4().hex
         parents_json = json.dumps(parent_oids)
         paths_json = json.dumps([str(path)[:512] for path in contributed_paths][:200])
+        root = canonical_worktree_root(worktree_root)
 
         def op() -> dict[str, Any]:
             self._db.execute(
@@ -2091,7 +2144,7 @@ class HistoryIndex:
                     session_name[:200],
                     run_id,
                     project_id,
-                    worktree_root,
+                    root,
                     commit_oid.lower(),
                     parents_json,
                     subject[:512],
@@ -2115,7 +2168,7 @@ class HistoryIndex:
             row = self._db.execute(
                 "SELECT * FROM git_provenance WHERE session_id=? AND agent_run_id=? "
                 "AND worktree_root=? AND commit_oid=?",
-                (session_id, run_id, worktree_root, commit_oid.lower()),
+                (session_id, run_id, root, commit_oid.lower()),
             ).fetchone()
             assert row is not None
             return self._public_git_provenance(row)
@@ -2145,7 +2198,7 @@ class HistoryIndex:
                             str(record["session_name"])[:200],
                             str(record.get("agent_run_id") or ""),
                             str(record["project_id"]),
-                            str(record["worktree_root"]),
+                            canonical_worktree_root(str(record["worktree_root"])),
                             str(record["commit_oid"]).lower(),
                             json.dumps(tuple(record.get("parent_oids") or ())),
                             str(record.get("subject") or "")[:512],

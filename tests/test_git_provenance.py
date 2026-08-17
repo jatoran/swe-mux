@@ -293,6 +293,83 @@ async def test_store_promotes_observed_evidence_to_exact_without_duplication(
     history.close()
 
 
+async def test_a_checkout_spelled_two_ways_is_one_row(tmp_path: Path) -> None:
+    """The checkout is part of the uniqueness key, so it needs one spelling.
+
+    Git prints forward slashes and pathlib prints backslashes for one directory.
+    Both spellings in the table made the daemon's row and the backfill's row for
+    one session and one commit into two rows, and the commit then read as having
+    contributed to itself twice.
+    """
+    database = tmp_path / "mux.db"
+    history = HistoryIndex(database)
+    common: dict[str, Any] = {
+        "session_id": "session-1",
+        "session_name": "Builder",
+        "agent_run_id": "run-1",
+        "project_id": "project-1",
+        "commit_oid": NEW,
+        "ambiguous": False,
+    }
+    await history.record_git_provenance(
+        **common,
+        worktree_root="D:/repo",
+        relationship="created",
+        confidence="exact",
+        source="session_tool",
+        evidence_rank=70,
+        role="committer",
+    )
+    await history.record_git_provenance(
+        **common,
+        worktree_root="D:\\repo",
+        relationship="contributed",
+        confidence="correlated",
+        source="tier0_write",
+        evidence_rank=60,
+        role="contributor",
+        contributed_paths=("src/one.py",),
+    )
+    rows = await history.git_provenance(project_id="project-1")
+    assert len(rows) == 1
+    assert rows[0]["role"] == "committer"
+    assert rows[0]["worktree_root"] == "D:/repo"
+    assert rows[0]["contributed_paths"] == ["src/one.py"]
+
+    # A database written before the canonical form still holds both spellings, so
+    # opening it must collapse them rather than leave the duplicate in place.
+    history._db.execute(  # noqa: SLF001 - the migration is what is under test
+        "INSERT INTO git_provenance(id,session_id,session_name,agent_run_id,project_id,"
+        "worktree_root,commit_oid,relationship,confidence,source,evidence_rank,"
+        "observed_at,updated_at,role) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "legacy",
+            "session-1",
+            "Builder",
+            "run-1",
+            "project-1",
+            "D:\\repo",
+            NEW,
+            "observed",
+            "ambiguous",
+            "git_monitor",
+            10,
+            1.0,
+            1.0,
+            "observer",
+        ),
+    )
+    history._db.commit()  # noqa: SLF001
+    history.close()
+
+    reopened = HistoryIndex(database)
+    repaired = await reopened.git_provenance(project_id="project-1")
+    assert len(repaired) == 1
+    assert repaired[0]["role"] == "committer"
+    assert repaired[0]["worktree_root"] == "D:/repo"
+    reopened.close()
+
+
 def _session(session_id: str = "session-1") -> Any:
     record = SimpleNamespace(
         id=session_id,

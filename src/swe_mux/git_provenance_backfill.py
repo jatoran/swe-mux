@@ -530,7 +530,15 @@ def _commit_catalog(root: Path) -> dict[str, CommitObject]:
 
     for line in result.stdout.splitlines():
         add(line)
-    unreachable = _git(root, "fsck", "--no-reflogs", "--unreachable", "--no-progress")
+    try:
+        unreachable = _git(root, "fsck", "--no-reflogs", "--unreachable", "--no-progress")
+    except subprocess.TimeoutExpired:
+        # `fsck` walks the whole object database and takes minutes on a large
+        # repository. It only adds commits nothing references — a rewritten or
+        # abandoned one — so a timeout costs a little coverage and must not cost
+        # the Project its entire plan.
+        log.warning("git object fsck timed out; continuing with reachable commits only")
+        return commits
     dangling = [
         match.group(1)
         for line in unreachable.stdout.splitlines()
