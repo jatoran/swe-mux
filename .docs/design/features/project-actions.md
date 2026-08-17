@@ -249,6 +249,14 @@ Built-ins are the launchable agent harnesses and their launch profiles, `Shell`,
 An action whose file is not approved carries a lock marker rather than a play marker, so the
 prompt that follows is expected rather than a surprise.
 
+An action row is its **title** plus its run shape (`2 terminals`, `asks for input`).
+The description is not laid out beside the title.
+It is agent-facing prose, and beside a title it took the row's whole width and ellipsised the name a human chooses by - on a package script, whose description is the script body, the name disappeared entirely.
+It stays on the row's tooltip, in the trust prompt, and above the inputs form.
+
+On a phone the menu is bounded rather than full-bleed: one readable column wide and at most 58% of the viewport tall, scrolling inside itself, so a Project with many actions is still a menu rather than the whole screen.
+`fitScrollingMenuInViewport` (`frontend/src/menuPosition.ts`) then lifts a menu anchored to the bottom toolbar back on-screen.
+
 ## Key files
 
 - `src/swe_mux/project_actions.py` (`parse_native_actions`, `read_actions_source`, `write_actions_source`, `STARTER_ACTIONS_TOML`)

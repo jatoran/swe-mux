@@ -504,6 +504,11 @@ def test_projects_manager_and_shared_directional_tab_actions_are_wired() -> None
 
     assert "sidebar_visible" in manager
     assert "Configured Projects keep their notes, files, settings, and history" in manager
+    # The editor header names the Project once. The opaque short id it used to lead
+    # with named nothing a human can act on: every selector a person or an agent uses
+    # (sidebar, pickers, the MCP `project` argument) takes the name.
+    assert "<span>PROJECT</span><h3>{selected.name}</h3>" in manager
+    assert "selected.id.slice(0,8)" not in manager
     assert (
         "visibleProjects = orderedProjects.filter(project => project.sidebar_visible !== false)"
         in app

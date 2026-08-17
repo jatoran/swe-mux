@@ -611,6 +611,31 @@ def test_worktrees_stay_out_of_navigation_but_can_launch_from_project_run() -> N
     assert "setup_command" in projects
 
 
+def test_run_menu_leads_with_the_action_title_and_stays_a_menu_on_a_phone() -> None:
+    run_menu = source("ProjectRunMenu.tsx")
+    css = source("style.css")
+
+    # A row shows the title and the run shape. The description is agent-facing prose
+    # laid out `flex:none`, so it took the row's whole width and ellipsised the name a
+    # human picks by - worst on package scripts, whose description is the script body.
+    assert "<strong>{action.label}</strong>{hint&&<em>{hint}</em>}" in run_menu
+    assert (
+        "const hint=[action.steps.length>1?`${action.steps.length} terminals`:'',"
+        "action.inputs?.length?'asks for input':''].filter(Boolean).join(' · ')" in run_menu
+    )
+    # It is still reachable, on the row's tooltip and above the inputs form.
+    assert "title={[action.description,...action.steps.map(step=>step.command)]" in run_menu
+
+    # On a phone the menu is a menu, not the screen: a Project with many actions
+    # scrolls inside a bounded box. `.project-run-menu` already sets `overflow:auto`,
+    # and fitScrollingMenuInViewport lifts a bottom-anchored box back on-screen.
+    assert (
+        ".project-run-menu{width:min(calc(300px*var(--ui-scale)),calc(100vw - 28px));"
+        "max-height:min(58dvh,calc(100dvh - 12px))}" in css
+    )
+    assert "left:6px!important" not in css
+
+
 def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
     panel = source("ProcessPanel.tsx")
 
