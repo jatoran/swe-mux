@@ -443,6 +443,17 @@ responsive controls.
   and `role="presentation"`: a real box breaks the desktop column and the mobile rail alike,
   and a `tablist` admits only tabs, so the heading is a visual affordance and a screen reader
   gets the same flat list the phone does.
+  A heading must read as chrome rather than as one more entry, and typography cannot carry
+  that distinction: `.settings-layer *` pins font family, size, weight, and line height with
+  `!important` so the whole panel scales as one unit, and `.app-shell *` pins tracking. The
+  separation is therefore built from what is left — a filled band where an entry is
+  transparent until hovered, rules closing that band, full `--text` against the entries'
+  muted grey, and flush with the sidebar's edge while every entry is indented past it. The
+  fill is green-tinted rather than `--panel2`, because `--panel2` is what hover and the
+  active tab use and a neutral fill reads as a selected row; the label is `--text` rather
+  than the panel's heading green because green on a green-tinted band measures 2.4:1 on the
+  low-chroma light themes, under where the `--green` headings already sit, while `--text`
+  holds 5:1 at worst across the catalogue.
 - Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
   - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
     provider credentials. Everything model-backed depends on that one key, so filing it inside
