@@ -90,6 +90,9 @@ type Config = {
   agent_message_pending_per_target:number
   auto_delivery_refusal_backoff_seconds:number
   auto_delivery_quiet_start:string;auto_delivery_quiet_end:string
+  approval_auto_enabled:boolean;approval_allow_all_permitted:boolean
+  approval_grant_ttl_minutes:number;approval_max_auto_per_grant:number
+  approval_hook_timeout_seconds:number
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
@@ -1192,6 +1195,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <div class="quiet-hours"><label>Quiet from<input type="time" value={draft.auto_delivery_quiet_start} onInput={e=>change('auto_delivery_quiet_start',e.currentTarget.value)} /></label><label>Until<input type="time" value={draft.auto_delivery_quiet_end} onInput={e=>change('auto_delivery_quiet_end',e.currentTarget.value)} /></label></div>
           <p>These are the bounds every conversation grant runs under, not a schedule. A manual send resets the consecutive count, because it is evidence you are watching; quiet hours (local time, both empty for none) pause automatic sends only and never your own Send now. The emergency pause in the queue pane is separate and takes effect instantly.</p>
           <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them.</p>
+          </section>
+
+          {/* Approvals sit beside auto-delivery deliberately: both answer "what
+              does swe-mux do on my behalf", and both are one install switch over
+              bounded per-conversation grants. */}
+          <section><h3>Approvals</h3>
+          <p>With this off, every permission request an agent raises waits for you, exactly as before. With it on, a conversation can be switched to answer matching requests itself from its pane's <code>approvals:</code> strip — never here, and never for a whole install at once. Only Claude sessions can hold a mode; the other harnesses report permission requests but cannot be told the answer.</p>
+          <label class="check"><span>Allow swe-mux to answer approvals</span><input type="checkbox" checked={draft.approval_auto_enabled} onChange={e=>change('approval_auto_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Offer the “allow all” mode</span><input type="checkbox" checked={draft.approval_allow_all_permitted} onChange={e=>change('approval_allow_all_permitted',e.currentTarget.checked)} /></label>
+          <label>Grant expires after this many minutes<input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /></label>
+          <label>Requests one grant may answer<input type="number" min="1" max="5000" value={draft.approval_max_auto_per_grant} onInput={e=>change('approval_max_auto_per_grant',Number(e.currentTarget.value))} /></label>
+          <label>Seconds the CLI waits for an answer<input type="number" min="1" max="60" step="0.5" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /></label>
+          <p>Every grant is bound twice, by the clock and by the count above, and belongs to one conversation: <code>/clear</code>, resume, Branch, and any conversation rollover drop it back to waiting. Leaving both bounds in place is what keeps this from becoming standing authority you forget you granted.</p>
+          <p><strong>Some requests are never answered automatically, in any mode.</strong> Pushes and forced Git operations, recursive or forced deletes, <code>sudo</code>, piping a download into a shell, outbound uploads, package publishes, GitHub and infrastructure writes, and anything touching a credential path all still come to you. swe-mux also never <em>denies</em> on your behalf — the only two answers it gives are “approved” and “ask the human”.</p>
+          <p>Which requests count as routine is a per-Project decision, in that Project's <code>.swe-mux/config.toml</code> (<code>approval_allow</code>), along with <code>approval_ceiling</code>, which caps the strongest mode any session there may hold. Unset means swe-mux's defaults: reads, search, and inert local writes such as editor task files. The CLI wait above only bounds a stall; if swe-mux does not answer in time the ordinary prompt appears, so a wedged daemon costs you seconds rather than a hung agent.</p>
           </section>
 
           <section><h3>Agent messaging</h3>

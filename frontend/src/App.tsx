@@ -98,7 +98,7 @@ import {
 import { currentProfile, loadDrawerTabOrder, loadRailConfig, loadSettings, refreshSettings } from './deviceSettings'
 import { initPush } from './push'
 import { watchDevicePresence } from './devicePresence'
-import type { Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
+import type { ApprovalMode, Project, ProjectGroup, Session, LaunchProfile, VoiceClip, VoiceContent, VoiceMode, VoiceStatus } from './types'
 import { keyChord } from './keys'
 import { Settings } from './Settings'
 import { HarnessSetup } from './HarnessSetup'
@@ -163,6 +163,7 @@ import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseR
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
 import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStatus, type AckMap, type ProjectRailActivity } from './sessionAttention'
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
+import { effectiveApprovalMode } from './approvals'
 import { activityBadges, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
@@ -2916,6 +2917,40 @@ export function App() {
     }
   }
 
+  // Setting the mode from the palette or the context menu, for the same reason
+  // the strip exists in the pane: a control whose only home is one disclosed
+  // line is one you have to be looking at the right pane to reach. Revoking to
+  // `wait` is deliberately always offered and never refused - taking authority
+  // back must not depend on the install switch, the Project ceiling, or the
+  // conversation still being the one the grant was made against.
+  const setApprovalMode = async (session: Session, mode: ApprovalMode) => {
+    setContextMenu(null)
+    try {
+      await api('PUT', `/api/sessions/${session.id}/approvals`, { mode, set_by: 'palette' })
+      window.dispatchEvent(
+        new CustomEvent('mux:approvals-changed', { detail: { sessionId: session.id } }),
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  // The one-shot. Answers the request the focused session is showing, once, and
+  // is not a mode: the server re-checks the agent run, the screen classification,
+  // and the prompt fingerprint before it writes anything.
+  const approvePendingRequest = async (session: Session) => {
+    setContextMenu(null)
+    try {
+      const result = await api<{ operation: string }>(
+        'POST', `/api/sessions/${session.id}/approvals/approve-once`,
+      )
+      return result.operation
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      return null
+    }
+  }
+
   // One menu item, not two. "Mark as read" and "Mark as unread" are the same
   // decision, and listing both makes the reader work out which of the pair is
   // currently true before clicking - which is exactly what a label stating the
@@ -4326,6 +4361,10 @@ export function App() {
     { id: 'session.rename', label: 'Rename selected session', category: 'session', available: !!commandSession, disabledReason: 'No session selected', run: () => commandSession && openRename({ kind: 'session', session: commandSession }) },
     { id: 'session.regenerateTitle', label: 'Regenerate generated title', category: 'session', available: !!commandSession && isAgent(commandSession) && commandSession.auto_named !== false && !isEndedSession(commandSession), disabledReason: 'Select a live auto-named agent session', run: () => commandSession && void regenerateSessionTitle(commandSession) },
     { id: 'session.clearStandingActivity', label: 'Clear standing activity (subagents / background tasks)', category: 'session', available: !!commandSession && activityBadges(commandSession).length > 0, disabledReason: 'Select a session with a standing-activity badge', run: () => commandSession && void clearStandingActivity(commandSession) },
+    { id: 'session.approveOnce', label: 'Approve the request this session is showing', category: 'session', available: !!commandSession && commandSession.state === 'awaiting' && commandSession.awaiting_reason === 'approval', disabledReason: 'Select a session waiting for an approval', run: () => commandSession && void approvePendingRequest(commandSession) },
+    { id: 'session.approvals.wait', label: 'Approvals: wait for me (default)', category: 'session', available: !!commandSession && effectiveApprovalMode(commandSession, Date.now() / 1000) !== 'wait', disabledReason: 'This session already routes every approval to you', run: () => commandSession && void setApprovalMode(commandSession, 'wait') },
+    { id: 'session.approvals.allowlisted', label: 'Approvals: auto-approve allowlisted requests', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Select a live agent session', run: () => commandSession && void setApprovalMode(commandSession, 'allowlisted') },
+    { id: 'session.approvals.allowAll', label: 'Approvals: auto-approve everything but the floor', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Select a live agent session', run: () => commandSession && void setApprovalMode(commandSession, 'allow_all') },
     { id: 'session.toggleRead', label: commandSession && isUnread(commandSession, ackedTurns) ? 'Mark selected session read' : 'Mark selected session unread', category: 'session', available: !!commandSession && isAgent(commandSession) && !isEndedSession(commandSession), disabledReason: 'Read state is tracked for live agent sessions', run: () => commandSession && void toggleSessionRead(commandSession) },
     { id: 'session.copyId', label: 'Copy selected session ID', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(commandSession.id).catch(() => setError('Clipboard access was blocked.')) ; setContextMenu(null) } },
     { id: 'session.copyCwd', label: 'Copy selected working directory', category: 'clipboard', available: !!commandSession, disabledReason: 'No session selected', run: () => { if (commandSession) void navigator.clipboard.writeText(workingCwd(commandSession)).catch(() => setError('Clipboard access was blocked.')); setContextMenu(null) } },
@@ -5615,6 +5654,12 @@ export function App() {
       {contextMenu.source==='sidebar'&&<button onClick={() => runNamedCommand('session.open')}>Open in focused pane</button>}
       {['exited', 'crashed'].includes(contextMenu.session.state) && isAgent(contextMenu.session) && <button onClick={() => runNamedCommand('session.resume')}>Resume as new…</button>}
       {activityBadges(contextMenu.session).length>0&&<button onClick={() => runNamedCommand('session.clearStandingActivity')}>Clear standing activity</button>}
+      {contextMenu.session.state==='awaiting'&&contextMenu.session.awaiting_reason==='approval'&&<button onClick={() => runNamedCommand('session.approveOnce')}>Approve this request</button>}
+      {/* Revoking is offered wherever a grant is standing, and only revoking:
+          *granting* authority from a right-click on a row you are not looking at
+          is the wrong affordance for it, and the pane's strip is where the mode,
+          its rules, and its budget are all visible together. */}
+      {effectiveApprovalMode(contextMenu.session,Date.now()/1000)!=='wait'&&<button onClick={() => runNamedCommand('session.approvals.wait')}>Stop auto-approving here</button>}
       {isAgent(contextMenu.session)&&!isEndedSession(contextMenu.session)&&<button onClick={()=>runNamedCommand('session.toggleRead')}>{isUnread(contextMenu.session,ackedTurns)?'Mark as read':'Mark as unread'}</button>}
       <button onClick={() => runNamedCommand('session.copyId')}>Copy session ID</button>
       {/* Pane-only, deliberately. A session's own ⋯ header menu is where its

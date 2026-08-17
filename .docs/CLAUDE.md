@@ -93,6 +93,15 @@
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`
+- Changing control-plane approvals (the per-conversation mode, the allow rules, the
+  never-auto-approved floor, the decision hook, or the approval strip):
+  `design/features/approvals.md`, `design/features/status-detection.md`,
+  `design/features/backends.md`, `design/interfaces.md`, `design/data-model.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`.
+  The rule the design exists to enforce: a decision is made from the harness's structured
+  permission request, never from the PTY screen, and the floor in `approvals.py` is checked
+  before the mode so no configuration can reach past it. `deny` is deliberately not a
+  decision mux ever makes.
 - Changing the durable status timeline (its table, sink, layer readings, or the
   state-log/diagnostic-bundle endpoints) or the incident investigation procedure:
   `design/features/status-detection.md`, `design/interfaces.md`, `design/data-model.md`,

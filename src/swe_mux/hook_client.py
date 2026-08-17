@@ -33,14 +33,52 @@ _DURABLE_EVENTS = {
 _ATTEMPTS = 3
 _TIMEOUTS = (2.0, 3.0, 5.0)
 
+# Events whose response the harness reads back as a decision. For these the POST
+# is not only a report — the agent is parked on it — so the first attempt runs on
+# a tight single-shot budget and its body is parsed. Everything about this path
+# fails open: no response, a slow one, a malformed one, or a daemon that is not
+# running all leave stdout empty, and an empty stdout means "ask", which is the
+# behaviour with no hook installed at all.
+_DECISION_EVENTS = {"PermissionRequest"}
+_DECISION_TIMEOUT = 3.0
 
-def _post(url: str, secret: str, body: bytes) -> bool:
-    request = urllib.request.Request(
+
+def _request(url: str, secret: str, body: bytes) -> urllib.request.Request:
+    return urllib.request.Request(
         url,
         data=body,
         method="POST",
         headers={"Content-Type": "application/json", "X-Mux-Hook-Secret": secret},
     )
+
+
+def _post_for_decision(url: str, secret: str, body: bytes) -> tuple[bool, object | None]:
+    """One fast attempt, returning ``(delivered, hookSpecificOutput or None)``.
+
+    Deliberately not retried. A retry loop here is time the agent spends parked
+    on a permission prompt that mux might have answered instantly, and the report
+    half of the event is covered by the ordinary retry path below when this
+    misses. Bounded response read because the body is daemon-authored but the
+    parse still runs in the user's turn.
+    """
+    try:
+        with urllib.request.urlopen(_request(url, secret, body), timeout=_DECISION_TIMEOUT) as fp:
+            raw = fp.read(64 * 1024)
+    except OSError as error:
+        sys.stderr.write(f"swe-mux hook decision POST failed: {error}\n")
+        return False, None
+    try:
+        parsed = json.loads(raw.decode("utf-8", errors="replace") or "{}")
+    except ValueError:
+        return True, None
+    if not isinstance(parsed, dict):
+        return True, None
+    decision = parsed.get("hookSpecificOutput")
+    return True, decision if isinstance(decision, dict) else None
+
+
+def _post(url: str, secret: str, body: bytes) -> bool:
+    request = _request(url, secret, body)
     last_error: OSError | None = None
     for attempt in range(_ATTEMPTS):
         try:
@@ -168,6 +206,21 @@ def main() -> None:
     if event == "codex_notify" and isinstance(payload, dict) and payload.get("type"):
         event = str(payload["type"])
     body = json.dumps({"event": event, "payload": payload}).encode()
+    if event in _DECISION_EVENTS:
+        delivered, decision = _post_for_decision(url, secret, body)
+        if delivered:
+            if isinstance(decision, dict):
+                # The daemon composes the harness-specific shape; the shim only
+                # relays it, so a second harness's decision schema is a registry
+                # change rather than an edit to the command every session runs.
+                sys.stdout.write(json.dumps({"hookSpecificOutput": decision}))
+                sys.stdout.flush()
+            return
+        # The decision attempt never reached the daemon, so the *record* of this
+        # approval has not landed either — and a permission dialog raised during
+        # a session-preserving restart has no second source. Fall through to the
+        # ordinary retry-and-spool path with no decision, which leaves the prompt
+        # with the user exactly as before this feature existed.
     if not _post(url, secret, body) and event in _DURABLE_EVENTS:
         _spool(spool, event, payload)
 

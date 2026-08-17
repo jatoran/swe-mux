@@ -43,6 +43,9 @@ from .harness import (
 )
 from .history import HistoryIndex
 from .models import (
+    APPROVAL_MODES,
+    ApprovalMode,
+    ApprovalPolicy,
     GitState,
     SessionRecord,
     SessionState,
@@ -947,6 +950,111 @@ def clear_all_standing_activity(session: Any, *, evidence: str, now: float | Non
         _standing_activity_ledger(session, "removed", activity, now, evidence=evidence)
     record.standing_activity.clear()
     return True
+
+
+def revoke_approval_policy(session: Any, *, evidence: str) -> bool:
+    """Return an auto-approval grant to `wait` at a run-identity seam.
+
+    Belt and braces on purpose. `ApprovalPolicy.effective_mode` already refuses
+    to apply a grant whose `run_id` is not the session's current one, so this
+    cannot be the thing that keeps authority correct — it runs at exactly the
+    seams that change `agent_run_id`, so by the time it is reached the grant is
+    already inert.
+
+    What it fixes is legibility: without it the record keeps rendering
+    "allow_all" in the strip and the sidebar badge for a conversation where it
+    no longer applies, and an operator reading a mode that is silently not in
+    effect is how a safety control loses its meaning.
+    """
+    record = session.record
+    if record.approval_policy.mode == "wait":
+        return False
+    previous = record.approval_policy
+    record.approval_policy = ApprovalPolicy()
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is not None:
+        transitions.append(
+            {
+                "ts": time.time(),
+                "kind": "approval_mode_revoked",
+                "evidence": evidence,
+                "previous_mode": previous.mode,
+                "auto_approved": previous.auto_approved,
+            }
+        )
+    return True
+
+
+#: Ordered weakest-first, so "is this mode within the ceiling" is an index
+#: comparison rather than a table of pairs that can disagree with itself.
+_APPROVAL_STRENGTH = {mode: index for index, mode in enumerate(APPROVAL_MODES)}
+
+
+def approval_mode_within(mode: str, ceiling: str) -> bool:
+    """Whether `mode` is no stronger than `ceiling`. Unknown values fail closed."""
+    if mode not in _APPROVAL_STRENGTH or ceiling not in _APPROVAL_STRENGTH:
+        return False
+    return _APPROVAL_STRENGTH[mode] <= _APPROVAL_STRENGTH[ceiling]
+
+
+def set_approval_mode(
+    session: Any,
+    mode: ApprovalMode,
+    *,
+    rules: list[str],
+    ttl_seconds: float,
+    max_auto: int,
+    set_by: str,
+    now: float | None = None,
+) -> ApprovalPolicy:
+    """Grant, change, or revoke this conversation's auto-approval mode.
+
+    The grant binds to the session's *current* `agent_run_id` and always carries
+    an expiry, so there is no path by which an operator produces standing
+    authority: the two ways this ends without anyone acting are the clock and
+    the answer budget, and both are set here rather than left optional.
+
+    Counters reset on every change, including a change between two non-`wait`
+    modes. A grant is the unit being authorized, so carrying a spent budget into
+    a fresh one would let a session that had exhausted `allowlisted` be handed a
+    silent zero-budget `allow_all`.
+    """
+    now = time.time() if now is None else now
+    record = session.record
+    previous: ApprovalPolicy = record.approval_policy
+    granted: ApprovalPolicy
+    if mode == "wait":
+        granted = ApprovalPolicy()
+    else:
+        granted = ApprovalPolicy(
+            mode=mode,
+            run_id=record.agent_run_id or None,
+            expires_at=now + max(1.0, ttl_seconds),
+            granted_at=now,
+            set_by=set_by[:64],
+            rules=list(rules) if mode == "allowlisted" else [],
+            max_auto=max(1, max_auto),
+        )
+    record.approval_policy = granted
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is not None:
+        transitions.append(
+            {
+                "ts": now,
+                "kind": "approval_mode_set",
+                "mode": mode,
+                "previous_mode": previous.mode,
+                "set_by": set_by[:64],
+                "run_id": granted.run_id,
+                "expires_at": granted.expires_at,
+                "rules": len(granted.rules),
+                "max_auto": granted.max_auto,
+                # The count the retired grant reached, so the timeline answers
+                # "how much did that mode actually do" after it is gone.
+                "previous_auto_approved": previous.auto_approved,
+            }
+        )
+    return granted
 
 
 # Exit codes that signal a clean or intentionally-interrupted shutdown rather
@@ -3459,6 +3567,11 @@ class SessionManager:
         # no ledger yet); live callers ledger via clear_all_standing_activity
         # *before* reaching this.
         record.standing_activity.clear()
+        # Same argument for the approval grant: it was authorized against the
+        # observation identity being replaced here. `effective_mode` would refuse
+        # it anyway on the run-id mismatch; this stops the record from displaying
+        # authority that is no longer in force.
+        record.approval_policy = ApprovalPolicy()
 
     def _reconcile_adopted_root_identity(
         self,
@@ -4077,6 +4190,7 @@ class SessionManager:
         session.record.parser_schema_version = None
         reset_session_observation_state(session, "promotion")
         clear_all_standing_activity(session, evidence="promotion")
+        revoke_approval_policy(session, evidence="promotion")
         session.record.state_detail = None
         session.state_source_priority = -1
         session.agent_promoted_at = time.time()
@@ -4139,6 +4253,7 @@ class SessionManager:
         session.record.parser_schema_version = None
         reset_session_observation_state(session, "demotion")
         clear_all_standing_activity(session, evidence="demotion")
+        revoke_approval_policy(session, evidence="demotion")
         session.observation_replay = False
         session.agent_promoted_at = None
         session.transcript_path = None
@@ -4325,6 +4440,7 @@ class SessionManager:
         record.parser_schema_version = None
         reset_session_observation_state(session, f"conversation_rolled:{source}")
         clear_all_standing_activity(session, evidence=f"conversation_rolled:{source}")
+        revoke_approval_policy(session, evidence=f"conversation_rolled:{source}")
         session.observation_replay = False
         session.agent_promoted_at = time.time()
         session.state_source_priority = -1
@@ -5351,6 +5467,7 @@ class SessionManager:
         # Ledgered clear first: _reset_provider_observation empties the record's
         # annotation list silently, which would leave nothing to ledger.
         clear_all_standing_activity(session, evidence="identity_reconciled")
+        revoke_approval_policy(session, evidence="identity_reconciled")
         self._reset_provider_observation(record)
         reset_session_observation_state(session, "identity_reconciled")
         session.observation_replay = False
@@ -6485,6 +6602,7 @@ class SessionManager:
         # A dead process holds no standing engagements; publish_exit below
         # carries the cleared set in its final snapshot.
         clear_all_standing_activity(session, evidence=f"process_exit:{final_reason}")
+        revoke_approval_policy(session, evidence=f"process_exit:{final_reason}")
         release_pty = getattr(session.pty, "release", None)
         if callable(release_pty):
             # Session scrollback is independent of ConPTY. Detach the ended

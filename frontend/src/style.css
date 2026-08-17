@@ -3092,6 +3092,30 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .queue-auto-toggle{display:flex;align-items:center;gap:5px;cursor:pointer}
 .queue-auto-on{color:var(--accent)}
 .queue-auto-note{margin:0;color:var(--muted);line-height:1.45}
+
+/* ---- Approval strip (pane-level, above the action rail) ---- */
+/* Same collapsed-disclosure shape as the auto-delivery strip above, deliberately:
+   both answer "what is swe-mux doing on my behalf here", and two different
+   treatments for the same question would read as two unrelated features. */
+.approval-strip-wrap{border-top:1px solid var(--line)}
+.approval-strip{display:flex;align-items:center}
+.approval-summary{flex:1 1 auto;min-width:0;min-height:24px;padding:3px 10px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:9px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Amber rather than accent: a standing grant is closer to "attention" than to
+   "on", and it must not read the same as the auto-delivery strip's accent. */
+.approval-on{color:var(--amber)}
+.approval-detail{display:grid;gap:6px;padding:6px 10px;border-top:1px solid var(--line);color:var(--muted);font-size:9px}
+.approval-modes{display:flex;gap:4px;flex-wrap:wrap}
+.approval-mode{padding:2px 8px;border:1px solid var(--line);border-radius:3px;background:transparent;color:var(--muted);font:inherit;font-size:9px;cursor:pointer}
+.approval-mode:disabled{opacity:.45;cursor:not-allowed}
+.approval-mode.selected{border-color:var(--amber);color:var(--amber)}
+.approval-note{margin:0;color:var(--muted);line-height:1.45}
+.approval-error{color:var(--red)}
+.rail-approve{color:var(--amber)}
+.rail-approve:disabled{opacity:.45}
+/* Sidebar badge. The mode's whole effect is removing the notification an
+   approval would otherwise raise, so a grant nobody remembers setting has to be
+   visible from the fleet list without opening the pane it applies to. */
+.row-approval-badge{margin-left:4px;padding:0 4px;border:1px solid var(--amber);border-radius:3px;color:var(--amber);font-size:8px;line-height:1.5;white-space:nowrap}
 .queue-item-sender{color:var(--accent)}
 .queue-item-schedule{color:var(--amber)}
 .queue-item-target{color:var(--text)}

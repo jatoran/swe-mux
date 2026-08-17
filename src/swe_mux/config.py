@@ -628,6 +628,30 @@ class Config:
     # Back-off after a refused automatic attempt, so a session whose readiness
     # flaps cannot spin the audit log.
     auto_delivery_refusal_backoff_seconds: float = 30.0
+    # Control-plane approvals (`approvals.py`). The master switch is off by
+    # default: with it off, `PermissionRequest` is observed exactly as before and
+    # no session can hold a non-`wait` mode. The bounds below are what every
+    # grant runs under; the grant itself is per-conversation runtime state on the
+    # session record, not config, so switching it back off is instant.
+    approval_auto_enabled: bool = False
+    # How long a grant lives before it decays back to `wait`. Short on purpose:
+    # the failure mode this bounds is an operator who switched `allow_all` on for
+    # one task and left it on for the day.
+    approval_grant_ttl_minutes: int = 30
+    # Requests one grant may answer before it disables itself. The cap is per
+    # grant rather than per hour so a runaway loop is bounded by count, which is
+    # the thing that actually runs away.
+    approval_max_auto_per_grant: int = 200
+    # What the generated hook settings tell the CLI to wait for. Claude's own
+    # default is 600 s and a timed-out hook falls through to the normal prompt,
+    # so this is not a correctness gate — it is the difference between a daemon
+    # hiccup costing a second and costing ten minutes of a stalled agent.
+    approval_hook_timeout_seconds: float = 5.0
+    # Whether `allow_all` may be selected at all on this install. Separate from
+    # the master switch because "let mux answer the boring ones" and "let mux
+    # answer everything" are different decisions, and the first is the one most
+    # installs want.
+    approval_allow_all_permitted: bool = True
     # Phase 5 agent-to-agent messaging (`mux.notify`). The tool exists by
     # default because a notify lands as an inert draft unless the *receiving*
     # session opted in to accepting agent messages.
@@ -1075,6 +1099,15 @@ def _validate(config: Config) -> None:
         errors["auto_delivery_session_ttl_minutes"] = "must be between 1 and 1440 minutes"
     if not 0 <= config.auto_delivery_refusal_backoff_seconds <= 3600:
         errors["auto_delivery_refusal_backoff_seconds"] = "must be between 0 and 3600 seconds"
+    # Approval bounds. Every lower bound here is the point: an unbounded grant or
+    # an unbounded answer count is standing authority, which is the one thing
+    # this feature must not become.
+    if not 1 <= config.approval_grant_ttl_minutes <= 480:
+        errors["approval_grant_ttl_minutes"] = "must be between 1 and 480 minutes"
+    if not 1 <= config.approval_max_auto_per_grant <= 5000:
+        errors["approval_max_auto_per_grant"] = "must be between 1 and 5000 requests"
+    if not 1 <= config.approval_hook_timeout_seconds <= 60:
+        errors["approval_hook_timeout_seconds"] = "must be between 1 and 60 seconds"
     for field_name in ("auto_delivery_quiet_start", "auto_delivery_quiet_end"):
         value = str(getattr(config, field_name) or "")
         if value and not QUIET_TIME.fullmatch(value):

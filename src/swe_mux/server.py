@@ -44,6 +44,7 @@ from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
 from .agent_messaging import AgentMessagingService
 from .agent_skills import discover_skills
+from .approvals import DEFAULT_ALLOW_RULES, normalize_rules
 from .attention_narration import NARRATION_RULE_ID, AttentionNarrator
 from .attention_ranking import AttentionRankingService
 from .auto_delivery import AutoDeliveryController
@@ -122,7 +123,12 @@ from .logsetup import current_log_level, set_log_level
 from .loop_lag import LoopLagMonitor
 from .mcp import McpAuthError, McpService
 from .meta_hooks import MetaHookEngine, parse_hook_rules
-from .models import MuxEvent, ProjectRecord, StandingActivityKind
+from .models import (
+    APPROVAL_MODES,
+    MuxEvent,
+    ProjectRecord,
+    StandingActivityKind,
+)
 from .network_usage import (
     MeteredWebSocketResponse,
     NetworkUsage,
@@ -179,6 +185,8 @@ from .project_files import (
     ignored_project_path,
     list_project_directories,
     list_project_directory,
+    project_approval_ceiling,
+    project_approval_rules,
     project_automations,
     project_note_summaries,
     project_path,
@@ -232,6 +240,7 @@ from .session import (
     Session,
     SessionManager,
     acknowledge_turns,
+    approval_mode_within,
     clear_all_standing_activity,
     clear_standing_activity,
     mark_unread,
@@ -240,6 +249,7 @@ from .session import (
     pty_tail_state,
     session_cli_state_status,
     session_is_unwitnessed,
+    set_approval_mode,
 )
 from .session_attachments import (
     MAX_ATTACHMENT_BYTES,
@@ -849,6 +859,9 @@ def create_app(
             web.post(
                 "/api/sessions/{sid}/standing-activity/clear", clear_session_standing_activity
             ),
+            web.get("/api/sessions/{sid}/approvals", get_session_approvals),
+            web.put("/api/sessions/{sid}/approvals", put_session_approvals),
+            web.post("/api/sessions/{sid}/approvals/approve-once", approve_pending_request),
             web.delete("/api/sessions/{sid}", delete_session),
             web.post("/api/sessions/{sid}/relaunch", relaunch_session),
             web.post("/api/sessions/{sid}/branch", branch_session),
@@ -1078,6 +1091,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             # are restart-scoped because adapters are built once here.
             mcp_url=mcp_url if config.harness_mcp_enabled.get(name, True) else "",
             instrument=config.harness_instrument_enabled.get(name, True),
+            approval_hook_timeout=config.approval_hook_timeout_seconds,
             # A harness that declares `requires_direct_entrypoint` has an argument a
             # `.cmd` shim cannot carry, so its JS entrypoint is launched directly.
             # Every other npm-shipped harness reads its shim generically, which needs
@@ -5689,6 +5703,182 @@ async def clear_session_standing_activity(request: web.Request) -> web.Response:
             ],
         }
     )
+
+
+def _approval_project_root(app: web.Application, session: Any) -> Path | None:
+    """The Project root whose `.swe-mux/config.toml` governs this session."""
+    project_id = getattr(session.record, "project_id", "")
+    project = app["projects"].projects.get(project_id) if project_id else None
+    if project is not None and project.root:
+        return Path(project.root)
+    cwd = getattr(session.record, "trusted_cwd", "") or getattr(session.record, "cwd", "")
+    return Path(cwd) if cwd else None
+
+
+async def _approval_context(app: web.Application, session: Any) -> dict[str, Any]:
+    """Everything the strip needs to render, and the endpoint needs to decide.
+
+    The two Project-file reads happen here — off the hook path, on an explicit
+    request — and never inside a decision, which runs while the agent is parked.
+    """
+    config = app["config"]
+    harness = descriptor(session.record.backend) if session.record.backend in HARNESSES else None
+    supported = bool(harness and harness.hook_approval_decisions)
+    root = _approval_project_root(app, session)
+    if root is None:
+        rules, ceiling = None, "wait"
+    else:
+        rules, ceiling = await asyncio.gather(
+            asyncio.to_thread(project_approval_rules, root),
+            asyncio.to_thread(project_approval_ceiling, root),
+        )
+    effective_rules = normalize_rules(list(DEFAULT_ALLOW_RULES) if rules is None else rules)
+    if not config.approval_allow_all_permitted and ceiling == "allow_all":
+        ceiling = "allowlisted"
+    unavailable: str | None = None
+    if not config.approval_auto_enabled:
+        unavailable = "off for this install"
+    elif not supported:
+        name = harness.display_name if harness else session.record.backend
+        unavailable = f"{name} cannot answer approvals through a hook"
+    elif not session.record.agent_run_id:
+        unavailable = "no agent conversation is running here"
+    elif ceiling == "wait":
+        unavailable = "this Project does not permit auto-approval"
+    return {
+        "supported": supported,
+        "enabled": bool(config.approval_auto_enabled),
+        "ceiling": ceiling,
+        "rules": effective_rules,
+        "rules_source": "project" if rules is not None else "default",
+        "unavailable": unavailable,
+        "ttl_seconds": config.approval_grant_ttl_minutes * 60.0,
+        "max_auto": config.approval_max_auto_per_grant,
+    }
+
+
+def _approval_snapshot(session: Any, context: dict[str, Any]) -> dict[str, Any]:
+    policy = session.record.approval_policy
+    now = time.time()
+    return {
+        **context,
+        "policy": policy.snapshot(),
+        # The mode that is actually in force, which is not always the stored one:
+        # an expired grant or one made against a replaced conversation still
+        # reads its stored mode and applies as `wait`. The UI renders this.
+        "effective_mode": policy.effective_mode(session.record.agent_run_id or None, now),
+        "modes": list(APPROVAL_MODES),
+    }
+
+
+async def get_session_approvals(request: web.Request) -> web.Response:
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    context = await _approval_context(request.app, session)
+    return json_response(_approval_snapshot(session, context))
+
+
+async def put_session_approvals(request: web.Request) -> web.Response:
+    """Set this conversation's approval mode.
+
+    Refusals are explicit and named rather than silently downgrading to `wait`:
+    an operator who selects `allow_all` and gets `wait` with no explanation will
+    reasonably conclude the control does not work, and then stop trusting the
+    one it does have.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    body = await request.json()
+    mode = str((body or {}).get("mode") or "").strip()
+    if mode not in APPROVAL_MODES:
+        return json_response(
+            {"error": f"mode must be one of {', '.join(APPROVAL_MODES)}", "code": "invalid_mode"},
+            400,
+        )
+    context = await _approval_context(request.app, session)
+    if mode != "wait":
+        if context["unavailable"]:
+            return json_response(
+                {"error": context["unavailable"], "code": "approvals_unavailable"}, 409
+            )
+        if not approval_mode_within(mode, str(context["ceiling"])):
+            return json_response(
+                {
+                    "error": (
+                        f"this Project's approval ceiling is {context['ceiling']}"
+                        if context["ceiling"] != "allowlisted"
+                        or request.app["config"].approval_allow_all_permitted
+                        else "allow_all is disabled for this install"
+                    ),
+                    "code": "above_ceiling",
+                },
+                409,
+            )
+        if mode == "allowlisted" and not context["rules"]:
+            return json_response(
+                {
+                    "error": "this Project's approval allowlist is empty",
+                    "code": "empty_allowlist",
+                },
+                409,
+            )
+    set_approval_mode(
+        session,
+        mode,
+        rules=list(context["rules"]),
+        ttl_seconds=float(context["ttl_seconds"]),
+        max_auto=int(context["max_auto"]),
+        set_by=str((body or {}).get("set_by") or "ui"),
+    )
+    session.publish_update()
+    await request.app["events"].emit(
+        "approval_mode_set",
+        session_id=session.record.id,
+        source="user",
+        mode=mode,
+    )
+    return json_response(_approval_snapshot(session, context))
+
+
+async def approve_pending_request(request: web.Request) -> web.Response:
+    """Answer the approval this session is showing right now, once.
+
+    Not a mode and deliberately not routed through the policy: this is the
+    operator pressing the button the CLI is already displaying, from a device
+    that may not have a keyboard on the pane. The guards are the ones the voice
+    path established - the same session, the same agent run, this session's own
+    screen still classifying as an approval, and the same prompt fingerprint -
+    minus voice's two-step challenge, because that exists to compensate for a
+    caller who cannot see the screen and a UI button sits next to it.
+    """
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    current = _current_voice_approval(session)
+    if current is None:
+        return json_response(
+            {"error": "this session is not showing an approval", "code": "no_approval"}, 409
+        )
+    operation, fingerprint = current
+    expected = str((await _optional_json(request)).get("fingerprint") or "")
+    if expected and expected != fingerprint:
+        # The dialog changed between render and click. Answering the new one
+        # would be approving something the operator never read.
+        return json_response(
+            {"error": "the approval changed; re-read it", "code": "fingerprint_changed"}, 409
+        )
+    _record_operator_input(request.app["events"], session, "\r", source="approve-once")
+    await request.app["events"].emit(
+        "approval_answered_once",
+        session_id=session.record.id,
+        source="user",
+        detail=operation,
+    )
+    return json_response({"ok": True, "operation": operation, "fingerprint": fingerprint})
+
+
+async def _optional_json(request: web.Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 async def _discard_session_media(app: web.Application, session_id: str) -> None:
@@ -10594,11 +10784,19 @@ async def hook_ingress(request: web.Request) -> web.Response:
                 scope=scope,
                 **event_payload,
             )
-    await apply_hook_observation(session, event_type, payload, request.app["events"])
+    hook_decision = await apply_hook_observation(
+        session, event_type, payload, request.app["events"]
+    )
     if sequence is not None:
         sequence_state = session.observation_state.setdefault("hook_sequences", {})
         if isinstance(sequence_state, dict):
             sequence_state[hook_source] = sequence
+    if hook_decision is not None:
+        # Relayed verbatim to the shim, which prints it for the CLI to read. The
+        # harness-specific shape is composed here (where the registry lives)
+        # rather than in the shim, which runs as a fresh interpreter for every
+        # hook and imports nothing from the package.
+        return json_response({"ok": True, "hookSpecificOutput": hook_decision})
     return json_response({"ok": True})
 
 

@@ -202,6 +202,19 @@ class HarnessDescriptor:
     # off-tail. An alternate-screen TUI (Claude) never rewrites scrollback, so
     # it stays WebGL-eligible.
     repaints_scrollback: bool
+    # Whether this harness lets a hook *answer* a permission request rather than
+    # only observe one — i.e. whether it reads a decision back off the hook
+    # command's stdout. Claude's `PermissionRequest` does (it fires only when a
+    # prompt would be shown, carries `tool_name`/`tool_input`, and takes
+    # `hookSpecificOutput.decision`); the others publish their permission events
+    # on an observational bus with no return path, so for them the only lever is
+    # spawn-time CLI configuration and the control-plane mode cannot exist.
+    #
+    # Declared rather than inferred because the failure is silent in the worst
+    # direction: a harness wrongly marked capable would render an approval-mode
+    # selector that changes nothing, and the operator would believe requests were
+    # being answered while every one of them sat waiting.
+    hook_approval_decisions: bool
 
     state_sources: tuple[StateSource, ...]
     measurement_source: MeasurementSource
@@ -677,6 +690,11 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         provider_account_management=True,
         hook_ordering_guarantee=False,
         repaints_scrollback=False,
+        # Claude's `PermissionRequest` fires only when a prompt would be shown,
+        # carries `tool_name`/`tool_input`/`tool_use_id`, and reads
+        # `hookSpecificOutput.decision` back off the hook's stdout. No response
+        # means `ask`, so the channel fails open by construction.
+        hook_approval_decisions=True,
         state_sources=("transcript", "hook", "pty", "cli_state"),
         measurement_source="transcript",
         reports_conversation_rollover=True,
@@ -759,6 +777,12 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         provider_account_management=True,
         hook_ordering_guarantee=False,
         repaints_scrollback=True,
+        # Codex fires `permission_request` and then writes nothing about the
+        # outcome: there is no resolution hook and, measured across every August
+        # 2026 rollout, zero approval records. Its hooks are notification-only,
+        # so the only lever is spawn-time `approval_policy`/`sandbox_mode`, which
+        # is whole-session and cannot change while the CLI runs.
+        hook_approval_decisions=False,
         state_sources=("transcript", "hook", "pty"),
         measurement_source="transcript",
         reports_conversation_rollover=False,
@@ -841,6 +865,11 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         provider_account_management=False,
         hook_ordering_guarantee=True,
         repaints_scrollback=True,
+        # OMP's in-process extension emits `PermissionRequest` and a separate
+        # `approval_resolved`, both as one-way notifications on its event stream.
+        # Nothing reads a value back, so mux can report an approval here but not
+        # answer one.
+        hook_approval_decisions=False,
         state_sources=("hook", "transcript", "pty"),
         measurement_source="transcript",
         reports_conversation_rollover=True,
@@ -920,6 +949,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # In-process extension, ordered against its own transcript writes, as omp.
         hook_ordering_guarantee=True,
         repaints_scrollback=True,
+        # pi's extension emits no permission event at all (`PermissionRequest` is
+        # absent from its hook set), so there is nothing here to answer.
+        hook_approval_decisions=False,
         # `pty` is a working-only reading, pinned to a captured pi 0.84.1 screen
         # (`working.pi_spinner`). It can veto delivery and detect activity; it
         # never grants idle, which hooks and the transcript already prove.
@@ -1005,6 +1037,12 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # keeps arbitrating rather than trusting hook order.
         hook_ordering_guarantee=False,
         repaints_scrollback=False,
+        # opencode's plugin surface *does* expose a decision-capable permission
+        # hook, but the mux plugin subscribes to the observational event bus
+        # (`permission.updated` / `permission.replied`) instead, which reports a
+        # decision and cannot make one. Flipping this to True is a plugin change,
+        # not a registry edit.
+        hook_approval_decisions=False,
         # opencode keeps conversations as rows in `opencode.db`, not as an
         # append-only file, so the byte-offset transcript tailer has nothing to
         # attach to and `transcript` is absent from the state sources. Its
