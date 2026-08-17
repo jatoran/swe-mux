@@ -12,7 +12,7 @@ import {
   EMPTY_ROW_BUDGET, buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
   identityRowTokens, rowBudget, sessionContextArc, sessionStandingMark,
 } from '../src/sessionRowFields.ts'
-import type { StandingActivity } from '../src/types.ts'
+import type { ApprovalPolicy, StandingActivity } from '../src/types.ts'
 import { shapePath } from '../src/dotShapes.ts'
 
 const NOW = 1_700_000_000
@@ -535,7 +535,39 @@ test('the flag strip is pinned to the top line’s right, away from the title', 
   // that clips, so a title long enough to fill the sidebar hid every one of them.
   const base = defaultSessionRowConfig()
   assert.deepEqual(base.top.left.map(slot => slot.id), ['glyph', 'title'])
-  assert.deepEqual(base.top.right.map(slot => slot.id), ['broadcast', 'badges', 'draft'])
+  assert.deepEqual(base.top.right.map(slot => slot.id), ['approvals', 'broadcast', 'badges', 'draft'])
+})
+
+test('the approval badge shows only while a grant is actually in force', () => {
+  // The mode's whole effect is removing the notification an approval would
+  // raise, so the fleet list is the only place a grant nobody remembers setting
+  // can still be seen — and a badge for a grant the daemon has already dropped
+  // would be the sidebar asserting authority that no longer exists.
+  const config = defaultSessionRowConfig()
+  const granted: ApprovalPolicy = { mode: 'allow_all', run_id: 'run-1', expires_at: NOW + 600,
+    granted_at: NOW, set_by: 'pane', rules: [], auto_approved: 4, max_auto: 200,
+    last_decision_at: NOW, last_request: 'Read(/x)', floor_deferred: 0 }
+  const flags = (item: Session) =>
+    buildSessionRowTokens(item, config, context()).top.right.tokens.map(token => token.text)
+
+  assert.deepEqual(flags(session()), [])
+  assert.deepEqual(
+    flags(session({ agent_run_id: 'run-1', approval_policy: { ...granted } })),
+    ['auto ALL'],
+  )
+  // Expired, and made for a conversation that has since been replaced.
+  assert.deepEqual(
+    flags(session({ agent_run_id: 'run-1', approval_policy: { ...granted, expires_at: NOW - 1 } })),
+    [],
+  )
+  assert.deepEqual(
+    flags(session({ agent_run_id: 'run-2', approval_policy: { ...granted } })),
+    [],
+  )
+  assert.deepEqual(
+    flags(session({ agent_run_id: 'run-1', approval_policy: { ...granted, mode: 'allowlisted', rules: ['Read'] } })),
+    ['auto'],
+  )
 })
 
 test('no amount of shedding removes a flag', () => {

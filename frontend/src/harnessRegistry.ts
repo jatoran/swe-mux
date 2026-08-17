@@ -40,6 +40,9 @@ export interface HarnessCapabilities {
   resolves_transcript_by_cwd?: boolean
   /** The daemon implements a fork strategy for this harness. */
   branch?: boolean
+  /** That fork strategy honours a chosen message, rather than only forking from
+   *  where the conversation currently stands. */
+  branch_from_message?: boolean
   /** WebGL is never safe here, not even under an explicit `webgl` preference.
    *  Distinct from `repaints_scrollback`, which only excludes `auto`. */
   webgl_unsafe?: boolean
@@ -244,6 +247,14 @@ export function applicationTouchScrollProfile(name: string | undefined): {
 /** Whether the daemon implements a fork strategy for this harness. */
 export const supportsBranch = (name: string | undefined): boolean =>
   Boolean(harnessDescriptor(name)?.capabilities.branch)
+
+/** Whether a branch of this harness can be cut at a chosen message.
+ *
+ * Distinct from `supportsBranch`: a harness that can only fork from where the
+ * conversation currently stands is still branchable, and offering it a point picker
+ * would present a choice the daemon then refuses. */
+export const branchesFromMessage = (name: string | undefined): boolean =>
+  Boolean(harnessDescriptor(name)?.capabilities.branch_from_message)
 
 /** Whether mux dictated the conversation id, making the session resumable at once. */
 export const assignsConversationId = (name: string | undefined): boolean =>

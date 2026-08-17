@@ -52,10 +52,27 @@ PROJECT_CONFIG_FIELDS = {
     # approves; "granted" lets an agent create a session here directly, inside a
     # per-origin budget. Authority is by target Project, as for interrupt/end.
     "spawn_grant",
+    # Which tool-permission requests mux may answer for sessions in this Project
+    # while a conversation holds the `allowlisted` mode, as `Tool` /
+    # `Tool(pattern)` rules. The rules live here rather than on the session
+    # because "reading this repo's .claude config is fine" is a property of the
+    # codebase, and because a rules editor is the wrong thing to hand someone in
+    # the moment they want to switch a mode on. Unset means the built-in
+    # `approvals.DEFAULT_ALLOW_RULES`; an explicit empty list means "nothing".
+    "approval_allow",
+    # The strongest mode a session in this Project may hold, whatever the
+    # operator picks. A repository can therefore refuse `allow_all` outright
+    # without depending on everyone remembering not to select it.
+    "approval_ceiling",
 }
 #: The two authority levels a grant field may hold. "off" is not a value here -
 #: it is the absence of the `session_control` automation opt-in.
 SESSION_CONTROL_GRANTS = ("draft", "granted")
+#: Values `approval_ceiling` may hold, weakest first. Mirrors
+#: `models.APPROVAL_MODES` and is asserted equal to it in the test suite; it is
+#: restated rather than imported to keep this module free of model imports.
+APPROVAL_CEILINGS = ("wait", "allowlisted", "allow_all")
+MAX_PROJECT_APPROVAL_RULES = 256
 # Read and discarded, never written. The scan-timeline dollar budget was a
 # per-project field; it is one global setting now, because a cap that lives in
 # a committed file nobody opens is a cap nobody can find when it stops the
@@ -122,6 +139,10 @@ class ProjectImageUnavailable(ValueError):
 
 class ProjectResourceExists(ValueError):
     """An exclusive Project file/folder create collided with an existing entry."""
+
+
+class ProjectNoteProtected(ValueError):
+    """A Project keeps at least one note, so its final note cannot be deleted."""
 
 
 def revision(data: bytes | None) -> str:
@@ -454,12 +475,19 @@ def _note_mtime(path: Path) -> float:
         return 0
 
 
+def _move_note_aside(destination: Path, path: Path) -> Path:
+    """Move one note file to a recoverable location without overwriting anything there."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        destination = destination.with_name(
+            f"{destination.stem}-{uuid.uuid4().hex[:8]}{destination.suffix}"
+        )
+    os.replace(path, destination)
+    return destination
+
+
 def _archive_legacy_note(root: Path, path: Path, category: str) -> None:
-    archive = root / ".swe-mux" / "notes" / "legacy" / category / path.name
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    if archive.exists():
-        archive = archive.with_name(f"{archive.stem}-{uuid.uuid4().hex[:8]}{archive.suffix}")
-    os.replace(path, archive)
+    _move_note_aside(root / ".swe-mux" / "notes" / "legacy" / category / path.name, path)
 
 
 def migrate_legacy_notes(
@@ -544,6 +572,23 @@ def migrate_legacy_notes(
             archived_empty,
         )
     return {"migrated": migrated, "archived_empty": archived_empty}
+
+
+def project_note_count(root: str | Path) -> int:
+    """Count the Project's note files without reading, migrating, or capping them.
+
+    `project_note_summaries` answers the same question, but only by reading and
+    bounding every file to build a listing. Deletion needs one number, and it
+    needs the untruncated one: the summary cap would make a Project past the cap
+    look like it had exactly that many notes.
+    """
+    notes_root = Path(root).resolve() / ".swe-mux" / "notes"
+    total = 1 if (notes_root / "project.md").is_file() else 0
+    try:
+        total += sum(1 for path in (notes_root / "items").glob("*.md") if path.is_file())
+    except OSError:
+        pass
+    return total
 
 
 def project_note_summaries(
@@ -783,6 +828,48 @@ def project_spawn_grant(root: str | Path) -> str:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
         pass
     return "draft"
+
+
+def project_approval_rules(root: str | Path) -> list[str] | None:
+    """This Project's declared auto-approval allowlist.
+
+    ``None`` means the Project declared nothing and the built-in defaults apply;
+    ``[]`` means it declared an empty list, which is a real and different answer
+    ("approve nothing automatically here"). A malformed config returns ``None``
+    rather than a partial list, so a broken file cannot widen the allowlist.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            rules = values.get("approval_allow")
+            if isinstance(rules, list):
+                return [str(rule).strip() for rule in rules if str(rule).strip()]
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        pass
+    return None
+
+
+def project_approval_ceiling(root: str | Path) -> str:
+    """The strongest approval mode a session in this Project may hold.
+
+    Defaults to ``allow_all`` (no Project-level restriction) so the feature's
+    bounds come from the install switch and the per-conversation grant rather
+    than from every repository having to opt in. A malformed config falls back
+    to the *safe* end instead, because an unreadable ceiling is not evidence of
+    permission.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            ceiling = values.get("approval_ceiling")
+            if ceiling in APPROVAL_CEILINGS:
+                return str(ceiling)
+            return "allow_all"
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        return "wait"
+    return "allow_all"
 
 
 def effective_project_ignores(root: str | Path, global_patterns: list[str]) -> list[str]:
@@ -1106,6 +1193,18 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("session_control_grant must be draft or granted")
     if parsed.get("spawn_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError("spawn_grant must be draft or granted")
+    if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
+        raise ValueError("approval_ceiling must be wait, allowlisted, or allow_all")
+    if "approval_allow" in parsed and (
+        not isinstance(parsed["approval_allow"], list)
+        or not all(isinstance(item, str) for item in parsed["approval_allow"])
+        or len(parsed["approval_allow"]) > MAX_PROJECT_APPROVAL_RULES
+        or any(not item.strip() or len(item) > 200 for item in parsed["approval_allow"])
+    ):
+        raise ValueError(
+            "approval_allow must be an array of at most "
+            f"{MAX_PROJECT_APPROVAL_RULES} non-empty rule strings"
+        )
     if "notification_sounds_enabled" in parsed and not isinstance(
         parsed["notification_sounds_enabled"], bool
     ):
@@ -1168,6 +1267,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "prompt_library_scope",
         "session_control_grant",
         "spawn_grant",
+        "approval_ceiling",
     ):
         if value := values.get(key):
             escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
@@ -1191,6 +1291,12 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
     if patterns := values.get("ignore_patterns"):
         encoded = ", ".join(json.dumps(str(pattern)) for pattern in patterns)
         lines.append(f"ignore_patterns = [{encoded}]")
+    if "approval_allow" in values and isinstance(values["approval_allow"], list):
+        # Written even when empty, because an empty allowlist is a *decision*
+        # ("this Project approves nothing automatically") and dropping it would
+        # silently restore the built-in defaults on the next read.
+        encoded = ", ".join(json.dumps(str(rule)) for rule in values["approval_allow"])
+        lines.append(f"approval_allow = [{encoded}]")
     if automations := values.get("automations"):
         pairs = ", ".join(
             f"{key} = {'true' if bool(value) else 'false'}"
@@ -1722,20 +1828,38 @@ async def delete_note(
     *,
     project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
-    """Delete one note only if the caller observed its current revision."""
+    """Retire one note into the Project's note trash, only at its observed revision.
+
+    Deletion is recoverable rather than forbidden. The file moves into
+    `.swe-mux/notes/trash/` instead of being unlinked, which is what makes an
+    ordinary two-click delete safe enough to offer from a tab the user is
+    reading. The whole `notes/` tree is Git-ignored and Project-local, so the
+    retained copy costs nothing and leaks nowhere.
+
+    The single refusal is a Project's last note. Protecting one *particular*
+    note instead - the seeded `project.md` - would be invisible in a rail where
+    it stays renameable and looks like every other tab, so the rule is about the
+    collection rather than about one member of it.
+    """
     current = await read_note(cwd, identity, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before deleting")
     if not current["exists"]:
         raise ValueError("note does not exist")
+    project_root = Path(str(current["project"]["root"]))
+    if project_note_count(project_root) <= 1:
+        raise ProjectNoteProtected(
+            "a Project keeps at least one note; rename or empty this one instead"
+        )
     path = Path(current["path"])
     try:
-        path.unlink()
+        trashed = _move_note_aside(project_root / ".swe-mux" / "notes" / "trash" / path.name, path)
     except FileNotFoundError as exc:
         raise ValueError("note changed externally; reload before deleting") from exc
     return {
         "deleted": True,
         "path": str(path),
+        "trashed_path": str(trashed),
         "bytes": int(current.get("bytes") or 0),
         "revision": expected_revision,
     }

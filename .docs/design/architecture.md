@@ -44,6 +44,14 @@ metadata plus a scrollback snapshot. Shutdown intent is signaled from outside th
 while "restart"/detach leaves supervised sessions alive. In-process spawning remains the
 automatic fallback whenever the supervisor is unreachable.
 
+That split survives a daemon restart but not the loss of the process that owns the PTYs: the
+supervisor's kill-on-close Job takes every process tree with it, and both the authoritative
+scrollback and the mirrored metadata are process memory. A **durable session registry** in
+`mux.db`, written by the daemon rather than the supervisor, is what covers the rest — a
+supervisor crash, a force close, a power loss, or the flag being off. Sessions whose end nobody
+recorded come back as dead-but-visible **cold sessions** at the next boot, after supervisor
+adoption has claimed everything that is still running (`features/session-recovery.md`).
+
 ## Package boundaries
 
 - `server.py`: transport composition and Project-bound session operations.

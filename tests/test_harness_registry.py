@@ -473,6 +473,7 @@ def test_every_browser_read_trait_travels_in_the_public_payload() -> None:
         "assigns_conversation_id",
         "resolves_transcript_by_cwd",
         "branch",
+        "branch_from_message",
         "webgl_unsafe",
         "owns_scroll_viewport",
         "width_envelope",

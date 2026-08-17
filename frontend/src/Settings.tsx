@@ -90,11 +90,16 @@ type Config = {
   agent_message_pending_per_target:number
   auto_delivery_refusal_backoff_seconds:number
   auto_delivery_quiet_start:string;auto_delivery_quiet_end:string
+  approval_auto_enabled:boolean;approval_allow_all_permitted:boolean
+  approval_grant_ttl_minutes:number;approval_max_auto_per_grant:number
+  approval_hook_timeout_seconds:number
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
+  scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
+  scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
   scan_timeline_daily_token_budget:number;scan_timeline_daily_budget_usd:number
   scan_timeline_hourly_call_cap:number;scan_timeline_max_output_tokens:number
@@ -684,6 +689,25 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(current => current ? {...current,[key]:value} : current)
+  // Previewing a highlighted theme touches the document's tokens and nothing else —
+  // never the draft — so Cancel, Save, and the dirty flag all stay ignorant of it and
+  // a walk through the catalogue costs no unsaved change. `null` reverts to whatever
+  // the draft currently holds, which is the chosen theme whether or not it is saved.
+  // A preview outlives the picker when one gesture closes both: a pointerdown on the
+  // Settings backdrop dismisses the list and the panel together, and the panel is gone
+  // before the list's own revert can run. So the revert is owned here, where it can
+  // still happen after everything below has unmounted. It reverts to the
+  // *authoritative* theme rather than the draft's, because discarding already put the
+  // saved one back on its way out and re-applying the draft would restore the
+  // discarded choice.
+  const authoritativeTheme = useRef<ThemeName>('dark')
+  authoritativeTheme.current = draft?.theme ?? config?.theme ?? 'dark'
+  const previewing = useRef(false)
+  const previewTheme = useCallback((name:ThemeName|null)=>{
+    previewing.current=name!==null
+    applyTheme(name??authoritativeTheme.current)
+  },[])
+  useEffect(()=>()=>{ if(previewing.current)applyTheme(authoritativeTheme.current) },[])
   // Previewed live, like the theme, because the only way to judge a chrome scale
   // is to see the chrome at it. Editing the *other* device class is a no-op on
   // screen, which is correct: `applyUiScale` resolves this device's key either
@@ -881,8 +905,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const discardAndLeave=()=>{
     if(!closeIntent)return
     // Theme and chrome scale are previewed live as you pick them, so discarding
-    // has to put both back — not just the draft that was never saved.
-    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);onUiScalePreview(config)}
+    // has to put both back — not just the draft that was never saved. Pointing the
+    // authoritative theme at the saved one keeps the unmount revert agreeing.
+    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);authoritativeTheme.current=config.theme;onUiScalePreview(config)}
     leaveSettings(closeIntent)
   }
   const saveAndLeave=async()=>{
@@ -1194,6 +1219,21 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <p>The grant is measured against idleness, not against the conversation's age: a session you are still using keeps it, and one nobody has touched for the window above loses it and gets it back when the conversation is in use again. An opt-out, an exhausted send budget, and a failed delivery are decisions rather than lapses, so those stay off until you clear them.</p>
           </section>
 
+          {/* Approvals sit beside auto-delivery deliberately: both answer "what
+              does swe-mux do on my behalf", and both are one install switch over
+              bounded per-conversation grants. */}
+          <section><h3>Approvals</h3>
+          <p>With this off, every permission request an agent raises waits for you, exactly as before. With it on, a conversation can be switched to answer matching requests itself from its pane's <code>approvals:</code> strip — never here, and never for a whole install at once. Only Claude sessions can hold a mode; the other harnesses report permission requests but cannot be told the answer.</p>
+          <label class="check"><span>Allow swe-mux to answer approvals</span><input type="checkbox" checked={draft.approval_auto_enabled} onChange={e=>change('approval_auto_enabled',e.currentTarget.checked)} /></label>
+          <label class="check"><span>Offer the “allow all” mode</span><input type="checkbox" checked={draft.approval_allow_all_permitted} onChange={e=>change('approval_allow_all_permitted',e.currentTarget.checked)} /></label>
+          <label>Grant expires after this many minutes<input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /></label>
+          <label>Requests one grant may answer<input type="number" min="1" max="5000" value={draft.approval_max_auto_per_grant} onInput={e=>change('approval_max_auto_per_grant',Number(e.currentTarget.value))} /></label>
+          <label>Seconds the CLI waits for an answer<input type="number" min="1" max="60" step="0.5" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /></label>
+          <p>Every grant is bound twice, by the clock and by the count above, and belongs to one conversation: <code>/clear</code>, resume, Branch, and any conversation rollover drop it back to waiting. Leaving both bounds in place is what keeps this from becoming standing authority you forget you granted.</p>
+          <p><strong>Some requests are never answered automatically, in any mode.</strong> Pushes and forced Git operations, recursive or forced deletes, <code>sudo</code>, piping a download into a shell, outbound uploads, package publishes, GitHub and infrastructure writes, and anything touching a credential path all still come to you. swe-mux also never <em>denies</em> on your behalf — the only two answers it gives are “approved” and “ask the human”.</p>
+          <p>Which requests count as routine is a per-Project decision, in that Project's <code>.swe-mux/config.toml</code> (<code>approval_allow</code>), along with <code>approval_ceiling</code>, which caps the strongest mode any session there may hold. Unset means swe-mux's defaults: reads, search, and inert local writes such as editor task files. The CLI wait above only bounds a stall; if swe-mux does not answer in time the ordinary prompt appears, so a wedged daemon costs you seconds rather than a hung agent.</p>
+          </section>
+
           <section><h3>Agent messaging</h3>
           <p>Bounds on messages agents address to each other. A message still enters the target's queue under every auto-delivery rule; these limit how far one thread may travel.</p>
           <label class="check"><span>Allow agent-to-agent messages</span><input type="checkbox" checked={draft.agent_messaging_enabled} onChange={e=>change('agent_messaging_enabled',e.currentTarget.checked)} /></label>
@@ -1293,6 +1333,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          </section>
+
+          <section><h3>Scheduled runs</h3>
+          <p>Schedules themselves live in a Project's <strong>Schedule</strong> tab and are stored on this machine, never in the repository. These are the install-wide limits over all of them: what a scheduled fleet may do to this computer is not a per-repository decision. A Project also has to opt into <strong>Scheduled runs</strong> before any of its schedules can fire.</p>
+          <label class="settings-toggle"><input type="checkbox" checked={draft.scheduled_runs_enabled} onChange={event=>change('scheduled_runs_enabled',event.currentTarget.checked)}/>Let schedules start sessions<small>The emergency stop. Off means nothing fires anywhere, whatever any Project opted into.</small></label>
+          <label>Concurrent scheduled sessions<input type="number" min="0" max="50" value={draft.scheduled_runs_max_concurrent} onInput={event=>change('scheduled_runs_max_concurrent',Number(event.currentTarget.value))}/><small>Nothing ends an agent session automatically, so this is what stops nightly runs accumulating into a fleet of forgotten panes.</small></label>
+          <label>Sweep seconds<input type="number" min="1" max="300" step="1" value={draft.scheduled_runs_poll_seconds} onInput={event=>change('scheduled_runs_poll_seconds',Number(event.currentTarget.value))}/><small>Schedules resolve to the minute; this only decides how promptly a due minute is noticed.</small></label>
+          <label>Run history days<input type="number" min="1" max="3650" value={draft.scheduled_run_retention_days} onInput={event=>change('scheduled_run_retention_days',Number(event.currentTarget.value))}/><small>Long enough to answer "has this been failing all week".</small></label>
           </section>
 
           <section><h3>Scan timeline</h3>
@@ -1490,7 +1538,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='appearance'&&<section><h3>Theme</h3>
           <div class="theme-field">
             <span>Theme</span>
-            <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} />
+            <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} onPreview={previewTheme} />
           </div>
           {draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />

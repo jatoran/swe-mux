@@ -28,6 +28,37 @@ The file tree and notes collection are utility-drawer tabs.
 - The default `Ctrl+Alt+N` binding and two-finger swipe-up gesture open the current Project's notes.
 - Stored `project.note` and `session.note` bindings and gestures migrate to `notes.open`.
 - The Notes drawer lists explicit notes even when empty, supports Project/all-Projects scope, searches title/Project/excerpt, and provides create, rename, delete, open-in-drawer, and open-in-pane actions.
+- **Deleting a note is recoverable, and it is refused only for a Project's last note.**
+  A delete moves the file into `.swe-mux/notes/trash/`, colliding names taking a short
+  suffix, rather than unlinking it.
+  The whole `notes/` tree is already Git-ignored and Project-local, so the retained copy
+  costs nothing and leaks nowhere; there is no TTL sweep and no in-app restore, because the
+  point is that the bytes are still on disk when someone wants them.
+  Recoverability is what makes an ordinary two-click delete safe enough to offer from a tab
+  the reader is looking at.
+  Retired files live outside `items/`, so they never reappear in a listing, in
+  `project_note_count`, or in the tab rail.
+- The one refusal is emptying a Project's collection: `project_note_count` must exceed one,
+  and the daemon answers `409 note_protected` otherwise.
+  The rule is deliberately about the collection rather than about the seeded
+  `.swe-mux/notes/project.md`.
+  Protecting that particular note instead would be invisible: it stays renameable and looks
+  like every other tab, so the block would read as a bug rather than as a policy, and a
+  Project could be left with one permanently stuck tab under a meaningless name.
+  Stating the rule as *the last note* also lets the surface explain itself in the disabled
+  control, and it survives renames and external edits.
+  The browser and the actions menu disable delete and give the reason; they never rely on
+  that check for correctness, since the daemon enforces it and a stale listing simply gets
+  the 409.
+- A note's actions reach it wherever it is drawn. The tab rail and the browser rows open the
+  same menu — right-click, touch long-press, or the keyboard's context-menu key — carrying
+  open-in-workspace-tab, rename, and delete, so managing a note never requires finding it in
+  the browser first.
+  The pending long-press is watched on `window` rather than on the pressed element, because
+  `OverflowRail` takes pointer capture for its horizontal pan as soon as a touch lands on an
+  overflowing strip: every later pointer event is then retargeted to the rail, an
+  element-local move/up handler never runs, and the timer would open a menu partway through
+  someone's scroll with nothing able to cancel it.
 - Autosaved note and Markdown-file headers keep the title and a fixed-size save indicator on one row, without repeating the owning Project.
   Green means saved, blue means modified or saving, red means an error or unavailable resource, and a neutral light covers transient loading.
   Scratchpad alone retains a `Global` scope label beside its title.
@@ -85,6 +116,7 @@ The file tree and notes collection are utility-drawer tabs.
   The active tab scrolls into view automatically.
   New notes become selected tabs immediately.
   Deleting the selected note chooses the next surviving tab, then the previous one, and uses Scratchpad only when no Project notes remain.
+  That last fallback is now only reachable through an external deletion or a stale listing, since a Project's own last note cannot be deleted from the app.
   A separate searchable browser provides Project and all-Project discovery plus rename, delete, and open-in-workspace actions without turning the browser into the normal landing page.
 - Scope follows how you arrived, the same rule the rest of the app's browsers use. Reaching the
   tab from the rail icon, the tab strip, or `drawer.notes` says nothing about scope, so it means

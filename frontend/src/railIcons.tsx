@@ -181,6 +181,15 @@ export const ProcessesIcon = () => <svg {...stroke}>
   <path d="M5 13h3l2-4 2.5 7 2-3h4.5" />
 </svg>
 
+/** A clock with a forward hand: a session this Project will start later.
+ *
+ *  Deliberately not a calendar. A calendar reads as "dates" and this tab is about
+ *  a recurrence that mostly has no date - "every night at 3" is a clock face. */
+export const ScheduleIcon = () => <svg {...stroke}>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M12 7v5l3.5 2.5" />
+</svg>
+
 /** A bell. The one concept here with a mark everyone already knows. */
 export const AlertsIcon = () => <svg {...stroke}>
   <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
@@ -249,5 +258,6 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   context: ContextIcon,
   git: GitIcon,
   processes: ProcessesIcon,
+  schedule: ScheduleIcon,
   notifications: AlertsIcon,
 }

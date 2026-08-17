@@ -22,6 +22,7 @@ DEFAULT_KEYBINDINGS = {
     "ctrl+alt+arrowleft": "pane.previous",
     "ctrl+alt+s": "settings.open",
     "ctrl+alt+n": "notes.open",
+    "ctrl+alt+j": "note.outline",
     **{f"ctrl+alt+{index}": f"project.activate({index})" for index in range(1, 10)},
 }
 
@@ -93,6 +94,10 @@ KEYBINDING_COMMANDS = (
     # Same shape: reachable from the pane header and the editor's own command rail, so this
     # exists for the palette, a gesture, and anyone who wants a chord for it.
     ("note.outline", "Jump to a heading in the focused note", "view"),
+    # Pins that same heading list as a faint, always-on overlay over the note (Ctrl+click the
+    # outline button, or bind a chord/gesture here). Reachable from the palette and bindable to a
+    # mobile gesture; there is no default chord because the overlay is toggled by Ctrl+click.
+    ("note.outlinePeek", "Toggle the pinned heading outline overlay", "view"),
     ("terminal.copy", "Copy from focused terminal", "terminal"),
     ("terminal.paste", "Paste into focused terminal", "terminal"),
     ("terminal.selectAll", "Select all in focused terminal", "terminal"),

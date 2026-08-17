@@ -2,7 +2,8 @@
 
 ## Why this exists
 
-History, Automation, Operational Telemetry, Status Timeline, Voice, Tier 0, and Clipboard
+History, Automation, Operational Telemetry, Status Timeline, Voice, Tier 0, Prompt Queue,
+Schedules, and Clipboard
 history use separate
 connections and serialized executors against one WAL database. SQLite still has one writer slot. A transaction left open on
 one connection can otherwise make unrelated session spawn or PTY event writes fail with
@@ -80,6 +81,10 @@ def op():
         return None  # may return while SQLite still owns an implicit transaction
 ```
 
+A uniqueness violation is sometimes the *mechanism* rather than an error to swallow.
+`schedule_runs(schedule_id, fire_key)` is unique, and `ScheduleStore.claim_run` inserts that row before a scheduled session is spawned: the losing insert raises `IntegrityError`, rolls back, and is surfaced as a typed `ScheduleConflict` the caller treats as "already claimed" (`../../design/features/scheduled-runs.md`).
+That is what makes a fire idempotent across a daemon restart, which no in-memory guard can be.
+
 Even expected uniqueness/deduplication paths must commit or roll back before return. Do not catch
 `OperationalError` and retry at the HTTP route: fix the store operation boundary so every caller
 gets the same guarantee.
@@ -134,6 +139,16 @@ regression is valuable because these user-visible paths historically exposed lea
   batched on its own worker, with time-based retention (`status_timeline_retention_days`).
   Writes are `INSERT OR IGNORE` against the `(session_id, agent_run_id, seq)` key, so a
   replayed batch after a failed flush cannot duplicate rows.
+- `src/swe_mux/session_recovery.py` — the durable session registry (`session_recovery` table):
+  one row per session with the redacted metadata blob it can be rebuilt from and an open marker,
+  sampled onto its own worker on an interval.
+  Its **terminal bytes are files, not rows**, and its file work runs through a separate `_run_io`
+  helper on the same worker but *outside* `database_operation_lock`: that lock is per database
+  file and shared with the history, automation, telemetry, and voice workers, so writing a few
+  hundred kilobytes of scrollback under it would make an unrelated history write wait on this
+  store's disk I/O.
+  Row-then-files ordering on delete, because a directory no row names is swept at boot while a row
+  naming files that are gone would have a restore report content it cannot produce.
 - `src/swe_mux/tier0_store.py`, `src/swe_mux/deterministic_consumers.py`
 - `src/swe_mux/project_context.py` writes no SQLite rows.
   The Project-owned Markdown file is its only active store.
