@@ -42,16 +42,16 @@ P0:
 P1 and P2:
 - Done: QR of the connection URL and the "Connect a phone" modal (`frontend/src/remoteConnection.tsx` `ConnectionQr` via the `qrcode-generator` dependency, `frontend/src/ConnectPhone.tsx`), reachable from Settings -> Remote. The URL uses the `.ts.net` MagicDNS name.
 - Done: "Not installed" next step (winget command plus a download link in the connection readout).
-- Done: per-harness mux MCP toggle and hook-instrumentation toggle (`harness_mcp_enabled`, `harness_instrument_enabled` in `config.py`; the `instrument` gate threaded through `build_agent_adapter` and every adapter family; Settings -> Agents). Both are restart-scoped and named their consequence.
+- Done: per-harness mux MCP toggle and hook-instrumentation toggle (`harness_mcp_enabled`, `harness_instrument_enabled` in `config.py`; the `instrument` gate threaded through `build_agent_adapter` and every adapter family; Settings -> Harnesses). Both are restart-scoped and named their consequence.
 - Done: "What mux injects" disclosure in the first-run panel.
 - Done: security posture statement in Settings -> Remote and the Connect-a-phone modal.
 - Done: STT off by default with a first-use download note; neutral `en-US` TTS voice default; STT language/model stated as a first-use choice; scan-timeline model made an editable, changeable default.
 - Done: model-catalog unknown-model path confirmed to degrade cleanly (family fallback in `claude_models.py`; covered by `tests/test_claude_models.py`).
-- Done: OpenRouter key surface listing what the key unlocks (Settings -> Automation).
+- Done: OpenRouter key surface listing what the key unlocks (Settings -> Accounts).
 - Done: provider-account login guidance in the first-run panel.
 - Done: prerequisite checklist for Git, Node, npm, and Tailscale (`prerequisites.py`, `GET /api/diagnostics/prerequisites`, Settings -> Remote).
 - Done: first-run chaining copy (harnesses -> project -> account login -> session) in the first-run panel.
-- Done: CLI-version-drift signal (best-effort `probe_cli_version`, `version_untested` against a maintainer-armed `TESTED_CLI_VERSIONS`, shown in Settings -> Agents).
+- Done: CLI-version-drift signal (best-effort `probe_cli_version`, `version_untested` against a maintainer-armed `TESTED_CLI_VERSIONS`, shown in Settings -> Harnesses).
 - Done: confirmed `ProcessPanel.tsx`'s `127.0.0.1:3000` was a seeded example; changed it to a placeholder so it no longer reads as an assumed dev-server port.
 - Done (Phase 7): the diagnostics export, prerequisites, connection-state, and firewall pieces are now consumed by the consolidated `mux doctor` report (`GET /api/diagnostics/doctor`, assembled by `doctor.build_doctor_report`), which adds per-check severity/remedy, a machine-readable capability block, and the observation-freshness check. This document owns the fresh-machine detail; the aggregation lives in `ROADMAP.md` Phase 7.
 

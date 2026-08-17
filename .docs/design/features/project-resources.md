@@ -179,7 +179,7 @@ The file tree and notes collection are utility-drawer tabs.
 
 ### Editor preferences
 
-- Settings → Notes configures the one shared editor, so every Markdown surface moves together:
+- Settings → Text editor configures the one shared editor, so every Markdown surface moves together:
   spellcheck, Markdown projection on/off (`plain` keeps undo, multi-cursor, list continuation,
   and autosave and only stops the rendering), what `Tab` does, typography, the touch command
   rail, and the editor's own keyboard shortcuts.
@@ -408,6 +408,10 @@ include a registered Project nested below another Git root.
 - Global `project_ignore_patterns` and Project-local `ignore_patterns` compose. They filter the
   browser and watcher only, never Git. Settings preserves line breaks while editing and trims
   blank entries only on explicit Save.
+  The two halves live one click apart and each names the other: the global list is
+  Settings → Projects → Global project ignores, and the per-Project list is Manage projects →
+  Repository options → Additional ignore patterns. They are one composed value edited in two
+  places, so neither surface may describe itself as the ignore list.
 - A file/folder context menu can reveal it in the host file manager, copy either path form,
   copy a file's contents, add its basename to global ignores, or add its Project-relative path
   to Project ignores. Windows reveal selects a file and asks Explorer to foreground its window.
