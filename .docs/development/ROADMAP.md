@@ -163,7 +163,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                             -> Phase 7  Windows maturity, CLI, doctor, soak [done, scope cut]
                               -> Phase 7.5  mux MCP v1 semantic memory      [done: CP step 8]
                                 -> Phase 7.6  mux MCP session control       [done: CP step 9]
-                                  -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [done: not yet redeployed]
+                                  -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [done]
                                     -> Phase 7.8  Git provenance re-attribution: committer + contributors [done]
                                       -> Phase 7.9  Code-structure graph: blast radius + per-session change map [done]
                                       -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [done]
@@ -2197,7 +2197,7 @@ sibling-initiated interrupt is exactly the kind of event that must never be sile
 
 ## Phase 7.7 — Consolidate behavioral summary: retire the turn summarizer, adaptive titling, and near-term scan-timeline consumers
 
-**Status: implemented in-tree (not yet landed or redeployed).** The turn summarizer is retired and the
+**Status: landed and running on the frozen app (redeployed 2026-08-17).** The turn summarizer is retired and the
 scan timeline is the single behavioral-summary producer; adaptive titling (`continuous_title`) and
 phase-transition signals (`phase_transitions`) ride a freshly saved scan record through
 `behavioral_consumers.py` on one shared pivot definition; and the near-term consumers
@@ -2360,10 +2360,29 @@ It depends on Phase 7.8 because the change map colors nodes by contributor.
 - [x] The per-session change map renders red/yellow/blue from `session_id`-attributed facts, excludes concurrent sessions by construction, ships only bounded server-side subgraphs, renders in WebGL with worker-side layout, and does not lag on a large codebase. (Server-side bounding and exclusion are unit-proven; the WebGL "does not lag on a large codebase" property is a live-UI check held for after code review.)
 - [x] The "callers edited but not examined" signal is produced from reverse callers intersected with the session's `file_read` facts, and static results are labeled a lower bound with blind spots named throughout.
 
-Held for after code review, by the user's instruction — the branch is not landed or redeployed until then:
+Landed and redeployed 2026-08-17; both verifications are recorded below.
 
-- [ ] Redeploy the frozen desktop app and confirm the tree-sitter grammar binaries load there (`parsing_available()` true in the bundle) so the graph is not silently empty on the frozen app.
-- [ ] Verify live through mux MCP that `blast_radius` and the navigation tools return real structure for the swe-mux checkout, and that the per-session change map renders without lag on this codebase.
+- [x] Redeploy the frozen desktop app and confirm the tree-sitter grammar binaries load there (`parsing_available()` true in the bundle) so the graph is not silently empty on the frozen app.
+  (Measured against the running frozen app, not the source tree, because that is the only claim
+  worth making: the bundle re-parsed this checkout at 11:09 on 2026-08-17 - after the 09:53
+  rebuild - producing 760 files, 13,507 symbols and 83,575 edges across **four** grammars
+  (python 351, typescript 306, tsx 87, javascript 16). A bundle whose grammars failed to load
+  parses nothing and writes nothing, so populated tables dated after the relaunch *are* the
+  proof; `parsing_available()` returning true in a source venv would have proved nothing about
+  the bundle. Read the graph tables rather than a status endpoint, because there is no endpoint
+  that reports parser health - a gap worth closing, since the failure mode is silence.)
+- [x] Verify live through mux MCP that `blast_radius` and the navigation tools return real structure for the swe-mux checkout, and that the per-session change map renders without lag on this codebase.
+  (Operator-confirmed for the MCP tool calls and the change-map render. Independently corroborated
+  on the substrate those tools read: the inbound edge set for `wsl_bridge.py` resolves to
+  `profiles.py`, `server.py`, `tailscale.py` and its own tests with `imports`/`calls`/`defines`
+  distinguished, and symbol lookup finds `_run_wsl` and `_reap_wsl_tree` - functions committed the
+  same day - so the graph is both structurally real and incrementally fresh.)
+
+**One defect this verification exposed, not yet fixed:** the graph indexes
+`src/swe_mux/static/assets/*.js`, which is gitignored minified build output. Three bundles
+account for 5,511 of the 5,662 javascript symbols (two of them truncated), including the
+vendored ONNX runtime. Minified identifiers are noise in symbol lookup and inflate blast
+radius, so build output should be excluded from graph ingestion the way it is from git.
 
 ## Phase 7.10 — Findings surface: annotation filters, the doc_debt tool, and the Insight tab
 
@@ -2404,7 +2423,7 @@ It depends only on shipped substrate (Phase 3.7 deterministic consumers, Phase 7
 - [x] Update `design/features/deterministic-consumers.md` (where findings surface and the two scopes), `design/features/mux-mcp.md` and `design/interfaces.md` (the new tool and the extended endpoint), and `technical/frontend/packages.md` (the Insight tab's two panes and their boundary).
 - [x] Backend tests: the new filter predicates including the session run-set resolution, `tag_counts` scoping, and the `doc_debt` tool including the empty and unpermitted cases.
 - [x] Frontend contract tests: the scope toggle, the exclusion notice, the dashboard link, and read-only (no mutation calls).
-- [ ] Verify on the isolated daemon (findings visible in both scopes, the `doc_debt` tool called from a live agent), then commit and redeploy.
+- [x] Verify on the isolated daemon (findings visible in both scopes, the `doc_debt` tool called from a live agent), then commit and redeploy. (Operator-confirmed 2026-08-17; landed and running on the frozen app.)
 
 ### Deferred
 
@@ -2413,10 +2432,10 @@ It depends only on shipped substrate (Phase 3.7 deterministic consumers, Phase 7
 
 ### Phase 7.10 exit criteria
 
-- [ ] `GET /api/annotations` serves findings filtered by tag, project, session, run, and `since`, with `tag_counts` in scope, and the store resolves a session filter through its run ids without a session column.
-- [ ] The `doc_debt` mux MCP tool returns re-derived `{doc, changed_files}` pairs, is gated on the `doc_debt` automation, returns empty rather than a guess when unpermitted, and names its blind spot.
-- [ ] The Insight tab exposes Timeline and Findings without losing a saved-workspace tab, and the Findings pane is read-only, scope-toggled, and always states what the scope excludes.
-- [ ] The surface is verified on the isolated daemon in both scopes and from a live agent before redeploy.
+- [x] `GET /api/annotations` serves findings filtered by tag, project, session, run, and `since`, with `tag_counts` in scope, and the store resolves a session filter through its run ids without a session column.
+- [x] The `doc_debt` mux MCP tool returns re-derived `{doc, changed_files}` pairs, is gated on the `doc_debt` automation, returns empty rather than a guess when unpermitted, and names its blind spot.
+- [x] The Insight tab exposes Timeline and Findings without losing a saved-workspace tab, and the Findings pane is read-only, scope-toggled, and always states what the scope excludes.
+- [x] The surface is verified on the isolated daemon in both scopes and from a live agent before redeploy. (Operator-confirmed 2026-08-17.)
 
 ## Phase 7.11 — Scan timeline as an agent-readable surface, and window-scoped semantic fields
 
