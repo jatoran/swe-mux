@@ -283,12 +283,12 @@ def test_provider_accounts_use_registry_but_usage_sources_do_not(tmp_path: Path)
 def test_agent_shims_cover_the_registry_and_keep_the_content_guard(tmp_path: Path) -> None:
     from swe_mux.config import Config
     from swe_mux.launchers import create_agent_shims
-    from swe_mux.shim_paths import is_mux_shim
+    from swe_mux.shim_paths import SHIM_SUFFIX, is_mux_shim
 
     env = create_agent_shims(Config(data_dir=tmp_path), None)
 
     for harness in agent_harnesses():
-        shim = tmp_path / "bin" / f"{harness}.cmd"
+        shim = tmp_path / "bin" / f"{harness}{SHIM_SUFFIX}"
         prefix = f"MUX_{harness.upper().replace('-', '_')}"
         assert shim.is_file()
         assert is_mux_shim(shim)

@@ -26,7 +26,7 @@ from swe_mux.server import (
     validate_session_media,
 )
 from swe_mux.session import terminal_exit_outcome
-from swe_mux.shim_paths import is_mux_shim, path_without_shim_dirs
+from swe_mux.shim_paths import SHIM_SUFFIX, is_mux_shim, path_without_shim_dirs
 from swe_mux.transcript_view import parse_transcript
 
 
@@ -181,7 +181,7 @@ def test_agent_launchers_inject_mux_wiring(tmp_path: Path, monkeypatch: pytest.M
 
     cfg = Config(data_dir=tmp_path)
     env = create_agent_shims(cfg, tmp_path / "hooks.json")
-    assert (tmp_path / "bin" / "claude.cmd").is_file()
+    assert (tmp_path / "bin" / f"claude{SHIM_SUFFIX}").is_file()
     assert env["PATH"].startswith(str(tmp_path / "bin"))
     assert env["MUX_SHIM_DIR"] == str(tmp_path / "bin")
 
@@ -340,11 +340,20 @@ def test_agent_launcher_bypasses_npm_batch_for_structured_codex_args(
 
 
 def _write_mux_shim(directory: Path) -> Path:
+    """A shim in this host's format, so the detection tests exercise the real one."""
     directory.mkdir(parents=True, exist_ok=True)
-    shim = directory / "codex.cmd"
-    shim.write_text(
-        '@echo off\r\n"swe-mux.exe" -m swe_mux.agent_launcher codex %*\r\n', encoding="utf-8"
-    )
+    shim = directory / f"codex{SHIM_SUFFIX}"
+    if SHIM_SUFFIX:
+        shim.write_text(
+            '@echo off\r\n"swe-mux.exe" -m swe_mux.agent_launcher codex %*\r\n',
+            encoding="utf-8",
+        )
+    else:
+        shim.write_text(
+            '#!/bin/sh\nexec "swe-mux" -m swe_mux.agent_launcher codex "$@"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
     return shim
 
 
@@ -354,8 +363,12 @@ def test_shim_detection_filters_only_mux_shim_directories(
     mux_shim = _write_mux_shim(tmp_path / "mux-bin")
     npm = tmp_path / "npm"
     npm.mkdir()
-    npm_shim = npm / "codex.cmd"
-    npm_shim.write_text("@echo off", encoding="utf-8")
+    # A real npm shim: same name, same directory shape, no mux marker. This is
+    # what `is_mux_shim` must NOT match, and on POSIX it is extensionless too, so
+    # the suffix alone can never be what distinguishes them.
+    npm_shim = npm / f"codex{SHIM_SUFFIX}"
+    npm_shim.write_text("@echo off" if SHIM_SUFFIX else "#!/bin/sh\nexec codex \"$@\"\n",
+                        encoding="utf-8")
     monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
 
     assert is_mux_shim(mux_shim)

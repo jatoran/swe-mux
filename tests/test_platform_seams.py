@@ -366,3 +366,130 @@ def test_a_nested_reaper_shares_one_guardian_with_its_parent() -> None:
     child.close()
     assert root._guardian is None
     root.close()
+
+def test_the_agent_shim_is_written_in_this_host_executable_script_format(
+    tmp_path: object,
+) -> None:
+    """A shim must be executable *and* recognizable as ours on this host.
+
+    Both halves matter and they pull in opposite directions. Windows needs the
+    `.cmd` extension or PATHEXT will not run it; POSIX needs no extension at all,
+    because `claude` is what the user types and what harness detection looks for.
+    `is_mux_shim` therefore has to gate on a different suffix rule per host - and
+    if it did not, every POSIX shim would read as a real CLI.
+    """
+    from pathlib import Path
+
+    from swe_mux.config import Config
+    from swe_mux.launchers import create_agent_shims
+    from swe_mux.shim_paths import SHIM_NAMES, is_mux_shim
+
+    data_dir = Path(str(tmp_path)) / "data"
+    env = create_agent_shims(Config(data_dir=data_dir))
+    bin_dir = data_dir / "bin"
+    written = sorted(item.name for item in bin_dir.iterdir())
+    assert written, "no shims were written"
+    for name in SHIM_NAMES:
+        shim = bin_dir / name
+        assert shim.is_file(), f"{name} was not written for this host"
+        assert is_mux_shim(shim), f"{name} is not recognized as a mux shim on this host"
+        if not IS_WINDOWS:
+            assert shim.suffix == "", "a POSIX shim must be extensionless to be found by name"
+            assert os.access(shim, os.X_OK), "a POSIX shim must be executable"
+            assert shim.read_text(encoding="utf-8").startswith("#!"), "missing shebang"
+    assert env["MUX_SHIM_DIR"] == str(bin_dir)
+
+
+def test_harness_detection_never_resolves_to_our_own_shim(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """The self-invocation trap, checked on whichever host is running.
+
+    `harness.detect_installation` goes through `which_real`. If the shim were not
+    recognized, every harness would report as installed and every launch would
+    recurse into the shim. This puts a shim directory first on PATH - exactly what
+    a daemon relaunched from inside a session inherits - and asserts it is seen
+    through.
+    """
+    from pathlib import Path
+
+    from swe_mux.config import Config
+    from swe_mux.launchers import create_agent_shims
+    from swe_mux.shim_paths import SHIM_NAMES, path_without_shim_dirs, which_real
+
+    data_dir = Path(str(tmp_path)) / "data"
+    create_agent_shims(Config(data_dir=data_dir))
+    bin_dir = data_dir / "bin"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.delenv("MUX_SHIM_DIR", raising=False)
+
+    assert str(bin_dir) not in path_without_shim_dirs()
+    for name in SHIM_NAMES:
+        stem = Path(name).stem
+        resolved = which_real(stem)
+        assert resolved is None or Path(resolved) != bin_dir / name, (
+            f"which_real resolved {stem} to our own shim"
+        )
+
+@POSIX_ONLY
+def test_the_posix_shim_launches_the_real_cli_with_argv_intact(tmp_path: object) -> None:
+    """The whole POSIX launch chain, minus the vendor binary.
+
+    shim -> `swe_mux.agent_launcher` -> `MUX_<NAME>_EXE`, executed for real. What
+    this proves that a unit test of any single link cannot: the shim is actually
+    executable by the kernel, the shebang resolves, the launcher reads the
+    per-harness variables the shim publishes, and argv survives the round trip.
+
+    The argv case is deliberately the nastiest real one. Codex threads a
+    JSON-valued `-c notify=[...]` through, which is exactly the shape a shell
+    re-splits if the shim forwards with `$@` unquoted instead of `"$@"` - and the
+    damage is invisible until an agent starts with silently mangled configuration.
+    """
+    import json
+    import subprocess
+    from pathlib import Path
+
+    from swe_mux.config import Config
+    from swe_mux.launchers import create_agent_shims
+
+    root = Path(str(tmp_path))
+    data_dir = root / "data"
+    fake_bin = root / "fake"
+    fake_bin.mkdir(parents=True)
+    # A stand-in for the vendor CLI: prints its argv as JSON so the assertion is
+    # about exact arguments rather than about a substring of a log line.
+    fake_cli = fake_bin / "codex"
+    fake_cli.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import json, sys",
+                "print(json.dumps(sys.argv[1:]))",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    fake_cli.chmod(0o755)
+
+    config = Config(data_dir=data_dir)
+    config.harness_exe = {**config.harness_exe, "codex": str(fake_cli)}
+    env_extra = create_agent_shims(config)
+    shim = data_dir / "bin" / "codex"
+    assert shim.is_file() and os.access(shim, os.X_OK)
+
+    notify = json.dumps(["a b", 'quote"inside', "{\"k\": 1}"])
+    argv = ["--flag", "-c", f"notify={notify}", "a path/with space"]
+    result = subprocess.run(
+        [str(shim), *argv],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, **env_extra},
+    )
+    assert result.returncode == 0, result.stderr
+    # The launcher prepends the harness's own configured arguments, so the
+    # assertion is that ours arrive intact at the end, unsplit and unquoted.
+    received = json.loads(result.stdout.strip().splitlines()[-1])
+    assert received[-len(argv):] == argv, f"argv was corrupted: {received}"

@@ -2546,8 +2546,25 @@ Read it before scoping any item here rather than re-deriving it.
   (Already shipped in `file_manager.file_manager_command`, which covers all three and takes
   the platform as an argument; the Win32 window-focus helper it sits beside imports
   `wintypes` lazily, so nothing here blocked a non-Windows import.)
-- [ ] Generate agent-promotion launchers per OS with safe structured argv/env/hook-secret
+- [x] Generate agent-promotion launchers per OS with safe structured argv/env/hook-secret
   propagation.
+  (`launchers._write_shim` writes a `.cmd` on Windows and a `#!/bin/sh` + `exec` script on
+  POSIX. The POSIX shim is `exec`ed rather than run as a child so the CLI inherits the shim's
+  pid - a wrapper process between the pseudoterminal root and the real agent would make the
+  root exit first and leave every process-tree walk rooted at a dead pid. Argument forwarding
+  is `%*` and `"$@"` respectively, the spellings that do not re-split; proven end to end on
+  Linux against a stub CLI with the nastiest real argv, Codex's JSON-valued `-c notify=[...]`,
+  which an unquoted `$@` silently mangles.
+  **The self-invocation trap the port reintroduced and this closes:** `is_mux_shim` accepted
+  only `.cmd`/`.bat`, which is correct on Windows and wrong everywhere else, because a POSIX
+  shim is deliberately extensionless so that `claude` resolves to it. Every shim would have
+  read as a real CLI, so `harness.detect_installation` - which goes through `which_real` -
+  would have reported every harness installed on Linux and every launch would have recursed
+  into the shim. The suffix gate is now per-host and the marker check reads a bounded 4 KiB
+  rather than the whole candidate file.
+  Hook commands needed no change: `_bash_executable_path` translates a `C:/...` interpreter
+  path for Claude's Bash hook runner and leaves a POSIX path alone, which was already the
+  correct behaviour on both.)
 - [x] Replace lowercased path comparisons with platform-aware same-file normalization for
   spaces, Unicode, symlinks, case sensitivity, UNC, and WSL paths.
   (`path_identity.py`: `os.path.samefile` when both paths exist - which answers symlinks,
@@ -2578,9 +2595,28 @@ Read it before scoping any item here rather than re-deriving it.
 
 ### Native rollout
 
-- [ ] Preserve the complete Windows regression contract while adding abstractions.
+- [x] Preserve the complete Windows regression contract while adding abstractions.
+  (Windows went 2925 -> 2927 passing across the seam work, with no test weakened to get
+  there. Where a test stopped passing on Linux it was triaged case by case: marked
+  Windows-only when its subject is a Windows rule - COMSPEC, `.cmd` shims, PowerShell
+  first-run, Win32 windows, NTFS case-insensitivity - and given host-appropriate fixture
+  paths when it merely happened to be written with `C:/repo`, which on POSIX is a *relative*
+  path whose first component contains a colon, so every assertion built on it was meaningless
+  rather than merely failing. `tests/host_paths.py` holds that helper.)
 - [ ] Linux: PTY/process groups, bash/zsh/pwsh, Claude/Codex promotion/transcripts,
   `xdg-open`, Project files, processes/listeners, queue delivery, and daemon-death cleanup.
+  **Substantially done and measured, with one part explicitly outstanding.** Proven by
+  `tools/linux_acceptance.sh` on Ubuntu 24.04 against a real daemon: a real `/bin/bash`
+  session on a POSIX pseudoterminal, the child leading its own process group, ownership
+  assigned, input and output over the same WebSocket a browser uses, and the session tree
+  reaped after a SIGKILLed daemon. Project files, queue delivery and the rest of the suite
+  pass on Linux (2879 passing). `xdg-open` was already implemented.
+  **Outstanding: promotion/transcripts against a real vendor CLI installed natively on
+  Linux.** The launch chain is proven end to end against a stub harness, but no vendor CLI is
+  installed natively in the WSL test environment (the `codex`/`opencode` on its PATH are the
+  Windows binaries reached through interop, which cannot serve as a native-Linux agent). This
+  needs a deliberate install and an authenticated account on that host, so it is a decision
+  rather than a task.
 - [ ] macOS: PTY/process groups, zsh/bash/pwsh, promotion/transcripts, `open`, service
   environment behavior, Project files, queue delivery, ownership, and cleanup.
 - [ ] Define/migrate data and config locations consistently for Windows `~/.mux`, XDG, and

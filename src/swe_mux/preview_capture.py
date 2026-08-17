@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+from .host_platform import IS_MACOS, IS_WINDOWS
+
 # Server-side headless screenshot of a session-owned loopback preview. Optional:
 # requires the `preview-capture` extra (Playwright + a Chromium download). When
 # absent the caller reports a typed "unavailable" state, like every other
@@ -12,21 +14,40 @@ from typing import Any, cast
 INSTALL_HINT = "uv sync --extra preview-capture && uv run playwright install chromium"
 
 
+def _playwright_cache_candidates() -> list[Path]:
+    """Where `playwright install` puts browsers, per host.
+
+    These are Playwright's own documented locations, not guesses: Windows uses
+    `%LOCALAPPDATA%\\ms-playwright`, macOS `~/Library/Caches/ms-playwright`, and
+    Linux `$XDG_CACHE_HOME/ms-playwright` falling back to `~/.cache/ms-playwright`.
+    Getting this wrong is silent - capture simply reports unavailable on a machine
+    that has Chromium installed.
+    """
+    if IS_WINDOWS:
+        local = os.environ.get("LOCALAPPDATA")
+        return [Path(local) / "ms-playwright"] if local else []
+    if IS_MACOS:
+        return [Path.home() / "Library" / "Caches" / "ms-playwright"]
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    roots = [Path(cache_home)] if cache_home else []
+    roots.append(Path.home() / ".cache")
+    return [root / "ms-playwright" for root in roots]
+
+
 def _configure_browsers_path() -> None:
     """Point Playwright at the standard per-user browser cache.
 
     A PyInstaller-frozen desktop build otherwise resolves browsers to a
     `.local-browsers` directory inside the bundle, which is empty. `playwright
-    install` puts Chromium in the OS cache (`%LOCALAPPDATA%\\ms-playwright` on
-    Windows), so point there unless the user set the path explicitly.
+    install` puts Chromium in the OS cache, so point there unless the user set
+    the path explicitly.
     """
     if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
         return
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        cache = Path(local) / "ms-playwright"
+    for cache in _playwright_cache_candidates():
         if cache.is_dir():
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(cache)
+            return
 
 # Preview-pane viewport labels → capture widths. Height is a sensible default;
 # full_page is off so the shot matches what the pane frames.

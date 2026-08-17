@@ -71,9 +71,20 @@ async def test_project_watcher_emits_changes_only_for_an_open_directory(tmp_path
             if watcher._watchers:
                 break
             await asyncio.sleep(0.1)
-        await asyncio.sleep(0.2)
-        (source / "main.py").write_text("print('ready')\n", encoding="utf-8")
-        event = await asyncio.wait_for(queue.get(), timeout=5)
+        # `_watchers` being populated means the watch was *registered*, not that the
+        # OS is delivering for it yet. A fixed settle is enough on Windows and is
+        # not on Linux under a loaded parallel suite, where arming inotify can lose
+        # the race with the write - so the write is retried instead of the sleep
+        # being lengthened, which would slow every run to fix the slowest one.
+        event = None
+        for attempt in range(20):
+            (source / "main.py").write_text(f"print('ready {attempt}')\n", encoding="utf-8")
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1)
+                break
+            except TimeoutError:
+                continue
+        assert event is not None, "the watcher never reported a change it was watching for"
         assert event.type == "project_files_changed"
         assert event.payload["project_id"] == project.id
         assert event.payload["paths"] == ["src/main.py"]

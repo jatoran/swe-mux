@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .config import Config
 from .harness import agent_harnesses
-from .shim_paths import path_without_shim_dirs, which_real
+from .host_platform import IS_WINDOWS
+from .shim_paths import SHIM_MARKER, path_without_shim_dirs, which_real
 
 
 def resolve_command(command: str) -> str:
@@ -119,6 +120,42 @@ def resolve_codex_pty_command(
     return resolved, ()
 
 
+def _write_shim(bin_dir: Path, backend: str) -> Path:
+    """Write one agent shim in this host's executable-script format.
+
+    Both forms do the same thing - hand the launch to `swe_mux.agent_launcher`
+    with the harness name and the caller's arguments - and both must forward
+    arguments *without* reinterpreting them, because the argv on the other side
+    includes Codex's JSON-valued `-c notify=...` and pi's `--extension <path>`.
+    `%*` and `"$@"` are the respective spellings that do not re-split.
+
+    The POSIX shim is `exec`ed rather than run as a child so the CLI inherits the
+    shim's pid: a wrapper process between the pseudoterminal's root and the real
+    agent would make the root exit before the agent does, and every process-tree
+    walk would then be rooted at a dead pid.
+    """
+    if IS_WINDOWS:
+        path = bin_dir / f"{backend}.cmd"
+        path.write_text(
+            f'@echo off\r\n"{sys.executable}" -m swe_mux.agent_launcher {backend} %*\r\n',
+            encoding="utf-8",
+        )
+        return path
+    path = bin_dir / backend
+    path.write_text(
+        "#!/bin/sh\n"
+        f"# {SHIM_MARKER}\n"
+        f'exec "{sys.executable}" -m swe_mux.agent_launcher {backend} "$@"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    # Executable for the owner only. The shim names an interpreter path and a
+    # module, so it is not a secret, but the data dir is the user's and there is
+    # no reason for anyone else on the host to run it.
+    path.chmod(0o755)
+    return path
+
+
 def create_agent_shims(
     config: Config,
     settings_path: Path | None = None,
@@ -143,11 +180,7 @@ def create_agent_shims(
     bin_dir = config.data_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     for backend in agent_harnesses():
-        path = bin_dir / f"{backend}.cmd"
-        path.write_text(
-            f'@echo off\r\n"{sys.executable}" -m swe_mux.agent_launcher {backend} %*\r\n',
-            encoding="utf-8",
-        )
+        _write_shim(bin_dir, backend)
     result = {
         # Strip inherited shim directories (ours or a stale data dir's) before
         # prepending, so sessions see exactly one shim dir at the front.
