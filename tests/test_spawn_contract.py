@@ -85,6 +85,7 @@ def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> Non
         "CLAUDE_CODE_ENTRYPOINT": "cli",
         "CLAUDE_CODE_SESSION_ID": "abc",
         "CLAUDE_CODE_EXECPATH": r"C:\bin\claude.exe",
+        "CLAUDE_JOB_DIR": r"C:\Users\dev\.claude\jobs\ea1e4fd9",
         "CLAUDE_PID": "123",
         "CLAUDE_EFFORT": "high",
         # Deliberate user configuration must pass through untouched.
@@ -98,6 +99,9 @@ def test_scrub_drops_parent_claude_markers_but_keeps_user_configuration() -> Non
     assert "CLAUDE_CODE_ENTRYPOINT" not in scrubbed
     assert "CLAUDE_CODE_SESSION_ID" not in scrubbed
     assert "CLAUDE_CODE_EXECPATH" not in scrubbed
+    # An inherited job dir makes the CLI adopt that background job's identity
+    # (name, shared scratch dir) in every pane, so it must never pass through.
+    assert "CLAUDE_JOB_DIR" not in scrubbed
     assert "CLAUDE_PID" not in scrubbed and "CLAUDE_EFFORT" not in scrubbed
     assert scrubbed["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] == "1"
     assert scrubbed["ANTHROPIC_API_KEY"] == "secret"

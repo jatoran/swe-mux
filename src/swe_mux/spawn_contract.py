@@ -19,6 +19,17 @@ MAX_SPAWN_ENV = 64
 # which also breaks swe-mux's transcript-based observation. Only per-process
 # identity/lifecycle markers are scrubbed; deliberate user configuration
 # (feature flags, ANTHROPIC_* credentials) passes through untouched.
+#
+# `CLAUDE_JOB_DIR` is the worst of them because the CLI treats its mere presence
+# as proof that the process *is* that background job, with no check of its own
+# session kind: `jobStateNameSync` reads `<job dir>/state.json`, adopts its
+# `name`, and watches the file for changes (its sibling bg-only hook is guarded,
+# this one is not). Every pane the daemon spawns then shows one dead agent's
+# title — in every Project, not just this one — a `/rename` in any pane renames
+# them all and stamps a `custom-title` into each transcript, the per-session
+# `$CLAUDE_JOB_DIR/tmp` scratch dir is shared instead of private, and live
+# sessions write exit-cause files into a finished job's directory. Upstream:
+# anthropics/claude-code#86531 (confirmed on 2.1.233), #59848, #82199.
 CLAUDE_SESSION_MARKERS = frozenset(
     {
         "CLAUDECODE",
@@ -27,6 +38,7 @@ CLAUDE_SESSION_MARKERS = frozenset(
         "CLAUDE_CODE_SESSION_ID",
         "CLAUDE_CODE_SSE_PORT",
         "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_JOB_DIR",
         "CLAUDE_PID",
         "CLAUDE_EFFORT",
     }

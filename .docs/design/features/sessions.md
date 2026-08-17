@@ -232,10 +232,15 @@ and reattachable browser viewports.
   belongs to the watchdog.
 - Terminal environments are built from a scrubbed base (`spawn_contract.base_session_env`):
   parent-Claude session markers (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, session
-  id/entrypoint/pid/effort) are dropped at spawn for every session because a daemon relaunched
-  from inside an agent session would otherwise mark every nested `claude` as a child session —
-  disabling its transcript saving and with it swe-mux's observation. Deliberate user
-  configuration (feature flags, `ANTHROPIC_*`) passes through untouched.
+  id/entrypoint/pid/effort, `CLAUDE_JOB_DIR`) are dropped at spawn for every session because a
+  daemon relaunched from inside an agent session would otherwise mark every nested `claude` as a
+  child session — disabling its transcript saving and with it swe-mux's observation. Deliberate
+  user configuration (feature flags, `ANTHROPIC_*`) passes through untouched.
+  `CLAUDE_JOB_DIR` is the same leak with a wider blast radius: the CLI reads its presence as
+  proof that the process *is* that background job without checking its own session kind, so an
+  inherited one makes every pane in every Project adopt one dead agent's name, share its
+  `$CLAUDE_JOB_DIR/tmp` scratch dir, and write exit-cause files into a finished job's directory
+  (upstream `anthropics/claude-code#86531`).
 - Every session is spawned describing the terminal that actually terminates its PTY — the
   browser's xterm.js client, not whatever launched the daemon (`spawn_contract.terminal_env`,
   applied centrally in `SessionManager.spawn`). It forces an xterm-256color / truecolor
