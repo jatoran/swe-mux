@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # Run the suite on Linux inside a container, from a Windows host.
 #
-# A second Linux target beside a WSL checkout, and deliberately *not* WSL: it also
-# confirms the port does not quietly depend on WSL-isms (interop PATH entries,
-# DrvFs mounts, a Windows-side home). It is the closest local equivalent of the
-# `platform` CI job, and it needs nothing installed but Docker.
+# A second Linux target beside a WSL checkout, and a much cleaner one: no interop
+# PATH, no DrvFs mounts, no Windows-side home. That difference is not cosmetic -
+# it caught a test that only passed in WSL because `pwsh.exe` was resolvable
+# through interop, which is exactly the kind of accidental pass a single Linux
+# target hides. It needs nothing installed but Docker.
+#
+# It is *not* a non-WSL kernel, though. Docker Desktop runs containers inside the
+# WSL2 VM, so `/proc/sys/kernel/osrelease` says `microsoft` and
+# `host_platform.running_under_wsl()` reports True in here. That is the honest
+# answer about the kernel and it is inert in a container (there are no `/mnt`
+# drive mounts and no `.exe` on PATH), but do not read a pass here as proof that
+# the port is free of WSL assumptions.
 #
 # Usage, from the repository root:
 #   docker run --rm -v "$PWD:/repo:ro" python:3.12-slim bash /repo/tools/linux_container_verify.sh

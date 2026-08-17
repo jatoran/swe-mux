@@ -1092,7 +1092,7 @@ def host_executable(harness: HarnessDescriptor) -> str:
     a way that silently produces a broken session. Under WSL the Windows install is
     on PATH through interop, so `shutil.which("claude.exe")` *succeeds*, resolving to
     `/mnt/c/.../claude.exe`. A Linux daemon then launches a Windows binary: it runs,
-    it paints a TUI, its working directory is reported as `\wsl.localhost\...`, its
+    it paints a TUI, its working directory is reported as the wsl.localhost share, its
     transcript is written into the Windows home where no Linux path points, and the
     process is not in any Linux process group so cleanup cannot reach it.
 

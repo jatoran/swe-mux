@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -203,6 +204,10 @@ def _shell_step(tmp_path: Path, task: dict[str, Any]) -> ActionStep:
     return catalog.actions[0].steps[0]
 
 
+@pytest.mark.skipif(
+    shutil.which("pwsh.exe") is None,
+    reason="needs a resolvable pwsh.exe: resolve_profile refuses an absent executable",
+)
 def test_shell_task_args_reach_the_spawned_command_line(tmp_path: Path) -> None:
     # A shell step that loses its args runs a bare `uv` and exits, so the spawn has
     # to carry the whole command line, not just the command.
