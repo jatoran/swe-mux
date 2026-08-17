@@ -116,6 +116,7 @@ import {
 } from './uiScale'
 import { DEFAULT_CLAUDE_MAX_COLUMNS, claudeMaxColumnsFrom } from './terminalViewport'
 import { bindingFor, displayChord, runCommand, searchCommands, type Command, type VoiceCommandResult } from './commands'
+import { setKeybindingsStore } from './keybindingsStore.ts'
 import { resolveRailVoiceEntries, type RailVoiceEntry } from './railVoice.ts'
 import { requestTerminalAction } from './terminalActions.ts'
 import { normalizeSpokenText, numberedCandidates, resolveVoiceIntent, selectNumberedCandidate, type VoiceIntentCandidate } from './voiceIntents'
@@ -1534,7 +1535,7 @@ export function App() {
     void loadProfiles()
     void api<VoiceStatus>('GET','/api/voice').then(setVoiceStatus).catch(()=>setVoiceStatus(null))
     void loadNotifications()
-    const loadKeys = () => void api<{ bindings: Record<string, string> }>('GET', '/api/keybindings').then(result => setKeybindings(current => JSON.stringify(current) === JSON.stringify(result.bindings) ? current : result.bindings))
+    const loadKeys = () => void api<{ bindings: Record<string, string> }>('GET', '/api/keybindings').then(result => { setKeybindingsStore(result.bindings); setKeybindings(current => JSON.stringify(current) === JSON.stringify(result.bindings) ? current : result.bindings) })
     loadKeys()
     // The /events WebSocket already pushes a refresh on every change, so these intervals
     // are only a safety net. Skip them while the tab is hidden (no point re-fetching and
@@ -4137,6 +4138,14 @@ export function App() {
       const claim = new CustomEvent('mux:note-outline', { cancelable: true })
       window.dispatchEvent(claim)
       if (!claim.defaultPrevented) setError('No focused note to outline. Click into a note first.')
+    } },
+    // The persistent overlay half of the outline: the same claim protocol, toggling the
+    // pinned faint list rather than opening the modal. Ctrl+click on the outline button does
+    // this too; this command exists for the palette and for a mobile gesture binding.
+    { id: 'note.outlinePeek', label: 'Toggle the pinned heading outline overlay', category: 'view', available: true, run: () => {
+      const claim = new CustomEvent('mux:note-outline-peek', { cancelable: true })
+      window.dispatchEvent(claim)
+      if (!claim.defaultPrevented) setError('No focused note to pin an outline for. Click into a note first.')
     } },
     // A plain "put the keyboard away" with no sticky mode behind it. On touch this is
     // the only way out of a note editor's keyboard: the read/select toggle below is a

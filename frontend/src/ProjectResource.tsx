@@ -14,6 +14,8 @@ import { composeAgentMessage, selectionText } from './noteSelection'
 import type { EditorSnapshot } from './noteSelection'
 import { findMatches, findStepDirection, matchIndexAfter, stepMatchIndex, type FindRange } from './noteFind'
 import { headingIndexAt, headingTrail, outlineDepths, outlineHeadings, type OutlineHeading } from './noteOutline'
+import { bindingFor, displayChord } from './commands'
+import { currentKeybindings, KEYBINDINGS_EVENT } from './keybindingsStore.ts'
 import { scrollLineIntoView, type ViewportScroller } from './noteScroll'
 import type { SendToAgentRequest } from './SendToAgentPicker'
 import { ProjectNoteEditor } from './ProjectNoteEditor'
@@ -25,6 +27,24 @@ import { currentInsertTarget } from './insertTarget'
 import { isFocusTraversalKey } from './keys'
 import { REQUEST_TIMEOUT_MS, retryDelay, watchResume } from './liveness'
 import type { Project } from './types'
+
+// The pinned-outline overlay is a device-local reading mode, not a per-note one: turning it on
+// for the note you are reading means "keep an outline up while I read", so every mounted note
+// editor honours it and it survives reloads. localStorage carries it (device-scoped, like the
+// rail arrangement), and a window event keeps sibling editors and the toggle in sync without a
+// server round-trip. `mod+click` on the outline button flips it; `note.outlinePeek` does too.
+const PEEK_KEY = 'mux.note-outline-peek'
+const PEEK_EVENT = 'mux:note-outline-peek-changed'
+function readOutlinePeek(): boolean {
+  try { return localStorage.getItem(PEEK_KEY) === '1' } catch { return false }
+}
+function writeOutlinePeek(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(PEEK_KEY, '1')
+    else localStorage.removeItem(PEEK_KEY)
+  } catch { /* private-mode storage denial: the mode is still applied for this session below */ }
+  window.dispatchEvent(new CustomEvent<boolean>(PEEK_EVENT, { detail: on }))
+}
 
 export type ProjectResourceIdentity=
   | {kind:'note'|'global-note'|'files'|'file';id:string}
@@ -712,6 +732,38 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   /** First visible source line, from Continuity 0.2.20's viewport window. */
   const [viewportLine,setViewportLine]=useState(0)
 
+  // The pinned-outline overlay. `peekMode` is the device-wide mode (mirrored across every
+  // editor through PEEK_EVENT); `peekHovered` is this editor's own hover state, tracked in JS
+  // because the resting overlay is `pointer-events:none` so the text under it stays fully
+  // interactive — a pointer-events layer would swallow the very clicks it must not.
+  const [peekMode,setPeekMode]=useState(readOutlinePeek)
+  const [peekHovered,setPeekHovered]=useState(false)
+  const peekPanel=useRef<HTMLDivElement>(null)
+  useEffect(()=>{
+    const onPeek=(event:Event)=>setPeekMode((event as CustomEvent<boolean>).detail)
+    window.addEventListener(PEEK_EVENT,onPeek)
+    // Adopt whatever another tab/editor may have written before this one mounted.
+    setPeekMode(readOutlinePeek())
+    return()=>window.removeEventListener(PEEK_EVENT,onPeek)
+  },[])
+  const togglePeek=()=>writeOutlinePeek(!readOutlinePeek())
+  const enablePeek=()=>writeOutlinePeek(true)
+
+  // The chord bound to the outline commands, for the button tooltip. Read from the shared
+  // keybindings store rather than threaded down from App; it updates when bindings change.
+  const [keybindings,setKeybindings]=useState<Readonly<Record<string,string>>>(currentKeybindings)
+  useEffect(()=>{
+    const onKeys=(event:Event)=>setKeybindings((event as CustomEvent<Record<string,string>>).detail)
+    window.addEventListener(KEYBINDINGS_EVENT,onKeys)
+    setKeybindings(currentKeybindings())
+    return()=>window.removeEventListener(KEYBINDINGS_EVENT,onKeys)
+  },[])
+  const outlineChord=bindingFor('note.outline',keybindings)
+  const peekChord=bindingFor('note.outlinePeek',keybindings)
+  const outlineTitle=`Jump to a heading${outlineChord?` (${displayChord(outlineChord)})`:''}`
+    +` · ${peekMode?'pinned':'click to open'}, Ctrl+click to ${peekMode?'unpin':'pin'} as an overlay`
+    +(peekChord?` (${displayChord(peekChord)})`:'')
+
   /** Re-read the note and rebuild the list. Cheap enough to redo on every change while open. */
   const readOutline=()=>{
     const element=editorElement.current
@@ -827,6 +879,19 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
   const outlineRef=useRef(openOutline)
   outlineRef.current=openOutline
 
+  // One heading row, shared by the modal list (`menu`) and the pinned overlay. Both jump the
+  // same way and both mark the heading the reader is under; only the ARIA role differs, because
+  // the overlay is a persistent landmark rather than a transient menu.
+  const outlineRow=(heading:OutlineHeading,index:number,menu:boolean)=>
+    <button key={`${heading.line}:${heading.level}`} type="button"
+      role={menu?'menuitem':undefined}
+      class={index===outlineAt?'current':''}
+      style={{paddingLeft:`${8+outlineDepthList[index]*13}px`}}
+      onClick={()=>jumpToHeading(heading)}>
+      <span>H{heading.level}</span>
+      <strong>{heading.text||'(untitled)'}</strong>
+    </button>
+
   // Keep the list honest while the panel is open, and dismiss it the way the tree menu does.
   useEffect(()=>{
     if(!outlineOpen)return
@@ -883,6 +948,49 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
     window.addEventListener('mux:note-outline',onOutline)
     return()=>window.removeEventListener('mux:note-outline',onOutline)
   },[autosaved])
+
+  // The pin toggle, claimed by whichever editor holds focus — same protocol as the two above,
+  // so a chord or gesture bound to `note.outlinePeek` toggles the overlay for the note in front
+  // of the user. The mode itself is global, so this flips it for every editor at once.
+  useEffect(()=>{
+    if(!autosaved)return
+    const onPeek=(event:Event)=>{
+      const element=editorElement.current
+      const target=currentInsertTarget()
+      if(!element||target?.kind!=='editor'||target.editor!==element)return
+      event.preventDefault()
+      togglePeek()
+    }
+    window.addEventListener('mux:note-outline-peek',onPeek)
+    return()=>window.removeEventListener('mux:note-outline-peek',onPeek)
+  },[autosaved])
+
+  // Hover, tracked by geometry rather than by `:hover`, because the resting overlay is
+  // `pointer-events:none` (so it never intercepts a click meant for the text beneath it) and a
+  // pointer-events-none element receives no mouse events to hover. A window `pointermove`, read
+  // once per frame against the panel's rect, is what lets the overlay light up and become
+  // clickable as the pointer arrives. Touch has no hover, so on coarse pointers the CSS keeps
+  // the overlay interactive on its own and this listener never installs.
+  useEffect(()=>{
+    if(!peekMode)return
+    if(window.matchMedia?.('(hover: hover)').matches===false){setPeekHovered(false);return}
+    let frame=0
+    const onMove=(event:PointerEvent)=>{
+      if(frame)return
+      const x=event.clientX,y=event.clientY
+      frame=requestAnimationFrame(()=>{
+        frame=0
+        const rect=peekPanel.current?.getBoundingClientRect()
+        setPeekHovered(!!rect&&x>=rect.left&&x<=rect.right&&y>=rect.top&&y<=rect.bottom)
+      })
+    }
+    window.addEventListener('pointermove',onMove,{passive:true})
+    return()=>{
+      window.removeEventListener('pointermove',onMove)
+      if(frame)cancelAnimationFrame(frame)
+      setPeekHovered(false)
+    }
+  },[peekMode])
 
   // A tab pointed at a different note keeps this component, so the bar and its ranges have
   // to go with the old document rather than describing it over the new one.
@@ -1275,9 +1383,14 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
           editor owns no selection engine, so its send is always the whole document. */}
       {canSendText&&<button class="resource-send" title={autosaved?'Send the selection (or the whole document) to an agent session':'Send the whole document to an agent session'} onClick={requestSendToAgent}>→ agent</button>}
       {autosaved&&<button class="resource-find" disabled={!editable} title="Find in this note" aria-label="Find in this note" onClick={openFind}>⌕</button>}
-      {autosaved&&<button ref={outlineTrigger} class="resource-outline" disabled={!editable} title="Jump to a heading" aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen}
+      {autosaved&&<button ref={outlineTrigger} class={`resource-outline${peekMode?' pinned':''}`} disabled={!editable} title={outlineTitle} aria-label="Jump to a heading" aria-haspopup="menu" aria-expanded={outlineOpen} aria-pressed={peekMode}
         onMouseDown={event=>event.stopPropagation()}
-        onClick={()=>outlineOpen?setOutlineOpen(false):openOutline()}>☰</button>}
+        onClick={event=>{
+          // Ctrl/Cmd+click pins the overlay instead of opening the modal; a plain click is the
+          // existing open/close.
+          if(event.ctrlKey||event.metaKey){event.preventDefault();togglePeek();return}
+          outlineOpen?setOutlineOpen(false):openOutline()
+        }}>☰</button>}
       {isDelimitedFile&&<><button class={fileViewMode==='preview'?'active':''} onClick={()=>setFileViewMode('preview')}>Table</button><button class={fileViewMode==='raw'?'active':''} onClick={()=>setFileViewMode('raw')}>Raw</button></>}
       {isFile&&!isMarkdownFile&&presentation?.kind!=='image'&&presentation?.kind!=='unsupported'&&(!isDelimitedFile||fileViewMode==='raw')&&<button disabled={!editable||text===baseline||saveState==='saving'} onClick={()=>void save()}>Save</button>}
     </div>:null}</header>
@@ -1303,17 +1416,20 @@ export function ProjectResource({project,resource,onOpenFile,onFileDragStart,onS
         onClick={()=>jumpToHeading(heading)}>{heading.text||'(untitled)'}</button>)}
     </div>}
     {outlineOpen&&<div class="note-outline" ref={outlinePanel} role="menu" aria-label="Note headings"
-      onMouseDown={event=>event.stopPropagation()}>
-      {outline.length?outline.map((heading,index)=>{
-        const depth=outlineDepthList[index]
-        return <button key={`${heading.line}:${heading.level}`} role="menuitem" type="button"
-          class={index===outlineAt?'current':''}
-          style={{paddingLeft:`${8+depth*13}px`}}
-          onClick={()=>jumpToHeading(heading)}>
-          <span>H{heading.level}</span>
-          <strong>{heading.text||'(untitled)'}</strong>
-        </button>
-      }):<p>No headings in this note.</p>}
+      onMouseDown={event=>event.stopPropagation()}
+      // Ctrl/Cmd+click anywhere in the open list pins it as the overlay instead of jumping —
+      // capture-phase so it pre-empts a row's own jump handler.
+      onClickCapture={event=>{if(event.ctrlKey||event.metaKey){event.preventDefault();event.stopPropagation();setOutlineOpen(false);enablePeek()}}}>
+      {outline.length?outline.map((heading,index)=>outlineRow(heading,index,true)):<p>No headings in this note.</p>}
+    </div>}
+    {/* The pinned overlay: the same list held faintly over the note (see PEEK_EVENT). Resting
+        state is pointer-events:none so it never blocks the text; the hover class (desktop) or a
+        coarse-pointer media query (touch) makes it solid and clickable. Suppressed while the
+        modal is open, since they share one anchor. */}
+    {peekMode&&!outlineOpen&&autosaved&&editable&&outline.length>0&&<div
+      class={`note-outline peek${peekHovered?' hovered':''}`} ref={peekPanel}
+      role="navigation" aria-label="Pinned note headings">
+      {outline.map((heading,index)=>outlineRow(heading,index,false))}
     </div>}
     {autosaved&&noteSave.banner&&<p class="resource-error note-conflict"><span>{noteSave.banner}</span>{noteSave.status==='conflict'&&<span class="note-conflict-actions"><button onClick={()=>void loadText()}>Reload from disk</button><button onClick={()=>void resolveKeepMine()}>Overwrite disk</button></span>}</p>}
     {imageReady?<ImageViewer key={revision} projectId={project.id} path={resource.id} revision={revision} mime={imagePresentation!.mime!} width={imagePresentation!.width!} height={imagePresentation!.height!} frames={imagePresentation!.frames!} size={fileSize} worktree={worktree}/>

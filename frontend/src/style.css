@@ -878,6 +878,29 @@ body {
 .note-outline span { color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace }
 .note-outline strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400 }
 .note-outline p { margin:0;padding:12px 9px;color:var(--muted) }
+/* Pinned overlay: the same list held faintly over the note so it is always up. It sits below
+   the modal's z-index and drops the shadow so it reads as a watermark, not a panel. */
+.note-outline.peek {
+  z-index:11;opacity:.32;box-shadow:none;transition:opacity .12s ease,box-shadow .12s ease;
+  border-color:color-mix(in srgb,var(--line) 55%,transparent)
+}
+/* Fine pointer (mouse): the resting overlay ignores the pointer entirely, so every click and
+   drag reaches the text under it. It only lights up and becomes clickable once the pointer is
+   over it — a class the component sets from geometry, since a pointer-events:none element gets
+   no :hover of its own. */
+@media(hover:hover) {
+  .note-outline.peek { pointer-events:none }
+  .note-outline.peek.hovered { pointer-events:auto;opacity:1;box-shadow:4px 5px 0 #0008 }
+}
+/* Coarse pointer (touch): there is no hover to solidify it, so it stays readable and tappable. */
+@media(hover:none) {
+  .note-outline.peek { opacity:.85;pointer-events:auto }
+}
+/* The outline button while the overlay is pinned, matching the toolbar's other active toggles. */
+.resource-actions button.resource-outline.pinned {
+  border-color:var(--accent);color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 12%,var(--panel2))
+}
 @media(max-width:760px) {
   .pane-split { display:contents }
   .pane-divider { display:none }
