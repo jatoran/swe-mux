@@ -589,6 +589,19 @@ responsive controls.
 - Appearance exposes one palette picker for the shared browser chrome and xterm theme.
   Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
   The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.
+  **Highlighting a theme applies it to the whole window immediately**, by arrow key or by
+  hover, so a catalogue of twenty-eight can be walked and seen instead of chosen blind,
+  reopened, and chosen again. It is a preview and not a choice: the draft moves only on
+  Enter or click, the dirty flag never fires, and the trigger keeps showing the chosen
+  theme rather than the highlighted one. Leaving the list any way at all hands the screen
+  back — Escape, a click elsewhere, or the one gesture that closes the list and the whole
+  panel together, which `Settings.tsx` owns rather than the picker precisely because the
+  picker is gone before its own revert could run. The revert targets the *authoritative*
+  theme rather than the draft's, since discarding unsaved settings has already put the
+  saved theme back on its way out.
+  The control is laid out as an ordinary field — label column, bounded control column —
+  rather than stacked full-width, which had made the one setting in the panel that spans
+  the label column read as a section heading.
   The built-in retro set includes Phosphor Blue, Phosphor Purple, Commodore 64, Amiga Workbench, CGA, Macintosh System 6, Game Boy, and Virtual Boy.
 - Appearance exposes **chrome scale**, one multiplier on the size of every surface, stored
   **separately for desktop and mobile**. Both default to `1.0`, so installing the build that

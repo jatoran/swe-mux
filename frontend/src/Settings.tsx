@@ -684,6 +684,25 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   }
 
   const change = <K extends keyof Config>(key: K, value: Config[K]) => setDraft(current => current ? {...current,[key]:value} : current)
+  // Previewing a highlighted theme touches the document's tokens and nothing else —
+  // never the draft — so Cancel, Save, and the dirty flag all stay ignorant of it and
+  // a walk through the catalogue costs no unsaved change. `null` reverts to whatever
+  // the draft currently holds, which is the chosen theme whether or not it is saved.
+  // A preview outlives the picker when one gesture closes both: a pointerdown on the
+  // Settings backdrop dismisses the list and the panel together, and the panel is gone
+  // before the list's own revert can run. So the revert is owned here, where it can
+  // still happen after everything below has unmounted. It reverts to the
+  // *authoritative* theme rather than the draft's, because discarding already put the
+  // saved one back on its way out and re-applying the draft would restore the
+  // discarded choice.
+  const authoritativeTheme = useRef<ThemeName>('dark')
+  authoritativeTheme.current = draft?.theme ?? config?.theme ?? 'dark'
+  const previewing = useRef(false)
+  const previewTheme = useCallback((name:ThemeName|null)=>{
+    previewing.current=name!==null
+    applyTheme(name??authoritativeTheme.current)
+  },[])
+  useEffect(()=>()=>{ if(previewing.current)applyTheme(authoritativeTheme.current) },[])
   // Previewed live, like the theme, because the only way to judge a chrome scale
   // is to see the chrome at it. Editing the *other* device class is a no-op on
   // screen, which is correct: `applyUiScale` resolves this device's key either
@@ -881,8 +900,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const discardAndLeave=()=>{
     if(!closeIntent)return
     // Theme and chrome scale are previewed live as you pick them, so discarding
-    // has to put both back — not just the draft that was never saved.
-    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);onUiScalePreview(config)}
+    // has to put both back — not just the draft that was never saved. Pointing the
+    // authoritative theme at the saved one keeps the unmount revert agreeing.
+    if(config){configureCustomTheme(config.custom_theme);applyTheme(config.theme);authoritativeTheme.current=config.theme;onUiScalePreview(config)}
     leaveSettings(closeIntent)
   }
   const saveAndLeave=async()=>{
@@ -1490,7 +1510,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
         {activeTab==='appearance'&&<section><h3>Theme</h3>
           <div class="theme-field">
             <span>Theme</span>
-            <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} />
+            <ThemePicker value={draft.theme} customTheme={draft.custom_theme} open={themePickerOpen} onOpenChange={setThemePickerOpen} onChange={value=>{change('theme',value);applyTheme(value)}} onPreview={previewTheme} />
           </div>
           {draft.theme==='custom' && <div class="theme-tokens">{Object.entries(draft.custom_theme).map(([key,value])=><label>{key}<input value={value} onInput={e=>{const custom={...draft.custom_theme,[key]:e.currentTarget.value};change('custom_theme',custom);configureCustomTheme(custom);applyTheme('custom')}} /></label>)}</div>}
           <input class="file-input" ref={themeFile} type="file" accept="application/json" onChange={e=>void importTheme(e.currentTarget.files?.[0])} />
