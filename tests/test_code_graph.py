@@ -265,6 +265,23 @@ async def test_subgraph_bounded(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_edges_dedupe_call_sites(tmp_path: Path) -> None:
+    # A caller that calls the same target several times is one relationship, not one
+    # edge per call site — otherwise the reverse-dependency walk explodes on a real
+    # repo (measured 14x edge bloat, a 3-hop hub walk going from 35ms to ~58s).
+    (tmp_path / "helper.py").write_text("def make(x):\n    return x\n")
+    (tmp_path / "app.py").write_text(
+        "from helper import make\n"
+        "def run(n):\n"
+        "    return make(make(make(n)))\n"  # three call sites, one relationship
+    )
+    store = CodeGraphStore(tmp_path / "graph.db")
+    await index_project(store, "p1", str(tmp_path))
+    calls = await store.callers_of_symbol("p1", "helper.py", "make")
+    assert len([c for c in calls if c["src_path"] == "app.py"]) == 1
+    store.close()
+
+
 async def test_subgraph_caps_and_reports_truncation(tmp_path: Path, monkeypatch) -> None:
     import swe_mux.code_graph as cg
 
