@@ -16,6 +16,7 @@ is how a port starts claiming parity it does not have.
 
 from __future__ import annotations
 
+import functools
 import sys
 
 IS_WINDOWS = sys.platform == "win32"
@@ -24,6 +25,7 @@ IS_LINUX = sys.platform.startswith("linux")
 IS_POSIX = not IS_WINDOWS
 
 
+@functools.lru_cache(maxsize=1)
 def running_under_wsl() -> bool:
     """Whether this Linux host is a WSL distribution rather than a native one.
 
@@ -31,6 +33,11 @@ def running_under_wsl() -> bool:
     kernel. Not from `WSL_DISTRO_NAME`, because that is an environment variable a
     child can lose - and the question decides whether an executable is trustworthy,
     so it must not depend on env hygiene.
+
+    Cached because it is reached from `which_real`, which runs on every executable
+    resolution: without this, deciding whether a candidate is trustworthy would
+    cost a `/proc` read each time.  The kernel does not change under a running
+    process, so a process-lifetime answer is exact rather than merely convenient.
     """
     if not IS_LINUX:
         return False
