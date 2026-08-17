@@ -171,7 +171,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
-                                            -> Phase 11  Public packaging and release    [open]
+                                            -> Phase 10.5 Distribution licensing + voice-stack replacement [open]
+                                              -> Phase 11  Public packaging and release  [open]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -2951,10 +2952,155 @@ every live session, which is why it was a deliberate act rather than part of the
   sockets are bound, so it needs setting plus a daemon restart before a bridged agent's hook
   can reach the daemon at all. Nothing has yet run that path end to end.
 
+## Phase 10.5 - Distribution licensing and the voice-stack replacement
+
+swe-mux has no `LICENSE` file, and the frozen desktop bundle it hands to a user redistributes GPL-2.0 code.
+Both facts are inert while this machine is the only distribution, and both become real the moment Phase 11 publishes an artifact.
+This phase is the precondition for that publication: it removes every copyleft component from the shipped closure, replaces the two voice engines that put them there, and states the project's own license.
+
+The audit behind it ran on 2026-08-17 against the live `dist/swe-mux` bundle and the resolved dependency closure rather than against declared metadata.
+Declared metadata is precisely what hid the defects: PyAV declares BSD-3-Clause and sherpa-onnx declares Apache-2.0, and both ship GPL binaries inside the wheel.
+
+### Measured baseline
+
+Copyleft in the shipped bundle:
+
+- `dist/swe-mux/_internal/av.libs/` is 63 MB of FFmpeg, and `avcodec-62`'s import table links `libx264` and `libx265`, which are GPL-2.0-or-later.
+  Its configure string carries `--enable-libx264 --enable-libx265 --enable-version3` while `av_license()` compiles to the single string `LGPL version 3 or later`.
+  The linkage governs, not the self-description.
+- Nothing in swe-mux uses it.
+  `av` enters only through `faster_whisper/__init__` into `faster_whisper/audio.py`, whose module-level `import av` exists for `decode_audio`.
+  `voice.py:1514` builds a float32 array from int16 PCM taken from a validated WAV header and hands it straight to `WhisperModel`, and no call site reaches `decode_audio`.
+- `edge-tts` is LGPL-3.0 and is the default engine (`tts_engine: str = "edge"`, `config.py:760`).
+  It is not a client of a public API: it reproduces Microsoft Edge's read-aloud call against an undocumented endpoint using an embedded client token.
+  The three-attempt 403 retry in `_synthesize_edge` is the visible symptom of a gate Microsoft rotates.
+  Every user of a published build would be making unauthorised calls to a Microsoft service, and the text sent is a distillation of the operator's own sessions.
+- `pystray` is LGPL-3.0 and stays, under notice and relink terms rather than removal.
+- MPL-2.0 (`certifi`, `pywebpush`, `py-vapid`, `pathspec`, `tqdm`) is file-level copyleft and needs license text only.
+
+Attribution owed regardless of the voice work:
+
+- No `LICENSE`, `NOTICE`, or `THIRD-PARTY-NOTICES` exists anywhere in the repository, so the default is all rights reserved, which contradicts what `site/index.html` announces.
+- Apache-2.0 dependencies that carry a NOTICE (`huggingface_hub`, `tokenizers`, `requests`, `aiohttp`) need it reproduced.
+- The frontend bundle redistributes **modified** `@xterm/*` (MIT), patched at install time by `patch-xterm-webgl.mjs` and `patch-xterm-requestmode.mjs`, so the notice must state that modification.
+- `ctranslate2` ships Intel's `libiomp5md.dll` under Intel's own redistribution terms.
+- The notification sounds already carry `LICENSE.orca.txt` (MIT) and are compliant.
+
+Replacements measured and **rejected**, recorded so they are not re-proposed:
+
+- **sherpa-onnx with Parakeet TDT**, the stack Orca uses for dictation.
+  Its published wheel statically links espeak-ng: `_sherpa_onnx.cp312-win_amd64.pyd` contains `espeak_Initialize`, `espeak_ng_Cancel`, and `ESPEAK_DATA_PATH`.
+  TTS is compiled in by default, so espeak-ng ships whether or not TTS is ever called.
+  Upstream agrees it is a licensing defect (k2-fsa/sherpa-onnx#3731, open since 2026-07-08, deferred to a 2.0.0 that has not shipped against a current 1.13.5).
+  Reopen when 2.0.0 ships, not before, because the alternative is maintaining a `SHERPA_ONNX_ENABLE_TTS=OFF` source build per platform.
+- **`kokoro-onnx`** as the Kokoro runtime.
+  It requires `espeakng-loader` and `phonemizer-fork` unconditionally, and `import kokoro_onnx` fails outright without them.
+  `espeakng-loader` ships `espeak-ng.dll` plus 18 MB of espeak data, so the dependency is a real GPL payload rather than a nominal one.
+- **`misaki[en]`** as an extra, because the `en` extra pulls those same two packages.
+  The base `misaki` distribution plus `spacy` and `num2words` must be depended on directly instead.
+- **Piper**, which embeds espeak-ng from 1.3 onward, and **KittenTTS**, which uses the same phonemizer family.
+- **Rebuilding PyAV against an LGPL-only FFmpeg**, and **relicensing swe-mux as GPL** so the current bundle becomes lawful.
+  Both spend real effort solving a problem that disappears when an unused dependency is dropped.
+- **Browser `speechSynthesis`.**
+  It cannot produce the server-side clip that `/api/voice/clips/{clip_id}/audio`, clip history, and phone playback are built on.
+- **AGPL or a source-available license.**
+  The strip-mining threat model does not fit a local desktop app that drives local CLIs, and both repel the users and the investors the project wants.
+
+Kokoro replacement baseline, measured on the development host: int8 ONNX through a direct onnxruntime session, misaki G2P, `fallback=None`.
+
+| case | chars | g2p | synth | audio | RTF |
+|---|---|---|---|---|---|
+| short | 37 | 10.5 ms | 1.62 s | 2.39 s | 0.68 |
+| medium | 125 | 3.9 ms | 3.49 s | 6.34 s | 0.55 |
+| long | 383 | 7.3 ms | 10.60 s | 21.74 s | 0.49 |
+
+Model load is 0.77 s against 89 MB of int8 weights plus 27 MB of voices.
+The ONNX interface is three inputs (`tokens` int64, `style` float32[1, 256], `speed` float32[1]) and one `audio` output, which is why the runtime is a direct session rather than a wrapper library.
+The G2P produces identical output with `espeakng_loader` and `phonemizer` physically removed from the environment, which is what makes the GPL-free path verified rather than intended.
+
+Out-of-vocabulary behaviour without an espeak fallback was measured against this project's own vocabulary.
+Unresolved words return a `❓` token: `pyproject`, `Worktree`, `healthcheck`, and the `swe` of `swe-mux`, which is roughly one word per sentence of release-note prose.
+Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, and every failure is a compound, so the fix is a splitter that retries on camelCase, hyphens, and underscores before giving up, with a small project lexicon behind it.
+
+### Decisions
+
+- **swe-mux is licensed Apache-2.0.**
+  Over MIT for three reasons that matter to a project that may later take investment: an explicit patent grant with retaliation termination where MIT is silent, an explicit trademark reservation that keeps the name and mark out of the grant, and §5, which states the license inbound contributions arrive under instead of relying on convention.
+  The cost is length and a per-file header convention that this phase declines; one `LICENSE` plus a README section is the whole ceremony.
+- **Contributions use a DCO sign-off, not a CLA.**
+  Sole authorship today means relicensing is still possible; the first outside contribution ends that permanently, and a CLA only binds what follows it.
+  The trigger to revisit is a funding conversation becoming concrete, not a contribution arriving.
+  Copyright should sit with an entity rather than an individual if one is ever formed.
+- **`av` is dropped, not replaced.**
+  A stub module satisfying the unused import is the entire fix, and it removes 66 MB along with the GPL closure.
+- **STT stays on faster-whisper.**
+  Once `av` is gone the remaining closure is MIT throughout (faster-whisper, CTranslate2, the Whisper weights), so there is no licensing reason to migrate, and no user-visible change to make.
+- **TTS moves to Kokoro-82M** (Apache-2.0 model, trained on public-domain and permissively-licensed audio) driven directly through onnxruntime, which the bundle already carries.
+- **Phonemization is lexicon-only, and no espeak-ng package may enter the closure.**
+  This is the constraint that rejected three otherwise-reasonable libraries, and it is a dependency-review rule, not a preference.
+- **Models are downloaded on demand and never bundled**, matching what already happens for the Whisper weights and the Silero VAD assets.
+- **The OS voice stays the always-available fallback and becomes the default**, so a fresh install speaks without a 116 MB download and without a network call.
+
+### Remove the GPL closure
+
+- [ ] Add an `av` stub and `--exclude-module av` to the PyInstaller spec, so `faster_whisper` imports cleanly with no FFmpeg present.
+  Assert in a test that `av.libs` is absent from a built bundle, because this regresses silently the next time the spec is regenerated.
+- [ ] Prove the STT path end to end on the built bundle rather than in the source checkout, since the source venv keeps its own working `av`.
+- [ ] Add a dependency-review gate that fails on a GPL or LGPL distribution entering the resolved closure without an explicit allowlist entry, with `pystray` as the only initial entry.
+  The audit's whole lesson is that declared package metadata does not describe shipped binaries, so the gate must read the resolved closure.
+
+### Replace the TTS engine
+
+- [ ] Add a `kokoro` engine behind the existing `tts_engine` seam in `voice.py`, alongside `edge` and `sapi`, producing the same clip contract into `<data_dir>/voice/` and `voice_clips`.
+- [ ] Drive the model through a direct onnxruntime session over the three-input interface; do not take a wrapper dependency.
+- [ ] Depend on base `misaki` plus `spacy` and `num2words` directly, construct the G2P with `fallback=None`, and add an import-time assertion that no espeak module is present.
+- [ ] Add the compound splitter and a project lexicon for the vocabulary the measurement found unresolved, with an unambiguous last resort (spell the word) so an unknown token is never silently dropped from speech.
+- [ ] Synthesize sentence by sentence and begin playback on the first clip, so perceived latency is the first sentence rather than the whole summary at RTF 0.5.
+- [ ] Remove `edge-tts` from the dependency set once `kokoro` and `sapi` cover both quality tiers, and migrate an existing `tts_engine: "edge"` config forward rather than failing on it.
+- [ ] Change the default `tts_engine` to the OS voice, and make `kokoro` selectable only once its model is present.
+
+### Model acquisition
+
+- [ ] Add a Voice settings surface that downloads the Kokoro weights and voices into the data directory with visible progress, pinned by immutable revision and per-file SHA-256, with explicit `not-downloaded` / `downloading` / `ready` / `error` state so a partial download can never be loaded.
+- [ ] Fold this into the same first-use-download inventory Phase 11 already owns for the Whisper model and the Silero VAD assets (`NEW_USER_RELEASE_READINESS.md`), rather than inventing a second mechanism.
+- [ ] Account for the G2P dependency weight (about 110 MB installed, mostly spaCy) as a deliberate bundle cost, against 66 MB removed with `av`.
+  If it becomes a problem, the lever is a lighter lexicon-only G2P, not a return to espeak.
+
+### License and notices
+
+- [ ] Add `LICENSE` (Apache-2.0), a short `NOTICE`, and a `CONTRIBUTING.md` carrying the DCO sign-off requirement.
+- [ ] Generate `THIRD-PARTY-NOTICES.md` from the lockfiles so it cannot drift, covering the Python closure, the frontend bundle, and the downloaded models (Kokoro Apache-2.0, Whisper MIT, Silero VAD MIT).
+  Reproduce the Apache-2.0 NOTICE files, the MPL license texts, the Intel OpenMP terms, and the LGPL notice for `pystray` with a pointer to the build instructions that satisfy its relink condition.
+- [ ] State that the shipped `@xterm/*` copies are modified, and name the two patch scripts.
+- [ ] Add the license section to `README.md` and resolve the `github.com/REPLACE/swe-mux` placeholder in `site/index.html`.
+
+### Terms that are not licenses
+
+- [ ] Add a "not affiliated with or endorsed by" line covering Anthropic, OpenAI, and the other harness vendors wherever the landing page and README name their CLIs, and keep vendor logos out of the site.
+- [ ] Document managed provider accounts as one operator switching between accounts they own, in `design/features/provider-accounts.md`, so the feature is not read as rate-limit evasion by someone reviewing the project cold.
+- [ ] Record that OpenRouter and HuggingFace access run on the user's own key and quota under the user's own agreement with those services.
+
+### Docs, tests, and ship
+
+- [ ] Update `design/features/voice.md` (the engine set, the G2P constraint, the model download, the new default) and the audio quick reference in `.docs/CLAUDE.md`, which names edge-tts as the TTS path.
+- [ ] Update `design/features/desktop-shell.md` for the bundle contents that change, and `technical/backend/packages.md` for the new modules.
+- [ ] Backend tests: the `av` stub satisfies `faster_whisper`; the Kokoro engine produces a playable clip for the same inputs as the other engines; the G2P refuses to construct if an espeak module is importable; the splitter resolves the measured vocabulary; and a partial model download is rejected.
+- [ ] Verify on the isolated daemon that read aloud works end to end with `edge-tts` uninstalled, then commit and redeploy.
+
+### Phase 10.5 exit criteria
+
+- [ ] A built bundle contains no GPL or unallowlisted LGPL component, proven by a test over the resolved closure rather than by inspection, and `av.libs` is absent.
+- [ ] Read aloud works with `edge-tts` absent from the environment, and no swe-mux code path reaches a Microsoft endpoint.
+- [ ] No espeak-ng binary, data directory, or Python wrapper exists anywhere in the closure, and the G2P fails loudly rather than silently falling back if one appears.
+- [ ] `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, and a generated `THIRD-PARTY-NOTICES.md` exist, and the notices file regenerates from the lockfiles with no manual edit.
+- [ ] A fresh install speaks using the OS voice with no download, and Kokoro is one explicit, hash-verified download away.
+
 ## Phase 11 — Public packaging and release
 
 This phase carries forward original Roadmap Phase 12. Source-checkout development remains
 acceptable until Windows proving and the supported platform matrix are complete.
+Licensing, third-party notices, and the copyleft removal are Phase 10.5's and are not restated here;
+this phase consumes their result and must not publish an artifact before they land.
 The packaging and external-trial readiness gaps, and the CI matrices, are inventoried in
 `CROSS_PLATFORM_FINDINGS.md`.
 
@@ -2962,8 +3108,9 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
 
 - [ ] Guarantee every wheel contains a frontend bundle from the same revision; fail release
   validation on stale or missing assets.
-- [ ] Complete package metadata/governance: license, URLs, platform classifiers, changelog,
-  release policy, security/contact path, and accurate capability documentation.
+- [ ] Complete package metadata/governance: URLs, platform classifiers, changelog, release
+  policy, security/contact path, and accurate capability documentation. The license field
+  reads whatever Phase 10.5 settled, and is not decided here.
 - [ ] Test wheel/sdist install, upgrade, uninstall, config/database migration/backup,
   embedded frontend, and `mux`/`muxd` on clean machines without source checkout or Node.js.
 - [ ] Validate `uv tool install swe-mux` and `pipx install swe-mux`; document clean install,
