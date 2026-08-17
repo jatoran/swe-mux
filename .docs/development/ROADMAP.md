@@ -2667,9 +2667,10 @@ blocker as `unavailable`. What it still does not do when off is *probe*, since a
 read must not spend seconds booting a distribution nobody asked about.
 
 Outstanding for this item: an end-to-end hook from a bridged agent through the firewall rule
-to a live daemon. It needs the daemon actually binding the WSL adapter, which needs the
-frozen-app redeploy that is deliberately deferred (see the supervisor note below), so it is
-recorded as unproven rather than claimed.
+to a live daemon. It needs the daemon actually binding the WSL adapter. The frozen-app
+redeploy that used to block it is done (2026-08-17), so what remains is setting
+`wsl_bridge_enabled` and restarting, rather than a build - but nobody has run that path, so it
+stays recorded as unproven rather than claimed.
 
 ### Platform interfaces
 
@@ -2872,17 +2873,27 @@ is written down that way rather than counted.**
   resolved per host, and the interop guard that stops a Linux daemon launching a Windows
   agent whose paths all point at the wrong side of the boundary.
 
+**The frozen Windows app now carries the seams.** Rebuilt and redeployed 2026-08-17 with a
+single `uv run python packaging/build_desktop.py` from a shell outside swe-mux, which is the
+right tool once everything is stopped: a plain run builds frontend, app bundle and supervisor
+together, so the ordering trap between the two staged paths does not arise - the redeploy
+script's preflight requires a live supervisor, while the supervisor build refuses to run while
+one exists. Confirmed live afterwards: `supervisor_bundle_current()` flipped `False` -> `True`
+with the stored hash matching source, `/api/health` reported `supervisor: true` and
+`supervisor_state: "connected"`, the served bundle moved to the newly built asset rather than
+the previous one, and the Tailscale Serve 443 route still pointed at the real daemon. It cost
+every live session, which is why it was a deliberate act rather than part of the phase.
+
 **Known gaps, deliberately not closed here and not counted as met:**
 
 - `deterministic_consumers.normalize_target` still casefolds. It is the storage key for the
   code graph, doc-debt ownership and Tier 0 targets, so changing it rewrites existing
   `mux.db` keys; it needs a migration, not an edit.
-- The WSL bridge's end-to-end hook delivery through the firewall rule needs the daemon
-  binding the WSL adapter, which needs the frozen-app redeploy that is deliberately deferred.
-- The frozen Windows app still ships the pre-split PTY code. Shipping the seams to it needs a
-  supervisor bundle rebuild, which reaps every live session, so it is a deliberate act rather
-  than part of this phase. Windows behaviour is unchanged by the refactor, so the running app
-  is correct meanwhile.
+- The WSL bridge's end-to-end hook delivery through the firewall rule is still unproven. The
+  redeploy it was waiting on has now happened, so the remaining requirement is ordinary
+  configuration rather than a build: `wsl_bridge_enabled` is off by default and changes which
+  sockets are bound, so it needs setting plus a daemon restart before a bridged agent's hook
+  can reach the daemon at all. Nothing has yet run that path end to end.
 
 ## Phase 11 — Public packaging and release
 

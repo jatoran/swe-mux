@@ -4,3 +4,11 @@
 # with CRLF and hide its header inside the editor. The parser tolerates CRLF, but
 # keeping the working copy LF stops the file churning on every checkout.
 .swe-mux/notes/**/*.md text eol=lf
+
+# Shell scripts are executed by Linux, but they live in a checkout that is normally
+# cloned on Windows under `core.autocrlf=true`. A CRLF checkout makes the shebang
+# read as `/usr/bin/env bash\r` and the script dies with `bad interpreter: ^M`. That
+# is not hypothetical for these: `tools/wsl_dev_setup.sh` is documented to run as
+# `wsl -d Ubuntu -- bash /mnt/d/.../tools/wsl_dev_setup.sh`, straight off the Windows
+# working copy, so the Windows line endings reach a Linux interpreter directly.
+*.sh text eol=lf

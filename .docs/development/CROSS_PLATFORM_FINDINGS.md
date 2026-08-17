@@ -256,6 +256,24 @@ Each supported combination needs real PTY and process tests.
 - direct and nested Claude/Codex/OMP launch, resume, hooks, transcripts, Ctrl+C, resize, paste, reconnect, daemon restart, and descendant cleanup;
 - source install, frozen artifact, upgrade, rollback, uninstall, and preserved data.
 
+### Driving a Linux daemon by hand from a Windows host
+
+`tools/wsl_dev_setup.sh` brings a native Linux checkout inside WSL to `origin/master`, installs both dependency sets, builds the frontend, and starts a daemon you open in a Windows browser.
+It is the interactive counterpart to `linux_acceptance.sh` and `linux_agent_acceptance.sh`, which prove contracts headlessly and exit.
+
+There is no Linux desktop app to launch.
+`pystray` and `pywebview` are declared `sys_platform == "win32"`, so on Linux swe-mux is a headless daemon plus a browser, by design rather than by omission.
+
+Four traps the script encodes, each of which silently produces a wrong result rather than an error:
+
+- **A non-interactive shell gets the wrong Node.** `nvm` is a shell function sourced from a profile, so `wsl.exe -- bash script.sh` never sees it and falls back to the distro Node. On a host whose distro Node is 18, `frontend/scripts/compress-static.mjs` calls `import.meta.dirname` (Node 20.11+), gets `undefined`, and throws in `postbuild` - *after* a successful `vite build`, so it reads as a bundling failure rather than a wrong interpreter. The script sources `nvm` and requires Node 20+ in preflight.
+- **A daemon started without `--local-only` steals the phone's address.** The startup mobile-voice setup retargets the single Tailscale Serve 443 route at whatever port it is run on, so a throwaway Linux daemon takes over the address every phone uses and leaves it answering nothing when it exits, while the real daemon keeps working on loopback and never notices.
+- **A checkout used to stage work by hand cannot fast-forward.** Files copied in to test a feature before it was committed are untracked files the merge must create, and modified files the merge must overwrite. Both refuse. Neither is real work, but proving that requires comparing against every commit in the incoming range, not just its tip - a file copied from partway through the range matches no tip.
+- **The Windows working tree's CRLF travels into the Linux clone.** It presents as hundreds of modified files with no content change, which blocks the merge and buries any genuine change in the noise.
+
+The script's rule is that nothing moves unless it can be proved disposable: identical to `HEAD` modulo CR, or identical to some commit in the incoming range.
+Anything else stops the run untouched unless `--stash-unmatched` is given, and everything it does move is copied under `.trash/` and stashed rather than deleted.
+
 ### Native-platform CI
 
 - Run import and non-PTY tests first on Windows, Linux, and macOS.
