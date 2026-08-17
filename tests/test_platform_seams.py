@@ -574,3 +574,65 @@ def test_the_posix_firewall_advises_rather_than_repairs() -> None:
         # Advice only, and it must never be something the daemon could run itself.
         assert command.startswith("sudo ")
         assert "8765" in command
+
+def test_the_default_agent_command_is_shaped_for_this_host() -> None:
+    """`claude.exe` is not a cosmetic default off Windows - it selects the wrong binary.
+
+    Under WSL the Windows install is on PATH through interop, so
+    `shutil.which("claude.exe")` *succeeds* and resolves to `/mnt/c/.../claude.exe`.
+    A Linux daemon then launches a Windows agent: it runs, it paints a TUI, it
+    reports `\wsl.localhost\...` as its working directory, it writes its transcript
+    into the Windows home where no Linux path points, and it joins no Linux process
+    group so cleanup cannot reach it. Measured exactly that way before this existed.
+    """
+    from swe_mux.config import default_harness_executables
+    from swe_mux.harness import HARNESSES, host_executable
+
+    for name, harness in HARNESSES.items():
+        chosen = host_executable(harness)
+        if IS_WINDOWS:
+            assert chosen == harness.executable
+        else:
+            assert not chosen.casefold().endswith(".exe"), f"{name} defaults to a Windows binary"
+    assert all(
+        IS_WINDOWS or not command.casefold().endswith(".exe")
+        for command in default_harness_executables().values()
+    )
+
+
+def test_an_interop_windows_binary_is_never_a_usable_agent() -> None:
+    """The rule that keeps a Linux daemon from launching a Windows agent.
+
+    Only meaningful under WSL, and deliberately inert elsewhere: on a native Linux
+    host `/mnt` is an ordinary mount point and nothing about it is suspicious, so
+    rejecting paths there would break legitimate installs.
+    """
+    from swe_mux.host_platform import is_windows_interop_path, running_under_wsl
+
+    if not running_under_wsl():
+        # Inert off WSL, including on Windows itself.
+        assert is_windows_interop_path("/mnt/c/Users/x/claude.exe") is False
+        return
+    assert is_windows_interop_path("/mnt/c/Users/x/AppData/Roaming/npm/claude") is True
+    assert is_windows_interop_path("/mnt/c/Users/x/.local/bin/claude.exe") is True
+    assert is_windows_interop_path("/home/user/.local/bin/claude") is False
+    # A multi-character directory under /mnt is an ordinary mount, not a drive.
+    assert is_windows_interop_path("/mnt/storage/bin/claude") is False
+
+
+def test_which_real_skips_a_windows_binary_reached_through_interop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defence in depth behind the corrected default: even a bare name must not
+    resolve to an interop binary, because a WSL PATH carries the Windows npm
+    directory and `command -v codex` lands there routinely."""
+    from swe_mux import shim_paths
+    from swe_mux.host_platform import running_under_wsl
+
+    if not running_under_wsl():
+        pytest.skip("the interop rule only applies inside a WSL distribution")
+
+    monkeypatch.setattr(
+        shim_paths.shutil, "which", lambda _cmd, path=None: "/mnt/c/npm/codex.exe"
+    )
+    assert shim_paths.which_real("codex") is None

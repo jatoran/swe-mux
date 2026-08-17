@@ -10,6 +10,8 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Literal, TypeGuard
 
+from .host_platform import IS_WINDOWS
+
 StateSource = Literal["hook", "transcript", "pty", "cli_state"]
 # Where tokens, cost, and model come from. `transcript` parses the harness's own
 # conversation file. `database` reads a harness-owned store instead: opencode
@@ -1080,6 +1082,26 @@ HARNESSES: dict[str, HarnessDescriptor] = {
 }
 
 AGENT_BACKENDS = frozenset(HARNESSES)
+
+
+def host_executable(harness: HarnessDescriptor) -> str:
+    """The default command for this harness on *this* host.
+
+    The registry declares Windows-shaped names (`claude.exe`, `codex.exe`) because
+    Windows was the only host. On POSIX that is not merely cosmetic - it is wrong in
+    a way that silently produces a broken session. Under WSL the Windows install is
+    on PATH through interop, so `shutil.which("claude.exe")` *succeeds*, resolving to
+    `/mnt/c/.../claude.exe`. A Linux daemon then launches a Windows binary: it runs,
+    it paints a TUI, its working directory is reported as `\wsl.localhost\...`, its
+    transcript is written into the Windows home where no Linux path points, and the
+    process is not in any Linux process group so cleanup cannot reach it.
+
+    Measured exactly that way on 2026-08-17 before this existed.
+    """
+    executable = harness.executable
+    if not IS_WINDOWS and executable.casefold().endswith(".exe"):
+        return executable[: -len(".exe")]
+    return executable
 
 
 def descriptor(name: str) -> HarnessDescriptor:

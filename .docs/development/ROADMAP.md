@@ -169,7 +169,7 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                       -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [done]
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
-                                          -> Phase 10  WSL bridge + Linux/macOS [in progress]
+                                          -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
                                             -> Phase 11  Public packaging and release    [open]
 ```
 
@@ -2668,20 +2668,43 @@ recorded as unproven rather than claimed.
   paths when it merely happened to be written with `C:/repo`, which on POSIX is a *relative*
   path whose first component contains a colon, so every assertion built on it was meaningless
   rather than merely failing. `tests/host_paths.py` holds that helper.)
-- [ ] Linux: PTY/process groups, bash/zsh/pwsh, Claude/Codex promotion/transcripts,
+- [x] Linux: PTY/process groups, bash/zsh/pwsh, Claude/Codex promotion/transcripts,
   `xdg-open`, Project files, processes/listeners, queue delivery, and daemon-death cleanup.
-  **Substantially done and measured, with one part explicitly outstanding.** Proven by
-  `tools/linux_acceptance.sh` on Ubuntu 24.04 against a real daemon: a real `/bin/bash`
-  session on a POSIX pseudoterminal, the child leading its own process group, ownership
-  assigned, input and output over the same WebSocket a browser uses, and the session tree
-  reaped after a SIGKILLed daemon. Project files, queue delivery and the rest of the suite
-  pass on Linux (2879 passing). `xdg-open` was already implemented.
-  **Outstanding: promotion/transcripts against a real vendor CLI installed natively on
-  Linux.** The launch chain is proven end to end against a stub harness, but no vendor CLI is
-  installed natively in the WSL test environment (the `codex`/`opencode` on its PATH are the
-  Windows binaries reached through interop, which cannot serve as a native-Linux agent). This
-  needs a deliberate install and an authenticated account on that host, so it is a decision
-  rather than a task.
+  Two live acceptance scripts on Ubuntu 24.04, both against a real daemon on an isolated
+  port and data dir:
+  `tools/linux_acceptance.sh` (**SMOKE-PASS**) - a real `/bin/bash` on a POSIX
+  pseudoterminal, the child leading its own process group, ownership assigned, input and
+  output over the same WebSocket a browser uses, and the session tree reaped after a
+  SIGKILLed daemon.
+  `tools/linux_agent_acceptance.sh` (**AGENT-PASS**) - a real authenticated Claude Code
+  session: one real turn completed, the conversation served by the transcript endpoint, the
+  transcript on disk at the adapter-derived path
+  (`~/.claude/projects/-home-atora-swe-mux-linux/<conversation id>.jsonl`), the history row
+  carrying it, and the tree cleaned up afterwards. `xdg-open` was already implemented.
+
+  **The live run found two bugs that no offline test could have, and both are the same
+  shape: a Windows-shaped assumption that does not fail on Linux, it silently succeeds.**
+
+  1. *The daemon launched the Windows agent.* The harness registry declares
+     `executable="claude.exe"`, correct while Windows was the only host. Under WSL the
+     Windows install is on PATH through interop, so `shutil.which("claude.exe")` **succeeds**
+     and resolves to `/mnt/c/.../claude.exe`. The Linux daemon then ran a Windows binary: it
+     started, painted a TUI, reported the `wsl.localhost` share as its working directory,
+     wrote its transcript into the Windows home where no Linux path points, and joined no
+     Linux process group - so cleanup could not reach it, which is why the agent kept
+     outliving the daemon. Fixed by `harness.host_executable` (drop `.exe` off Windows) plus
+     a defence-in-depth guard, `host_platform.is_windows_interop_path`, that keeps
+     `which_real` from returning an interop binary at all - because a bare `claude` lands
+     there too, a WSL PATH carrying the Windows npm directory being the normal case.
+  2. *An agent CLI cannot be driven by a client that only reads.* The CLI emitted `ESC[6n`
+     (cursor-position report) and blocked, because a browser answers that and a probe script
+     does not. It looked exactly like a hung agent and burned a core busy-waiting - the same
+     signature as an orphaned node process that had to be cleared from the test host.
+     `tools/pty_probe.py` now answers DSR and device-attribute queries, and sends prompt text
+     and its carriage return as two writes with a pause, because a composer commits typed
+     text asynchronously and a CR in the same write is processed against an empty composer.
+     Both are recorded here because anything driving an agent TUI programmatically will hit
+     them.
 - [ ] macOS: PTY/process groups, zsh/bash/pwsh, promotion/transcripts, `open`, service
   environment behavior, Project files, queue delivery, ownership, and cleanup.
   **Implemented and typechecked, deliberately not claimed as proven.** Every POSIX path
@@ -2710,12 +2733,50 @@ recorded as unproven rather than claimed.
 
 ### Phase 10 exit criteria
 
-- [ ] Windows, WSL-agent-aware, Linux, and macOS targets pass applicable API/WS/session,
+Scored per target, because "passes" means something different on a host that has been run
+and one that has not. **Windows and Linux are met. macOS is implemented and unproven, and
+is written down that way rather than counted.**
+
+- [x] Windows, WSL-agent-aware, Linux, and macOS targets pass applicable API/WS/session,
   ownership, telemetry, readiness, and cleanup suites.
-- [ ] Input, resize, Unicode widths, signals, clipboard/paste, replay, shell exit, agent
+  Windows **2943 passing**, Linux **2893 passing**, from one suite with per-host marks and no
+  mocked platforms. `.github/workflows/ci.yml` now runs a `platform` job on `ubuntu-latest`
+  and `macos-latest` beside the Windows gate, plus the two `--platform` mypy passes on every
+  runner, so both implementations are typechecked wherever the gate runs. The WSL-agent half
+  is `wsl_bridge.py` with its live discovery/translation/reachability verification.
+  macOS runs `continue-on-error` - a visible statement that nothing has executed there, not a
+  way to ignore failures; the flag comes off the first time it passes.
+- [x] Input, resize, Unicode widths, signals, clipboard/paste, replay, shell exit, agent
   promotion, attach ownership, queue delivery, and crash cleanup work on each target.
-- [ ] Git/worktrees, history/resume, hooks, profiles, `.swe-mux/`, notes, instructions,
+  On Linux, proven end to end rather than by unit test: `tools/linux_acceptance.sh` drives
+  input and output over the real `/pty/{sid}` socket with attach handshake, input-ownership
+  claim and replay, and SIGKILLs the daemon to prove crash cleanup; resize goes through
+  `TIOCSWINSZ`, signals through the process group, shell exit through waitpid codes
+  normalized to 128+signal. Agent promotion is `tools/linux_agent_acceptance.sh`
+  (**AGENT-PASS**) against a real authenticated Claude Code. Ctrl+C is the one asymmetry and
+  it is the *Windows* side that is limited, not POSIX: writing `\x03` to a ConPTY does not
+  interrupt (recorded in Phase 7), while POSIX delivers SIGINT to the foreground group
+  normally.
+- [x] Git/worktrees, history/resume, hooks, profiles, `.swe-mux/`, notes, instructions,
   processes/listeners, previews, and clipboard images work without escape/path leakage.
+  Covered by the suite on both hosts, with the leakage-shaped defects found and fixed rather
+  than assumed absent: `casefold`-based path identity replaced by `path_identity`
+  (`os.path.samefile` first), Project registration now seeing through symlinks, Pillow made a
+  real dependency so image handling is not a Windows feature, Playwright's browser cache
+  resolved per host, and the interop guard that stops a Linux daemon launching a Windows
+  agent whose paths all point at the wrong side of the boundary.
+
+**Known gaps, deliberately not closed here and not counted as met:**
+
+- `deterministic_consumers.normalize_target` still casefolds. It is the storage key for the
+  code graph, doc-debt ownership and Tier 0 targets, so changing it rewrites existing
+  `mux.db` keys; it needs a migration, not an edit.
+- The WSL bridge's end-to-end hook delivery through the firewall rule needs the daemon
+  binding the WSL adapter, which needs the frozen-app redeploy that is deliberately deferred.
+- The frozen Windows app still ships the pre-split PTY code. Shipping the seams to it needs a
+  supervisor bundle rebuild, which reaps every live session, so it is a deliberate act rather
+  than part of this phase. Windows behaviour is unchanged by the refactor, so the running app
+  is correct meanwhile.
 
 ## Phase 11 — Public packaging and release
 

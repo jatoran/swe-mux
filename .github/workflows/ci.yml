@@ -1,18 +1,25 @@
-# Windows CI gate for swe-mux.
+# CI gate for swe-mux.
 #
-# swe-mux is a Windows-first, tailnet-only app; its runtime contracts (ConPTY,
-# Job Objects, the PTY supervisor) only mean anything on Windows, so the matrix is
-# a single windows-latest runner rather than a broad multi-OS grid (public
-# artifacts and a multi-OS matrix are Phase 11). This mirrors the local
-# `.worktree-verify` gate and adds the two things that gate does not run: the
-# production frontend build, and the Playwright renderer suite.
+# Two jobs, because the two questions are different.
 #
-# The suite is the canonical verification: ruff, mypy, pytest (live-provider
-# canaries excluded - they need an authenticated CLI and quota), the frontend
-# typecheck and unit suite, the production build, and the Playwright renderer
-# suite (`npm run test:renderer`). The real-ConPTY integration tests (`-m conpty`)
-# and the harness-adapter coverage matrix run inside the ordinary pytest step on
-# the Windows runner.
+# `verify` (windows-latest) is the full gate on the proving platform: ruff, mypy,
+# the whole pytest suite including the real-ConPTY integration tests and the
+# harness-adapter coverage matrix, the frontend typechecks and unit suite, the
+# production build, and the Playwright renderer suite. Windows remains where a
+# regression must be caught, because that is where the app ships.
+#
+# `platform` (ubuntu + macos) exists because Phase 10 made the package importable
+# and runnable off Windows, and an unexercised port breaks silently a few features
+# later. It runs the suite on each POSIX target - the platform seam tests inside it
+# are the ones that matter, and they are marked per host rather than mocking
+# `sys.platform`, because a test that mocks the platform proves nothing about the
+# platform.
+#
+# macOS is `continue-on-error`. That is a deliberate, visible statement rather than
+# a way to ignore failures: every POSIX path is written and typechecked for macOS,
+# but nothing has ever run there, so the first red is expected to be about the
+# runner rather than about a regression. It is wired up now so the gap is measured
+# instead of assumed, and the flag comes off the moment it passes once.
 name: ci
 
 on:
@@ -42,6 +49,23 @@ jobs:
 
       - name: mypy
         run: uv run mypy
+
+      # Each host's PTY, ownership and secret implementation is typechecked under
+      # its own platform, on every runner. Without this, half the platform code is
+      # invisible to the type checker on whichever machine happens to run the gate.
+      - name: mypy (POSIX implementations)
+        run: >-
+          uv run mypy --config-file mypy-platform.toml --platform linux
+          src/swe_mux/pty_backend_posix.py
+          src/swe_mux/posix_process_group.py
+          src/swe_mux/posix_guardian.py
+
+      - name: mypy (Windows implementations)
+        run: >-
+          uv run mypy --config-file mypy-platform.toml --platform win32
+          src/swe_mux/pty_backend_windows.py
+          src/swe_mux/win_jobobj.py
+          src/swe_mux/secret_cipher_windows.py
 
       - name: pytest (incl. ConPTY integration + harness adapter matrix)
         run: >-
@@ -75,3 +99,49 @@ jobs:
 
       - name: Browser smoke (Playwright renderer suite)
         run: npm --prefix frontend run test:renderer
+
+  platform:
+    name: platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    continue-on-error: ${{ matrix.unproven }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            unproven: false
+          # Implemented and typechecked, never executed. See the header.
+          - os: macos-latest
+            unproven: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync backend
+        run: uv sync
+
+      # The first milestone of the port, and still the cheapest regression to
+      # catch: a stray top-level Windows import makes the whole package
+      # unimportable here, and nothing else in this job would run.
+      - name: Package imports
+        run: uv run python -c "import swe_mux.server; print('import ok')"
+
+      - name: CLI runs
+        run: uv run mux --help
+
+      - name: ruff
+        run: uv run ruff check src/swe_mux tests packaging
+
+      - name: mypy
+        run: uv run mypy
+
+      - name: pytest
+        run: >-
+          uv run pytest tests -q
+          -m "not live_agent and not live_subagent and not live_telemetry and not live_quota and not live_automations and not live_mcp"

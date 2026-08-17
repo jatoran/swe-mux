@@ -10,7 +10,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
+from .harness import (
+    HARNESSES,
+    host_executable,
+    is_agent_harness,
+    reserved_launch_arg_conflict,
+)
 from .host_platform import IS_MACOS, IS_WINDOWS, platform_key
 from .keybindings import is_command
 
@@ -334,7 +339,7 @@ def default_ccusage_command(source: str | None = None) -> list[str]:
 
 
 def default_harness_executables() -> dict[str, str]:
-    return {name: harness.executable for name, harness in HARNESSES.items()}
+    return {name: host_executable(harness) for name, harness in HARNESSES.items()}
 
 
 def default_harness_args() -> dict[str, list[str]]:
