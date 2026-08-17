@@ -167,12 +167,12 @@ import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape, StandingRender } from './sessionRowConfig'
 import {
-  applySessionDotSize, useObservedWidth, useRowClock, useSessionRowConfig, watchSessionDotProfile,
+  applySessionDotSize, useRowBudget, useRowClock, useSessionRowConfig, watchSessionDotProfile,
 } from './sessionRowPrefs'
 import { serverNow } from './serverClock.ts'
 import {
   buildSessionRowTokens, deriveRowContext, identityRowTokens, sessionContextArc,
-  sessionStandingMark, shedForWidth,
+  sessionStandingMark,
 } from './sessionRowFields'
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
@@ -439,19 +439,22 @@ export function App() {
     ()=>Object.fromEntries(Object.entries(queueSummary).map(([id,target])=>[id,target.pending])),
     [queueSummary],
   )
-  // Width-driven token shedding is measured, not queried in CSS: hiding a token
-  // with `display:none` leaves the separator JSX already emitted beside it.
+  // The width ladder is measured, not queried in CSS: hiding a token with
+  // `display:none` leaves the separator JSX already emitted beside it. What is
+  // measured is the `.row-metric` probe below, a stand-in for one row's text
+  // column — not this element, whose width overstates the room a row has by the
+  // indicator gutter, the tree's padding, and the scrollbar.
   const sidebarRef=useRef<HTMLElement>(null)
-  const rowWidth=useObservedWidth(sidebarRef)
-  const rowShed=shedForWidth(rowWidth)
+  const rowMetricRef=useRef<HTMLDivElement>(null)
+  const rowBudget=useRowBudget(rowMetricRef)
   // Device-local drafts are unioned into the row context rather than read at the
   // row: the daemon's ledger sees text typed from any client but not text staged
   // in this browser's own draft composer, which never reaches the PTY. Neither
   // source is a superset of the other.
   const localDrafts=useMemo(()=>mobileTerminalDraftStore.stamps(),[mobileDraftRevision])
   const rowContext=useMemo(
-    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowShed,localDrafts),
-    [sessions,rowQueueDepth,rowNow,rowShed,localDrafts],
+    ()=>deriveRowContext(sessions,rowQueueDepth,rowNow,rowBudget,localDrafts),
+    [sessions,rowQueueDepth,rowNow,rowBudget,localDrafts],
   )
   const refreshQueueSummary=()=>{
     if(queueSummaryTimer.current)return
@@ -5314,6 +5317,25 @@ export function App() {
           <button class="sidebar-tool" aria-label="Add a Project" title="Add a Project" onClick={()=>{openProjectsManager();void createProject()}}><PlusIcon/></button>
         </div>
         <div class="project-tree">
+          {/* The box the token engine's character budget is measured from: one
+              row's text column, at zero height, inside the real container chain.
+              The wrappers are the tree's own classes and `.row-metric` restates the
+              row's columns from the same variables, so the measured column cannot
+              drift from the drawn one — and the gutter is `--session-dot`, which
+              the user sets. It carries neither the `.session-row` class nor a
+              `data-group-id`/`data-reorder-id`, so no selector, drag, or drop
+              target elsewhere can resolve to it. */}
+          <div ref={rowMetricRef} class="row-metric-probe sidebar-project-list" aria-hidden="true">
+            <div class="project-group"><div class="session-list">
+              <div class="row-metric">
+                <span />
+                <span class="session-copy" data-metric="copy">
+                  <span class="row-line top"><span data-metric="top">0000000000</span></span>
+                  <span class="row-line bottom"><span data-metric="bottom">0000000000</span></span>
+                </span>
+              </div>
+            </div></div>
+          </div>
           {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
           {/* `data-group-id` is what a Project drag reads to decide which Group it is
               dropping into; the root list carries the empty string for "ungrouped".

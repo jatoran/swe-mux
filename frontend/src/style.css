@@ -30,7 +30,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .broadcast-banner { grid-row:2;height:calc(34px*var(--ui-scale));background:#382e0c;border-bottom:1px solid #806817;display:flex;align-items:center;justify-content:center;gap:18px;color:#e6ce78;font-size:12px }.broadcast-banner span { color:#b5a76d }.broadcast-banner button { border:0;background:transparent;text-decoration:underline;cursor:pointer }
 .workspace { grid-row:3;display:grid;grid-template-columns:254px minmax(0,1fr);min-height:0 }.sidebar { display:flex;flex-direction:column;min-height:0;background:#0d1014;border-right:1px solid var(--line) }.sidebar-heading { height:calc(38px*var(--ui-scale));flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 13px;font:600 9px 'JetBrains Mono';letter-spacing:.11em;color:#67717f;border-bottom:1px solid #1d2229 }.sidebar-heading button { width:25px;height:calc(25px*var(--ui-scale));border:0;background:transparent;border-radius:5px;color:#7f8997;cursor:pointer }.sidebar-heading button:hover { background:#1b2027;color:var(--green) }
 .project-tree { flex:1;min-height:0;overflow:auto;padding:6px }.project-group { margin-bottom:3px;border:1px solid transparent;border-radius:7px }.project-group.active { background:#101510;border-color:#263123 }.project-row { height:calc(34px*var(--ui-scale));display:grid;grid-template-columns:16px minmax(0,1fr) 20px 24px 24px;align-items:center;padding:0 3px 0 6px;border-radius:6px;color:#858f9c;cursor:pointer }.project-row:hover { background:#171c22;color:#cdd2da }.project-group.active>.project-row { color:#dfe7da }.project-chevron { color:#59636f;font-size:10px }.project-row strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px }.project-row small { text-align:center;color:#65705e;font:9px 'JetBrains Mono' }.project-row button { width:22px;height:calc(22px*var(--ui-scale));border:0;background:transparent;border-radius:4px;color:#65707d;cursor:pointer }.project-row button:hover { color:var(--green);background:#252c25 }.project-group .session-list { overflow:visible;flex:none;padding:2px 4px 5px 15px }.project-group .session-row { height:calc(49px*var(--ui-scale)) }.project-empty { width:100%;height:calc(31px*var(--ui-scale));border:1px dashed #2b3328;border-radius:5px;background:transparent;color:#697564;text-align:left;padding-left:10px;font-size:10px;cursor:pointer }.project-empty:hover { border-color:#55684c;color:#9fbd91 }
-.session-list { overflow:auto;flex:1;padding:7px }.session-row { display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;width:100%;height:calc(55px*var(--ui-scale));padding:8px 7px;border:1px solid transparent;background:transparent;border-radius:7px;cursor:pointer;text-align:left;position:relative;margin-bottom:2px }.session-row:hover { background:#15191f }.session-row.active { background:#1a201a;border-color:#34442d;box-shadow:inset 2px 0 var(--green) }.session-row.awaiting { background:#2b2510;animation:pulse 2s ease-in-out infinite }.session-row.crashed,.session-row.exited { opacity:.62 }.state-dot { display:inline-block;width:7px;height:7px;border-radius:50%;background:#727b88;align-self:start;margin-top:5px;flex:none }.state-dot.running,.state-dot.idle { background:#7fc95a }.state-dot.working { background:var(--blue);box-shadow:0 0 7px #72a7ff88 }.state-dot.starting { background:#ae91d3 }.state-dot.awaiting { background:var(--amber);box-shadow:0 0 8px #e7c768aa }.state-dot.crashed { background:var(--red) }.state-dot.exited { background:#69717d }.state-dot.idle.standing { background:transparent;border:2px solid var(--blue);box-sizing:border-box;box-shadow:0 0 6px #72a7ff55;animation:none }
+.session-list { overflow:auto;flex:1;padding:7px }.session-row { display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:var(--session-row-gap);width:100%;height:calc(55px*var(--ui-scale));padding:8px 7px;border:1px solid transparent;background:transparent;border-radius:7px;cursor:pointer;text-align:left;position:relative;margin-bottom:2px }.session-row:hover { background:#15191f }.session-row.active { background:#1a201a;border-color:#34442d;box-shadow:inset 2px 0 var(--green) }.session-row.awaiting { background:#2b2510;animation:pulse 2s ease-in-out infinite }.session-row.crashed,.session-row.exited { opacity:.62 }.state-dot { display:inline-block;width:7px;height:7px;border-radius:50%;background:#727b88;align-self:start;margin-top:5px;flex:none }.state-dot.running,.state-dot.idle { background:#7fc95a }.state-dot.working { background:var(--blue);box-shadow:0 0 7px #72a7ff88 }.state-dot.starting { background:#ae91d3 }.state-dot.awaiting { background:var(--amber);box-shadow:0 0 8px #e7c768aa }.state-dot.crashed { background:var(--red) }.state-dot.exited { background:#69717d }.state-dot.idle.standing { background:transparent;border:2px solid var(--blue);box-sizing:border-box;box-shadow:0 0 6px #72a7ff55;animation:none }
 .state-dot.working.interrupting { background:var(--amber);box-shadow:0 0 7px #e7c76888;animation:none }
 .session-copy { display:flex;flex-direction:column;gap:4px;min-width:0 }.session-copy strong { font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.session-copy small { font:9px 'JetBrains Mono';color:#697381;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.row-actions { display:none;position:absolute;right:7px;bottom:6px }.session-row:hover .row-actions { display:block }.row-actions button { border:0;background:#262d35;border-radius:4px;color:#aeb5bf;cursor:pointer }.row-actions button:hover { color:var(--red) }
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
@@ -3239,6 +3239,11 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
      equal to that padding — they are a restatement of it, not a second opinion. */
   --session-row-inset-x:8px;
   --session-row-inset-y:5px;
+  /* The gap between the indicator's gutter column and the row's text column. A
+     variable because `.row-metric` — the box the width ladder's budget is measured
+     from — has to reproduce this row's text column exactly, and a second literal
+     `8px` in that rule would be a copy of the layout rather than the layout. */
+  --session-row-gap:8px;
 }
 .state-dot.state-indicator{
   /* Dense surfaces — tab strips, menus, pane headers — keep the former dot's
@@ -3341,17 +3346,47 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
    colour is what keeps the fade right on a hovered, selected, or awaiting row —
    all three paint different backgrounds, and one of them pulses. */
 .row-actions{background-color:inherit;-webkit-mask-image:linear-gradient(to right,transparent,#000 12px);mask-image:linear-gradient(to right,transparent,#000 12px)}
-/* The bottom line does the opposite: neither section shrinks, the right one is
-   pushed over by `margin-left:auto` only while there is room, and the line
-   clips. So the two sections slide together as the sidebar narrows, meet at a
-   fixed gap, and then run off the right edge — rather than the right section
-   squeezing the left one out of existence, which is what `flex:1 1 auto` on the
-   left plus `flex:0 0 auto` on the right actually does. */
-.row-line.bottom{overflow:hidden}
-.row-line.bottom .row-section{flex:0 0 auto}
-.row-line.bottom .row-section.right{margin-left:auto;padding-left:10px}
+/* The bottom line now yields in the same direction as the top one: the RIGHT
+   section is laid out first and the LEFT section ellipsizes into what is left.
+
+   It used to be the reverse — neither section shrank, and the right one was
+   pushed off the line's edge and clipped. Measured at the 190px minimum, a
+   22-character worktree on the left held a fixed 116px while 49 of the model's
+   68px were cut off the right edge, mid-glyph, with no ellipsis: the box was
+   never squeezed, so `text-overflow` never engaged. A value the reader pinned to
+   the row's edge must not be deletable by a long value on the other side.
+
+   The failure the old rule was guarding against — a fixed right section squeezing
+   the left one out of existence — is prevented by `--row-token-floor` instead of
+   by absolute left precedence. The lopsided shrink factors are what sequence the
+   two: flexbox shrinks siblings in proportion, so 1000 against 1 makes the left
+   absorb the whole deficit until it reaches its floor, after which the right
+   begins to yield. Neither can reach zero, and neither overflows the line.
+
+   The floor is six characters of the line's own monospace type, matching the
+   token engine's `ROW_MIN_CHARS`: below it a truncated worktree stops
+   distinguishing itself from its siblings, and that is the width at which the
+   engine has already collapsed the token to its mark. */
+.row-line.bottom{overflow:hidden;--row-token-floor:6ch}
+.row-line.bottom .row-section.left{flex:1000 1 auto;min-width:0;overflow:hidden}
+.row-line.bottom .row-section.right{flex:0 1 auto;margin-left:auto;padding-left:10px;min-width:0}
+/* One token per section yields, for the reason the top line has the same rule:
+   flexbox shrinks every sibling in proportion, so a squeezed non-clipping token
+   spills its glyph visibly under its neighbour instead of ellipsizing. The one
+   that yields is the one furthest from the row's edge the section is anchored to
+   — the left section's last token, the right section's first — because the tokens
+   at the edges are the ones placement pinned there. */
+.row-line.bottom .row-section .row-token{flex:none}
+.row-line.bottom .row-section.left .row-token:last-child,
+.row-line.bottom .row-section.right .row-token:first-child{
+  flex:0 1 auto;overflow:hidden;min-width:min(var(--row-token-floor),100%)
+}
 .row-token{display:inline-flex;align-items:baseline;min-width:0;flex:0 1 auto}
 .row-section.left .row-token:last-child{overflow:hidden}
+/* A token collapsed to its field's mark. Unshrinkable and never ellipsized: a
+   mark has nothing to lose a tail from, and the whole point of the rung is that
+   it is the smallest honest thing the field can be. */
+.row-icon{flex:none;white-space:nowrap}
 .row-sep{color:#5c6f61;opacity:.7;white-space:pre;flex:none}
 .row-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row-text.muted{color:#5c6f61}
@@ -3401,17 +3436,47 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   background:var(--blue);box-shadow:0 0 0 1.5px var(--panel);pointer-events:none
 }
 .session-row.active .ind-standing{box-shadow:0 0 0 1.5px #1a201a}
-/* Width shedding is NOT done here. Hiding a token with `display:none` removes
-   the token but not the separator already emitted beside it, which rendered a
-   narrowed row as `· apply_patch`. The token engine sheds instead, so the
-   separator invariant — only between tokens that drew — survives resizing.
-   See `shedForWidth` in sessionRowFields.ts. */
+/* Collapsing a token to its mark, and dropping one, are NOT done here. Hiding a
+   token with `display:none` removes the token but not the separator already
+   emitted beside it, which rendered a narrowed row as `· apply_patch`. The token
+   engine fits the line instead, so the separator invariant — only between tokens
+   that drew — survives resizing. Continuous truncation *is* done here, because
+   CSS measures exactly what a JS step would only quantise.
+   See `fitLine` in sessionRowFields.ts. */
+/* The box the engine's character budget is measured from: a zero-height stand-in
+   for one row's text column, inside the real container chain.
+
+   It exists because the budget was previously compared against the width of the
+   whole `<aside class="sidebar">`, which overstates the room by the indicator
+   gutter, the tree's and list's padding, and the scrollbar. At the default 254px
+   sidebar that is 49-63px depending on `--session-dot`, a setting the thresholds
+   could not see — so the shipped default degraded a token before anybody dragged
+   anything, and a user who enlarged the indicator got the same thresholds over
+   less room.
+
+   Every number here comes from the variables `.session-row` itself is built from,
+   so the measured column cannot drift from the drawn one. It deliberately does
+   NOT reuse the `.session-row` class: a second element carrying it changes what
+   `querySelector('.session-row')` returns for every other reader in the app and
+   in the renderer specs, which is too large a side effect for a measuring stick.
+
+   A `ResizeObserver` on the inner cell picks up the scrollbar appearing and the
+   indicator being resized as well as the drag, none of which resizes the sidebar
+   itself. */
+.row-metric-probe{height:0;overflow:hidden;visibility:hidden;pointer-events:none}
+.row-metric{
+  display:grid;grid-template-columns:var(--session-dot) minmax(0,1fr);
+  gap:var(--session-row-gap);padding-inline:var(--session-row-inset-x)
+}
 @media(prefers-reduced-motion:reduce){.state-dot.state-indicator,.ind-core{animation:none!important}}
 
 /* Settings → Appearance → Session rows. */
 .session-row-settings h4{margin:14px 0 4px;font-size:11px}
 .session-row-settings h5{margin:0 0 3px;color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
-.session-row-preview{width:100%;max-width:420px;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+/* Width comes from the panel's own control, not from a cap here: it used to be
+   pinned at 420px — wider than the sidebar can be dragged — so the panel showed
+   every setting except the one a reader cannot predict from the field list. */
+.session-row-preview{max-width:100%;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
 .session-row-preview .session-row{cursor:default}
 /* Slider plus a live readout, because a size in pixels is a number the user has
    to be able to say back — a bare track leaves "how big is it now" unanswerable

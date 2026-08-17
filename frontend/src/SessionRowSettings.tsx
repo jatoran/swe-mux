@@ -11,7 +11,7 @@
 // the user nothing about what they just changed; the four sample sessions here
 // are chosen so each mode has something to demonstrate.
 
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { SessionRowBody } from './SessionRowBody'
 import { StateIndicator } from './StateIndicator'
 import { currentProfile, type SettingsProfile } from './deviceSettings'
@@ -26,7 +26,10 @@ import {
 import {
   buildSessionRowTokens, deriveRowContext, sessionContextArc, sessionStandingMark,
 } from './sessionRowFields'
-import { loadSessionRowConfig, saveSessionRowConfig } from './sessionRowPrefs'
+import { loadSessionRowConfig, saveSessionRowConfig, useRowBudget } from './sessionRowPrefs'
+import {
+  SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, clampSidebarWidth,
+} from './sidebarResize'
 import type { Session } from './types'
 
 const NOW = 1_770_000_000
@@ -96,7 +99,15 @@ const PREVIEW_SESSIONS: Session[] = [
   }),
 ]
 
-const PREVIEW_CONTEXT = deriveRowContext(PREVIEW_SESSIONS, { 'preview-worktree': 2 }, NOW)
+/**
+ * Everything about the preview except how much room it has.
+ *
+ * The budget is measured off the preview itself, so the panel demonstrates the
+ * width ladder instead of hiding it: this preview used to render at a fixed 420px
+ * — wider than the sidebar can be dragged — so the one behaviour a reader cannot
+ * predict from the field list was the one behaviour it never showed.
+ */
+const PREVIEW_FLEET = deriveRowContext(PREVIEW_SESSIONS, { 'preview-worktree': 2 }, NOW)
 
 const SHAPES: Array<{ id: DotShape; label: string }> = [
   { id: 'hexagon', label: 'Hexagon' }, { id: 'circle', label: 'Circle' }, { id: 'square', label: 'Square' },
@@ -131,6 +142,16 @@ export function SessionRowSettings() {
   // a desktop browser shows the mobile result instead of leaving the preview
   // inert and the change unverifiable until you pick up the phone.
   const [sizeProfile, setSizeProfile] = useState<SettingsProfile>(thisDevice)
+  // The width the preview is drawn at, and therefore the width the ladder is
+  // demonstrated at. Device-local and unpersisted on purpose: it is an inspection
+  // control for this visit to the panel, not a property of the layout.
+  const [previewWidth, setPreviewWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
+  const previewMetricRef = useRef<HTMLDivElement>(null)
+  const previewBudget = useRowBudget(previewMetricRef)
+  const previewContext = useMemo(
+    () => ({ ...PREVIEW_FLEET, budget: previewBudget }),
+    [previewBudget],
+  )
 
   useEffect(() => {
     const sync = () => setConfig(loadSessionRowConfig())
@@ -248,8 +269,36 @@ export function SessionRowSettings() {
     {/* The preview carries the size of whichever device class is being edited,
         rather than the root variable this device is using, so adjusting the
         mobile size from a desktop browser still shows what it did. */}
-    <div class="session-row-preview sidebar" style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px` }}>
+    <label class="row-size-control">
+      <span>Sidebar width</span>
+      <input
+        type="range"
+        min={SIDEBAR_MIN_WIDTH}
+        max={SIDEBAR_MAX_WIDTH}
+        step={1}
+        value={previewWidth}
+        aria-label="Preview sidebar width in pixels"
+        onInput={event => setPreviewWidth(clampSidebarWidth(event.currentTarget.valueAsNumber))}
+      />
+      <output>{previewWidth}px</output>
+    </label>
+    <div
+      class="session-row-preview sidebar"
+      style={{ '--session-dot': `${config[sizeKey(sizeProfile)]}px`, width: `${previewWidth}px` }}
+    >
       <div class="session-list">
+        {/* Same probe the sidebar renders, so the preview's budget is measured
+            the same way rather than computed from the slider's number: the row's
+            text column is the slider minus a gutter the indicator size sets. */}
+        <div ref={previewMetricRef} class="row-metric-probe" aria-hidden="true">
+          <div class="row-metric">
+            <span />
+            <span class="session-copy" data-metric="copy">
+              <span class="row-line top"><span data-metric="top">0000000000</span></span>
+              <span class="row-line bottom"><span data-metric="bottom">0000000000</span></span>
+            </span>
+          </div>
+        </div>
         {PREVIEW_SESSIONS.map(session => <div key={session.id} class={`session-row agent ${session.state}`}>
           <StateIndicator
             session={session}
@@ -257,7 +306,7 @@ export function SessionRowSettings() {
             gauge={sessionContextArc(session, config)}
             standing={sessionStandingMark(session, config)}
           />
-          <SessionRowBody session={session} tokens={buildSessionRowTokens(session, config, PREVIEW_CONTEXT)} config={config} />
+          <SessionRowBody session={session} tokens={buildSessionRowTokens(session, config, previewContext)} config={config} />
         </div>)}
       </div>
     </div>

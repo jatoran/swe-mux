@@ -1950,13 +1950,37 @@ The layout is user-configurable in Settings → Appearance → Session rows.
   A token that names a model *family* — `codex`, `kimi`, `o3`, `sonnet` — is not branding and stays.
   It replaced a hand-maintained per-family table, which printed the raw id for every model nobody had added yet: the sidebar showed `opus-5` beside `claude-fable-5`, and `sonnet-4-6` beside `gpt-5.6-sol`, in the same list.
 - **Separators are per line** and render only between tokens that actually drew, so a hidden conditional field leaves no dangling or doubled mark.
-- **Sections meet but never overlap.**
-  Neither bottom-line section shrinks; the right one is pushed over only while there is room, and the line clips.
-  So as the sidebar narrows the two slide together, meet at a fixed gap, and then run off the right edge — rather than the right section squeezing the left one out of existence, which is what a flexible left section beside a fixed right one actually does.
-- **Width shedding happens in the token engine, never in CSS.**
-  Below width thresholds the left section drops whole low-priority tokens, so the survivors stay fully legible instead of every token losing its tail at once.
-  It cannot be a container query: hiding a token with `display:none` removes the token but not the separator already emitted beside it, so a narrowed row rendered as `· apply_patch` — a leading mark belonging to a token that was gone.
-  The separator invariant is a property of the token list, so the list is what sheds; the width is measured with a `ResizeObserver`.
+- **Sections meet but never overlap, and the RIGHT one has precedence.**
+  On both lines the right section is laid out first and the left section ellipsizes into what remains.
+  A value the reader deliberately pinned to the row's edge must not be deletable by a long value on the other side.
+  The bottom line used to do the opposite: neither section shrank, and the right one was pushed off the line's edge and clipped.
+  Measured at the 190 px minimum, a 22-character worktree on the left held a fixed 116 px while 49 of the model's 68 px were cut off the right edge, mid-glyph and with no ellipsis — the box was never squeezed, so `text-overflow` never engaged.
+  The failure the old rule guarded against, a fixed right section squeezing the left one out of existence, is prevented by a `min-width` floor on the left instead of by making it unshrinkable.
+  Lopsided flex-shrink factors (1000 against 1) are what sequence the two: flexbox shrinks siblings in proportion, so the left absorbs the whole deficit until it reaches its floor, after which the right begins to yield.
+  Exactly one token per section yields — the left section's last, the right section's first, the ones furthest from the edge the section is anchored to — because a squeezed non-clipping sibling spills its glyph under its neighbour instead of ellipsizing.
+- **A field too wide for the row degrades down a three-rung ladder, in this order.**
+  1. **Truncated.** CSS ellipsizes the yielding token down to `ROW_MIN_CHARS` (6). Nothing in the engine acts; it only accounts for the rung. The browser measures the available space exactly and truncates at every intermediate pixel, which a JS step could only quantise, and worse.
+  2. **Its own mark.** Below that floor a field with an unambiguous glyph collapses to it — worktree `⌂`, branch `⎇` — and the value moves to the tooltip. An icon costs two characters against a value's ten or twenty, so collapsing the line is far cheaper than deleting from it and keeps every placed fact on screen, which is the point of having placed the field.
+  3. **Dropped.** For a field with no honest mark, and for a line so narrow that even the marks do not fit.
+  Six is the floor rather than a target: below it a worktree reads `feat-t`, which two sibling checkouts in one fleet will share, so the token is spending width to say something that no longer distinguishes.
+  The mark is drawn whatever `gitGlyphs` says — that setting decides whether a glyph decorates the full value; this rung is the field's identity at the width where its value no longer fits.
+  Not every field earns rung 2: `model` deliberately has no glyph, because the provider mark is already the `glyph` field and cannot tell opus from sonnet, so an icon there would claim to identify something it does not.
+  Within rungs 2 and 3 the order is ascending `priority`, so the field the reader ranked lowest is the first to lose its value and the first to leave.
+- **Rungs 2 and 3 happen in the token engine, never in CSS.**
+  A container query cannot do it: hiding a token with `display:none` removes the token but not the separator already emitted beside it, so a narrowed row rendered as `· apply_patch` — a leading mark belonging to a token that was gone.
+  The separator invariant is a property of the token list, so the list is what degrades.
+- **A section is never emptied while it still holds a token.**
+  The count-based shedding this replaced had no floor beyond "more than one token to begin with", so a two-token section at shed 2 lost both: a sidebar dragged to 230 px rendered a blank bottom line, and deleted an `always`-mode field to do it.
+- **The budget is measured in characters, off a probe shaped like a row's text column.**
+  `.row-metric` is a zero-height stand-in for one row's text column, nested in the real container chain and built from the same variables `.session-row` is (`--session-dot`, `--session-row-gap`, `--session-row-inset-x`), so the measured column cannot drift from the drawn one.
+  Characters rather than pixels because the bottom line is monospace: on the line that carries almost every degradable field the unit is exact rather than estimated.
+  It replaced pixel thresholds compared against the width of the whole `<aside class="sidebar">`, which overstates a row's room by the indicator gutter, the tree's and list's padding, and the scrollbar — 49 to 63 px at the default 254 px width depending on `--session-dot`, a setting the thresholds could not see.
+  The shipped default therefore degraded a token from every section before anybody dragged anything, and a user who enlarged the indicator got the same thresholds over less room.
+  A `ResizeObserver` on the probe's inner cell also catches the scrollbar appearing and the indicator being resized, neither of which resizes the sidebar at all.
+  The probe deliberately does **not** carry the `.session-row` class: a second element wearing it changes what `querySelector('.session-row')` returns for every other reader, which is too large a side effect for a measuring stick.
+- **The settings preview has its own width control, and measures its budget the same way.**
+  It used to render at a fixed 420 px — wider than the sidebar can be dragged — so the one behaviour a reader cannot predict from the field list was the one behaviour the panel never showed.
+  The width is device-local and unpersisted: it is an inspection control for this visit to the panel, not a property of the layout.
 - **The empty bottom line is kept on desktop and dropped on mobile.**
   Constant row height is what makes a list scannable, and the blank reads as "nothing to report"; on a phone the vertical space is worth more.
 - **One duration field, and within a turn it measures one thing.**

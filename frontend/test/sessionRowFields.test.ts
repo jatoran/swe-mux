@@ -9,8 +9,8 @@ import {
 } from '../src/sessionRowConfig.ts'
 import { sessionDotSize } from '../src/sessionRowPrefs.ts'
 import {
-  buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
-  identityRowTokens, sessionContextArc, sessionStandingMark, shedForWidth,
+  EMPTY_ROW_BUDGET, buildSessionRowTokens, deriveRowContext, emptyRowContext, formatRowDuration,
+  identityRowTokens, rowBudget, sessionContextArc, sessionStandingMark,
 } from '../src/sessionRowFields.ts'
 import type { StandingActivity } from '../src/types.ts'
 import { shapePath } from '../src/dotShapes.ts'
@@ -382,41 +382,141 @@ test('with no fleet baseline every branch reads as divergent', () => {
   assert.deepEqual(bottomText(session(), config, context()), ['master'])
 })
 
-test('shedding drops whole tokens and leaves no dangling separator', () => {
-  // Shedding used to be a container query hiding tokens with `display:none`,
-  // which removed the token but not the separator JSX beside it — a narrowed
-  // row rendered as `· apply_patch`, a mark belonging to a token that was gone.
+test('a line that fits is left alone', () => {
   const config = withBottom(defaultSessionRowConfig(), ['branch', 'diff', 'queue', 'detail'])
   const item = session({
     state: 'working', state_detail: 'apply_patch',
     git: { branch: 'feat-x', dirty: 2, ahead: 0, behind: 0, added: 9, removed: 1 },
   })
-  const full = context({ queueDepth: { s1: 2 } })
-  assert.deepEqual(bottomText(item, config, full), ['feat-x', '+9 -1', '⋮2', 'apply_patch'])
-
-  // Lowest priority sheds first — diff (55) then branch (60) — while the queue
-  // depth (65) and what it is doing (70) survive, and the configured order of
-  // the survivors is preserved.
-  const tight = buildSessionRowTokens(item, config, { ...full, shed: 2 })
-  assert.deepEqual(tight.bottom.left.tokens.map(token => token.id), ['queue', 'detail'])
-  // The renderer emits a separator only between the tokens in this list, so a
-  // shed token cannot leave one behind.
-  assert.equal(tight.bottom.left.tokens[0].id, 'queue')
+  const roomy = context({ queueDepth: { s1: 2 }, budget: { top: 60, bottom: 80 } })
+  assert.deepEqual(bottomText(item, config, roomy), ['feat-x', '+9 -1', '⋮2', 'apply_patch'])
 })
 
-test('the width thresholds shed progressively and never below zero', () => {
-  assert.equal(shedForWidth(0), 0, 'unmeasured width sheds nothing')
-  assert.equal(shedForWidth(400), 0)
-  assert.equal(shedForWidth(270), 1)
-  assert.equal(shedForWidth(230), 2)
-  assert.equal(shedForWidth(195), 3)
-  assert.equal(shedForWidth(120), 3, 'shedding stops once the list is exhausted')
+test('a value long enough to overflow is left for CSS to ellipsize, not degraded', () => {
+  // The reported case: one worktree on the left, one model on the right. At the
+  // narrowest the sidebar can be dragged the bottom line holds 25 characters and
+  // the two values want 31 — but each section's yielding token is the one CSS
+  // ellipsizes, so six characters of the worktree plus six of the model plus the
+  // gap is 14. Nothing is collapsed and nothing is dropped: the browser truncates
+  // the worktree continuously, and the model the reader pinned to the row's edge
+  // is untouched. Under the shedding this replaced the model was clipped off that
+  // edge instead, mid-glyph and without an ellipsis.
+  const config: SessionRowConfig = {
+    ...defaultSessionRowConfig(),
+    bottom: {
+      ...defaultSessionRowConfig().bottom,
+      left: [{ id: 'worktree', mode: 'always' }],
+      right: [{ id: 'model', mode: 'always' }],
+    },
+  }
+  const item = session({
+    model: 'gpt-5-codex',
+    git: { branch: 'master', worktree: 'feat-tokenizer-rewrite', dirty: 0, ahead: 0, behind: 0 },
+  })
+  const tokens = buildSessionRowTokens(item, config, context({ budget: { top: 40, bottom: 25 } }))
+  assert.deepEqual(tokens.bottom.left.tokens.map(token => token.display), ['full'])
+  assert.equal(tokens.bottom.left.tokens[0].text, 'feat-tokenizer-rewrite')
+  assert.deepEqual(tokens.bottom.right.tokens.map(token => token.text), ['5-codex'])
+
+  // Below the floor the mark takes over, and the model still survives it.
+  const crushed = buildSessionRowTokens(item, config, context({ budget: { top: 40, bottom: 12 } }))
+  assert.equal(crushed.bottom.left.tokens[0].display, 'icon')
+  assert.equal(crushed.bottom.left.tokens[0].glyph, '⌂')
+  assert.deepEqual(crushed.bottom.right.tokens.map(token => token.text), ['5-codex'])
 })
 
-test('the title survives any amount of shedding', () => {
+test('a narrow line collapses marks before it drops anything, lowest priority first', () => {
+  // The ladder's whole point: an icon costs two characters against a value's ten,
+  // so a field with a mark of its own keeps saying that it exists rather than
+  // being deleted to make room for a field the reader ranked lower.
+  const config = withBottom(defaultSessionRowConfig(), ['worktree', 'branch', 'diff', 'detail'])
+  const item = session({
+    state: 'working', state_detail: 'apply_patch',
+    git: { branch: 'feat-tokenizer', worktree: 'feat-tokenizer-rewrite', dirty: 2, ahead: 0, behind: 0, added: 9, removed: 1 },
+  })
+  const tokens = (bottom: number) =>
+    buildSessionRowTokens(item, config, context({ budget: { top: 60, bottom } })).bottom.left.tokens
+
+  // The line's natural cost is 61 characters: 22 + 14 + 5 + 11 of value plus three
+  // ` · ` separators. Branch (60) is the lowest-priority token that owns a mark, so
+  // at a budget that one collapse satisfies it is the only one that loses its
+  // value — and it is still on the row.
+  const squeezed = tokens(50)
+  assert.deepEqual(squeezed.map(token => token.id), ['worktree', 'branch', 'diff', 'detail'])
+  assert.equal(squeezed.find(token => token.id === 'branch')?.display, 'icon')
+  assert.equal(squeezed.find(token => token.id === 'worktree')?.display, 'full')
+
+  // Tighter still: the worktree collapses too, and only then does the diff — which
+  // has no mark of its own — get dropped.
+  const tight = tokens(20)
+  assert.equal(tight.find(token => token.id === 'worktree')?.display, 'icon')
+  assert.ok(!tight.some(token => token.id === 'diff'), 'a markless low-priority field is dropped')
+})
+
+test('a field with no honest mark is dropped rather than iconised', () => {
+  // `model` deliberately carries no glyph: the provider mark is already the
+  // `glyph` field and cannot tell opus from sonnet, so an icon here would claim
+  // to identify something it does not.
+  const config = withBottom(defaultSessionRowConfig(), ['model', 'detail'])
+  const item = session({ model: 'claude-opus-5', state: 'working', state_detail: 'apply_patch' })
+  const tokens = buildSessionRowTokens(item, config, context({ budget: { top: 60, bottom: 12 } }))
+  const ids = tokens.bottom.left.tokens.map(token => token.id)
+  assert.deepEqual(ids, ['detail'], 'the lower-priority markless field leaves entirely')
+})
+
+test('a section is never emptied while it still holds a token', () => {
+  // The regression this pins: the count-based shedding this replaced had no floor
+  // beyond "more than one token to begin with", so a two-token section at shed 2
+  // lost both. A sidebar dragged to 230px rendered a blank bottom line and
+  // deleted an `always`-mode field to do it.
+  const config: SessionRowConfig = {
+    ...defaultSessionRowConfig(),
+    bottom: {
+      ...defaultSessionRowConfig().bottom,
+      left: [{ id: 'worktree', mode: 'always' }, { id: 'detail', mode: 'always' }],
+      right: [{ id: 'model', mode: 'always' }, { id: 'duration', mode: 'always' }],
+    },
+  }
+  const item = session({
+    state: 'working', state_detail: 'apply_patch', turn_started_at: NOW - 1320,
+    model: 'claude-opus-5',
+    git: { branch: 'master', worktree: 'feat-tokenizer-rewrite', dirty: 0, ahead: 0, behind: 0 },
+  })
+  const tokens = buildSessionRowTokens(item, config, context({ budget: { top: 60, bottom: 1 } }))
+  assert.equal(tokens.bottom.left.tokens.length, 1, 'the left section keeps one token')
+  assert.equal(tokens.bottom.right.tokens.length, 1, 'the right section keeps one token')
+  // The survivors are the highest-priority members of each section.
+  assert.equal(tokens.bottom.left.tokens[0].id, 'detail')
+  assert.equal(tokens.bottom.right.tokens[0].id, 'duration')
+})
+
+test('an unmeasured budget degrades nothing', () => {
+  const config = withBottom(defaultSessionRowConfig(), ['worktree', 'branch', 'diff', 'detail'])
+  const item = session({
+    state: 'working', state_detail: 'apply_patch',
+    git: { branch: 'feat-tokenizer', worktree: 'feat-tokenizer-rewrite', dirty: 2, ahead: 0, behind: 0, added: 9, removed: 1 },
+  })
+  const tokens = buildSessionRowTokens(item, config, context())
+  assert.equal(tokens.bottom.left.tokens.length, 4)
+  assert.ok(tokens.bottom.left.tokens.every(token => token.display === 'full'))
+})
+
+test('the character budget is the text column divided by that line’s own advance', () => {
+  // Measured, not assumed. The thresholds this replaced were compared against the
+  // width of the whole sidebar, which overstates a row's room by the indicator
+  // gutter, the tree's padding, and the scrollbar — 49 to 63px at the default
+  // width depending on `--session-dot`, a setting they could not see.
+  assert.deepEqual(rowBudget(199, { top: 7, bottom: 5.27 }), { top: 28, bottom: 37 })
+  assert.deepEqual(rowBudget(135, { top: 7, bottom: 5.27 }), { top: 19, bottom: 25 })
+  assert.deepEqual(rowBudget(0, { top: 7, bottom: 5.27 }), EMPTY_ROW_BUDGET, 'unmeasured stays unmeasured')
+  assert.deepEqual(rowBudget(199, { top: 0, bottom: 0 }), { top: 0, bottom: 0 }, 'no advance, no budget')
+})
+
+test('identity survives any amount of width pressure', () => {
   const config = defaultSessionRowConfig()
-  const tokens = buildSessionRowTokens(session(), config, { ...context(), shed: 99 })
+  const tokens = buildSessionRowTokens(session(), config, context({ budget: { top: 1, bottom: 1 } }))
   assert.ok(tokens.top.left.tokens.some(token => token.kind === 'title'))
+  assert.ok(tokens.top.left.tokens.every(token => token.display === 'full'))
 })
 
 test('the identity projection drops every non-identity field', () => {
