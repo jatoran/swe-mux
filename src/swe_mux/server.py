@@ -8848,6 +8848,10 @@ async def session_change_map(request: web.Request) -> web.Response:
             "nodes": nodes,
             "edges": subgraph.get("edges", []),
             "sessions": sessions_legend if unify else [],
+            # When the blast radius overflowed the node cap, say so and by how much,
+            # so a truncated view never reads as the whole reach.
+            "truncated": bool(subgraph.get("truncated")),
+            "totals": subgraph.get("totals"),
         }
     )
 

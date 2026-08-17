@@ -69,6 +69,9 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
   const [hops, setHops] = useState(1)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [mobile, setMobile] = useState(isMobile)
+  // True while the worker is settling ForceAtlas2. The seeded ring is already on
+  // screen, so this drives an unobtrusive "laying out…" badge, not a blank pane.
+  const [layoutPending, setLayoutPending] = useState(false)
   // Bumped when the WebGL context is lost, which is the one failure Sigma cannot
   // recover from in place: every program, texture, and buffer it holds is dead.
   const [rebuildToken, setRebuildToken] = useState(0)
@@ -173,7 +176,14 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
 
     // Sigma has no resize observation of its own and only watches the window, so a
     // drawer drag or a pane split would otherwise leave the canvas at its old size.
-    const observer = new ResizeObserver(() => renderer.resize())
+    // The explicit refresh is load-bearing: selecting a node opens the detail panel,
+    // which reflows the pane and resizes the canvas, and a bare resize() leaves the
+    // WebGL surface blank until the next camera move (the "click a node and it goes
+    // black until you pan" bug). Repainting on every resize keeps a picture up.
+    const observer = new ResizeObserver(() => {
+      renderer.resize()
+      renderer.refresh()
+    })
     observer.observe(host)
 
     // Same resilience TerminalPane's WebGL renderer has, for the same reason: a lost
@@ -241,11 +251,13 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
     renderer.refresh()
 
     const worker = ensureWorker()
-    if (!worker) return
+    if (!worker) { setLayoutPending(false); return }
+    setLayoutPending(true)
     const handler = (event: MessageEvent<LayoutResult>) => {
       const positions = usablePositions(event.data, request.requestId, nodes)
       if (!positions) return
       worker.removeEventListener('message', handler)
+      setLayoutPending(false)
       if (graphRef.current !== graph) return
       for (const [path, point] of Object.entries(positions)) {
         if (graph.hasNode(path)) graph.mergeNodeAttributes(path, point)
@@ -254,7 +266,10 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
     }
     worker.addEventListener('message', handler)
     worker.postMessage(request)
-    return () => worker.removeEventListener('message', handler)
+    return () => {
+      worker.removeEventListener('message', handler)
+      setLayoutPending(false)
+    }
   }, [data, showGraph, rebuildToken])
 
   const controls = <div class="change-map-controls">
@@ -363,13 +378,33 @@ export function ChangeMapPane({ session, project, onPopOut }: Props) {
         </ul>
       </section>)}
     </div>
-    : <div class="change-map-canvas" ref={containerRef} role="img"
-      aria-label={`Change map: ${nodes.length} files, ${edges.length} dependencies`} />
+    : <div class="change-map-stage">
+      <div class="change-map-canvas" ref={containerRef} role="img"
+        aria-label={`Change map: ${nodes.length} files, ${edges.length} dependencies`} />
+      {(loading || layoutPending) && <div class="change-map-busy" role="status">
+        <span class="change-map-spinner" aria-hidden="true" />
+        <span>{loading ? 'Loading change map…' : `Laying out ${nodes.length} nodes…`}</span>
+      </div>}
+    </div>
+
+  // Two honest captions the reader needs to read the picture correctly: what the
+  // node cap dropped, and the common "seeds but no links" case where a session's
+  // edits sit outside the indexed tree (a worktree the project graph does not cover)
+  // or nothing imports them yet — without it, a ring of disconnected dots is a puzzle.
+  const status = <div class="change-map-status">
+    {data.truncated && data.totals && <small class="change-map-truncated">
+      Showing {data.totals.shown} of {data.totals.blast + data.totals.context + nodes.filter(n => n.role === 'seed').length} reachable files — blast radius capped for legibility.
+    </small>}
+    {!mobile && nodes.length > 0 && edges.length === 0 && <small class="change-map-note-inline">
+      No dependency links found for these files. They may be outside the indexed project tree (for example a worktree the graph does not cover), or nothing imports them yet.
+    </small>}
+  </div>
 
   return <section class="change-map-pane">
     {header}
     {controls}
     {legend}
+    {status}
     {error && <p class="usage-error">{error}</p>}
     {renderError && <p class="usage-error">The graph could not be drawn: {renderError}</p>}
     {body}

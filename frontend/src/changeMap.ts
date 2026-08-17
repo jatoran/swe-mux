@@ -39,6 +39,9 @@ export type ChangeMap = {
   edges: ChangeMapEdge[]
   /** Legend, populated only in unify mode. */
   sessions: ChangeMapSession[]
+  /** The blast radius overflowed the node cap; `totals` says by how much. */
+  truncated?: boolean
+  totals?: { shown: number; blast: number; context: number }
   excludes_note: string
   lower_bound_note: string
 }

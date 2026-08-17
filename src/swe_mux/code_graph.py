@@ -72,6 +72,11 @@ DEFAULT_BLAST_HOPS = 2
 MAX_BLAST_HOPS = 4
 DEFAULT_RESULT_LIMIT = 40
 MAX_RESULT_LIMIT = 200
+#: Hard cap on the nodes one change-map view ships. A hub edit can reach hundreds
+#: of files; past a few hundred the WebGL force layout and render stall and the
+#: picture is unreadable anyway. Seeds are always kept, then blast nodes
+#: nearest-hop first, then context; the drop is reported, never silent.
+MAX_MAP_NODES = 250
 #: A file re-parse never emits more than this many edges — a generated or minified
 #: file would otherwise flood the table. Recorded as a truncation, not silent.
 MAX_EDGES_PER_FILE = 4000
@@ -1048,48 +1053,89 @@ class CodeGraphStore:
     ) -> dict[str, Any]:
         """The bounded subgraph a change-map view needs: the seed files, their
         reverse dependents (blast radius), one hop of forward imports (context),
-        and every edge among that node set. Server-side so the client never holds
-        the whole codebase graph."""
+        and every edge among that node set. Server-side and hard-capped at
+        ``MAX_MAP_NODES`` so a god-node seed cannot ship thousands of nodes that
+        would stall the WebGL layout and render; seeds are always kept, then blast
+        nodes nearest-hop first, then context. ``truncated`` and ``totals`` report
+        what the cap dropped so the reader is never silently shown a partial map."""
         seeds = [s for s in dict.fromkeys(seed_paths) if s]
 
-        async def collect() -> dict[str, Any]:
-            nodes: dict[str, dict[str, Any]] = {}
-            for seed in seeds:
-                nodes.setdefault(seed, {"path": seed, "role": "seed"})
-            # Reverse dependents (yellow = blast radius).
-            for seed in seeds:
-                for dep in await self.reverse_dependents(project_id, seed, hops=hops):
-                    node = nodes.setdefault(dep.path, {"path": dep.path, "role": "blast"})
-                    if node["role"] != "seed":
-                        node["role"] = "blast"
-                        node["hop"] = dep.hop
-            # Forward context (blue = immediate imports).
-            for seed in seeds:
-                for imp in await self.imports_of(project_id, seed):
-                    nodes.setdefault(imp, {"path": imp, "role": "context"})
-            node_set = set(nodes)
-            edges = await self._edges_among(project_id, node_set)
-            return {"nodes": list(nodes.values()), "edges": edges}
+        nodes: dict[str, dict[str, Any]] = {}
+        for seed in seeds:
+            nodes.setdefault(seed, {"path": seed, "role": "seed"})
 
-        return await collect()
+        # Blast radius: the nearest hop each dependent sits at (a file reached from
+        # two seeds keeps the smaller hop), collected fully so the totals are honest
+        # even when the cap drops the far tail.
+        blast_hop: dict[str, int] = {}
+        for seed in seeds:
+            for dep in await self.reverse_dependents(project_id, seed, hops=hops):
+                if dep.path in nodes:
+                    continue
+                prev = blast_hop.get(dep.path)
+                if prev is None or dep.hop < prev:
+                    blast_hop[dep.path] = dep.hop
+        blast_total = len(blast_hop)
+
+        # Forward context: what the seeds import, minus anything already a seed or a
+        # blast node.
+        context: set[str] = set()
+        for seed in seeds:
+            for imp in await self.imports_of(project_id, seed):
+                if imp not in nodes and imp not in blast_hop:
+                    context.add(imp)
+        context_total = len(context)
+
+        truncated = False
+        budget = MAX_MAP_NODES - len(nodes)
+        for path, hop in sorted(blast_hop.items(), key=lambda kv: (kv[1], kv[0])):
+            if budget <= 0:
+                truncated = True
+                break
+            nodes[path] = {"path": path, "role": "blast", "hop": hop}
+            budget -= 1
+        for path in sorted(context):
+            if budget <= 0:
+                truncated = True
+                break
+            nodes[path] = {"path": path, "role": "context"}
+            budget -= 1
+
+        edges = await self._edges_among(project_id, set(nodes))
+        result: dict[str, Any] = {"nodes": list(nodes.values()), "edges": edges}
+        if truncated:
+            result["truncated"] = True
+            result["totals"] = {
+                "shown": len(nodes),
+                "blast": blast_total,
+                "context": context_total,
+            }
+        return result
 
     async def _edges_among(self, project_id: str, node_set: set[str]) -> list[dict[str, Any]]:
-        if not node_set:
+        """Edges whose endpoints are both in the (bounded) node set.
+
+        Filters in SQL against the node set rather than scanning every project edge
+        and filtering in Python: the map's node set is capped at ``MAX_MAP_NODES``,
+        so two bounded ``IN`` clauses stay well under SQLite's parameter limit and
+        ride the src/dst indexes, instead of loading a repository's whole edge table
+        (tens of thousands of rows) on every view."""
+        paths = list(node_set)
+        if not paths:
             return []
 
         def op() -> list[dict[str, Any]]:
+            placeholders = ",".join("?" * len(paths))
             rows = self._db.execute(
-                "SELECT DISTINCT src_path, dst_path, kind FROM code_graph_edges "
-                "WHERE project_id=? AND kind IN ('imports','calls') AND dst_path IS NOT NULL",
-                (project_id,),
+                f"SELECT DISTINCT src_path, dst_path, kind FROM code_graph_edges "
+                f"WHERE project_id=? AND kind IN ('imports','calls') "
+                f"AND src_path IN ({placeholders}) AND dst_path IN ({placeholders})",
+                (project_id, *paths, *paths),
             ).fetchall()
-            out: list[dict[str, Any]] = []
-            for r in rows:
-                if r["src_path"] in node_set and r["dst_path"] in node_set:
-                    out.append(
-                        {"source": r["src_path"], "target": r["dst_path"], "kind": r["kind"]}
-                    )
-            return out
+            return [
+                {"source": r["src_path"], "target": r["dst_path"], "kind": r["kind"]}
+                for r in rows
+            ]
 
         return await self._run(op)
 

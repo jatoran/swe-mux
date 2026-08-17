@@ -265,6 +265,29 @@ async def test_subgraph_bounded(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_subgraph_caps_and_reports_truncation(tmp_path: Path, monkeypatch) -> None:
+    import swe_mux.code_graph as cg
+
+    # helper.py is imported by six callers; cap the map at 3 nodes and confirm the
+    # seed plus two nearest dependents ship, with the drop reported honestly.
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "helper.py").write_text("def make(x):\n    return x\n")
+    for i in range(6):
+        (tmp_path / f"c{i}.py").write_text(
+            f"from pkg.helper import make\ndef f{i}():\n    return make(1)\n"
+        )
+    store = CodeGraphStore(tmp_path / "graph.db")
+    await index_project(store, "p1", str(tmp_path))
+    monkeypatch.setattr(cg, "MAX_MAP_NODES", 3)
+    sub = await store.subgraph("p1", ["pkg/helper.py"], hops=1)
+    assert len(sub["nodes"]) == 3  # 1 seed + 2 blast
+    assert sub["truncated"] is True
+    assert sub["totals"]["blast"] == 6  # all six counted even though capped
+    assert sub["totals"]["shown"] == 3
+    store.close()
+
+
 async def test_import_cycles(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("import b\ndef fa():\n    return b.fb()\n")
     (tmp_path / "b.py").write_text("import a\ndef fb():\n    return a.fa()\n")
