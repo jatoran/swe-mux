@@ -18,13 +18,14 @@ import {
   type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
 } from './drawerLayout'
 import { ProcessesTab } from './ProcessesTab'
+import { ScheduleTab } from './ScheduleTab'
 import type { WatchScope, WatchSnapshot } from './processWatch'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
 import { OverflowRail } from './RailScroller'
 import type { SendToAgentRequest, SendToAgentResult, SendToAgentTarget } from './SendToAgentPicker'
-import type { Project, ProjectBackend, Session } from './types'
+import type { LaunchProfile, Project, ProjectBackend, Session } from './types'
 import { hasHarnessTranscript } from './harnessRegistry'
 import { sessionDisplayName } from './sessionNames'
 
@@ -104,6 +105,12 @@ type Props = {
   processScope: WatchScope
   onProcessScope: (scope: WatchScope) => void
   onRefreshProcesses: () => void
+  /** Schedule: its own Project/all-Projects scope, owned by the caller like the
+   *  Processes one so it survives a tab switch and a Project change. */
+  scheduleScope: string
+  onScheduleScope: (scope: string) => void
+  /** Schedule: the launch profiles the editor offers, where a model flag lives. */
+  profiles: LaunchProfile[]
   /** Register a detected loopback server as a preview tab beside its session. */
   onOpenPreview: (sessionId: string, url: string) => void
   /** Escape hatch to the modal inspector, prefiltered to the tab's current scope. */
@@ -363,6 +370,20 @@ export function UtilityDrawer(props: Props) {
           onOpenPreview={props.onOpenPreview}
           onOpenInspector={props.onOpenInspector}
           onRefresh={props.onRefreshProcesses}
+          onDone={onDone}
+        />
+      case 'schedule':
+        return <ScheduleTab
+          project={project}
+          projects={props.projects}
+          profiles={props.profiles}
+          scope={props.scheduleScope}
+          onScope={props.onScheduleScope}
+          onOpenSession={props.onOpenSession}
+          onOpenProjectSettings={props.onOpenProjectSettings}
+          // `onDone` on purpose: revealing the session a schedule started, or
+          // opening the Project's opt-in, is acting on something other than the
+          // terminal underneath, so on mobile the drawer gets out of the way.
           onDone={onDone}
         />
       case 'notifications':

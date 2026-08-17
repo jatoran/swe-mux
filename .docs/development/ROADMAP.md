@@ -955,7 +955,13 @@ before Phase 5.
   `constraints_json` (`not_before`/`expires_at`, 30-day horizon, `delay_seconds` resolved at
   write time). Both paths honour it: an early manual send is refused `delivery_not_due` and
   keeps its state, "Send now" is the explicit human override, and an expired item is
-  cancelled rather than delivered late. Recurring/schedule-driven sends remain out of scope.
+  cancelled rather than delivered late. Recurring/schedule-driven *sends* remain out of scope:
+  a queue item is still delivered once and never re-armed.
+  **Recurrence exists one layer up instead, as scheduled runs** (`design/features/scheduled-runs.md`):
+  a schedule starts a *session* on a cron/interval/one-off trigger and stages its follow-up
+  messages as ordinary queue items with these same constraints. That is deliberately not a
+  repeating queue item - the recurring thing is the conversation, and a message that re-armed
+  itself would have no run to bind to.
 
 ### Human/device fleet queue
 

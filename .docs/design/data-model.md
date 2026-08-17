@@ -200,6 +200,23 @@
   writes `1` explicitly. A column default would also land on rows inserted by an opt-out and
   on the reserved pause row, where "on" is not what was meant, so the per-run default belongs
   in the one code path that grants a run rather than in the DDL.
+- `schedules` / `schedule_runs` (`features/scheduled-runs.md`): the definitions that start an
+  agent session on their own, and their run history.
+  A definition is a deferred `SpawnRequest` (`project_id`, `backend`, `profile_id`, `cwd`,
+  `session_name`, `prompt`) plus a trigger (`trigger_kind` `cron|interval|once` with `cron`,
+  `interval_seconds`, `run_at`, `timezone`), the policies (`catch_up`, `overlap`,
+  `daily_run_cap`), `follow_ups_json` (the messages pre-queued behind the seed prompt), a
+  `revision` for the same optimistic-concurrency contract the Project files use, and the
+  cached trigger state (`next_fire_at`, `last_fire_at`, `last_session_id`, `last_outcome`).
+  **These rows are deliberately machine-local rather than portable Project config**: a
+  schedule committed to a repository would arm itself in every clone and worktree, the same
+  boundary Project Action trust draws.
+  `schedule_runs` records one row per occurrence with `fire_key`, `due_at`, `outcome`
+  (`started|spawned|skipped|failed|missed`), `reason`, `session_id`, and `origin`
+  (`timer|manual`).
+  `(schedule_id, fire_key)` is **unique, and that index is the idempotency mechanism**: the
+  row is inserted before the spawn, so a daemon that dies mid-fire cannot start the same
+  occurrence twice on restart.
 - `project_scopes`, `repo_groups`, and `artifacts`: derived Git/filesystem inventory retained
   for diagnostics and future Git expansion, not session containment.
 - Git review patches and line annotations are not SQLite records.

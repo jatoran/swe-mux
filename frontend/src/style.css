@@ -2312,6 +2312,79 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
   .process-watch-server button{min-height:38px;font-size:9px}
   .processes-footnote button{min-height:38px}
 }
+/* Schedule tab: the same column shape as Processes, because it answers the same question
+   one step later. Rows are collapsed to label + cadence + countdown; the prompt and the run
+   history open on demand, since a column this narrow cannot show five schedules at once with
+   their bodies expanded. */
+.schedule-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.schedule-filters{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;padding:6px 9px;border-bottom:1px solid var(--line)}
+.schedule-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.schedule-filters select:focus{outline:0;border-color:var(--green)}
+.schedule-filters button{min-height:calc(30px*var(--ui-scale));padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
+.schedule-filters button:hover{color:var(--text)}
+.schedule-filters button.primary{border-color:var(--green);color:var(--text)}
+.schedule-summary{flex:none;margin:0;padding:5px 9px;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:8px}
+.schedule-body{flex:1 1 auto;min-height:0;overflow:auto}
+.schedule-empty{padding:14px 10px;color:var(--muted);font-size:9px;line-height:1.5;text-align:center}
+.schedule-error{margin:0;padding:7px 9px;border-bottom:1px solid var(--line);color:var(--red,#e06c75);font-size:9px}
+.schedule-row{border-bottom:1px solid var(--line)}
+.schedule-row.paused{opacity:.7}
+/* A schedule that cannot fire is marked at the row, not only in a summary line: the whole
+   failure mode this surface exists to prevent is an armed-looking row that is inert. */
+.schedule-row.blocked{border-left:2px solid var(--red,#e06c75)}
+.schedule-heading{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;background:transparent;color:var(--text);padding:7px 9px 4px;text-align:left;cursor:pointer}
+.schedule-heading:hover,.schedule-heading:focus-visible{background:var(--panel2)}
+.schedule-heading>span{min-width:0;display:flex;align-items:center;gap:6px;max-width:100%}
+.schedule-heading strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500}
+.schedule-heading small{color:var(--muted);font-size:8px}
+.schedule-project{font-style:normal;padding:0 4px;border:1px solid var(--line);border-radius:8px;font-size:8px;color:var(--muted)}
+.schedule-blocked{margin:0;padding:0 9px 5px;color:var(--red,#e06c75);font-size:8px;line-height:1.5}
+.schedule-blocked button{margin-left:6px}
+.schedule-meta{display:flex;align-items:center;gap:8px;padding:0 9px 5px;color:var(--muted);font-size:8px}
+.schedule-actions{display:flex;flex-wrap:wrap;gap:5px;padding:0 9px 7px}
+.schedule-actions button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.schedule-actions button:hover:not(:disabled){background:var(--panel2);color:var(--text)}
+.schedule-actions button.danger:hover:not(:disabled){border-color:var(--red,#e06c75);color:var(--red,#e06c75)}
+.schedule-detail{padding:0 9px 8px;border-top:1px solid var(--line)}
+.schedule-prompt{margin:6px 0;color:var(--text);font-size:9px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.schedule-followups{margin:0 0 6px;color:var(--muted);font-size:8px}
+.schedule-runs{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px}
+.schedule-run{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;color:var(--muted);font-size:8px}
+.schedule-run>span{color:var(--text)}
+.schedule-run.failed>span,.schedule-run.missed>span{color:var(--red,#e06c75)}
+.schedule-run em{font-style:normal;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The editor replaces the list rather than opening beside it: at drawer width a form and a
+   list side by side leaves neither usable. */
+.schedule-editor{flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:9px}
+.schedule-editor header{display:flex;flex-direction:column;gap:3px}
+.schedule-editor header strong{font-size:10px;font-weight:500}
+.schedule-editor header small,.schedule-editor label small,.schedule-editor fieldset small{color:var(--muted);font-size:8px;line-height:1.5}
+.schedule-editor label{display:flex;flex-direction:column;gap:3px;font-size:9px;color:var(--muted)}
+.schedule-editor label em{font-style:normal;opacity:.8}
+.schedule-editor input,.schedule-editor select,.schedule-editor textarea{min-width:0;padding:5px 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:9px}
+.schedule-editor textarea{resize:vertical;line-height:1.5}
+.schedule-editor input:focus,.schedule-editor select:focus,.schedule-editor textarea:focus{outline:0;border-color:var(--green)}
+/* Qualified by `.schedule-editor` on purpose: the column rule above is two classes deep,
+   so a bare `.schedule-check` loses to it and the hint below the checkbox stops wrapping,
+   which is a horizontal scrollbar in a 380 px column rather than a cosmetic slip. */
+.schedule-editor label.schedule-check{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px}
+.schedule-editor label.schedule-check input{flex:none}
+.schedule-editor label.schedule-check small{flex:1 0 100%;min-width:0}
+.schedule-preview{margin:0;padding:5px 7px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:8px;line-height:1.5}
+.schedule-preview.bad{border-color:var(--red,#e06c75);color:var(--red,#e06c75)}
+.schedule-followup-editor{display:flex;flex-direction:column;gap:6px;margin:0;padding:7px;border:1px solid var(--line)}
+.schedule-followup-editor legend{padding:0 4px;color:var(--muted);font-size:8px}
+.schedule-followup-editor>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;align-items:start}
+.schedule-followup-editor button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.schedule-editor-actions{display:flex;justify-content:flex-end;gap:6px}
+.schedule-editor-actions button{min-height:28px;padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;cursor:pointer}
+.schedule-editor-actions button.primary{border-color:var(--green)}
+@media(max-width:760px){
+  .schedule-filters select,.schedule-filters button{height:calc(38px*var(--ui-scale));min-height:calc(38px*var(--ui-scale))}
+  .schedule-heading{min-height:48px}
+  .schedule-actions button,.schedule-followup-editor button{min-height:38px}
+  .schedule-editor-actions button{min-height:42px}
+}
 /* Files tab: the browser fills the drawer column. Its own header carries the Project
    root, which is the only thing identifying which tree this is once it left the pane
    tree (a pane had a tab strip to say so; a drawer tab says only "Files"). */
@@ -2505,7 +2578,7 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .drawer-panel-title{position:absolute;z-index:8;top:3px;left:7px;width:var(--drawer-panel-title-width);max-width:calc(100% - 14px);height:18px;margin:0;padding:0 6px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid color-mix(in srgb,var(--accent) 58%,var(--line));background:color-mix(in srgb,var(--accent) 13%,var(--panel2));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 82%,transparent);color:var(--text);font:600 8px/16px 'Cascadia Mono',Consolas,monospace;letter-spacing:.035em;cursor:help}
 .drawer-panel-title:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
 .drawer-body-clipboard>.drawer-status,.drawer-body-actions>.actions-tab>.drawer-status,.drawer-body-git>.drawer-status,.drawer-body-notifications>.drawer-status,.drawer-body-context>.drawer-status{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
-.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
+.drawer-body-files>.project-resource.file-browser>header,.drawer-body-context .agent-context-header,.drawer-body-processes .processes-filters,.drawer-body-schedule .schedule-filters,.drawer-body-schedule .schedule-editor header,.drawer-body-queue .queue-scope{padding-left:calc(var(--drawer-panel-title-width) + 13px)}
 .drawer-body-transcript .transcript-tab-meta{padding-left:calc(var(--drawer-panel-title-width) + 4px)}
 .drawer-body-context .agent-context-header>div>strong{display:none}
 .drawer-body-files>.drawer-empty:first-of-type,.drawer-body-transcript>.drawer-empty:first-of-type{padding-top:38px}

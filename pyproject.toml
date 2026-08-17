@@ -21,6 +21,13 @@ dependencies = [
   "pywinpty>=3.0.2; sys_platform == 'win32'",
   "tree-sitter>=0.23",
   "tree-sitter-language-pack>=0.7",
+  # Windows ships no IANA timezone database, so `zoneinfo.ZoneInfo("Europe/Oslo")`
+  # raises there and nowhere else. A schedule that names a timezone is exactly
+  # the feature that would break on the primary platform without this, and the
+  # failure would look like a user error ("unknown timezone") rather than a
+  # missing dependency. Marked Windows-only because every POSIX host already has
+  # the system database.
+  "tzdata>=2024.1; sys_platform == 'win32'",
   "watchfiles>=1.0",
 ]
 

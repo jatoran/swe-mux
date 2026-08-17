@@ -396,6 +396,9 @@ export function App() {
   // processes view would churn its whole body on each focus change and read empty most of the
   // time, since most sessions are just their agent CLI and a conhost.
   const [processWatchScope,setProcessWatchScope]=useState<WatchScope>('')
+  // The Schedule tab's scope, kept here for the same reason: '' is every Project's
+  // schedules ("what fires tonight"), anything else is one Project's.
+  const [scheduleScope,setScheduleScope]=useState<string>('')
   // Which Project's templates join the global ones. Unlike the other surfaces
   // this is additive rather than restrictive, so the app menu still passes the
   // active Project: opening "unscoped" would remove templates, not filters.
@@ -5490,6 +5493,11 @@ export function App() {
         processScope={processWatchScope&&projects.some(project=>project.id===processWatchScope)?processWatchScope:(projectId||'')}
         onProcessScope={setProcessWatchScope}
         onRefreshProcesses={()=>void loadProcesses()}
+        // Same resolution as the process scope: an unscoped tab follows the Project the
+        // drawer is sitting beside rather than pinning whichever was active on open.
+        scheduleScope={scheduleScope&&projects.some(project=>project.id===scheduleScope)?scheduleScope:(projectId||'')}
+        onScheduleScope={setScheduleScope}
+        profiles={profiles}
         onOpenPreview={(sessionId,url)=>{
           const owner=sessions.find(item=>item.id===sessionId)
           if(owner)void openDetectedServer({url},owner)

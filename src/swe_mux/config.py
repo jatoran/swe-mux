@@ -673,6 +673,23 @@ class Config:
     # Spawn's blast radius is a single injection into fan-out, so this is smaller
     # than the interrupt/end budget and is what bounds that fan-out.
     agent_spawn_hourly_budget: int = 10
+    # Scheduled runs. The install-wide master switch is here rather than
+    # per-Project because it is the emergency stop: off means no schedule fires
+    # anywhere, whatever any Project opted into. The caps are global for the same
+    # reason spend limits are - what a scheduled fleet may cost this machine is
+    # not a per-repository decision.
+    scheduled_runs_enabled: bool = True
+    # How many schedule-started sessions may be alive at once. Unattended agents
+    # that accumulate are the failure mode this bounds: nothing ends an agent
+    # session automatically, so without a ceiling a nightly job on five Projects
+    # is five forgotten panes a week later.
+    scheduled_runs_max_concurrent: int = 3
+    # Sweep cadence. Schedules resolve to the minute, so this only decides how
+    # promptly a due minute is noticed.
+    scheduled_runs_poll_seconds: float = 5.0
+    # How long the run history behind each schedule is kept. Long enough that
+    # "has this been failing all week" is answerable.
+    scheduled_run_retention_days: int = 60
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -1095,6 +1112,12 @@ def _validate(config: Config) -> None:
         errors["session_control_graceful_timeout_s"] = "must be between 1 and 120 seconds"
     if not 0 <= config.agent_spawn_hourly_budget <= 1000:
         errors["agent_spawn_hourly_budget"] = "must be between 0 and 1000 spawns per hour"
+    if not 0 <= config.scheduled_runs_max_concurrent <= 50:
+        errors["scheduled_runs_max_concurrent"] = "must be between 0 and 50 sessions"
+    if not 1 <= config.scheduled_runs_poll_seconds <= 300:
+        errors["scheduled_runs_poll_seconds"] = "must be between 1 and 300 seconds"
+    if not 1 <= config.scheduled_run_retention_days <= 3650:
+        errors["scheduled_run_retention_days"] = "must be between 1 and 3650 days"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

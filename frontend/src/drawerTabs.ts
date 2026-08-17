@@ -35,8 +35,16 @@
 // nothing there needs a terminal beside it — so it is a modal opened from the Queue tab
 // and the app menu, the same watch-here/act-there split Processes has with the process
 // fleet. Two queue-shaped tabs in one rail also read as a duplicate of each other.
+//
+// Schedule closes the Project-scoped block, immediately after Processes, because the two
+// answer the same question at different times: Processes is what this Project's sessions are
+// running *now*, Schedule is what it will start *later*. It carries its own fleet scope the
+// way Processes does rather than a companion modal — "what fires tonight" spans Projects even
+// though every schedule belongs to exactly one — and it is a tab rather than a modal because
+// deciding whether a nightly run should keep running, be paused, or be run right now is a
+// judgement about live sessions, which are legible in the workspace behind it.
 
-export type DrawerTabId = 'clipboard' | 'actions' | 'queue' | 'transcript' | 'insight' | 'changemap' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'actions' | 'queue' | 'transcript' | 'insight' | 'changemap' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'schedule' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -68,6 +76,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'context', label: 'Context', heading: 'Instructions & Memory', title: 'Context - view agent instructions and learned project memory', scope: 'project' },
   { id: 'git', label: 'Git', heading: 'Git', title: 'Git - worktree map and commit graph for this Project', scope: 'project' },
   { id: 'processes', label: 'Processes', heading: 'Processes', title: 'Processes - what this Project’s sessions are running, and what they are serving', scope: 'project' },
+  { id: 'schedule', label: 'Schedule', heading: 'Scheduled Runs', title: 'Schedule - sessions this Project starts on its own, and what they did last time', scope: 'project' },
   { id: 'notifications', label: 'Alerts', heading: 'Alerts', title: 'Alerts - what needs you now, and every attention record behind it', scope: 'app' },
 ]
 

@@ -95,6 +95,8 @@ type Config = {
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
   automation_rule_daily_budget_usd:number;automation_hourly_call_cap:number
   automation_rule_hourly_call_cap:number;openrouter_cheap_model:string
+  scheduled_runs_enabled:boolean;scheduled_runs_max_concurrent:number
+  scheduled_runs_poll_seconds:number;scheduled_run_retention_days:number
   scan_timeline_enabled:boolean;scan_timeline_model:string;scan_timeline_run_token_budget:number
   scan_timeline_daily_token_budget:number;scan_timeline_daily_budget_usd:number
   scan_timeline_hourly_call_cap:number;scan_timeline_max_output_tokens:number
@@ -1293,6 +1295,14 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Maximum input tokens<input type="number" value={draft.automation_max_input_tokens} onInput={event=>change('automation_max_input_tokens',Number(event.currentTarget.value))}/></label>
           <label>Maximum output tokens<input type="number" value={draft.automation_max_output_tokens} onInput={event=>change('automation_max_output_tokens',Number(event.currentTarget.value))}/></label>
           <label>Retention days<input type="number" value={draft.automation_retention_days} onInput={event=>change('automation_retention_days',Number(event.currentTarget.value))}/></label>
+          </section>
+
+          <section><h3>Scheduled runs</h3>
+          <p>Schedules themselves live in a Project's <strong>Schedule</strong> tab and are stored on this machine, never in the repository. These are the install-wide limits over all of them: what a scheduled fleet may do to this computer is not a per-repository decision. A Project also has to opt into <strong>Scheduled runs</strong> before any of its schedules can fire.</p>
+          <label class="settings-toggle"><input type="checkbox" checked={draft.scheduled_runs_enabled} onChange={event=>change('scheduled_runs_enabled',event.currentTarget.checked)}/>Let schedules start sessions<small>The emergency stop. Off means nothing fires anywhere, whatever any Project opted into.</small></label>
+          <label>Concurrent scheduled sessions<input type="number" min="0" max="50" value={draft.scheduled_runs_max_concurrent} onInput={event=>change('scheduled_runs_max_concurrent',Number(event.currentTarget.value))}/><small>Nothing ends an agent session automatically, so this is what stops nightly runs accumulating into a fleet of forgotten panes.</small></label>
+          <label>Sweep seconds<input type="number" min="1" max="300" step="1" value={draft.scheduled_runs_poll_seconds} onInput={event=>change('scheduled_runs_poll_seconds',Number(event.currentTarget.value))}/><small>Schedules resolve to the minute; this only decides how promptly a due minute is noticed.</small></label>
+          <label>Run history days<input type="number" min="1" max="3650" value={draft.scheduled_run_retention_days} onInput={event=>change('scheduled_run_retention_days',Number(event.currentTarget.value))}/><small>Long enough to answer "has this been failing all week".</small></label>
           </section>
 
           <section><h3>Scan timeline</h3>
