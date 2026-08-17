@@ -3,18 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import subprocess
 import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
 
-import psutil
-import winpty
-
-from .subprocess_flags import background_creation_flags
-from .win_jobobj import ReaperJob
+from .host_platform import IS_WINDOWS
+from .process_reaper import ProcessReaper
+from .pty_backend import PtyError, PtyProcess, open_pty
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +22,7 @@ _MAX_COALESCE_BYTES = 256 * 1024
 _QUEUE_PUT_POLL_SECONDS = 5.0
 # Reader poll cadence, graduated by how recently this PTY did any I/O.
 #
-# The read is deliberately nonblocking: `pty.read(blocking=True)` parks the thread
+# The read is deliberately nonblocking: a blocking read parks the thread
 # somewhere neither `_stop` nor a dead child can reach it, so the reader polls and the
 # only real question is how often. A single fixed interval answers that question badly,
 # because the two cases want opposite things. While output is flowing, the interval is
@@ -50,7 +46,7 @@ _READ_DEEP_IDLE_AFTER_SECONDS = 5.0
 def read_poll_interval(idle_seconds: float) -> float:
     """Seconds to sleep before the next nonblocking read attempt.
 
-    Pure so the ladder is testable without a pseudoconsole: the whole point is the
+    Pure so the ladder is testable without a pseudoterminal: the whole point is the
     boundaries, and those are the thing a future edit would get subtly wrong.
     """
     if idle_seconds < _READ_ACTIVE_WINDOW_SECONDS:
@@ -58,60 +54,23 @@ def read_poll_interval(idle_seconds: float) -> float:
     if idle_seconds < _READ_DEEP_IDLE_AFTER_SECONDS:
         return _READ_POLL_RECENT_SECONDS
     return _READ_POLL_DEEP_IDLE_SECONDS
-_CONPTY_CREATE_ATTEMPTS = 3
-_CONSOLE_HOST_NAMES = {"conhost", "conhost.exe", "openconsole", "openconsole.exe"}
-_PTY_SPAWN_LOCK = threading.Lock()
-_CLAIMED_CONSOLE_HOSTS: set[tuple[int, float]] = set()
-
-
-def _console_host_children() -> dict[int, float]:
-    try:
-        children = psutil.Process(os.getpid()).children()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-        return {}
-    result: dict[int, float] = {}
-    for process in children:
-        try:
-            if process.name().casefold() in _CONSOLE_HOST_NAMES:
-                result[int(process.pid)] = float(process.create_time())
-        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-            continue
-    return result
-
-
-def create_pty(cols: int, rows: int) -> winpty.PTY:
-    """Create ConPTY with a bounded retry for pywinpty's transient PyO3 panic.
-
-    In a frozen windowed process, the first Windows pseudoconsole allocation can
-    fail with ``ERROR_SEM_NOT_FOUND``. pywinpty 3 surfaces that Rust panic as an
-    unexported ``pyo3_runtime.PanicException`` derived directly from
-    ``BaseException``. Match only that private exception identity; control-flow
-    exceptions must never be swallowed.
-    """
-    last_error: BaseException | None = None
-    for attempt in range(_CONPTY_CREATE_ATTEMPTS):
-        try:
-            return winpty.PTY(cols=cols, rows=rows)
-        except BaseException as exc:
-            is_pyo3_panic = (
-                exc.__class__.__module__ == "pyo3_runtime"
-                and exc.__class__.__name__ == "PanicException"
-            )
-            if not is_pyo3_panic:
-                raise
-            last_error = exc
-            if attempt + 1 < _CONPTY_CREATE_ATTEMPTS:
-                time.sleep(0.05 * (attempt + 1))
-    raise RuntimeError("Windows could not initialize a pseudoconsole") from last_error
 
 
 def merge_environment(base: Mapping[str, str], extra: Mapping[str, str]) -> dict[str, str]:
-    """Merge a Windows environment without duplicate case-insensitive keys.
+    """Merge a child environment, collapsing duplicate keys the way the host would.
 
     Windows treats ``Path`` and ``PATH`` as the same variable, but a raw ConPTY
     environment block can contain both. Which value a child observes is then
     inconsistent, so overrides must replace the original spelling as well.
+
+    POSIX environment keys are case-*sensitive*: ``Path`` and ``PATH`` are two
+    different variables there, and folding them would silently drop one. So the
+    collapse is applied only on the host whose rule it is. The sort is kept on both
+    for a stable, diffable block.
     """
+    if not IS_WINDOWS:
+        merged_posix = {**base, **extra}
+        return dict(sorted(merged_posix.items()))
     overridden = {key.casefold() for key in extra}
     merged = {key: value for key, value in base.items() if key.casefold() not in overridden}
     merged.update(extra)
@@ -120,12 +79,20 @@ def merge_environment(base: Mapping[str, str], extra: Mapping[str, str]) -> dict
 
 @dataclass
 class PtyHost:
+    """One pseudoterminal session: platform-neutral buffering over a `PtyProcess`.
+
+    Everything below the reader thread is delegated to the platform backend
+    (`pty_backend.open_pty`); everything at and above it - coalescing, the
+    backpressure handoff, the poll ladder, the resize and exit-status contracts -
+    is shared and exists once.
+    """
+
     appname: str
     argv: tuple[str, ...] = ()
     cwd: str | None = None
     cols: int = 120
     rows: int = 30
-    reaper: ReaperJob | None = None
+    reaper: ProcessReaper | None = None
     env_extra: Mapping[str, str] | None = None
     # When provided, the child environment is built from this mapping instead of
     # this process's os.environ. The out-of-process supervisor passes {} plus a
@@ -133,7 +100,7 @@ class PtyHost:
     # (potentially stale) supervisor's.
     env_base: Mapping[str, str] | None = None
     graceful_exit: str = "exit\r"
-    _pty: winpty.PTY | None = field(default=None, init=False)
+    _pty: PtyProcess | None = field(default=None, init=False)
     _queue: asyncio.Queue[bytes] | None = field(default=None, init=False)
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
@@ -153,10 +120,6 @@ class PtyHost:
     # exists to improve. An interruptible wait is what makes arming the window mean
     # anything.
     _io_wake: threading.Event = field(default_factory=threading.Event, init=False)
-    _console_host_pid: int | None = field(default=None, init=False)
-    _console_host_started_at: float | None = field(default=None, init=False)
-    _console_hosts_before: set[int] = field(default_factory=set, init=False)
-    _root_started_at: float | None = field(default=None, init=False)
     reaper_assignment: str = field(default="not_attempted", init=False)
 
     @property
@@ -182,30 +145,13 @@ class PtyHost:
     def spawn(self) -> None:
         if self._loop is None or self._queue is None:
             self.prepare()
-        # pywinpty launches OpenConsole as a daemon sibling rather than a child of
-        # the terminal root. Serialize only allocation so the new helper can be
-        # bound unambiguously to this host for deterministic teardown.
-        with _PTY_SPAWN_LOCK:
-            existing_hosts = _console_host_children()
-            self._console_hosts_before = set(existing_hosts)
-            self._pty = create_pty(self.cols, self.rows)
-            env = None
-            if self.env_extra:
-                base = os.environ if self.env_base is None else self.env_base
-                merged = merge_environment(base, self.env_extra)
-                env = "\0".join(f"{k}={v}" for k, v in merged.items()) + "\0\0"
-            # ConPTY is the Windows process boundary and therefore owns Windows argv
-            # quoting. Backend adapters keep arguments structured and platform-neutral.
-            cmdline = subprocess.list2cmdline(self.argv) if self.argv else None
-            self._pty.spawn(self.appname, cmdline=cmdline, cwd=self.cwd, env=env)
-            try:
-                self._root_started_at = float(psutil.Process(self.pid).create_time())
-            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-                self._root_started_at = time.time()
-            for _ in range(20):
-                if self._bind_console_host(_console_host_children()):
-                    break
-                time.sleep(0.01)
+        pty = open_pty(self.cols, self.rows)
+        env: dict[str, str] | None = None
+        if self.env_extra:
+            base = os.environ if self.env_base is None else self.env_base
+            env = merge_environment(base, self.env_extra)
+        pty.spawn(self.appname, tuple(self.argv), self.cwd, env)
+        self._pty = pty
         if self.reaper:
             try:
                 self.reaper.assign(self.pid)
@@ -221,28 +167,29 @@ class PtyHost:
         assert self._pty and self._queue and self._loop
         # Keep a thread-local owner until all final output has drained. The
         # session can detach ``self._pty`` as soon as the root exits, allowing
-        # ConPTY teardown once this reader drops its last reference.
+        # teardown once this reader drops its last reference.
         pty = self._pty
         try:
             while not self._stop.is_set():
                 try:
-                    chunk = pty.read(blocking=False)
-                except winpty.WinptyError:
+                    chunk = pty.read()
+                except PtyError:
                     chunk = None
                 if chunk:
-                    buffer = bytearray(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-                    # Coalesce any output already waiting in the ConPTY into a single
-                    # cross-thread handoff. A burst (build log, large `ls`) is thousands
-                    # of tiny reads; without this each pays a full event-loop wakeup plus
-                    # a blocking round-trip, capping throughput at loop-wakeup latency.
+                    buffer = bytearray(chunk)
+                    # Coalesce any output already waiting in the pseudoterminal into a
+                    # single cross-thread handoff. A burst (build log, large `ls`) is
+                    # thousands of tiny reads; without this each pays a full event-loop
+                    # wakeup plus a blocking round-trip, capping throughput at
+                    # loop-wakeup latency.
                     while len(buffer) < _MAX_COALESCE_BYTES:
                         try:
-                            more = pty.read(blocking=False)
-                        except winpty.WinptyError:
+                            more = pty.read()
+                        except PtyError:
                             break
                         if not more:
                             break
-                        buffer += more.encode("utf-8") if isinstance(more, str) else more
+                        buffer += more
                     if self._first_output_at is None:
                         self._first_output_at = time.perf_counter()
                     self._last_io_at = time.monotonic()
@@ -254,7 +201,7 @@ class PtyHost:
                     break
                 else:
                     # Interruptible: `write()` sets this, so a keystroke does not wait
-                    # out an interval chosen for an idle pseudoconsole. Cleared after the
+                    # out an interval chosen for an idle pseudoterminal. Cleared after the
                     # wait rather than before, so a set that lands mid-wait is consumed
                     # by this iteration instead of spinning the next one.
                     self._io_wake.wait(read_poll_interval(time.monotonic() - self._last_io_at))
@@ -265,7 +212,7 @@ class PtyHost:
             except Exception:
                 pass
 
-    def _put_with_backpressure(self, payload: bytes, pty: Any) -> bool:
+    def _put_with_backpressure(self, payload: bytes, pty: PtyProcess) -> bool:
         """Hand a chunk to the loop, waiting as long as the child is alive.
 
         Timing out here used to abort the reader thread, which injected the b""
@@ -323,95 +270,26 @@ class PtyHost:
         return bool(self._pty and self._pty.isalive())
 
     def exit_status(self) -> int | None:
-        """Return the ConPTY root exit code after it has stopped, when available."""
-        if not self._pty or self._pty.isalive():
+        """Return the root exit code after it has stopped, when available."""
+        if not self._pty:
             return None
-        try:
-            status = self._pty.get_exitstatus()
-        except (winpty.WinptyError, OSError, TypeError, ValueError):
-            return None
-        return int(status) if status is not None else None
+        return self._pty.exit_status()
 
     def release(self) -> None:
-        """Release an ended pseudoconsole without discarding retained scrollback."""
+        """Release an ended pseudoterminal without discarding retained scrollback."""
         pty = self._pty
         if pty is not None and pty.isalive():
-            raise RuntimeError("cannot release a live pseudoconsole")
+            raise RuntimeError("cannot release a live pseudoterminal")
         self._stop.set()
-        cancel_io = getattr(pty, "cancel_io", None)
-        if callable(cancel_io):
-            try:
-                # Frozen pywinpty can keep a nonblocking reader parked after the
-                # root has exited. Wake it so its thread-local PTY reference is
-                # released deterministically instead of retaining OpenConsole.
-                cancel_io()
-            except (winpty.WinptyError, OSError):
-                pass
+        if pty is not None:
+            pty.interrupt_read()
+            pty.close()
         self._pty = None
-        self._reap_console_host()
-
-    def _reap_console_host(self) -> None:
-        pid, started_at = self._console_host_pid, self._console_host_started_at
-        self._console_host_pid = None
-        self._console_host_started_at = None
-        if pid is not None and started_at is not None:
-            if self._kill_console_host(pid, started_at):
-                return
-        # Frozen builds can replace the initially observed OpenConsole process
-        # with conhost after PTY.spawn returns. Resolve that delayed helper by
-        # creation time at teardown, when it is guaranteed to be present.
-        with _PTY_SPAWN_LOCK:
-            self._bind_console_host(_console_host_children())
-        pid, started_at = self._console_host_pid, self._console_host_started_at
-        self._console_host_pid = None
-        self._console_host_started_at = None
-        if pid is None or started_at is None:
-            return
-        self._kill_console_host(pid, started_at)
-
-    @staticmethod
-    def _kill_console_host(pid: int, started_at: float) -> bool:
-        try:
-            process = psutil.Process(pid)
-            if (
-                abs(float(process.create_time()) - started_at) > 0.01
-                or process.name().casefold() not in _CONSOLE_HOST_NAMES
-                or int(process.ppid()) != os.getpid()
-            ):
-                return False
-            process.kill()
-            return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
-            return False
-        finally:
-            _CLAIMED_CONSOLE_HOSTS.discard((pid, started_at))
-
-    def _bind_console_host(self, hosts: dict[int, float]) -> bool:
-        root_started_at = self._root_started_at
-        if root_started_at is None:
-            return False
-        candidates = {
-            pid: started_at
-            for pid, started_at in hosts.items()
-            if pid not in self._console_hosts_before
-            and (pid, started_at) not in _CLAIMED_CONSOLE_HOSTS
-        }
-        if not candidates:
-            return False
-        pid, started_at = min(
-            candidates.items(), key=lambda item: abs(item[1] - root_started_at)
-        )
-        if abs(started_at - root_started_at) > 5:
-            return False
-        self._console_host_pid = pid
-        self._console_host_started_at = started_at
-        _CLAIMED_CONSOLE_HOSTS.add((pid, started_at))
-        return True
 
     def stop(self, *, graceful: bool = True, timeout: float = 2.0) -> None:
         if not self._pty:
             return
-        pty, pid = self._pty, self.pid
+        pty = self._pty
         if graceful and pty.isalive():
             try:
                 pty.write(self.graceful_exit)
@@ -421,20 +299,10 @@ class PtyHost:
             while pty.isalive() and time.monotonic() < deadline:
                 time.sleep(0.05)
         if pty.isalive():
-            subprocess.run(
-                ["taskkill", "/F", "/PID", str(pid), "/T"],
-                capture_output=True,
-                check=False,
-                creationflags=background_creation_flags(),
-            )
+            pty.force_kill()
         self._stop.set()
-        cancel_io = getattr(pty, "cancel_io", None)
-        if callable(cancel_io):
-            try:
-                cancel_io()
-            except (winpty.WinptyError, OSError):
-                pass
+        pty.interrupt_read()
         # Explicit stop owns forced teardown; dropping the final host reference
-        # closes ConPTY even if taskkill status has not propagated yet.
+        # closes the pseudoterminal even if kill status has not propagated yet.
         self._pty = None
-        self._reap_console_host()
+        pty.close()

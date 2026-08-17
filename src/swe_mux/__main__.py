@@ -13,10 +13,10 @@ from aiohttp import web
 from .config import LOOPBACK_HOSTS, Config, load_config
 from .lifecycle import ledger
 from .logsetup import enable_crash_tracebacks, setup_daemon_logging
+from .process_reaper import process_in_job
 from .server import create_app
 from .tailscale import enable_mobile_voice_serve, listener_hosts
 from .timer_resolution import raise_timer_resolution
-from .win_jobobj import process_in_job
 
 
 def parser() -> argparse.ArgumentParser:

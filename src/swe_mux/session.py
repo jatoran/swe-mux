@@ -49,6 +49,7 @@ from .models import (
     StandingActivity,
     StandingActivityKind,
 )
+from .process_reaper import ProcessReaper
 from .pty_host import PtyHost, merge_environment
 from .runtime_cwd import Osc7Parser, Osc133Parser, OscSignalParser, classify_osc7_location
 from .screen_mode import (
@@ -68,7 +69,6 @@ from .status_timeline import LedgerRing, StatusTimelineStore, note_layer_reading
 from .supervisor_client import RemotePtyHost, SupervisorClient, host_for_adoption
 from .terminal_arbitration import OwnerState, effective_geometry, release_owner
 from .transcript_view import conversation_is_readable
-from .win_jobobj import ReaperJob
 
 log = logging.getLogger(__name__)
 
@@ -1777,7 +1777,7 @@ class Session:
         adapter: BackendAdapter,
         max_scrollback: int,
         hook_secret: str,
-        ownership_job: ReaperJob | None = None,
+        ownership_job: ProcessReaper | None = None,
         startup_started_at: float | None = None,
         *,
         mcp_token: str | None = None,
@@ -2481,7 +2481,7 @@ class SessionManager:
     def __init__(
         self,
         adapters: dict[str, BackendAdapter],
-        reaper: ReaperJob,
+        reaper: ProcessReaper,
         history: HistoryIndex,
         events: EventBus,
         max_scrollback: int,
@@ -2566,6 +2566,7 @@ class SessionManager:
         completion_mode: Literal["interactive", "one_shot"] = "interactive",
         worktree_project_root: Path | None = None,
         initial_output: bytes | None = None,
+        start_cwd: str | None = None,
     ) -> Session:
         startup_started_at = startup_started_at or time.perf_counter()
         startup_timing_ms = dict(startup_timing_ms or {})
@@ -2588,6 +2589,22 @@ class SessionManager:
         resolved_cwd = Path(cwd or Path.cwd()).resolve()
         if not resolved_cwd.is_dir():
             raise ValueError(f"cwd does not exist: {resolved_cwd}")
+        # Where the child process actually starts. This is the Project cwd for
+        # every profile except `cwd_strategy='home'`, and it is deliberately kept
+        # separate from `resolved_cwd`: Project identity, transcript resolution,
+        # worktree containment and every persisted record must keep naming the
+        # Project, or choosing "start in my home directory" would quietly move the
+        # session into a different Project (or none).
+        pty_cwd = resolved_cwd
+        if start_cwd:
+            candidate = Path(start_cwd).resolve()
+            if candidate.is_dir():
+                pty_cwd = candidate
+            else:
+                log.warning(
+                    "launch profile start directory does not exist, using the project root: %s",
+                    candidate,
+                )
         adapter = self.adapters[backend]
         # One source of truth for the pane's hook identity: the child environment
         # below and the per-session harness settings file the adapter writes must
@@ -2702,7 +2719,7 @@ class SessionManager:
                 sid,
                 appname=spawn_spec.executable,
                 argv=tuple(spawn_spec.argv),
-                cwd=str(resolved_cwd),
+                cwd=str(pty_cwd),
                 # The supervisor spawns children with exactly this daemon-built
                 # environment; its own (potentially stale) environ is excluded.
                 env=merge_environment(env_base, env_extra),
@@ -2733,7 +2750,7 @@ class SessionManager:
             pty = PtyHost(
                 spawn_spec.executable,
                 spawn_spec.argv,
-                str(resolved_cwd),
+                str(pty_cwd),
                 reaper=self.reaper,
                 graceful_exit=adapter.graceful_exit_keys(),
                 env_extra=env_extra,
@@ -2750,7 +2767,7 @@ class SessionManager:
         record.root_started_at = await asyncio.to_thread(process_started_at, record.pid)
         record.process_job_assignment = pty.reaper_assignment
         registration_started_at = time.perf_counter()
-        ownership_job: ReaperJob | None = None
+        ownership_job: ProcessReaper | None = None
         ownership_error: str | None = None
         # Supervisor-owned PTYs get their nested per-session job supervisor-side;
         # a daemon-held job handle would kill the tree on daemon exit and defeat

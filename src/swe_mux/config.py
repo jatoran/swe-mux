@@ -11,7 +11,33 @@ from pathlib import Path
 from typing import Any
 
 from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
+from .host_platform import IS_WINDOWS, platform_key
 from .keybindings import is_command
+
+
+def default_shell_executable() -> str:
+    """The interactive shell a fresh install starts with on this host.
+
+    Windows keeps its shipped answer exactly - `powershell.exe`, upgraded to
+    `pwsh.exe` by the first-run logic when PowerShell 7 is present - because the
+    proving platform's default must not move underneath existing installs.
+
+    POSIX asks the user's own environment first. `$SHELL` is what the account is
+    configured to use and what any other terminal would honour; guessing `bash`
+    over it would silently override a deliberate choice of zsh or fish. `/bin/sh`
+    is the last resort because it always exists, which is exactly why it must not
+    be allowed to win over a real login shell.
+    """
+    if IS_WINDOWS:
+        return "powershell.exe"
+    declared = os.environ.get("SHELL", "").strip()
+    if declared and Path(declared).is_file():
+        return declared
+    for candidate in ("bash", "zsh", "fish", "sh"):
+        if found := shutil.which(candidate):
+            return found
+    return "/bin/sh"
+
 
 SCHEMA_VERSION = 25
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -340,7 +366,7 @@ class LaunchProfile:
     executable: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
-    platforms: list[str] = field(default_factory=lambda: ["windows"])
+    platforms: list[str] = field(default_factory=lambda: [platform_key()])
     cwd_strategy: str = "native"
     marker: str = "sh"
     capabilities: list[str] = field(default_factory=lambda: ["interactive", "agent-aware"])
@@ -357,7 +383,7 @@ class Config:
     port: int = 8765
     tailnet_enabled: bool = True
     default_backend: str = "shell"
-    shell_exe: str = "powershell.exe"
+    shell_exe: str = field(default_factory=lambda: default_shell_executable())
     harness_exe: dict[str, str] = field(default_factory=default_harness_executables)
     harness_args: dict[str, list[str]] = field(default_factory=default_harness_args)
     # Explicit per-harness enablement choices only. An absent key means "follow
@@ -1293,6 +1319,14 @@ def _default_shell_profile(executable: str) -> LaunchProfile:
         return LaunchProfile("default", "PowerShell 7", executable, args, marker="ps7")
     if executable_name in {"powershell", "powershell.exe"}:
         return LaunchProfile("default", "Windows PowerShell", executable, args, marker="ps")
+    if not IS_WINDOWS:
+        # Labelled with the shell's own name rather than "Default shell": on a
+        # POSIX host the profile list is a list of real shells, and one row saying
+        # "Default shell" beside `bash` and `zsh` tells the reader nothing about
+        # which one it is.
+        return LaunchProfile(
+            "default", executable_name or "Shell", executable, args, marker="sh"
+        )
     return LaunchProfile("default", "Default shell", executable, args)
 
 
@@ -1462,10 +1496,20 @@ def load_config(path: Path | None = None) -> Config:
             cfg.harness_setup_complete = True
             migrated = True
     if not cfg.shell_profiles:
-        if "shell_exe" not in raw and shutil.which("pwsh.exe"):
-            cfg.shell_exe = "pwsh.exe"
+        if "shell_exe" not in raw:
+            if IS_WINDOWS and shutil.which("pwsh.exe"):
+                cfg.shell_exe = "pwsh.exe"
+            elif not IS_WINDOWS:
+                # A config file written on another host, or one predating POSIX
+                # support, can carry a `powershell.exe` default this host cannot
+                # start. Re-derive rather than inherit a shell that is not here.
+                cfg.shell_exe = default_shell_executable()
         cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]
-    elif _is_auto_managed_windows_powershell_default(cfg) and shutil.which("pwsh.exe"):
+    elif (
+        IS_WINDOWS
+        and _is_auto_managed_windows_powershell_default(cfg)
+        and shutil.which("pwsh.exe")
+    ):
         cfg.shell_exe = "pwsh.exe"
         cfg.shell_profiles = [_default_shell_profile(cfg.shell_exe)]
         migrated = True

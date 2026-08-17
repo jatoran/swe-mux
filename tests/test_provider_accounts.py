@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -1097,6 +1098,7 @@ def test_provider_account_routes_are_registered(tmp_path: Path) -> None:
     assert ("DELETE", "/api/provider-accounts/{provider}/{account_id}") in routes
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows npm .cmd shim resolution")
 def test_account_commands_resolve_npm_batch_shims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

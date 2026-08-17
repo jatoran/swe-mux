@@ -151,6 +151,7 @@ from .preview_capture import (
     capture_available,
     capture_loopback,
 )
+from .process_reaper import create_reaper
 from .processes import PreviewRegistry, ProcessInspector
 from .profiles import find_profile, profile_payload, resolve_agent_profile, resolve_profile
 from .project_actions import (
@@ -285,7 +286,6 @@ from .voice import (
     approval_prompt,
     clip_snapshot,
 )
-from .win_jobobj import ReaperJob
 from .windows_firewall import (
     firewall_supported,
     inspect_firewall,
@@ -1040,7 +1040,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         agent_context.capture_project(project.root)
     history_backfills = HistoryBackfillManager(history, projects)
     history_scan = HistoryScanManager(history, config)
-    reaper = ReaperJob()
+    reaper = create_reaper()
     supervisor_client: SupervisorClient | None = None
     if config.pty_supervisor_enabled:
         try:
@@ -4710,6 +4710,7 @@ async def _spawn_from_body(
     argv = list(spec.argv)
     profile_id: str | None = None
     profile_env: dict[str, str] | None = None
+    profile_start_cwd: str | None = None
     if backend == "shell" and not executable:
         profile_id = (
             spec.profile_id
@@ -4725,6 +4726,13 @@ async def _spawn_from_body(
         executable = profile.executable
         argv = [*profile.argv, *argv]
         profile_env = profile.env
+        # `cwd_strategy='home'` is the only thing that moves the start directory
+        # away from the Project root, and it moves *only* that. Project identity,
+        # transcript resolution, and every record stay on the Project cwd: the
+        # session still belongs to that Project, it just does not begin its prompt
+        # inside it.
+        if profile.start_cwd and profile.start_cwd != str(Path(cwd).resolve()):
+            profile_start_cwd = profile.start_cwd
     elif is_agent_harness(backend) and not executable:
         # Three argument slots, least specific first: the harness's global
         # `harness_args`, then this profile's, then whatever the request itself asked
@@ -4795,6 +4803,8 @@ async def _spawn_from_body(
         spawn_values["worktree_project_root"] = worktree_project_root
     if initial_output:
         spawn_values["initial_output"] = initial_output
+    if profile_start_cwd is not None:
+        spawn_values["start_cwd"] = profile_start_cwd
     if isinstance(manager, SessionManager):
         spawn_values["project"] = project
         spawn_values["startup_started_at"] = startup_started_at

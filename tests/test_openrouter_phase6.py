@@ -566,6 +566,11 @@ def test_dpapi_persistence_round_trip_is_encrypted(
         "configured": True,
         "source": "stored",
         "persistent": True,
+        # DPAPI is a real encryption backend, so both halves are true here. They
+        # come apart only on the opt-in POSIX file fallback, which is what
+        # `encrypted` exists to distinguish.
+        "encrypted": True,
+        "backend": "dpapi",
     }
     store.clear("openrouter_api_key")
     assert store.get("openrouter_api_key") is None

@@ -34,6 +34,8 @@ from swe_mux.project_files import (
     write_project_config,
 )
 
+from .host_paths import ABS_ROOT, abs_path
+
 
 def test_project_config_round_trips_worktree_setup_command() -> None:
     values = {"worktree": {"setup_command": "uv sync && npm ci"}}
@@ -112,9 +114,9 @@ async def test_explicit_project_identity_keeps_a_nested_project_out_of_its_workt
 
 
 async def test_rebase_identity_reanchors_only_the_root_not_the_repo_group() -> None:
-    outer = ProjectIdentity("outer", "worktree", r"C:\repo", "git-worktree", "grp-id", "grp")
-    inner = rebase_identity(outer, r"C:\repo\packages\app")
-    assert inner.root == str(Path(r"C:\repo\packages\app").resolve())
+    outer = ProjectIdentity("outer", "worktree", ABS_ROOT, "git-worktree", "grp-id", "grp")
+    inner = rebase_identity(outer, abs_path("packages", "app"))
+    assert inner.root == str(Path(abs_path("packages", "app")).resolve())
     assert inner.id != outer.id
     # Repository-group metadata still describes the real worktree.
     assert (inner.repo_group_id, inner.repo_group_label) == ("grp-id", "grp")

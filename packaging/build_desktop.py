@@ -20,6 +20,15 @@ from swe_mux.desktop import create_tray_image  # noqa: E402
 SUPERVISOR_SOURCES = (
     ROOT / "src" / "swe_mux" / "supervisor.py",
     ROOT / "src" / "swe_mux" / "pty_host.py",
+    # The platform seams `pty_host` now delegates to. They are part of the
+    # closure for the same reason `pty_host.py` is: a change to how a
+    # pseudoterminal is allocated or how a process tree is owned is a change to
+    # the supervisor's behaviour, and if the hash does not cover them the gate
+    # reports a current bundle while shipping the old PTY implementation.
+    ROOT / "src" / "swe_mux" / "host_platform.py",
+    ROOT / "src" / "swe_mux" / "pty_backend.py",
+    ROOT / "src" / "swe_mux" / "pty_backend_windows.py",
+    ROOT / "src" / "swe_mux" / "process_reaper.py",
     ROOT / "src" / "swe_mux" / "scrollback.py",
     ROOT / "src" / "swe_mux" / "timer_resolution.py",
     ROOT / "src" / "swe_mux" / "win_jobobj.py",

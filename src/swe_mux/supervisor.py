@@ -35,10 +35,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
+from .process_reaper import ProcessReaper, create_reaper, process_in_job
 from .pty_host import PtyHost
 from .scrollback import ScrollbackBuffer
 from .timer_resolution import raise_timer_resolution
-from .win_jobobj import ReaperJob, process_in_job
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class SupervisedSession:
     host: PtyHost
     scrollback: ScrollbackBuffer
     meta: dict[str, Any] = field(default_factory=dict)
-    ownership_job: ReaperJob | None = None
+    ownership_job: ProcessReaper | None = None
     subscribers: set[Connection] = field(default_factory=set)
     alive: bool = True
     exit_code: int | None = None
@@ -152,7 +152,7 @@ class SupervisorServer:
         self.config_path = config_path
         self.data_dir = data_dir
         self.token = secrets.token_urlsafe(32)
-        self.reaper = ReaperJob()
+        self.reaper = create_reaper()
         self.sessions: dict[str, SupervisedSession] = {}
         self.connections: set[Connection] = set()
         self.exit_event = asyncio.Event()
@@ -484,7 +484,7 @@ class SupervisorServer:
         except BaseException:
             self.sessions.pop(entry.sid, None)
             raise
-        ownership_job: ReaperJob | None = None
+        ownership_job: ProcessReaper | None = None
         try:
             ownership_job = self.reaper.create_child()
             ownership_job.assign(host.pid)

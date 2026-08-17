@@ -8,9 +8,16 @@ dependencies = [
   "aiohttp>=3.11",
   "edge-tts>=7.0",
   "faster-whisper>=1.2",
-  "pillow>=11.0; sys_platform == 'win32'",
+  # Pillow is not a Windows feature: Project image presentation is the same
+  # capability on every target and Pillow ships wheels for all of them. It was
+  # marked win32 only while Windows was the sole host, which then made
+  # `project_files` unimportable everywhere else. Its absence is still handled as
+  # a degraded capability rather than an import error.
+  "pillow>=11.0",
   "psutil>=6.1",
   "pywebpush>=2.0",
+  # Genuinely Windows-only: there is no ConPTY anywhere else. The POSIX target
+  # uses the stdlib `pty` module, which needs no third-party dependency.
   "pywinpty>=3.0.2; sys_platform == 'win32'",
   "tree-sitter>=0.23",
   "tree-sitter-language-pack>=0.7",
@@ -80,3 +87,24 @@ python_version = "3.12"
 strict = true
 packages = ["swe_mux"]
 ignore_missing_imports = true
+
+# The per-platform implementation modules are uncheckable in this pass, because
+# mypy resolves `os.killpg`, `pty.fork`, and `ctypes.windll` against the typeshed
+# view of *this* host: half of them do not exist here whichever host that is.
+#
+# They are not left unchecked. `mypy-platform.toml` drives two further passes,
+# one per `--platform`, that check exactly these modules with strict errors on.
+# That is stronger than the shipped single pass, not weaker: today a POSIX-only
+# call is typechecked on Windows and a Win32-only call is typechecked on Linux,
+# so neither implementation can rot while the other host is the one being
+# developed on.
+[[tool.mypy.overrides]]
+module = [
+  "swe_mux.posix_guardian",
+  "swe_mux.posix_process_group",
+  "swe_mux.pty_backend_posix",
+  "swe_mux.pty_backend_windows",
+  "swe_mux.secret_cipher_windows",
+  "swe_mux.win_jobobj",
+]
+ignore_errors = true

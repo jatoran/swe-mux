@@ -27,6 +27,7 @@ from .adapters.claude import claude_data_home
 from .adapters.codex import codex_data_home
 from .agent_skills import discover_skills, parse_frontmatter
 from .harness import Backend, descriptor, is_agent_harness, require_backend
+from .path_identity import same_path
 from .subprocess_flags import background_creation_flags
 
 Scope = Literal["built_in", "managed", "user", "project", "local", "session", "unknown"]
@@ -959,12 +960,8 @@ def _mcp_from_data(
     if isinstance(direct, dict):
         tables.append((direct, source.scope))
     if backend == "claude" and isinstance(data.get("projects"), dict):
-        target = str(cwd.resolve()).casefold()
         for project_path, project_data in data["projects"].items():
-            try:
-                matches = str(Path(project_path).resolve()).casefold() == target
-            except OSError:
-                matches = False
+            matches = same_path(project_path, cwd)
             project_servers = (
                 project_data.get("mcpServers") if isinstance(project_data, dict) else None
             )

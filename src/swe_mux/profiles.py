@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import Config, LaunchProfile
 from .harness import is_agent_harness, reserved_launch_arg_conflict
+from .host_platform import IS_POSIX, IS_WINDOWS, platform_key, platform_label
 from .subprocess_flags import background_creation_flags
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,12 @@ class ResolvedProfile:
     argv: tuple[str, ...]
     env: dict[str, str]
     capabilities: tuple[str, ...]
+    # Where the shell actually starts. Normally the Project root the caller passed,
+    # but `cwd_strategy='home'` answers differently, and the strategy has to own
+    # that answer or it cannot be honoured at all - which is exactly how `home`
+    # came to be accepted by config, offered in Settings, and then silently behave
+    # like `native`.
+    start_cwd: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +52,47 @@ class ResolvedAgentProfile:
 
 def _available(command: str) -> str | None:
     return shutil.which(command)
+
+
+def profile_host_error(profile: LaunchProfile) -> str | None:
+    """Why this profile cannot run on this host, or None when it can.
+
+    `platforms` was stored but never used to *select* anything: the shipped check
+    only refused a non-Windows profile on Windows, which was correct while Windows
+    was the only host. With more than one target the check has to work in both
+    directions, or a Windows-only profile stays selectable on Linux and fails later
+    with a confusing "executable not found".
+
+    An empty `platforms` means unrestricted, which is what a hand-written profile
+    that never thought about portability gets, and it stays permitted.
+    """
+    if not profile.platforms:
+        return None
+    host = platform_key()
+    if host in profile.platforms:
+        return None
+    # A profile written for "posix" runs on any POSIX host; nothing generates that
+    # value today, but accepting it costs nothing and refusing it would be wrong.
+    if IS_POSIX and "posix" in profile.platforms:
+        return None
+    return f"launch profile is unavailable on {platform_label()}"
+
+
+def _posix_login_shell() -> str | None:
+    """The user's own interactive shell, preferring what the OS says it is.
+
+    ``$SHELL`` is the user's declared choice and is what a terminal emulator would
+    honour, so it comes first. The fallbacks are ordered by how likely a host is to
+    have them rather than by preference; `sh` is last because it always exists and
+    would otherwise mask a real shell.
+    """
+    declared = os.environ.get("SHELL", "").strip()
+    if declared and Path(declared).is_file():
+        return declared
+    for candidate in ("bash", "zsh", "fish", "sh"):
+        if found := _available(candidate):
+            return found
+    return None
 
 
 def _wsl_distros() -> list[str]:
@@ -71,6 +119,58 @@ def _wsl_distros() -> list[str]:
 
 
 def detected_profiles() -> list[LaunchProfile]:
+    """Interactive shells this host actually has.
+
+    Split by host rather than probed generically: `pwsh` exists on Linux and macOS
+    too, but a Windows-shaped PowerShell profile carries the ConPTY bootstrap and
+    the `.cmd` shim contract, so offering it under the same id on a POSIX host
+    would advertise agent-awareness that the POSIX launcher path has to earn
+    separately.
+    """
+    return _detected_windows_profiles() if IS_WINDOWS else _detected_posix_profiles()
+
+
+def _detected_posix_profiles() -> list[LaunchProfile]:
+    host = platform_key()
+    profiles: list[LaunchProfile] = []
+    seen: set[str] = set()
+    declared = os.environ.get("SHELL", "").strip()
+    candidates: list[tuple[str, str]] = []
+    if declared and Path(declared).is_file():
+        candidates.append((Path(declared).name, declared))
+    for name in ("bash", "zsh", "fish", "sh"):
+        if found := _available(name):
+            candidates.append((name, found))
+    for name, executable in candidates:
+        profile_id = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-") or "shell"
+        if profile_id in seen:
+            continue
+        seen.add(profile_id)
+        profiles.append(
+            LaunchProfile(
+                profile_id,
+                name,
+                executable,
+                [],
+                platforms=[host],
+                marker="sh",
+            )
+        )
+    if pwsh := _available("pwsh"):
+        profiles.append(
+            LaunchProfile(
+                "pwsh",
+                "PowerShell 7",
+                pwsh,
+                ["-NoLogo"],
+                platforms=[host],
+                marker="ps7",
+            )
+        )
+    return profiles
+
+
+def _detected_windows_profiles() -> list[LaunchProfile]:
     profiles: list[LaunchProfile] = []
     if executable := _available("powershell.exe"):
         profiles.append(
@@ -184,11 +284,8 @@ def resolve_agent_profile(config: Config, profile_id: str, backend: str) -> Reso
         )
     if not profile.enabled:
         raise ValueError({"profile_id": f"launch profile is disabled: {profile_id}"})
-    if profile.platforms and "windows" not in profile.platforms and os.name == "nt":
-        # The same check `resolve_profile` applies to a shell, kept identical rather
-        # than generalized: broadening it would refuse an existing `["windows"]`
-        # profile on Linux, which works today.
-        raise ValueError({"profile_id": "launch profile is unavailable on Windows"})
+    if host_error := profile_host_error(profile):
+        raise ValueError({"profile_id": host_error})
     conflict = reserved_launch_arg_conflict(backend, profile.args)
     if conflict:
         log.warning(
@@ -357,8 +454,8 @@ def resolve_profile(
         )
     if not profile.enabled:
         raise ValueError({"profile_id": f"shell profile is disabled: {profile_id}"})
-    if profile.platforms and "windows" not in profile.platforms and os.name == "nt":
-        raise ValueError({"profile_id": "shell profile is unavailable on Windows"})
+    if host_error := profile_host_error(profile):
+        raise ValueError({"profile_id": host_error.replace("launch profile", "shell profile")})
     executable = _available(profile.executable) or profile.executable
     if not Path(executable).is_file() and not _available(executable):
         raise ValueError({"profile_id": f"executable not found: {profile.executable}"})
@@ -390,8 +487,19 @@ def resolve_profile(
                     ),
                 ]
             )
+    start_cwd = str(cwd)
     if profile.cwd_strategy == "wsl":
         argv.extend(["--cd", _wsl_cwd(executable, argv, cwd)])
+    elif profile.cwd_strategy == "home":
+        # `home` was accepted by config and offered in Settings while only the WSL
+        # branch existed, so choosing it silently produced a Project-root shell -
+        # a setting that appeared to work and did nothing.
+        start_cwd = str(Path.home())
     return ResolvedProfile(
-        profile.id, executable, tuple(argv), dict(profile.env), tuple(dict.fromkeys(capabilities))
+        profile.id,
+        executable,
+        tuple(argv),
+        dict(profile.env),
+        tuple(dict.fromkeys(capabilities)),
+        start_cwd,
     )

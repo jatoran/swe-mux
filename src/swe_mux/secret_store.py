@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import base64
-import ctypes
-import json
 import os
-from ctypes import wintypes
 from pathlib import Path
 from typing import Protocol
 
+from .secret_backends import SecretBackend, SecretStoreError, resolve_backend
 
-class SecretStoreError(RuntimeError):
-    pass
+__all__ = ["PlatformSecretStore", "SecretStore", "SecretStoreError"]
 
 
 class SecretStore(Protocol):
@@ -23,121 +19,74 @@ class SecretStore(Protocol):
     def status(self, name: str) -> dict[str, object]: ...
 
 
-class _DataBlob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
-
-
-def _blob(data: bytes) -> tuple[_DataBlob, ctypes.Array[ctypes.c_char]]:
-    buffer = ctypes.create_string_buffer(data)
-    return (
-        _DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_byte))),
-        buffer,
-    )
-
-
-def _dpapi_protect(value: bytes) -> bytes:
-    if os.name != "nt":
-        raise SecretStoreError("persistent secret storage is unavailable on this platform")
-    source, keepalive = _blob(value)
-    result = _DataBlob()
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    if not crypt32.CryptProtectData(
-        ctypes.byref(source), "swe-mux", None, None, None, 0, ctypes.byref(result)
-    ):
-        raise SecretStoreError(f"DPAPI protection failed: {ctypes.get_last_error()}")
-    try:
-        return ctypes.string_at(result.pbData, result.cbData)
-    finally:
-        kernel32.LocalFree(result.pbData)
-        del keepalive
-
-
-def _dpapi_unprotect(value: bytes) -> bytes:
-    if os.name != "nt":
-        raise SecretStoreError("persistent secret storage is unavailable on this platform")
-    source, keepalive = _blob(value)
-    result = _DataBlob()
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    if not crypt32.CryptUnprotectData(
-        ctypes.byref(source), None, None, None, None, 0, ctypes.byref(result)
-    ):
-        raise SecretStoreError(f"DPAPI decryption failed: {ctypes.get_last_error()}")
-    try:
-        return ctypes.string_at(result.pbData, result.cbData)
-    finally:
-        kernel32.LocalFree(result.pbData)
-        del keepalive
-
-
 class PlatformSecretStore:
-    """Write-only-at-the-API secret store with a Windows current-user DPAPI backend."""
+    """Write-only-at-the-API secret store over the host's own credential storage.
+
+    The environment override, the never-return-a-secret-through-diagnostics rule,
+    and the status shape are the same on every host; only where the bytes rest
+    differs, and that is `secret_backends.resolve_backend`'s answer.
+    """
 
     ENV_NAMES = {"openrouter_api_key": "OPENROUTER_API_KEY"}
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, backend: SecretBackend | None = None) -> None:
         self.path = path
+        self._backend = backend if backend is not None else resolve_backend(path)
 
-    def _stored(self) -> dict[str, str]:
-        if not self.path.exists():
-            return {}
-        try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise SecretStoreError("encrypted secrets file is unreadable") from exc
-        if not isinstance(value, dict) or value.get("version") != 1:
-            raise SecretStoreError("encrypted secrets file has an unsupported format")
-        items = value.get("secrets", {})
-        if not isinstance(items, dict):
-            raise SecretStoreError("encrypted secrets file is malformed")
-        return {str(key): str(item) for key, item in items.items()}
-
-    def _write(self, values: dict[str, str]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps({"version": 1, "secrets": values}, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        os.replace(temporary, self.path)
+    @property
+    def backend_name(self) -> str:
+        return self._backend.name
 
     def get(self, name: str) -> str | None:
         env_name = self.ENV_NAMES.get(name)
         if env_name and os.environ.get(env_name):
             return os.environ[env_name]
-        encoded = self._stored().get(name)
-        if not encoded:
-            return None
-        try:
-            return _dpapi_unprotect(base64.b64decode(encoded, validate=True)).decode("utf-8")
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise SecretStoreError("stored secret could not be decrypted") from exc
+        return self._backend.get(name)
 
     def set(self, name: str, value: str) -> None:
         value = value.strip()
         if not value:
             raise SecretStoreError("secret must not be empty")
-        values = self._stored()
-        values[name] = base64.b64encode(_dpapi_protect(value.encode("utf-8"))).decode("ascii")
-        self._write(values)
+        self._backend.set(name, value)
 
     def clear(self, name: str) -> None:
-        values = self._stored()
-        if name in values:
-            del values[name]
-            self._write(values)
+        self._backend.clear(name)
 
     def status(self, name: str) -> dict[str, object]:
+        """Whether a secret is configured, and how well it is protected at rest.
+
+        `encrypted` is reported separately from `persistent` because the two come
+        apart on a host using the opt-in file fallback: the secret survives a
+        restart while being protected by nothing stronger than file mode, and a
+        caller that reads only `persistent` would present that as equivalent to
+        DPAPI or a Keychain entry.
+        """
         env_name = self.ENV_NAMES.get(name)
         if env_name and os.environ.get(env_name):
-            return {"configured": True, "source": "environment", "persistent": False}
-        try:
-            configured = bool(self._stored().get(name))
             return {
-                "configured": configured,
-                "source": "stored" if configured else "none",
-                "persistent": configured,
+                "configured": True,
+                "source": "environment",
+                "persistent": False,
+                "encrypted": False,
+                "backend": "environment",
             }
+        try:
+            configured = self._backend.get(name) is not None
         except SecretStoreError:
-            return {"configured": False, "source": "error", "persistent": False}
+            return {
+                "configured": False,
+                "source": "error",
+                "persistent": False,
+                "encrypted": False,
+                "backend": self._backend.name,
+            }
+        return {
+            "configured": configured,
+            # `source` keeps its shipped vocabulary (stored/environment/none/error).
+            # Which backend stored it is the new `backend` key, so an existing
+            # reader is unaffected by gaining a second credential store.
+            "source": "stored" if configured else "none",
+            "persistent": configured,
+            "encrypted": configured and self._backend.encrypted,
+            "backend": self._backend.name,
+        }

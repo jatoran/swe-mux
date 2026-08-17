@@ -167,6 +167,7 @@ def test_voice_command_migration_adds_bare_stop_only_to_stock_mute_phrases(
     assert custom.voice_commands[0]["phrases"] == ["silence"]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell first-run defaults")
 def test_first_run_prefers_powershell_7_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -187,6 +188,7 @@ def test_first_run_prefers_powershell_7_when_available(
     assert config.shell_profiles[0].marker == "ps7"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell first-run defaults")
 def test_first_run_falls_back_to_windows_powershell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -200,6 +202,7 @@ def test_first_run_falls_back_to_windows_powershell(
     assert config.shell_profiles[0].marker == "ps"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell first-run defaults")
 def test_untouched_legacy_default_upgrades_to_powershell_7_but_custom_profile_does_not(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -234,6 +237,7 @@ def test_untouched_legacy_default_upgrades_to_powershell_7_but_custom_profile_do
     assert preserved.shell_profiles[0].label == "My Windows shell"
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell first-run defaults")
 def test_auto_managed_windows_default_retries_detection_after_schema_is_current(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

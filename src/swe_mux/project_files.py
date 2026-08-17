@@ -17,8 +17,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, UnidentifiedImageError
-
 from .automation_registry import REGISTRY as AUTOMATION_REGISTRY
 from .git_projects import ProjectIdentity, rebase_identity, resolve_project
 from .harness import is_agent_harness
@@ -163,6 +161,38 @@ def _unsupported_presentation(reason: str) -> dict[str, Any]:
     return {"kind": "unsupported", "reason": reason}
 
 
+def image_inspection_available() -> bool:
+    """Whether Pillow is importable, so image presentation is a real capability here.
+
+    Pillow ships wheels for every supported target, so this is normally true
+    everywhere. It is a capability check rather than a platform check because the
+    two are different questions: a build can legitimately omit Pillow, and the
+    correct behaviour then is a file that presents as unsupported, not a daemon
+    that will not import. Answering it wrong in the other direction is worse -
+    silently claiming image support that is not there.
+    """
+    return _pillow() is not None
+
+
+def _pillow() -> Any | None:
+    """The Pillow ``Image`` module, or None when Pillow is not installed."""
+    global _PIL_IMAGE, _PIL_CHECKED
+    if not _PIL_CHECKED:
+        _PIL_CHECKED = True
+        try:
+            from PIL import Image as _image
+
+            _PIL_IMAGE = _image
+        except ImportError:
+            log.info("Pillow is not installed; project image presentation is unavailable")
+            _PIL_IMAGE = None
+    return _PIL_IMAGE
+
+
+_PIL_IMAGE: Any | None = None
+_PIL_CHECKED = False
+
+
 def _inspect_image_bytes(data: bytes, suffix: str) -> dict[str, Any]:
     """Return bounded metadata for an explicitly image-named file.
 
@@ -171,6 +201,10 @@ def _inspect_image_bytes(data: bytes, suffix: str) -> dict[str, Any]:
     browser receives the bytes.
     """
 
+    Image = _pillow()
+    if Image is None:
+        return _unsupported_presentation("image-inspection-unavailable")
+    UnidentifiedImageError = Image.UnidentifiedImageError
     try:
         with Image.open(io.BytesIO(data)) as image:
             image_format = str(image.format or "").upper()

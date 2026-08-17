@@ -1470,6 +1470,11 @@ def test_public_config_and_secret_status_never_return_key(tmp_path: Path, monkey
         "configured": True,
         "source": "environment",
         "persistent": False,
+        # An environment-supplied key rests nowhere, so it is neither persistent
+        # nor encrypted, and `backend` names the source rather than the host's
+        # credential store - which is not consulted at all on this path.
+        "encrypted": False,
+        "backend": "environment",
     }
     payload = Config(data_dir=tmp_path).public_dict()
     assert "sk-or-secret" not in str(payload)

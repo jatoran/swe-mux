@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from .harness import Backend, publishes_cli_state
+from .path_identity import identity_key
 from .status_timeline import note_layer_reading
 
 try:
@@ -626,7 +627,10 @@ class CliStateMonitor:
 
 
 def _normalized_cwd(cwd: str) -> str:
-    try:
-        return str(Path(cwd).resolve()).casefold()
-    except (OSError, ValueError):
-        return cwd.casefold()
+    """A grouping key two spellings of one directory share on this host.
+
+    `identity_key` rather than `casefold`: folding case on a case-sensitive
+    filesystem merges two different working directories into one key, which here
+    would attribute one CLI's state to a session standing somewhere else.
+    """
+    return identity_key(cwd)

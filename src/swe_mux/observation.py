@@ -5,7 +5,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 import re
 import time
 from collections.abc import Callable
@@ -23,6 +22,7 @@ from .harness import (
     reports_lifecycle_hooks,
 )
 from .models import SessionState
+from .path_identity import same_path
 from .scrollback import SCREEN_TAIL_BYTES
 from .session import (
     STANDING_ACTIVITY_TTL_SLACK_SECONDS,
@@ -2745,12 +2745,15 @@ class RolloverDecision(NamedTuple):
 
 
 def _same_directory(left: str, right: str) -> bool:
-    try:
-        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
-            os.path.abspath(right)
-        )
-    except (OSError, ValueError):
-        return False
+    """Whether two recorded directories are the same one.
+
+    Delegates to `path_identity.same_path`, which asks the filesystem when both
+    exist. The previous `normcase(abspath(...))` folded case unconditionally, so on
+    a case-sensitive host two genuinely different directories compared equal - and
+    the consequence here is that a nested CLI's `/clear` in a similarly-named
+    directory would be accepted as this session's own conversation replacement.
+    """
+    return same_path(left, right)
 
 
 def conversation_rollover_decision(

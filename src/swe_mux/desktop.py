@@ -33,8 +33,8 @@ from .desktop_window_state import (
 )
 from .lifecycle import ledger
 from .logsetup import enable_crash_tracebacks
+from .process_reaper import process_in_job
 from .subprocess_flags import popen_outside_job
-from .win_jobobj import process_in_job
 
 CONTROL_TOKEN_ENV = "SWE_MUX_DESKTOP_CONTROL_TOKEN"
 CONTROL_TOKEN_NAME = "desktop-control.token"

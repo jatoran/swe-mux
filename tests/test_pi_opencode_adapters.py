@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from swe_mux.adapters import build_agent_adapter
 from swe_mux.adapters.base import SpawnOptions
@@ -20,6 +23,7 @@ PI_HEADER = (
 )
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows npm .cmd shim resolution")
 def test_pi_session_dir_encoding_matches_the_installed_cli() -> None:
     """Pinned to pi 0.74.2's observed output on Windows (measured 2026-08-10).
 
@@ -466,6 +470,7 @@ def _write_shim(root: Path, name: str, body: str, target: Path) -> Path:
     return shim
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows npm .cmd shim resolution")
 def test_npm_binary_shim_resolves_to_the_real_executable(tmp_path: Path) -> None:
     """ConPTY cannot execute a `.cmd`; spawning one is what closed the pane."""
     from swe_mux.launchers import resolve_npm_shim_pty_command
@@ -475,6 +480,7 @@ def test_npm_binary_shim_resolves_to_the_real_executable(tmp_path: Path) -> None
     assert resolve_npm_shim_pty_command(str(shim), windows=True) == (str(target), ())
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows npm .cmd shim resolution")
 def test_npm_node_shim_resolves_to_node_plus_entrypoint(tmp_path: Path) -> None:
     from swe_mux.launchers import resolve_npm_shim_pty_command
 

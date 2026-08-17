@@ -160,16 +160,16 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                         -> Phase 6  Agent Context + instruction coverage    [coverage done; rest deferred/culled]
                            (return-path channel 2: standing context, not pull) [CP §7]
                           -> Phase 6.5  Attention ranking + narration       [done: CP steps 6-7]
-                            -> Phase 7  Windows maturity, CLI, doctor, soak [open, scope cut]
+                            -> Phase 7  Windows maturity, CLI, doctor, soak [done, scope cut]
                               -> Phase 7.5  mux MCP v1 semantic memory      [done: CP step 8]
                                 -> Phase 7.6  mux MCP session control       [done: CP step 9]
                                   -> Phase 7.7  Behavioral-summary consolidation + scan-timeline consumers [done: not yet redeployed]
-                                    -> Phase 7.8  Git provenance re-attribution: committer + contributors [open]
-                                      -> Phase 7.9  Code-structure graph: blast radius + per-session change map [build complete, held for review — not landed/redeployed]
-                                      -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [open, ships before 7.9]
+                                    -> Phase 7.8  Git provenance re-attribution: committer + contributors [done]
+                                      -> Phase 7.9  Code-structure graph: blast radius + per-session change map [done]
+                                      -> Phase 7.10 Findings surface: annotation filters + doc_debt tool + Insight tab [done]
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
-                                          -> Phase 10  WSL bridge + Linux/macOS [open]
+                                          -> Phase 10  WSL bridge + Linux/macOS [in progress]
                                             -> Phase 11  Public packaging and release    [open]
 ```
 
@@ -2517,24 +2517,64 @@ Read it before scoping any item here rather than re-deriving it.
 
 ### Platform interfaces
 
-- [ ] Introduce `PtyHost` implementations for Windows ConPTY/pywinpty and Linux/macOS POSIX
+- [x] Introduce `PtyHost` implementations for Windows ConPTY/pywinpty and Linux/macOS POSIX
   PTY through `forkpty`/`openpty` or a vetted equivalent.
-- [ ] Introduce lifecycle/reapers: retain Windows Job Objects; on POSIX, a per-session
+  (`pty_backend.py` holds the `PtyProcess` contract and the unified `PtyError`;
+  `pty_backend_windows.py` and `pty_backend_posix.py` implement it. `pty_host.py` keeps the
+  half that is genuinely shared - reader thread, poll ladder, coalescing, backpressure
+  handoff, resize/exit-status/release - so there is one buffering implementation rather than
+  one per target. The POSIX side uses `pty.fork` specifically for the controlling terminal:
+  without `TIOCSCTTY` in the right order the child silently loses Ctrl+C, SIGWINCH, and job
+  control while still passing an `isatty` check.)
+- [x] Introduce lifecycle/reapers: retain Windows Job Objects; on POSIX, a per-session
   guardian owns the process group and daemon pipe, then performs graceful signal, bounded
   wait, and group SIGKILL after daemon loss.
+  (`process_reaper.py` is the contract; `win_jobobj.ReaperJob` and
+  `posix_process_group.ProcessGroupReaper` implement it, and `posix_guardian.py` is the
+  separate process that covers the case a process group cannot: the daemon dying without
+  asking. EOF on the daemon's pipe is the trigger, chosen because a crashed daemon cannot
+  decline to close its descriptors - unlike a heartbeat, there is no failure mode where the
+  daemon dies and the guardian keeps waiting. An explicit `release` exits without killing,
+  which is the POSIX half of the session-preserving restart contract.
+  **The safety property that needed enforcing:** `assign()` refuses a pid whose process
+  group is the daemon's own. That happens when a child was started without `setsid`, and
+  owning it would make session cleanup signal the daemon, the supervisor, and every sibling
+  session - turning a cleanup bug into a whole-app kill.)
 - [ ] Add a cross-platform process-inspection boundary for descendants, resources,
   signals/termination, anomaly evidence, and listener ownership.
-- [ ] Add OS reveal services: Explorer, macOS `open`, and Linux `xdg-open`.
+- [x] Add OS reveal services: Explorer, macOS `open`, and Linux `xdg-open`.
+  (Already shipped in `file_manager.file_manager_command`, which covers all three and takes
+  the platform as an argument; the Win32 window-focus helper it sits beside imports
+  `wintypes` lazily, so nothing here blocked a non-Windows import.)
 - [ ] Generate agent-promotion launchers per OS with safe structured argv/env/hook-secret
   propagation.
-- [ ] Replace lowercased path comparisons with platform-aware same-file normalization for
+- [x] Replace lowercased path comparisons with platform-aware same-file normalization for
   spaces, Unicode, symlinks, case sensitivity, UNC, and WSL paths.
+  (`path_identity.py`: `os.path.samefile` when both paths exist - which answers symlinks,
+  junctions, mapped drives, bind mounts and per-directory case sensitivity at once - then a
+  textual fallback with NFC normalization and the right case rule, refined by a read-only
+  per-directory case-sensitivity probe. Containment is component-wise, because a string
+  prefix reports `project-old` as inside `project`. Migrated: the rollover cwd comparison,
+  the CLI-state cwd grouping key, and the Claude per-project MCP table match.
+  **Known gap, deliberately not changed here:** `deterministic_consumers.normalize_target`
+  still casefolds. It is the storage key for the code graph, doc-debt ownership and Tier 0
+  targets, so changing it rewrites existing `mux.db` keys; it needs a migration, not an
+  edit, and is tracked in the native-rollout item below.)
 - [ ] Make Project root and `.swe-mux/` resolution platform-aware across Git worktrees,
   non-repository cwd, symlinks, UNC, and WSL translation.
-- [ ] Guard platform imports so config, CLI, package import, and non-PTY tests work on all
+- [x] Guard platform imports so config, CLI, package import, and non-PTY tests work on all
   targets. Adapt data directories, executable/transcript discovery, hook `run`, reveal,
   config migration, voice-capability documentation, and instruction-file resolution per
   platform.
+  (Import parity is proven rather than asserted: on a native-ext4 Ubuntu 24.04 checkout the
+  suite went from **1211 collected with 87 collection errors** to **2874 passing, 0
+  failures**. The blockers removed: the unconditional `import winpty` in `pty_host`, the
+  unconditional `from PIL import ...` in `project_files` (Pillow is now a real dependency on
+  every target, since image presentation is not a Windows feature, with its absence handled
+  as a degraded capability), the unconditional `ReaperJob()` in `server.create_app`, and
+  `from ctypes import wintypes` at `secret_store` module scope - now isolated in
+  `secret_cipher_windows.py`. Data-directory and instruction-file placement are Stage 7 and
+  remain open.)
 
 ### Native rollout
 

@@ -9,7 +9,10 @@ own processes or the sibling supervisor bundle.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from swe_mux.bundle_locks import (
     bundle_lock_holders,
@@ -39,6 +42,7 @@ def test_cwd_exe_and_open_file_anchors_are_classified() -> None:
     ) == ("cwd", str(BUNDLE))
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="NTFS case-insensitive path matching")
 def test_matching_is_case_insensitive_like_the_filesystem() -> None:
     assert classify_bundle_holder(
         BUNDLE, name="node.exe", exe=None, cwd=str(BUNDLE).upper()

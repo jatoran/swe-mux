@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -297,6 +298,7 @@ def test_sweep_parks_windows_and_records_bookkeeping(monkeypatch: pytest.MonkeyP
     assert "ts" in sweeper.recent[0]
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 window enumeration")
 def test_sweep_skips_windows_that_fail_to_move(monkeypatch: pytest.MonkeyPatch) -> None:
     ghosts = [_ghost(1), _ghost(2)]
     sweeper = GhostWindowSweeper()

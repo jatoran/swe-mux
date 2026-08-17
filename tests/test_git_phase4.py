@@ -11,6 +11,8 @@ from swe_mux import git_monitor, git_review
 from swe_mux.event_bus import EventBus
 from swe_mux.git_monitor import read_git_reading, read_git_state, read_unique_git_states
 
+from .host_paths import ABS_ROOT
+
 _FULL_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 
 
@@ -391,9 +393,9 @@ async def test_no_resolvable_base_leaves_the_branch_fields_unmeasured(
         # `.git` from a repository root, `../.git` from a subdirectory. Resolving
         # either against the daemon's own cwd rather than the directory git ran in
         # made every primary checkout read as a worktree named after the repo.
-        ("C:/repo", ".git"),
-        ("C:/repo/frontend", "../.git"),
-        ("C:/repo", "C:/repo/.git"),
+        (ABS_ROOT, '.git'),
+        (f'{ABS_ROOT}/frontend', '../.git'),
+        (ABS_ROOT, f'{ABS_ROOT}/.git'),
     ],
 )
 @pytest.mark.asyncio
@@ -405,7 +407,7 @@ async def test_primary_checkout_is_never_a_worktree(
         responses = _fake_git_responses("")
         responses[("rev-parse", "--absolute-git-dir", "--git-common-dir")] = (
             0,
-            f"C:/repo/.git\n{common_dir}",
+            f"{ABS_ROOT}/.git\n{common_dir}",
         )
         return responses[args]
 

@@ -23,6 +23,8 @@ from swe_mux.git_provenance import (
 from swe_mux.history import HistoryIndex
 from swe_mux.models import GitState, MuxEvent
 
+from .host_paths import ABS_ROOT, OTHER_ABS_ROOT, abs_path
+
 OLD = "a" * 40
 NEW = "b" * 40
 SIBLING = "c" * 40
@@ -113,13 +115,13 @@ def test_contributor_join_prefers_content_and_falls_back_to_the_last_write() -> 
         GitCommitChange(path="src/two.py", status="M", blob="2" * 40),
     )
     facts = [
-        _write_fact("f1", "writer", "C:/repo/src/one.py", 10.0, content_hash="digest-one"),
-        _write_fact("f2", "early", "C:/repo/src/two.py", 11.0),
-        _write_fact("f3", "late", "C:/repo/src/two.py", 12.0),
-        _write_fact("f4", "elsewhere", "C:/other/src/one.py", 12.5),
+        _write_fact("f1", "writer", abs_path("src/one.py"), 10.0, content_hash="digest-one"),
+        _write_fact("f2", "early", abs_path("src/two.py"), 11.0),
+        _write_fact("f3", "late", abs_path("src/two.py"), 12.0),
+        _write_fact("f4", "elsewhere", f"{OTHER_ABS_ROOT}/src/one.py", 12.5),
     ]
     candidates = candidate_writes(
-        changes, facts, worktree_root="C:/repo", session_roots={}
+        changes, facts, worktree_root=ABS_ROOT, session_roots={}
     )
     contributors = {
         item.session_id: item
@@ -174,7 +176,7 @@ def test_contributor_join_places_a_relative_write_by_its_session_checkout() -> N
         _write_fact("f2", "stranger", "src/one.py", 11.0),
     ]
 
-    unplaced = candidate_writes(changes, facts, worktree_root="C:/repo", session_roots={})
+    unplaced = candidate_writes(changes, facts, worktree_root=ABS_ROOT, session_roots={})
     # Neither write can be placed and neither carries content, so nothing is claimed.
     assert resolve_contributors(unplaced, {}) == []
 

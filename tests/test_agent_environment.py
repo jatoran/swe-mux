@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -281,6 +282,7 @@ def test_omp_hooks_section_lists_the_injected_extension(
     assert not any(meta["label"] == "Reports" for meta in theirs["meta"])
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows hook command paths")
 def test_hooks_group_by_event_and_mark_the_ones_swe_mux_installs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,0 +1,20 @@
+# Strict typechecking for the per-platform implementation modules, run once per
+# target regardless of which host the developer is on.
+#
+# The main `[tool.mypy]` config in pyproject.toml cannot check these: it resolves
+# the standard library against the typeshed view of the *current* platform, so on
+# Windows `os.killpg` does not exist and on Linux `ctypes.windll` does not. The
+# answer is not to ignore the errors but to ask the question under the right
+# platform, which `--platform` does.
+#
+# Driven by `.worktree-verify`:
+#   mypy --config-file mypy-platform.toml --platform linux <posix modules>
+#   mypy --config-file mypy-platform.toml --platform win32 <windows modules>
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+# These modules are reached directly by path rather than as a package, and they
+# import their siblings; following those imports would drag the whole package in
+# under the wrong platform and report errors about code this pass does not own.
+follow_imports = "silent"

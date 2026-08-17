@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-import swe_mux.pty_host as pty_host_module
 from swe_mux import agent_launcher
 from swe_mux.adapters import ClaudeAdapter, ShellAdapter, SpawnOptions
 from swe_mux.agent_launcher import _claude, _codex
@@ -17,7 +16,7 @@ from swe_mux.event_bus import EventBus
 from swe_mux.history import HistoryIndex
 from swe_mux.launchers import create_agent_shims, resolve_codex_pty_command, resolve_command
 from swe_mux.models import ProjectRecord, SessionRecord
-from swe_mux.pty_host import PtyHost, create_pty, merge_environment
+from swe_mux.pty_host import PtyHost, merge_environment
 from swe_mux.reconcile import reconcile_external_history
 from swe_mux.server import (
     SESSION_MEDIA_TTL_SECONDS,
@@ -43,53 +42,48 @@ def test_adapters_keep_executable_and_arguments_structured(tmp_path: Path) -> No
 
 
 def test_pty_host_reports_root_exit_status_only_after_exit() -> None:
+    """The shared host's exit/release contract, independent of any platform backend.
+
+    Driven through a fake `PtyProcess` rather than a fake ConPTY: this behaviour is
+    the same on every host, so proving it against one platform's object would tie a
+    portable contract to a Windows-only type.
+    """
+
     class FakePty:
         def __init__(self, alive: bool, status: int) -> None:
             self.alive = alive
             self.status = status
-            self.cancelled = False
+            self.interrupted = False
+            self.closed = False
+
+        @property
+        def pid(self) -> int:
+            return 4321
 
         def isalive(self) -> bool:
             return self.alive
 
-        def get_exitstatus(self) -> int:
-            return self.status
+        def exit_status(self) -> int | None:
+            return None if self.alive else self.status
 
-        def cancel_io(self) -> None:
-            self.cancelled = True
+        def interrupt_read(self) -> None:
+            self.interrupted = True
+
+        def close(self) -> None:
+            self.closed = True
 
     host = PtyHost("cmd.exe", [])
     host._pty = FakePty(True, 7)  # type: ignore[assignment]
     assert host.exit_status() is None
-    with pytest.raises(RuntimeError, match="live pseudoconsole"):
+    with pytest.raises(RuntimeError, match="live pseudoterminal"):
         host.release()
     ended = FakePty(False, 7)
     host._pty = ended  # type: ignore[assignment]
     assert host.exit_status() == 7
     host.release()
-    assert ended.cancelled
+    assert ended.interrupted
+    assert ended.closed
     assert host._pty is None
-
-
-def test_pty_host_reaps_a_delayed_replacement_console_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    host = PtyHost("cmd.exe", [])
-    host._root_started_at = 100.0
-    host._console_host_pid = 10
-    host._console_host_started_at = 100.0
-    killed: list[tuple[int, float]] = []
-
-    def kill_console_host(pid: int, started_at: float) -> bool:
-        killed.append((pid, started_at))
-        return pid == 20
-
-    monkeypatch.setattr(host, "_kill_console_host", kill_console_host)
-    monkeypatch.setattr(pty_host_module, "_console_host_children", lambda: {20: 100.1})
-    try:
-        host._reap_console_host()
-    finally:
-        pty_host_module._CLAIMED_CONSOLE_HOSTS.clear()
-
-    assert killed == [(10, 100.0), (20, 100.1)]
 
 
 def test_one_shot_terminal_exit_outcomes_preserve_failures() -> None:
@@ -304,6 +298,9 @@ def test_codex_pty_resolution_bypasses_the_npm_batch_shim(
     )
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows COMSPEC/.cmd shim and environment-case rules"
+)
 def test_agent_launcher_runs_batch_commands_through_comspec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -318,6 +315,9 @@ def test_agent_launcher_runs_batch_commands_through_comspec(
     assert "codex.cmd" in calls[0][4]
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows COMSPEC/.cmd shim and environment-case rules"
+)
 def test_agent_launcher_bypasses_npm_batch_for_structured_codex_args(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -364,6 +364,9 @@ def test_shim_detection_filters_only_mux_shim_directories(
     assert path_without_shim_dirs(joined) == str(npm)
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows COMSPEC/.cmd shim and environment-case rules"
+)
 def test_agent_launcher_escapes_a_poisoned_shim_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -478,6 +481,9 @@ def test_agent_shim_env_strips_inherited_shim_directories(
     assert env["PATH"] == f"{bin_dir}{sep}{other}"
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows COMSPEC/.cmd shim and environment-case rules"
+)
 def test_windows_environment_override_is_case_insensitive() -> None:
     merged = merge_environment(
         {"Path": r"C:\Windows", "TEMP": r"C:\Temp"},
@@ -486,30 +492,6 @@ def test_windows_environment_override_is_case_insensitive() -> None:
     assert merged["PATH"].startswith(r"C:\mux\bin")
     assert "Path" not in merged
     assert len([key for key in merged if key.casefold() == "path"]) == 1
-
-
-def test_conpty_creation_retries_only_the_private_pyo3_panic(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class PanicException(BaseException):
-        pass
-
-    PanicException.__module__ = "pyo3_runtime"
-    sentinel = object()
-    attempts = 0
-
-    def create(**_kwargs: int) -> object:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise PanicException("transient ConPTY initialization failure")
-        return sentinel
-
-    monkeypatch.setattr("swe_mux.pty_host.winpty.PTY", create)
-    monkeypatch.setattr("swe_mux.pty_host.time.sleep", lambda _seconds: None)
-
-    assert create_pty(120, 30) is sentinel
-    assert attempts == 2
 
 
 def test_official_claude_hook_envelope_cannot_shadow_mux_metadata() -> None:

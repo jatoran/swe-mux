@@ -36,6 +36,8 @@ from swe_mux.server import _branch_source_id, hook_event_payload
 from swe_mux.session import Session, SessionManager
 from tests.support.detection_replay import ReplaySession, VirtualClock
 
+from .host_paths import OTHER_ABS_ROOT, abs_path
+
 CLEARED = "9d1f0c2a-4b6e-4f2a-9c31-0e7a5b6d8f11"
 ORIGINAL = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 
@@ -128,9 +130,13 @@ def test_a_replacement_reported_from_another_cwd_never_rolls() -> None:
     # candidate whose hook cwd is elsewhere is a foreign process regardless of
     # what source it claims.
     session = hook_session()
-    session.record.run_cwd = "D:/PROJECTS/repo"
+    session.record.run_cwd = abs_path("PROJECTS", "repo")
     for source in ("clear", "resume"):
-        payload = {"session_id": CLEARED, "source": source, "cwd": "C:/Temp/scratch"}
+        payload = {
+            "session_id": CLEARED,
+            "source": source,
+            "cwd": f"{OTHER_ABS_ROOT}/Temp/scratch",
+        }
         decision = conversation_rollover_decision(session, "SessionStart", payload)
         assert decision.roll_to is None
         assert decision.refused == CLEARED
@@ -139,14 +145,16 @@ def test_a_replacement_reported_from_another_cwd_never_rolls() -> None:
 
 def test_a_replacement_in_the_session_cwd_still_rolls() -> None:
     session = hook_session()
-    session.record.run_cwd = "D:/PROJECTS/repo"
+    session.record.run_cwd = abs_path("PROJECTS", "repo")
     for source in ("clear", "resume"):
         payload = {
             "session_id": CLEARED,
             "source": source,
             # Same directory through a different spelling: the comparison must
-            # normalize, not string-match.
-            "cwd": "D:\\PROJECTS\\other\\..\\repo",
+            # normalize, not string-match. Built from the host's own separator,
+            # because a Windows-shaped literal is not a path at all on POSIX and
+            # the assertion would then prove nothing about normalization.
+            "cwd": str(Path(abs_path("PROJECTS", "other")) / ".." / "repo"),
         }
         decision = conversation_rollover_decision(session, "SessionStart", payload)
         assert decision.roll_to == CLEARED

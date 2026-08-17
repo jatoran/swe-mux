@@ -19,6 +19,20 @@ uv run ruff check src/swe_mux tests packaging
 step "mypy"
 uv run mypy
 
+step "mypy (per-platform implementations)"
+# Each host's PTY, process-ownership, and secret-store implementation is
+# typechecked under its own platform, on every host. Without this, half the
+# platform code is invisible to the type checker on whichever machine happens to
+# be running the gate, and only breaks when someone builds on the other one.
+uv run mypy --config-file mypy-platform.toml --platform linux \
+  src/swe_mux/pty_backend_posix.py \
+  src/swe_mux/posix_process_group.py \
+  src/swe_mux/posix_guardian.py
+uv run mypy --config-file mypy-platform.toml --platform win32 \
+  src/swe_mux/pty_backend_windows.py \
+  src/swe_mux/win_jobobj.py \
+  src/swe_mux/secret_cipher_windows.py
+
 step "frontend tsc"
 ( cd frontend && npx tsc --noEmit )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +69,9 @@ def test_resolve_profile_preserves_profile_owned_argv_and_environment(
     assert resolved.env == {"PROFILE_TEST": "yes"}
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows shell detection (PowerShell, CMD, WSL)"
+)
 def test_detected_presets_include_native_shells_and_wsl_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
