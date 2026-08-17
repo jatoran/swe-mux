@@ -49,6 +49,17 @@
   in the record snapshot, so supervisor adoption round-trips it across daemon restarts;
   drift-tolerant like the rest of `from_snapshot` (unknown keys dropped, malformed
   annotations skipped). Contract and detection sources: `features/status-detection.md`.
+- `SessionRecord.approval_policy`: the live auto-approval grant —
+  `ApprovalPolicy {mode: wait|allowlisted|allow_all, run_id, expires_at, granted_at, set_by,
+  rules, auto_approved, max_auto, last_decision_at, last_request, floor_deferred}`.
+  Keyed on `agent_run_id` and always carrying an expiry for a non-`wait` mode, both checked at
+  read time by `effective_mode` rather than swept: a sweep that does not run leaves authority
+  standing. `rules` is the Project's allowlist as it stood when the grant was made, so the
+  decision needs no file I/O on the agent's blocked turn and an edit to the committed file
+  cannot widen a grant already standing. On the record rather than in SQLite so it rides the
+  supervisor snapshot through a session-preserving restart, which is routine here; restored
+  `allowlisted` with no rules drops to `wait` rather than becoming an empty allowlist. Full
+  contract: `features/approvals.md`.
 - Git `repository_id`, project scope, root, and repository group fields are derived metadata,
   separate from canonical Project ownership.
 
@@ -106,7 +117,8 @@
   entry (transitions *and* the non-transition kinds: `watchdog_recovery`,
   `standing_activity`, `cli_state`, `layer_reading`, `screen_classifier_blind`,
   `foreign_conversation_hook_ignored`, `transition_refused`, `reopen_blocked`,
-  `observer_fault`, hook-spool records) keyed `(session_id, agent_run_id, seq)` with `ts`,
+  `observer_fault`, `approval_auto_decision`, `approval_mode_set`, `approval_mode_revoked`,
+  hook-spool records) keyed `(session_id, agent_run_id, seq)` with `ts`,
   `kind`, and the entry payload verbatim as JSON. Run-keyed so a conversation rollover's
   successor rows never mix with its predecessor's. Written behind the in-memory rings by a
   batched sink (never on the transition path), pruned by
@@ -272,6 +284,16 @@
   directly (`granted`) or writes the Phase 5 inert draft (`draft`); authority is by target
   Project, so an agent spawns into a Project the operator granted. The install caps the granted
   path with `agent_spawn_hourly_budget` (default 10).
+  Two further fields govern control-plane approvals (`features/approvals.md`): `approval_allow`,
+  the `Tool` / `Tool(pattern)` rules a session's `allowlisted` mode resolves against, and
+  `approval_ceiling` (`"wait"` | `"allowlisted"` | `"allow_all"`) capping the strongest mode any
+  session here may hold. The rules live in the Project file because "reading this repo's
+  `.claude` config is fine" is a property of the codebase, and because a rules editor is the
+  wrong thing to hand someone in the moment they want to switch a mode on. Unset `approval_allow`
+  means the built-in `approvals.DEFAULT_ALLOW_RULES`; an explicit `[]` is a different and real
+  answer ("approve nothing automatically here") and is preserved on write rather than dropped.
+  A malformed config yields ceiling `"wait"`, because an unreadable ceiling is not evidence of
+  permission. Neither field can reach past the floor in `approvals.py`.
   Legacy `resource_open_mode` input remains parseable for compatibility but is omitted from current
   effective/public options.
 - `<project>/.swe-mux/observations.json`: the Project's capture inbox — a bounded list of

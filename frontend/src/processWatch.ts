@@ -18,18 +18,24 @@
 // Explicit extension: this module is reachable from the node test runner, whose
 // type-stripping ESM loader does not resolve extensionless specifiers.
 import { detectedServers, type DetectedServer, type ProcessWithListeners } from './sessionProcesses.ts'
+import { sessionDisplayName } from './sessionNames.ts'
 
 export type WatchProcess = ProcessWithListeners & { cpu_pct?: number; memory_bytes?: number }
 export type WatchSnapshot = {
   sessions?: Array<{ session_id: string; project_id?: string; processes?: WatchProcess[] }>
 } | null
-export type WatchSession = { id: string; name?: string; project_id: string; state?: string; created_at?: number }
+export type WatchSession = {
+  id: string; name?: string; project_id: string; state?: string; created_at?: number
+  // Read only through `sessionDisplayName`, so this row model names a session the way the
+  // sidebar does without restating the rule.
+  auto_named?: boolean; generated_title?: string
+}
 export type WatchProject = { id: string; name: string; position: number }
 
 export type WatchRow = {
   sessionId: string
   projectId: string
-  /** Session name, falling back to its id when the session itself is already gone. */
+  /** The session's display name, falling back to its id when the session itself is gone. */
   label: string
   projectLabel: string
   state: string
@@ -78,7 +84,7 @@ export function buildWatchRows(
     rows.push({
       sessionId: group.session_id,
       projectId,
-      label: session?.name || group.session_id,
+      label: (session && sessionDisplayName(session)) || group.session_id,
       projectLabel: projectById.get(projectId)?.name || 'Unknown project',
       state: session?.state || 'running',
       focused: !!focusedSessionId && group.session_id === focusedSessionId,

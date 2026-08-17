@@ -574,6 +574,41 @@ def test_claude_hook_command_is_bash_safe_for_windows_venv(tmp_path: Path) -> No
     assert not (tmp_path / "claude-hooks.json.tmp").exists()
 
 
+def test_the_decision_hook_carries_an_explicit_timeout(tmp_path: Path) -> None:
+    """Claude's own default is 600 s, and a timed-out hook does not block.
+
+    So this bounds a *stall*, not a decision: without it a wedged daemon costs
+    the agent ten minutes parked on a permission prompt before the CLI gives up
+    and shows it, instead of a few seconds.
+    """
+    ClaudeAdapter(data_dir=tmp_path, approval_hook_timeout=7)
+    settings = json.loads((tmp_path / "claude-hooks.json").read_text(encoding="utf-8"))
+    assert settings["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"] == 7
+    # Only the event whose answer the CLI actually reads back gets one. A
+    # timeout on the observational hooks would cap work that is not on any
+    # critical path and can legitimately take longer.
+    assert "timeout" not in settings["hooks"]["PostToolUse"][0]["hooks"][0]
+
+
+def test_a_harness_that_cannot_decide_gets_no_decision_timeout(tmp_path: Path) -> None:
+    """The compatible-family adapter stands in for a non-deciding harness."""
+    from swe_mux.harness import HARNESSES
+
+    for name, harness in HARNESSES.items():
+        if harness.adapter_family != "claude" or harness.hook_approval_decisions:
+            continue
+        adapter = ClaudeAdapter(
+            data_dir=tmp_path,
+            name=name,
+            config_dir_name=harness.config_dir_name,
+            script_base_name=harness.script_base_name,
+        )
+        assert adapter.settings_path is not None
+        settings = json.loads(adapter.settings_path.read_text(encoding="utf-8"))
+        for handlers in settings["hooks"].values():
+            assert "timeout" not in handlers[0]["hooks"][0]
+
+
 def test_codex_spawn_resume_and_notify_are_structured(tmp_path: Path) -> None:
     adapter = CodexAdapter("codex.exe", notify=True)
 

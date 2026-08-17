@@ -6,7 +6,9 @@
 - Changing the harness registry, descriptors, capability levels, adapter families, or adding a
   harness: `design/features/backends.md`; completed abstraction record:
   `development/archive/HARNESS_ABSTRACTION_AND_OMP.md`; per-surface parity classification and
-  the open enforcement gaps: `development/archive/HARNESS_PARITY_AUDIT_2026-08-11.md`
+  the open enforcement gaps: `development/archive/HARNESS_PARITY_AUDIT_2026-08-11.md`;
+  per-candidate parity study for CLIs not yet in the registry, and the sequencing that consumes
+  it: `development/HARNESS_EXPANSION_CANDIDATES.md`, `development/ROADMAP.md` Phase 12
 - Changing Project/Group registration, ownership, ordering, or sidebar visibility:
   `design/features/projects.md`, `design/data-model.md`, `design/interfaces.md`
 - Changing Project notes, the global Scratchpad, files, ignores, or watches:
@@ -93,6 +95,15 @@
 - Changing session status detection, the transition ledger, the state watchdog,
   awaiting sub-reasons, the detection golden corpus, or status-health diagnostics:
   `design/features/status-detection.md`, `design/features/delivery-readiness.md`
+- Changing control-plane approvals (the per-conversation mode, the allow rules, the
+  never-auto-approved floor, the decision hook, or the approval strip):
+  `design/features/approvals.md`, `design/features/status-detection.md`,
+  `design/features/backends.md`, `design/interfaces.md`, `design/data-model.md`,
+  `technical/backend/packages.md`, `technical/frontend/packages.md`.
+  The rule the design exists to enforce: a decision is made from the harness's structured
+  permission request, never from the PTY screen, and the floor in `approvals.py` is checked
+  before the mode so no configuration can reach past it. `deny` is deliberately not a
+  decision mux ever makes.
 - Changing the durable status timeline (its table, sink, layer readings, or the
   state-log/diagnostic-bundle endpoints) or the incident investigation procedure:
   `design/features/status-detection.md`, `design/interfaces.md`, `design/data-model.md`,

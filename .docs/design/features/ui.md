@@ -186,6 +186,10 @@ responsive controls.
   equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
+  It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
+  tree it edits, and `menu → Projects…` between Utilities and Configure Actions. The header
+  button is discoverable only once the sidebar is open and its header is in view, while the
+  app menu is where every other app-wide surface is looked for.
 - The sidebar footer is two controls: `menu` at the left edge and the alerts bell at the right.
   It held four. `projects` moved into the `PROJECTS` header, beside the tree it edits, and the
   settings cog was removed: `menu → All Settings…` sits one row away from the button next to it,
@@ -443,6 +447,17 @@ responsive controls.
   and `role="presentation"`: a real box breaks the desktop column and the mobile rail alike,
   and a `tablist` admits only tabs, so the heading is a visual affordance and a screen reader
   gets the same flat list the phone does.
+  A heading must read as chrome rather than as one more entry, and typography cannot carry
+  that distinction: `.settings-layer *` pins font family, size, weight, and line height with
+  `!important` so the whole panel scales as one unit, and `.app-shell *` pins tracking. The
+  separation is therefore built from what is left — a filled band where an entry is
+  transparent until hovered, rules closing that band, full `--text` against the entries'
+  muted grey, and flush with the sidebar's edge while every entry is indented past it. The
+  fill is green-tinted rather than `--panel2`, because `--panel2` is what hover and the
+  active tab use and a neutral fill reads as a selected row; the label is `--text` rather
+  than the panel's heading green because green on a green-tinted band measures 2.4:1 on the
+  low-chroma light themes, under where the `--green` headings already sit, while `--text`
+  holds 5:1 at worst across the catalogue.
 - Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
   - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
     provider credentials. Everything model-backed depends on that one key, so filing it inside
@@ -578,6 +593,19 @@ responsive controls.
 - Appearance exposes one palette picker for the shared browser chrome and xterm theme.
   Every option shows the same six fixed-width color swatches, so palette comparison does not depend on label length.
   The custom listbox supports pointer selection, Up/Down/Home/End navigation, Enter/Space selection, and layered Escape dismissal.
+  **Highlighting a theme applies it to the whole window immediately**, by arrow key or by
+  hover, so a catalogue of twenty-eight can be walked and seen instead of chosen blind,
+  reopened, and chosen again. It is a preview and not a choice: the draft moves only on
+  Enter or click, the dirty flag never fires, and the trigger keeps showing the chosen
+  theme rather than the highlighted one. Leaving the list any way at all hands the screen
+  back — Escape, a click elsewhere, or the one gesture that closes the list and the whole
+  panel together, which `Settings.tsx` owns rather than the picker precisely because the
+  picker is gone before its own revert could run. The revert targets the *authoritative*
+  theme rather than the draft's, since discarding unsaved settings has already put the
+  saved theme back on its way out.
+  The control is laid out as an ordinary field — label column, bounded control column —
+  rather than stacked full-width, which had made the one setting in the panel that spans
+  the label column read as a section heading.
   The built-in retro set includes Phosphor Blue, Phosphor Purple, Commodore 64, Amiga Workbench, CGA, Macintosh System 6, Game Boy, and Virtual Boy.
 - Appearance exposes **chrome scale**, one multiplier on the size of every surface, stored
   **separately for desktop and mobile**. Both default to `1.0`, so installing the build that
@@ -1476,7 +1504,8 @@ responsive controls.
 - **One session has one name on every surface.** The rule - a generated title wins only while the
   session is still `auto_named` - lives in one place per side (`frontend/src/sessionNames.ts`,
   `src/swe_mux/session_titles.py`) and every surface reads it: sidebar rows, workspace tabs, the
-  drawer's session-scoped headings, prompt and queue targets, the Git tab, voice, and History. A
+  drawer's session-scoped headings, prompt and queue targets, the Git tab, the Processes tab and
+  the process fleet inspector, the mobile draft composer, voice, and History. A
   surface that spells the rule out itself is the one that eventually disagrees with the sidebar,
   which is what a heading still reading `claude-0e7d93` beside a titled pane looked like.
   The two payload shapes disagree about types and are read through separate entry points: a live
