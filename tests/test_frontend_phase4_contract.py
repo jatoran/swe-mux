@@ -372,8 +372,13 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     # same one-row scroller and selected-tab reveal contract.
     # Back to twelve: Actions combines the former Commands and Prompts tabs without changing
     # the one-row scroller or selected-tab reveal contract.
+    # Re-checked at thirteen (Change Map, Phase 7.9): a session-scoped compact reader like
+    # Insight and Transcript, using the same one-row scroller and selected-tab reveal contract.
+    # It is the thirteenth 36px stop in a scroller that was already scrolling below ten, so the
+    # header machinery is unchanged; the bar it passes is "does this surface belong beside a
+    # terminal", and a per-session code change map read against the focused session does.
     ids = re.findall(r"\{ id: '([a-z]+)'", tabs)
-    assert len(ids) == 12, ids
+    assert len(ids) == 13, ids
     tab_css = css[css.index(".drawer-tabs{") : css.index(".drawer-tabs::")]
     assert "flex-wrap:nowrap" in tab_css and "overflow-x:auto" in tab_css
     assert "drawer-chrome" not in drawer
