@@ -846,6 +846,19 @@ body {
   pointer-events:none;background:var(--bg)
 }
 .project-resource>continuity-editor.note-editor { grid-row:resource-editor;grid-column:1 }
+/* Code files: the CodeMirror host fills the editor grid row exactly like the note editor and the
+   textarea it replaces. Token colours are defined once as `--cm-*` mapped onto the core palette,
+   so every theme (and light/dark) is covered without a per-theme rule; codeTheme.ts reads them. */
+:root {
+  --cm-keyword:var(--red);--cm-comment:var(--muted);--cm-string:var(--green);--cm-number:var(--amber);
+  --cm-function:var(--blue);--cm-type:var(--green2);--cm-variable:var(--text);--cm-property:var(--blue);
+  --cm-attribute:var(--amber);--cm-tag:var(--red);--cm-punctuation:var(--muted);--cm-meta:var(--blue);
+  --cm-heading:var(--accent);--cm-link:var(--blue);--cm-invalid:var(--red)
+}
+.project-resource>.code-editor { grid-row:resource-editor;grid-column:1;min-width:0;min-height:0;overflow:hidden;background:var(--bg) }
+.code-editor .cm-editor { height:100% }
+.code-editor .cm-editor.cm-focused { outline:none }
+.code-editor .cm-scroller { overflow:auto }
 /* Continuity contains its shadow tree's paint, so its internal z-index cannot outrank the
    sibling heading trail. Promote the editor host only while the touch selection toolbar is
    open; Copy/Cut/Paste then wins the overlap without changing the trail's ordinary layer. */
