@@ -146,6 +146,29 @@ listener, with optional Tailscale Serve for browser-recognized HTTPS.
   daemons, IP-loopback only, and gated by the desktop-generated bearer secret. Tailnet peers
   cannot use it even when admitted to the ordinary UI/API.
 
+## One Serve route, several daemons
+
+Tailscale Serve on 443 is a single machine-wide route, and more than one swe-mux may want it:
+the desktop app on 8765, a terminal daemon on another port, a short-lived test instance. The
+rule is ownership, not first-come:
+
+- A **foreign** (non-loopback) route is never touched.
+- An **abandoned** swe-mux route - loopback, but nothing answering on that port - is
+  reclaimable. That is what lets a terminal daemon take over after an unclean exit, and losing
+  it would strand the route permanently.
+- A route held by a **running** swe-mux is left alone, and the refusal names the port holding
+  it and suggests `--local-only`.
+
+That last rule was missing until 2026-08-17, and its absence is not theoretical: a test daemon
+on an ephemeral port took the route from the live desktop app, and mobile access stayed broken
+after that daemon exited. The damage is entirely one-sided and silent - the victim keeps
+serving loopback and never learns it lost the address, so nothing on the desktop looks wrong
+while every phone is stranded.
+
+**Any daemon that is not the machine's primary must start with `--local-only`.** An isolated
+port and an isolated data directory are not enough: neither of them isolates the tailnet, and
+the Serve route is shared regardless of which port or data directory a daemon uses.
+
 ## Operator guidance
 
 - Restrict the Tailscale grant to the owning user/devices and this host. Remove a device

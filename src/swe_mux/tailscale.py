@@ -8,6 +8,7 @@ import re
 import shutil
 import ssl
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,52 @@ def _web_target_is_loopback(value: Any, https_port: int) -> bool:
         if any(marker in serialized for marker in ("127.0.0.1:", "localhost:", "[::1]:")):
             return True
     return False
+
+
+def _loopback_target_port(value: Any, https_port: int) -> int | None:
+    """The loopback port the Serve route on ``https_port`` proxies to, if any.
+
+    Extracted rather than merely detected, because "is this loopback" is not
+    enough to decide whether taking the route is safe: what matters is *which*
+    daemon is on the other end and whether it is still running.
+    """
+    if not isinstance(value, dict) or not isinstance(value.get("Web"), dict):
+        return None
+    for authority, config in value["Web"].items():
+        if not isinstance(authority, str):
+            continue
+        candidate = authority if authority.startswith("https://") else f"https://{authority}"
+        if not _url_on_port(candidate, https_port):
+            continue
+        serialized = json.dumps(config)
+        match = re.search(r"(?:127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})", serialized)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+async def _swemux_daemon_alive(port: int) -> bool:
+    """Whether a swe-mux daemon is currently answering on this loopback port.
+
+    `ui_build_id` rather than a bare `ok`, because the question is "is another
+    swe-mux still using this route", not "is anything listening". Any failure -
+    refused, timed out, wrong shape - answers False, which is the permissive
+    direction on purpose: an abandoned route must stay reclaimable.
+    """
+
+    def probe() -> bool:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/health", timeout=2
+            ) as response:
+                if response.status != 200:
+                    return False
+                payload = json.loads(response.read(4096) or b"{}")
+        except (OSError, ValueError, TimeoutError):
+            return False
+        return isinstance(payload, dict) and payload.get("ok") is True and "ui_build_id" in payload
+
+    return await asyncio.to_thread(probe)
 
 
 def _text_urls(value: str) -> list[str]:
@@ -513,25 +560,44 @@ async def enable_mobile_voice_serve(
         }
     existing, existing_error = await _status(executable, "serve")
     existing_url = mobile_voice_url(_serve_urls(existing), https_port)
-    # Take over an existing route only when it already targets this daemon's port
-    # or is a swe-mux-style loopback route (e.g. another daemon on a different port
-    # left it pointing at 127.0.0.1:<other>). A non-loopback route is foreign and
-    # left untouched. This lets the desktop app (8765) and a terminal daemon
-    # (e.g. 18765) each reclaim the single HTTPS route when they start.
-    if (
-        existing_url
-        and not _web_target_matches(existing, https_port, port)
-        and not _web_target_is_loopback(existing, https_port)
-    ):
-        return {
-            "status": "error",
-            "url": None,
-            "authorization_url": None,
-            "diagnostic": (
-                f"Port {https_port} already serves another private Tailscale route; "
-                "swe-mux will not replace it."
-            ),
-        }
+    # Take over an existing route only when it already targets this daemon's port,
+    # or is a swe-mux-style loopback route whose owner is gone. A non-loopback
+    # route is foreign and left untouched. This lets the desktop app (8765) and a
+    # terminal daemon (e.g. 18765) each reclaim the single HTTPS route when they
+    # start, which is the intended behaviour and is preserved.
+    #
+    # What is *not* allowed is taking it from a daemon that is still running. That
+    # used to happen silently and the damage is entirely on the other side of the
+    # boundary: the running daemon keeps working on loopback and never learns it
+    # lost the route, while every phone pointed at the tailnet URL is served by
+    # whichever instance started last - and when that instance exits, the URL
+    # answers nothing at all. Observed on 2026-08-17, when a short-lived test
+    # daemon on an ephemeral port took the route from the live desktop app and
+    # mobile access stayed broken after it exited.
+    if existing_url and not _web_target_matches(existing, https_port, port):
+        target_port = _loopback_target_port(existing, https_port)
+        if target_port is None:
+            return {
+                "status": "error",
+                "url": None,
+                "authorization_url": None,
+                "diagnostic": (
+                    f"Port {https_port} already serves another private Tailscale route; "
+                    "swe-mux will not replace it."
+                ),
+            }
+        if await _swemux_daemon_alive(target_port):
+            return {
+                "status": "error",
+                "url": None,
+                "authorization_url": None,
+                "diagnostic": (
+                    f"Port {https_port} already serves a running swe-mux on port "
+                    f"{target_port}; swe-mux will not take the address from it. Stop that "
+                    "daemon first, or start this one with --local-only if it is a test "
+                    "instance that should not touch the shared tailnet route."
+                ),
+            }
     if existing is None and existing_error and "not configured" not in existing_error.casefold():
         return {
             "status": "error",

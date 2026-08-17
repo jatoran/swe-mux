@@ -30,7 +30,13 @@ api() { curl -sS --max-time 15 "http://127.0.0.1:$PORT$1" "${@:2}"; }
 echo "--- starting daemon"
 # `--config` is how the data dir is chosen: Config takes data_dir from the config
 # file's parent, so an isolated dir keeps this off the real ~/.mux.
-uv run muxd --host 127.0.0.1 --port "$PORT" --config "$DATA/config.toml" \
+#
+# `--local-only` is not optional. Without it the daemon enables the tailnet
+# listener and runs the startup mobile-voice setup, which retargets the single
+# Tailscale Serve 443 route at *this* port. A throwaway daemon then owns the
+# address every phone uses, and when it exits that address answers nothing -
+# while the real daemon keeps working on loopback and never notices.
+uv run muxd --host 127.0.0.1 --port "$PORT" --config "$DATA/config.toml" --local-only \
   >"$DATA/daemon.out" 2>&1 &
 DAEMON_PID=$!
 

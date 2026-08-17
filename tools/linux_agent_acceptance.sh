@@ -32,7 +32,7 @@ esac
 echo "native $BACKEND: $CLI"
 
 echo "--- starting the daemon"
-uv run muxd --host 127.0.0.1 --port "$PORT" --config "$DATA/config.toml" \
+uv run muxd --host 127.0.0.1 --port "$PORT" --config "$DATA/config.toml" --local-only \
   >"$DATA/daemon.out" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 90); do api /api/health >/dev/null 2>&1 && break; sleep 0.5; done
