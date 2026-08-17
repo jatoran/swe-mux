@@ -1501,7 +1501,8 @@ responsive controls.
 - **One session has one name on every surface.** The rule - a generated title wins only while the
   session is still `auto_named` - lives in one place per side (`frontend/src/sessionNames.ts`,
   `src/swe_mux/session_titles.py`) and every surface reads it: sidebar rows, workspace tabs, the
-  drawer's session-scoped headings, prompt and queue targets, the Git tab, voice, and History. A
+  drawer's session-scoped headings, prompt and queue targets, the Git tab, the Processes tab and
+  the process fleet inspector, the mobile draft composer, voice, and History. A
   surface that spells the rule out itself is the one that eventually disagrees with the sidebar,
   which is what a heading still reading `claude-0e7d93` beside a titled pane looked like.
   The two payload shapes disagree about types and are read through separate entry points: a live
