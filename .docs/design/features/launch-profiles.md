@@ -32,7 +32,7 @@ The Python type is `LaunchProfile` and the TypeScript type is `LaunchProfile`.
 The stored field is `list[str]`, because that is what a spawn is: an executable and a list of arguments handed to the OS with no shell between them.
 The *entry* is a command line, parsed by `frontend/src/commandLine.ts`.
 
-Both argument fields in the product use it: a profile's `Arguments`, and Settings → Agents → default args.
+Both argument fields in the product use it: a profile's `Arguments`, and Settings → Harnesses → default args.
 Those previously wanted one argv token per line and a JSON array respectively, which was two syntaxes for one concept, neither labelled, and both of which turned the obvious `--model claude-opus-4-8` into a single argument the CLI then rejected.
 
 The rules are Windows rules, not POSIX:

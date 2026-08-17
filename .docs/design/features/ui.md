@@ -425,21 +425,72 @@ responsive controls.
 
 - Form changes remain local drafts until explicit Save. Save state is visible as
   dirty/saving/saved, and a background refresh cannot reset the selected settings section.
+- **One tab names one subsystem.** Seventeen tabs are grouped into four runs, declared once
+  in `settingsTabs.ts` and rendered from that single order by both layouts:
+
+  | Group | Tabs |
+  | --- | --- |
+  | Workspace | General, Projects, Terminals, Git, Processes |
+  | Agents | Harnesses, Accounts, Prompt queue, Automation, Usage |
+  | Interface | Appearance, Input, Text editor, Voice |
+  | System | Alerts, Remote, Diagnostics |
+
+  A group is a contiguous *run* of the array, not a declared membership list, so a tab that
+  drifts away from its group produces a repeated heading rather than a silently miscategorised
+  tab. The desktop sidebar draws a heading wherever the group changes; the mobile rail renders
+  the same order flat with the headings suppressed, because a phone cannot spare the width and
+  the flat order already agrees with the grouped one. The group wrapper is `display:contents`
+  and `role="presentation"`: a real box breaks the desktop column and the mobile rail alike,
+  and a `tablist` admits only tabs, so the heading is a visual affordance and a screen reader
+  gets the same flat list the phone does.
+- Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
+  - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
+    provider credentials. Everything model-backed depends on that one key, so filing it inside
+    Automation made it unfindable from Voice, the scan timeline, or attention narration.
+  - **Auto-delivery and agent messaging** are the Prompt queue tab. They bound how a queued
+    message reaches an agent whichever harness it runs, so they are delivery policy rather than
+    harness configuration.
+  - **Global project ignores** are on Projects, beside the per-Project list they compose with,
+    rather than under process evidence. They filter the file tree and resource watchers, never Git.
+  - **System prerequisites, the three session-preserving reload actions, and the diagnostics
+    bundle** are the Diagnostics tab. None of them is remote configuration.
+  - **Scrollback** is on Terminals. `history_limit` is *not* scrollback — it is the history
+    browser's page size — so it sits with native-history indexing on Harnesses.
 - Automation enablement is not duplicated in Settings.
   The Automation dashboard owns the engine, Scan timeline, titler, summarizer, attention-observer, and custom-rule switches.
-  Settings retains OpenRouter credentials, models, budgets, execution bounds, retention, and advanced rule definitions.
-- Agents is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The section also holds native-history reconcile: the startup toggle and a `Scan now` control with progress and cancel (`features/history.md`).
-- The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Agents rather than duplicating the per-harness editors.
-- Git and processes exposes the absolute `worktree_root` used by the Project Run launcher.
+  Settings retains budgets, execution bounds, retention, and advanced rule definitions; the credential and models are on Accounts.
+- Harnesses is the per-harness section: an enable toggle, the detected executable path (read-only), the executable override, default arguments as a command line, and the width envelope where the harness declares it. It lists every registered harness including disabled ones (`allHarnessesIncludingDisabled`), because a section that hid a disabled harness could not re-enable it. The enable toggle is three-state: leaving a harness untouched follows detection, and a `follow detection` control clears an explicit choice. A disabled harness is only hidden from the launchers; it stays spawnable and its history stays searchable (`features/backends.md`). The tab also holds native-history reconcile: the startup toggle, a `Scan now` control with progress and cancel, and the browser's page size (`features/history.md`). That is history indexing rather than harness configuration, but the scan is scoped to exactly the enabled harnesses, so the two are read together or not at all.
+- The first-run harness panel appears once, gated daemon-side by `harness_setup_complete`, not device-local storage, so a choice made on one device does not reappear on another. It lists detected harnesses pre-ticked, offers a separate `scan history` choice, and a skip that writes only the completion flag. `Configure in Settings…` hands off to Settings → Harnesses rather than duplicating the per-harness editors.
+- Git exposes the absolute `worktree_root` used by the Project Run launcher.
   An empty stored value resolves to `<data_dir>/worktrees`; the field displays that resolved default, and changing it does not move existing worktrees.
-- Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device).
+- Settings opens on the **tab it was last left on** (`mux.settings.tab.v1`, per device) and, within
+  that tab, on the **section it was last left on** (`mux.settings.section.v1`, a per-tab map).
   A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.
-  Only an unqualified open restores the remembered tab.
+  Only an unqualified open restores the remembered tab, and a pending search jump always beats a
+  remembered section because that caller named an exact control rather than a region.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.
+  Tab ids persisted by older builds are migrated rather than discarded (`LEGACY_TAB_IDS`), so a
+  device that last used `workspace` reopens on Git instead of reading as the panel forgetting.
   The panel is opened, scanned, and closed many times in a session, and landing on General
   every time re-charges the navigation that reached the tab someone actually lives in.
+- A tab of four or more sections carries a **sticky section rail** at the top of its scroller, on
+  desktop and mobile alike. It is scroll anchors, never sub-tabs, and that distinction is load-bearing:
+  every section of a tab stays mounted, so the search index can still see the whole tab, `Ctrl`+`F`
+  still works, and the single Save transaction can never hide a dirty field behind a pane the user
+  cannot see while a validation error at the top names it.
+  The rail is derived from the `<h3>` elements the tab actually rendered — a `MutationObserver`
+  keeps it correct as child panels (Accounts, Alerts, the WSL bridge) paint after their fetches —
+  so a new section joins the rail the moment it renders and there is no declared list to update.
+  Repeated headings are numbered (`railSectionIds`) because a remembered section id has to survive
+  a reload. Scroll-spy selects the last heading above the rail's underside, and hitting the bottom
+  of the scroller selects the final section, whose heading is usually too close to the end to
+  cross that line. A rail click holds the selection for the length of the scroll: without that
+  hold the late sections of a short tab are unpickable, because scrolling to one lands at the
+  bottom and the bottom rule immediately re-selects the last section.
+  On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
+  rather than growing into the content.
 - Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
@@ -448,27 +499,35 @@ responsive controls.
   reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
   form because Save writes them back unconditionally. Remote, voice, and firewall status stay
   separate non-blocking fetches.
-- The Remote tab renders the Tailscale connection state (not-installed, logged-out, connecting,
-  stopped, or connected-as-`<device>.ts.net`) with cause-pointing next-step text, a Windows-only
-  Defender Firewall panel with a one-click Repair button when a blocking or missing rule is
-  found, a collapsible phone setup checklist (Use Tailscale DNS on, Android Private DNS off or
-  automatic), and an Export diagnostics button that copies one bundle to the clipboard with a
-  selectable textarea fallback. The Voice tab's Mobile voice section shows the same connection
-  state and phone checklist beside the secure-address button. The firewall panel is hidden off a
-  frozen Windows build, and both tabs read the phone checklist from static copy because the
-  daemon cannot detect the phone's DNS state.
-- The Remote tab also carries a "Connect a phone" button opening a modal (`ConnectPhone.tsx`) with
-  a scannable QR of the connection URL (the `.ts.net` MagicDNS name, secure Serve address when up),
-  a system-prerequisites checklist (Git, Node, npm, Tailscale, each with a next step), and a
-  security-posture line stating that any tailnet device reaches the daemon with no login.
-- Settings -> Agents renders two per-harness instrumentation toggles under each harness: the mux MCP
+- The Remote tab is one section per concern: the Tailscale connection state (not-installed,
+  logged-out, connecting, stopped, or connected-as-`<device>.ts.net`) with cause-pointing
+  next-step text, a "Connect a phone" button, a Windows-only Defender Firewall panel with a
+  one-click Repair button when a blocking or missing rule is found, the WSL bridge, the secure
+  HTTPS address, and a phone setup checklist (Use Tailscale DNS on, Android Private DNS off or
+  automatic). The Voice tab's Mobile voice section deliberately repeats the connection state,
+  secure-address button, and phone checklist: someone setting up dictation should not have to
+  leave the tab, and Remote remains the canonical copy. Both tabs read the phone checklist from
+  static copy because the daemon cannot detect the phone's DNS state. The firewall and WSL panels
+  render nothing off a supported host, and because each now owns a heading, Settings states the
+  unsupported case rather than leaving a heading with nothing under it.
+- "Connect a phone" opens a modal (`ConnectPhone.tsx`) with a scannable QR of the connection URL
+  (the `.ts.net` MagicDNS name, secure Serve address when up), a system-prerequisites checklist
+  (Git, Node, npm, Tailscale, each with a next step), and a security-posture line stating that any
+  tailnet device reaches the daemon with no login.
+- The Diagnostics tab holds the standing system-prerequisites checklist, the three
+  session-preserving reload actions (`ui.reload`, `daemon.reload`, `app.redeploy`), and an Export
+  diagnostics button that copies one bundle to the clipboard with a selectable textarea fallback.
+  The reload buttons dispatch the app's own command registry rather than re-implementing the
+  paths, so a change to what "reload daemon" means reaches this panel for free, and a command the
+  host does not offer disables its button instead of failing when pressed.
+- Settings -> Harnesses renders two per-harness instrumentation toggles under each harness: the mux MCP
   server (offered only where the `mcp` capability is set) and "Instrument with mux hooks", whose
   off state shows an inline warning that a clean launch drops the harness to unobserved. Both note
   that the change applies on the next daemon restart. Each harness also shows its detected CLI
   version, flagged when it is newer than the version mux was tested against.
 - Settings -> Voice defaults microphone input off; enabling it shows a note that the first Talk
   downloads the local Whisper model, and the language/model inputs are framed as a first-use choice.
-  Settings -> Automation lists what one OpenRouter key unlocks, and the scan-timeline model is an
+  Settings -> Accounts lists what one OpenRouter key unlocks, and the scan-timeline model is an
   editable, changeable default rather than a fixed read-only value. The first-run panel discloses
   what mux injects per session and points at the next onboarding steps (project, CLI login, session,
   phone).
@@ -487,7 +546,10 @@ responsive controls.
   goes missing entirely. Labels, headings, buttons, option labels, placeholders, and the help
   paragraph following a control are all matched on; the index is rebuilt when a search begins
   or when the config it came from changes, never per keystroke.
-- Automation's cheap and standard model controls accept typed queries and filter the cached
+  The section rail is excluded from the index and from the jump's candidate scan alike: its
+  buttons repeat every heading, so indexing them would duplicate results and counting them as
+  candidates would shift the occurrence a recorded result points at.
+- The Accounts tab's cheap and standard model controls accept typed queries and filter the cached
   OpenRouter catalog live by model name or exact ID.
   Their listboxes scroll inside a bounded desktop or mobile height instead of expanding to the
   height of the catalog.
@@ -661,7 +723,7 @@ responsive controls.
   Mobile mounts only visible terminals so offscreen PTY sockets cannot consume mobile bandwidth.
 - Desktop agent panes apply backend-specific width envelopes before registering PTY geometry.
   Claude's terminal body stops at `claude_max_columns` and remains centered when the pane grows wider, because Claude Code's live-region renderer can leave stale and duplicated cells across large width changes.
-  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Agents rendered for any harness declaring `applies_width_envelope`, not by CLI name; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
+  The setting offers a fixed set of steps plus `0` for no cap, defaults to the historical 120 columns, and lives in Settings → Harnesses rendered for any harness declaring `applies_width_envelope`, not by CLI name; it is a setting rather than a constant because the defect it answers belongs to an independently released CLI, and a cap that outlives its evidence silently costs width.
   The corruption itself is repaired at its source by the settled-resize repaint pulse (`features/terminal-input.md`), which makes the child restate the screen the user stopped on; the envelope is now a width preference rather than the only defence, and `0` is a reasonable setting.
   A capped pane whose width change is clamped raises a transient notice naming the limit and offering the setting, since the symptom - text that stops widening while margin appears - otherwise reads as the CLI refusing to resize.
   That notice yields to the ownership and letterbox notices, which share its slot and describe geometry the user has less control over.

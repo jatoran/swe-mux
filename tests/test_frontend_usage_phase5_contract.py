@@ -62,11 +62,12 @@ def test_settings_use_tabs_compact_profile_selection_and_latest_ccusage() -> Non
 def test_input_has_a_command_first_validated_shortcut_editor() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     settings = (root / "Settings.tsx").read_text(encoding="utf-8")
+    tabs = (root / "settingsTabs.ts").read_text(encoding="utf-8")
     style = (root / "style.css").read_text(encoding="utf-8")
 
-    assert "{id:'input',label:'Input'}" in settings
+    assert "{id:'input',label:'Input',group:'Interface'}" in tabs
     assert "activeTab==='input'" in settings
-    assert "KEYBOARD::SHORTCUTS" in settings
+    assert "<h3>Keyboard shortcuts</h3>" in settings
     assert "captureBinding" in settings
     assert "Reserved shortcut policy" in settings
     assert "browser_reserved" in settings

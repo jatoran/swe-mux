@@ -123,7 +123,7 @@ status line.
   phone. They are deliberately **not** in the fleet queue: a brake reachable only by opening
   an overlay is a brake you cannot reach in the moment you want it. The fleet queue reports
   the state and never owns it.
-- **Settings → Agents → Prompt queue**: the install-wide master switch and the bounds every
+- **Settings → Prompt queue → Auto-delivery**: the install-wide master switch and the bounds every
   grant runs under (stability window, consecutive-send cap, grant expiry, refusal back-off,
   quiet hours). The queue strip's "off for this install" note names that control.
 
@@ -151,7 +151,7 @@ install, scanned every second.
 `auto_delivery_session_ttl_minutes`, `auto_delivery_quiet_start`, `auto_delivery_quiet_end`,
 `auto_delivery_refusal_backoff_seconds` (`config.py`, validated with lower bounds — a
 zero-length stability window would defeat the gate it exists to be), all editable in
-Settings → Agents. Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
+Settings → Prompt queue. Runtime state (pause, per-conversation grants/opt-outs, counters) lives in
 SQLite, not config, so the emergency pause never waits on a config write.
 
 ## Key files

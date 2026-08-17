@@ -11,7 +11,7 @@ The browser immediately creates and focuses a client-only unpanned pending sessi
 Its full-workspace setup surface leaves the durable pane tree unchanged, so selecting another session removes setup from view without disturbing existing splits.
 The pending row is replaced in place by the daemon session when setup and spawn finish.
 Moving elsewhere during setup is respected: completion updates the pending location without reclaiming focus.
-Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git and processes.
+Its suggested checkout path is grouped by Project and branch below `worktree_root`, which defaults to `<data_dir>/worktrees` and is editable in Settings under Git.
 The resulting absolute path remains editable before creation, and changing the setting does not move existing worktrees.
 Whitespace entered in the branch field becomes `-`, keeping the Git branch and suggested filesystem path aligned.
 
