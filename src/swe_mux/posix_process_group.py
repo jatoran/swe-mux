@@ -57,14 +57,25 @@ class ProcessGroupReaper:
     contract on every host.
     """
 
-    def __init__(self, *, guard_against_daemon_death: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        guard_against_daemon_death: bool = True,
+        parent: ProcessGroupReaper | None = None,
+    ) -> None:
         self._pgids: set[int] = set()
         self._closed = False
-        # Whether this reaper starts a guardian process for the groups it owns.
-        # A nested per-session reaper does, because a session is the unit that
-        # must not survive the daemon. Turned off in tests that only exercise the
-        # addressing half, so they do not leave processes behind.
+        # Whether this reaper tree protects its groups against an unclean daemon
+        # death. Turned off in tests that only exercise the addressing half, so
+        # they do not leave a guardian process behind.
         self._guarding = guard_against_daemon_death
+        # Only the daemon-wide reaper owns a guardian process; nested per-session
+        # reapers register their group with it. Measured on Linux before this:
+        # every session started two guardians, because `PtyHost` assigns to the
+        # daemon-wide reaper and `SessionManager` then assigns the same pid to a
+        # nested one. One guardian watching every group is the same protection at
+        # one process per daemon instead of two per session.
+        self._parent = parent
         self._guardian: PosixGuardian | None = None
 
     def assign(self, pid: int) -> None:
@@ -100,13 +111,20 @@ class ProcessGroupReaper:
     def _guard(self, pgid: int) -> None:
         """Extend daemon-death protection to a newly owned group.
 
-        One guardian process per reaper, not per group: the guardian accepts more
-        groups over its pipe, so a reaper owning several sessions still costs one
-        process. A guardian that could not be started leaves the group addressable
-        but unprotected against an unclean daemon death, which is logged by
-        `start_guardian` and is strictly better than refusing the session.
+        One guardian for the whole reaper tree, not one per reaper and not one per
+        group: the guardian accepts further groups over its pipe, so a daemon with
+        fifty sessions still costs one process. A nested reaper delegates upward
+        rather than starting its own.
+
+        A guardian that could not be started leaves the group addressable but
+        unprotected against an unclean daemon death. That is logged by
+        `start_guardian` and is strictly better than refusing the session, because
+        the alternative trades a rare leak for a certain outage.
         """
         if not self._guarding:
+            return
+        if self._parent is not None:
+            self._parent._guard(pgid)
             return
         if self._guardian is None:
             self._guardian = start_guardian(pgid)
@@ -158,7 +176,7 @@ class ProcessGroupReaper:
         the daemon-wide one ends every session, which is the contract callers rely
         on.
         """
-        return ProcessGroupReaper(guard_against_daemon_death=self._guarding)
+        return ProcessGroupReaper(guard_against_daemon_death=self._guarding, parent=self)
 
     def close(self) -> None:
         """Signal every owned group: SIGTERM, bounded wait, then SIGKILL."""
@@ -171,6 +189,9 @@ class ProcessGroupReaper:
             # The daemon is doing the killing itself, so the guardian must not also
             # try: release it first, then signal. Dropping its pipe instead would
             # race two killers onto one group for no benefit.
+            #
+            # Only the root reaper reaches this: a nested one never owns a guardian,
+            # so closing one session cannot un-guard its siblings.
             guardian.release()
         alive = [pgid for pgid in pgids if _signal_group(pgid, signal.SIGTERM)]
         if not alive:

@@ -9,6 +9,7 @@ platform.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -270,3 +271,98 @@ def test_home_cwd_strategy_actually_starts_in_the_home_directory(tmp_path: objec
     project = Path(str(tmp_path))
     assert resolve_profile(config, "home-profile", project).start_cwd == str(Path.home())
     assert resolve_profile(config, "native-profile", project).start_cwd == str(project)
+
+@POSIX_ONLY
+def test_the_guardian_reaps_the_group_when_the_daemon_pipe_closes() -> None:
+    """The case a process group cannot cover: the daemon dying without asking.
+
+    Closing the pipe *is* the daemon dying, as far as the guardian can tell - a
+    SIGKILLed process cannot decline to close its descriptors, which is exactly
+    why EOF is the trigger rather than a heartbeat. Proven on a real child in a
+    real process group, because the whole property is about what the kernel does.
+    """
+    import signal
+    import subprocess
+    import time
+
+    from swe_mux.posix_guardian import start_guardian
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
+    )
+    guardian = None
+    try:
+        pgid = os.getpgid(child.pid)
+        assert pgid != os.getpgid(0)
+        guardian = start_guardian(pgid)
+        assert guardian is not None, "the guardian process could not be started"
+        # Dropping the pipe without a release is what an unclean daemon death
+        # looks like from the guardian's side.
+        guardian.close()
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if child.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert child.poll() is not None, "the guardian did not reap the group"
+    finally:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            child.wait(timeout=5)
+        if guardian is not None:
+            guardian.close()
+
+
+@POSIX_ONLY
+def test_a_released_guardian_leaves_the_group_running() -> None:
+    """A deliberate restart must not reap sessions - that is the whole point of it.
+
+    The same pipe carries both outcomes, so the difference between "the daemon
+    crashed" and "the daemon is restarting on purpose" is one written word. If
+    release did not work, every session-preserving reload on POSIX would silently
+    become a session-killing one.
+    """
+    import signal
+    import subprocess
+    import time
+
+    from swe_mux.posix_guardian import start_guardian
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+    )
+    guardian = None
+    try:
+        pgid = os.getpgid(child.pid)
+        guardian = start_guardian(pgid)
+        assert guardian is not None
+        guardian.release()
+        time.sleep(3)
+        assert child.poll() is None, "a released guardian killed the group anyway"
+    finally:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            child.wait(timeout=5)
+
+
+@POSIX_ONLY
+def test_a_nested_reaper_shares_one_guardian_with_its_parent() -> None:
+    """One guardian per daemon, not one per session.
+
+    Measured on Linux before this held: every session started two guardian
+    processes, because `PtyHost` assigns the root pid to the daemon-wide reaper
+    and `SessionManager` then assigns the same pid to a nested per-session one.
+    Both watched the same group, so the second bought nothing.
+    """
+    from swe_mux.posix_process_group import ProcessGroupReaper
+
+    root = ProcessGroupReaper(guard_against_daemon_death=False)
+    child = root.create_child()
+    assert child._parent is root
+    # A nested reaper never owns a guardian, so closing one session cannot
+    # un-guard its siblings.
+    child.close()
+    assert root._guardian is None
+    root.close()
