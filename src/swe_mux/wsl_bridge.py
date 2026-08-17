@@ -43,6 +43,7 @@ Four boundaries have to be crossed, and each is crossed by a different mechanism
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import shutil
@@ -50,6 +51,9 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import Any
+
+import psutil
 
 from .harness import agent_harnesses, descriptor
 from .host_platform import IS_WINDOWS
@@ -153,6 +157,86 @@ def wsl_available() -> bool:
     return IS_WINDOWS and shutil.which("wsl.exe") is not None
 
 
+# How long to spend reaping a timed-out tree before giving up on it. Bounded for
+# the same reason the commands are: a reap that blocks turns a leaked process into
+# a wedged settings render, which is strictly worse.
+_REAP_TIMEOUT_SECONDS = 5.0
+
+
+def _reap_wsl_tree(process: subprocess.Popen[Any]) -> int:
+    """Kill a timed-out `wsl.exe` and every descendant. Returns descendants killed.
+
+    Never raises; it runs on the failure path of something already going wrong.
+    """
+    descendants: list[psutil.Process] = []
+    with contextlib.suppress(psutil.Error, OSError):
+        descendants = psutil.Process(process.pid).children(recursive=True)
+    with contextlib.suppress(OSError, ProcessLookupError):
+        process.kill()
+    for child in descendants:
+        with contextlib.suppress(psutil.Error, OSError):
+            child.kill()
+    # Drain the pipes after the kill, or the reap can deadlock against stdio this
+    # process still holds open - the same trap `reap_process_tree` documents.
+    with contextlib.suppress(Exception):
+        process.communicate(timeout=_REAP_TIMEOUT_SECONDS)
+    if descendants:
+        with contextlib.suppress(Exception):
+            psutil.wait_procs(descendants, timeout=_REAP_TIMEOUT_SECONDS)
+    return len(descendants)
+
+
+def _run_wsl(
+    argv: list[str],
+    *,
+    timeout: float,
+    stdin_payload: str | None = None,
+    text: bool = True,
+) -> subprocess.CompletedProcess[Any]:
+    """`subprocess.run` for `wsl.exe`, but a timeout kills the whole process tree.
+
+    `subprocess.run(timeout=...)` kills only the process it spawned, and `wsl.exe`
+    re-execs itself - a live invocation is a parent/child *pair*. So a plain
+    timeout leaves an orphaned `wsl.exe` grandchild behind, and against a
+    distribution that is genuinely wedged that grandchild never returns either.
+    Because `cached_bridge_status` re-probes every 30 seconds for any surface
+    rendering a WSL profile, the leak is not a one-off: an open Settings page
+    against a wedged WSL accumulates a hung process every half minute, and each
+    new one makes the wedge harder to clear.
+
+    Raises `subprocess.TimeoutExpired` exactly as `subprocess.run` would, so
+    callers keep their existing error handling - the difference is only that
+    nothing survives the timeout.
+    """
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE if stdin_payload is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=text,
+        encoding="utf-8" if text else None,
+        errors="replace" if text else None,
+        creationflags=background_creation_flags(),
+    )
+    try:
+        stdout, stderr = process.communicate(input=stdin_payload, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        orphans = _reap_wsl_tree(process)
+        log.warning(
+            "wsl command timed out after %.0fs and was tree-killed "
+            "(%d descendant(s) reaped): %s",
+            timeout,
+            orphans,
+            " ".join(argv[:4]),
+        )
+        raise
+    except BaseException:
+        # A cancelled or interrupted caller must not leak the tree either.
+        _reap_wsl_tree(process)
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
 def _run_in_distro(
     distro: str, command: str, *, timeout: int = _WSL_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[str] | None:
@@ -166,15 +250,9 @@ def _run_in_distro(
     if not executable:
         return None
     try:
-        return subprocess.run(
+        return _run_wsl(
             [executable, "--distribution", distro, "--", "sh", "-lc", command],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=timeout,
-            creationflags=background_creation_flags(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         log.debug("wsl command failed in %s: %s", distro, exc)
@@ -488,12 +566,10 @@ def running_distros() -> set[str]:
     if not executable:
         return set()
     try:
-        result = subprocess.run(
+        result = _run_wsl(
             [executable, "--list", "--running", "--quiet"],
-            check=False,
-            capture_output=True,
             timeout=_WSL_QUICK_TIMEOUT_SECONDS,
-            creationflags=background_creation_flags(),
+            text=False,
         )
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -596,16 +672,10 @@ def install_bridge(distro: str) -> BridgeStatus:
     if not executable:
         raise WslBridgeError("wsl.exe is not available")
     try:
-        result = subprocess.run(
+        result = _run_wsl(
             [executable, "--distribution", distro, "--", "sh", "-lc", script],
-            input=payload,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=_WSL_TIMEOUT_SECONDS,
-            creationflags=background_creation_flags(),
+            stdin_payload=payload,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise WslBridgeError(f"could not write the bridge into {distro}: {exc}") from exc
@@ -628,16 +698,10 @@ def _write_distro_shim(distro: str, root: str, python: str, harness: str) -> Non
     if not executable:
         return
     try:
-        subprocess.run(
+        _run_wsl(
             [executable, "--distribution", distro, "--", "sh", "-lc", script],
-            input=body,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=_WSL_TIMEOUT_SECONDS,
-            creationflags=background_creation_flags(),
+            stdin_payload=body,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("could not write the %s bridge shim in %s: %s", harness, distro, exc)

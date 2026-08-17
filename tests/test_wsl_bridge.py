@@ -12,7 +12,9 @@ presenting an uninstrumented agent as an observed one, so the test asserts that
 
 from __future__ import annotations
 
+import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -146,3 +148,91 @@ def test_the_wsl_firewall_rule_is_scoped_to_the_wsl_subnet() -> None:
     assert "-Action Allow" in script
     # It must never be written as an unscoped allow.
     assert "-RemoteAddress 'Any'" not in script
+
+
+class _FakeProc:
+    """A `wsl.exe` invocation that never returns, and the child it re-execed into."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
+        self.killed = False
+        self.drained = False
+
+    def communicate(self, input: object = None, timeout: float | None = None) -> object:
+        if not self.killed:
+            raise subprocess.TimeoutExpired(cmd="wsl.exe", timeout=timeout or 0)
+        self.drained = True
+        return ("", "")
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+class _FakeChild:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def _stub_wsl_timeout(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeProc, list[_FakeChild]]:
+    """Make every wsl spawn hang, and give it one re-execed child to orphan."""
+    from swe_mux import wsl_bridge
+
+    proc = _FakeProc(4242)
+    grandchild = [_FakeChild(4243)]
+
+    monkeypatch.setattr(wsl_bridge.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(
+        wsl_bridge.psutil,
+        "Process",
+        lambda _pid: SimpleNamespace(children=lambda recursive: grandchild),
+    )
+    monkeypatch.setattr(wsl_bridge.psutil, "wait_procs", lambda _p, timeout=None: ([], []))
+    return proc, grandchild
+
+
+def test_a_timed_out_wsl_command_kills_the_grandchild_it_re_execed_into(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`subprocess.run(timeout=)` kills only the direct child, and wsl.exe re-execs.
+
+    A live `wsl.exe` invocation is a parent/child pair, so the plain-timeout version
+    of this left an orphaned grandchild behind on every timeout. Against a wedged
+    distribution that orphan never returns either, and `cached_bridge_status`
+    re-probes every 30s - so an open settings page accumulated one hung process per
+    half minute, each making the wedge harder to clear. The timeout must take the
+    whole tree with it.
+    """
+    from swe_mux import wsl_bridge
+
+    proc, grandchild = _stub_wsl_timeout(monkeypatch)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        wsl_bridge._run_wsl(["wsl.exe", "--distribution", "Ubuntu"], timeout=1)
+
+    assert proc.killed, "the direct wsl.exe child was not killed"
+    assert grandchild[0].killed, "the re-execed grandchild was orphaned"
+    assert proc.drained, "the pipes were not drained after the kill, which can deadlock the reap"
+
+
+def test_the_probe_callers_report_failure_rather_than_leaking_the_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The leak has to be closed at the call site the UI actually polls.
+
+    `_run_in_distro` swallows the timeout and reports "cannot be run", which is the
+    correct answer for a wedged distro - the bug was that it did so while leaving a
+    process behind.
+    """
+    from swe_mux import wsl_bridge
+
+    monkeypatch.setattr(wsl_bridge.shutil, "which", lambda _n: r"C:\Windows\system32\wsl.exe")
+    proc, grandchild = _stub_wsl_timeout(monkeypatch)
+
+    assert wsl_bridge._run_in_distro("Ubuntu", "true") is None
+    assert proc.killed and grandchild[0].killed
