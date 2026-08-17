@@ -186,6 +186,10 @@ responsive controls.
   equivalent `▶` button. Mobile's toolbar Run is the same surface.
 - `projects` opens the viewport-level Projects manager, which lists configured visible and
   hidden Projects. A Project must exist before terminal actions are enabled.
+  It is reachable from two places on purpose: the sidebar's `PROJECTS` header, beside the
+  tree it edits, and `menu → Projects…` between Utilities and Configure Actions. The header
+  button is discoverable only once the sidebar is open and its header is in view, while the
+  app menu is where every other app-wide surface is looked for.
 - The sidebar footer is two controls: `menu` at the left edge and the alerts bell at the right.
   It held four. `projects` moved into the `PROJECTS` header, beside the tree it edits, and the
   settings cog was removed: `menu → All Settings…` sits one row away from the button next to it,

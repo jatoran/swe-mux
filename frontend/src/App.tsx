@@ -5798,10 +5798,12 @@ export function App() {
         <button onClick={() => runNamedCommand('storageUsage.open')}>Storage usage…</button>
         <button onClick={() => runNamedCommand('notifications.open')}>Notifications{notificationUnread?` [${notificationUnread} new]`:''}</button>
       </MenuGroup>
-      {/* The Project registry is not here: adding and managing Projects are the two
-          buttons in the sidebar's own PROJECTS header, beside the tree they act on.
-          A registry entry buried in an app-wide menu was a second door to the same
-          surface, one step further from what it edits. */}
+      {/* The Project registry is reachable from the sidebar's own PROJECTS header too,
+          beside the tree it edits. It is repeated here on purpose: the header button is
+          discoverable only once the sidebar is open and the header is in view, and this
+          menu is where every other app-wide surface is looked for. Two doors to one
+          registry is the lesser cost. */}
+      <button onClick={() => runNamedCommand('project.create')}>Projects…</button>
       <button onClick={() => runNamedCommand('actions.configure')}>Configure Actions…</button>
       <button onClick={() => runNamedCommand('hooks.open')}>Automation…</button>
       <MenuGroup id="maintenance" label="Maintenance" openId={menuGroup} onOpenChange={setMenuGroup} hint="Reload and rebuild without reaping live sessions">
