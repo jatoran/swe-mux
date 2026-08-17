@@ -19,6 +19,14 @@ no backend is available is to refuse persistence and keep working from the
 environment variable, because a refused write is recoverable and a silently
 cleartext credential is not. `MUX_SECRET_STORE=file` turns it on for an operator
 who has decided that trade is right for their host.
+
+**Secrets do not move between hosts, and that is not a bug to route around.** Every
+real backend here binds its material to something local: DPAPI to the Windows user
+account, the Keychain to the login keychain, libsecret to the session keyring. A
+data directory copied to another machine therefore arrives with secrets that are
+intact and undecryptable, and the correct behaviour is to say so and ask for them
+again rather than to invent a portable format. Anything portable enough to survive
+the copy would be portable enough for whoever else obtained the copy.
 """
 
 from __future__ import annotations
@@ -105,7 +113,17 @@ class DpapiFileBackend:
         try:
             return dpapi_unprotect(base64.b64decode(encoded, validate=True)).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
-            raise SecretStoreError("stored secret could not be decrypted") from exc
+            # Names the most likely cause, because the generic message sent people
+            # looking for corruption. DPAPI blobs are bound to the Windows user
+            # account that wrote them, so a data directory copied from another
+            # machine (or restored under a different account) carries secrets that
+            # are intact and permanently unreadable here. Failing closed with a
+            # re-enter instruction is the only correct outcome.
+            raise SecretStoreError(
+                "stored secret could not be decrypted. DPAPI secrets are bound to the "
+                "Windows account that stored them, so a data directory copied from "
+                "another machine or account cannot decrypt them - re-enter the secret"
+            ) from exc
 
     def set(self, key: str, value: str) -> None:
         from .secret_cipher_windows import dpapi_protect

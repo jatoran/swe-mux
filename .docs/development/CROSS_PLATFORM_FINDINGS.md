@@ -210,7 +210,13 @@ These are Windows trial-readiness issues even if native Linux/macOS work never s
 - External proving should default to local-only unless the tester has deliberately reviewed Tailscale policy and the remote-control boundary.
 - The connect-onboarding surface planned in `NEW_USER_RELEASE_READINESS.md` (Tailscale connection state, the phone-side DNS checklist, and the QR of the connection URL) is browser-side and reads `tailscale status --json`, so it is platform-neutral and the headless-Linux plus browser target inherits it unchanged.
 - The Windows Defender Firewall inbound-rule check and repair for the tailnet socket is Windows-specific and must sit behind a platform boundary. A headless Linux host usually leaves the Tailscale interface unfiltered, so the POSIX-appropriate equivalent is a reachability probe plus `ufw`/`firewalld` guidance rather than an elevated rule edit.
-- This boundary is now implemented in `src/swe_mux/windows_firewall.py`, gated by `firewall_supported` (Windows plus a frozen build). It reports `supported: false` everywhere else, so the POSIX reachability-probe equivalent is still open and slots in behind the same gate.
+- This boundary is now implemented in `src/swe_mux/windows_firewall.py`, gated by `firewall_supported` (Windows plus a frozen build).
+  **The POSIX equivalent shipped with Phase 10** as `src/swe_mux/posix_firewall.py`, behind the same gate: a reachability probe plus the exact command *this host's* firewall tool needs (`ufw`, `firewall-cmd`, `nft`, `iptables`), with `repair_supported: false` throughout because opening a port needs root and is the user's decision.
+  It probes rather than reading rules on purpose - there is no single POSIX firewall to inspect, so reading whichever one happens to be installed would give a confident answer that is wrong on the next machine, while a probe answers the question the user actually has and stays correct when the blocker is upstream of the host entirely (a cloud security group, a container network).
+- **A second Windows firewall rule turned out to be required, for WSL.**
+  Measured 2026-08-17: a daemon listener on the WSL virtual adapter is reachable from Windows and *times out* from inside the distribution, which is the signature of a DROP rather than a missing listener.
+  Without an inbound rule scoped to the WSL subnet, a bridged agent runs perfectly and its hooks never arrive - the silent-uninstrumented state the bridge exists to end.
+  `windows_firewall.build_wsl_repair_script` adds it, scoped to the WSL subnet and the swe-mux executable rather than to `Any`; see `ROADMAP.md` Phase 10.
 
 ## Packaging and external-trial readiness
 

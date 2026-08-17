@@ -19,6 +19,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, assert_never
 
+from .config import default_data_dir
 from .git_monitor import BLOB_DIGEST_MAX_BYTES, GitCommitChange, parse_raw_changes
 from .git_provenance import (
     COMMITTER_EXACT_RANK,
@@ -1136,7 +1137,7 @@ def main() -> None:
     parser.add_argument(
         "--database",
         type=Path,
-        default=Path.home() / ".mux" / "mux.db",
+        default=default_data_dir() / "mux.db",
         help="swe-mux SQLite database (default: ~/.mux/mux.db)",
     )
     parser.add_argument(

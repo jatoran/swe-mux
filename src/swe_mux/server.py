@@ -142,6 +142,7 @@ from .observation import (
 )
 from .openrouter import OpenRouterClient, OpenRouterError
 from .operational_telemetry import OperationalTelemetryStore
+from .posix_firewall import inspect_posix_firewall, posix_firewall_supported
 from .prerequisites import detect_prerequisites
 from .preview_capture import (
     INSTALL_HINT as PREVIEW_CAPTURE_INSTALL_HINT,
@@ -5294,6 +5295,8 @@ async def diagnostics_export(request: web.Request) -> web.Response:
         firewall = await inspect_firewall(
             config.port, await tailscale_ipv4(), serve_active=serve_active
         )
+    elif posix_firewall_supported():
+        firewall = await inspect_posix_firewall(config.port, await tailscale_ipv4())
 
     live = sum(session.pty.isalive() for session in sessions.sessions.values())
     export = {
@@ -5377,6 +5380,11 @@ async def get_doctor_report(request: web.Request) -> web.Response:
         firewall = await inspect_firewall(
             config.port, await tailscale_ipv4(), serve_active=serve_active
         )
+    elif posix_firewall_supported():
+        # The POSIX equivalent is a reachability probe plus the exact command this
+        # host's firewall tool would need, never a rule edit: opening a port is a
+        # security decision that requires root, and a daemon must not make it.
+        firewall = await inspect_posix_firewall(config.port, await tailscale_ipv4())
     prerequisites = await asyncio.to_thread(detect_prerequisites)
     installations = await asyncio.to_thread(
         detect_installations_with_versions, dict(config.harness_exe)

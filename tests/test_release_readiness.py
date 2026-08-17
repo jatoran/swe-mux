@@ -8,6 +8,7 @@ one-click diagnostics export endpoint.
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -338,7 +339,20 @@ async def test_diagnostics_export_bundles_pieces(
     assert body["logs"]["daemon"]["present"] is True
     assert "listening on 8765" in body["logs"]["daemon"]["lines"]
     assert body["logs"]["redeploy"]["present"] is False
-    assert body["firewall"]["supported"] is False
+    # Each host reports the firewall answer it actually has. This used to assert
+    # `supported is False` everywhere, which was right only while Windows was the
+    # sole target: POSIX now has a real answer (a reachability probe plus the
+    # command this host's firewall tool would need). What must stay true on POSIX
+    # is that swe-mux never claims it can *repair* anything - opening a port needs
+    # root and is the user's decision.
+    if sys.platform == "win32":
+        # Source runs are unfrozen, so the Windows rule (bound to swe-mux.exe) is
+        # correctly inert here.
+        assert body["firewall"]["supported"] is False
+    else:
+        assert body["firewall"]["supported"] is True
+        assert body["firewall"]["repair_supported"] is False
+        assert body["firewall"]["needs_repair"] is False
     # The export is the sanitized public config; it must never carry a token.
     assert "token" not in body["config"]
 

@@ -493,3 +493,84 @@ def test_the_posix_shim_launches_the_real_cli_with_argv_intact(tmp_path: object)
     # assertion is that ours arrive intact at the end, unsplit and unquoted.
     received = json.loads(result.stdout.strip().splitlines()[-1])
     assert received[-len(argv):] == argv, f"argv was corrupted: {received}"
+
+def test_the_data_directory_follows_this_host_convention() -> None:
+    """XDG on Linux, Application Support on macOS, `~/.mux` on Windows."""
+    from pathlib import Path
+
+    from swe_mux.config import default_data_dir
+
+    directory = default_data_dir()
+    if IS_WINDOWS:
+        assert directory == Path.home() / ".mux"
+    elif (Path.home() / ".mux").exists():
+        # An existing directory always wins; see the next test for why.
+        assert directory == Path.home() / ".mux"
+    elif sys.platform == "darwin":
+        assert directory == Path.home() / "Library" / "Application Support" / "swe-mux"
+    else:
+        assert directory.name == "swe-mux"
+        assert "share" in str(directory) or "XDG" in str(directory)
+
+
+def test_an_existing_data_directory_always_wins_over_the_convention(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """A convention applies to a fresh install, never to one that already has data.
+
+    Without this rule, moving to XDG would silently start a POSIX user from an
+    empty directory *beside* their real one - projects gone, history gone, nothing
+    reporting an error, and the old data still on disk looking fine.
+    """
+    from pathlib import Path
+
+    from swe_mux.config import default_data_dir
+
+    home = Path(str(tmp_path)) / "home"
+    (home / ".mux").mkdir(parents=True)
+    monkeypatch.delenv("MUX_DATA_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    assert default_data_dir() == home / ".mux"
+
+
+def test_an_explicit_data_dir_override_beats_every_convention(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    from pathlib import Path
+
+    from swe_mux.config import default_data_dir
+
+    chosen = Path(str(tmp_path)) / "elsewhere"
+    monkeypatch.setenv("MUX_DATA_DIR", str(chosen))
+    assert default_data_dir() == chosen
+
+
+@POSIX_ONLY
+def test_the_posix_firewall_advises_rather_than_repairs() -> None:
+    """Opening a port needs root and is the user's decision, so nothing here mutates.
+
+    `needs_repair` means "swe-mux can fix this for you", so on POSIX it must stay
+    False even when the probe fails - otherwise a UI would offer a repair button
+    that cannot exist.
+    """
+    import asyncio
+
+    from swe_mux.posix_firewall import (
+        allow_command,
+        inspect_posix_firewall,
+        posix_firewall_supported,
+    )
+
+    assert posix_firewall_supported() is True
+    # A port nothing is listening on: the probe must fail rather than hang.
+    status = asyncio.run(inspect_posix_firewall(59_231))
+    assert status["supported"] is True
+    assert status["reachable"] is False
+    assert status["needs_repair"] is False
+    assert status["repair_supported"] is False
+    assert status["remedy"]
+    command = allow_command(8765)
+    if command is not None:
+        # Advice only, and it must never be something the daemon could run itself.
+        assert command.startswith("sudo ")
+        assert "8765" in command

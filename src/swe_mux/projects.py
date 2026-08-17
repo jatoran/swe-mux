@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import os
 import time
 import uuid
 from pathlib import Path
@@ -12,6 +11,7 @@ from .harness import is_agent_harness
 from .history import HistoryIndex
 from .layouts import normalize_layout
 from .models import ProjectGroupRecord, ProjectRecord
+from .path_identity import same_path
 from .project_files import DEFAULT_NOTE_STORAGE_ID, note_header
 
 log = logging.getLogger(__name__)
@@ -142,8 +142,13 @@ class ProjectManager:
         # Registration conflicts and an unknown group are checked before the folder is
         # created, so a rejected request never leaves a stray directory behind.
         resolved = Path(root).expanduser().resolve()
-        key = os.path.normcase(str(resolved))
-        if any(os.path.normcase(item.root) == key for item in self.projects.values()):
+        # `same_path` rather than a normalized-string compare. `normcase` is
+        # already platform-correct about case, but it is still a *string* test, so
+        # two genuinely different spellings of one directory - a symlink, a
+        # junction, a UNC path against a mapped drive, a bind mount - register as
+        # two Projects over the same tree. Both then own the same `.swe-mux/`, and
+        # nothing downstream can tell them apart.
+        if any(same_path(item.root, resolved) for item in self.projects.values()):
             raise ValueError("that folder is already registered as a project")
         if group_id is not None and group_id not in self.groups:
             raise ValueError("unknown project group")
@@ -233,9 +238,8 @@ class ProjectManager:
             )
         if "root" in changes:
             root = canonical_project_root(str(changes["root"]))
-            key = os.path.normcase(str(root))
             if any(
-                item.id != project_id and os.path.normcase(item.root) == key
+                item.id != project_id and same_path(item.root, root)
                 for item in self.projects.values()
             ):
                 raise ValueError("that folder is already registered as a project")

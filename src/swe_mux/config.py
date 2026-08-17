@@ -11,8 +11,36 @@ from pathlib import Path
 from typing import Any
 
 from .harness import HARNESSES, is_agent_harness, reserved_launch_arg_conflict
-from .host_platform import IS_WINDOWS, platform_key
+from .host_platform import IS_MACOS, IS_WINDOWS, platform_key
 from .keybindings import is_command
+
+
+def default_data_dir() -> Path:
+    """Where this host keeps swe-mux's data, honouring `MUX_DATA_DIR` first.
+
+    Windows keeps `~/.mux`, because moving the proving platform's data directory
+    would strand every existing install for no benefit. POSIX follows platform
+    convention instead of carrying `~/.mux` across by accident: XDG on Linux
+    (`$XDG_DATA_HOME`, else `~/.local/share/swe-mux`) and Application Support on
+    macOS.
+
+    **An existing `~/.mux` always wins**, on every host. That is the forward-safe
+    rule: anyone who already has data - including a Linux user of an earlier build,
+    or someone who copied a directory across - keeps using it rather than silently
+    starting from an empty one beside it. A convention is only applied to a fresh
+    install, where there is nothing to lose.
+    """
+    override = os.environ.get("MUX_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    legacy = Path.home() / ".mux"
+    if IS_WINDOWS or legacy.exists():
+        return legacy
+    if IS_MACOS:
+        return Path.home() / "Library" / "Application Support" / "swe-mux"
+    data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    root = Path(data_home).expanduser() if data_home else Path.home() / ".local" / "share"
+    return root / "swe-mux"
 
 
 def default_shell_executable() -> str:
@@ -757,7 +785,7 @@ class Config:
     # process on this machine shares one data dir. Tests must inject an explicit path
     # (see load_config) rather than relying on isolation; two suites running at once
     # from different git worktrees will otherwise contend over the same mux.db.
-    data_dir: Path = Path.home() / ".mux"
+    data_dir: Path = field(default_factory=default_data_dir)
     config_path: Path | None = field(default=None, repr=False)
 
     @property
@@ -1363,7 +1391,7 @@ def _is_auto_managed_windows_powershell_default(config: Config) -> bool:
 
 
 def load_config(path: Path | None = None) -> Config:
-    path = path or Path.home() / ".mux" / "config.toml"
+    path = path or default_data_dir() / "config.toml"
     cfg = Config(data_dir=path.parent, config_path=path)
     migrated = False
     raw: dict[str, Any] = {}

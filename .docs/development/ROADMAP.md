@@ -2590,8 +2590,16 @@ recorded as unproven rather than claimed.
   group is the daemon's own. That happens when a child was started without `setsid`, and
   owning it would make session cleanup signal the daemon, the supervisor, and every sibling
   session - turning a cleanup bug into a whole-app kill.)
-- [ ] Add a cross-platform process-inspection boundary for descendants, resources,
+- [x] Add a cross-platform process-inspection boundary for descendants, resources,
   signals/termination, anomaly evidence, and listener ownership.
+  (Already largely satisfied and now confirmed rather than assumed: `processes.py` is
+  psutil-based throughout, and its one genuinely divergent operation - interrupt - already
+  branches correctly, sending `SIGINT` on POSIX and `CTRL_BREAK_EVENT` on Windows with an
+  explicit "cannot be interrupted, use terminate" rather than a raw psutil error. Ownership
+  evidence is the part that needed a real second implementation, and that is
+  `process_reaper` / `posix_process_group` above: `process_ids()` answers on both hosts the
+  question a parent/child walk cannot, because a descendant whose intermediate parent exited
+  is reparented away from the walk while its Job membership or process group still names it.)
 - [x] Add OS reveal services: Explorer, macOS `open`, and Linux `xdg-open`.
   (Already shipped in `file_manager.file_manager_command`, which covers all three and takes
   the platform as an argument; the Win32 window-focus helper it sits beside imports
@@ -2627,8 +2635,15 @@ recorded as unproven rather than claimed.
   still casefolds. It is the storage key for the code graph, doc-debt ownership and Tier 0
   targets, so changing it rewrites existing `mux.db` keys; it needs a migration, not an
   edit, and is tracked in the native-rollout item below.)
-- [ ] Make Project root and `.swe-mux/` resolution platform-aware across Git worktrees,
+- [x] Make Project root and `.swe-mux/` resolution platform-aware across Git worktrees,
   non-repository cwd, symlinks, UNC, and WSL translation.
+  (Project identity comparisons moved to `path_identity.same_path`. The `os.path.normcase`
+  they used was already platform-correct about *case* - unlike the `casefold` fixed earlier -
+  but it is still a string test, so two genuinely different spellings of one directory
+  registered as two Projects over the same tree, both owning the same `.swe-mux/` with
+  nothing downstream able to tell them apart. Symlinks, junctions, a UNC path against a
+  mapped drive, and bind mounts are all that shape. WSL translation is `wsl_bridge`'s
+  `wslpath` pair. `.swe-mux/` itself is repo-relative and needed no change.)
 - [x] Guard platform imports so config, CLI, package import, and non-PTY tests work on all
   targets. Adapt data directories, executable/transcript discovery, hook `run`, reveal,
   config migration, voice-capability documentation, and instruction-file resolution per
@@ -2669,8 +2684,29 @@ recorded as unproven rather than claimed.
   rather than a task.
 - [ ] macOS: PTY/process groups, zsh/bash/pwsh, promotion/transcripts, `open`, service
   environment behavior, Project files, queue delivery, ownership, and cleanup.
-- [ ] Define/migrate data and config locations consistently for Windows `~/.mux`, XDG, and
+  **Implemented and typechecked, deliberately not claimed as proven.** Every POSIX path
+  above is written for macOS as well as Linux and is typechecked under `--platform`, the
+  Keychain secret backend is macOS-specific, `open`/`open -R` was already the reveal
+  command, and the data directory follows Application Support. But no macOS host exists to
+  run any of it on, and the cross-platform findings are explicit that a unit test which
+  mocks the platform proves nothing about the platform. It stays unchecked until a real
+  macOS run happens; the honest state is "should work, unverified", and writing it down that
+  way is the point.
+- [x] Define/migrate data and config locations consistently for Windows `~/.mux`, XDG, and
   macOS platform conventions.
+  (`config.default_data_dir()`: `MUX_DATA_DIR` first, then Windows `~/.mux` unchanged,
+  macOS `~/Library/Application Support/swe-mux`, Linux `$XDG_DATA_HOME/swe-mux` falling back
+  to `~/.local/share/swe-mux`.
+  **The migration rule is that an existing `~/.mux` always wins, on every host.** Applying a
+  convention to a directory that already has data would start a POSIX user from an empty one
+  *beside* their real one - projects gone, history gone, nothing reporting an error, and the
+  old data still on disk looking fine. A convention is for a fresh install only.
+  Secrets are the one thing that deliberately does not travel: DPAPI binds to the Windows
+  account, the Keychain to the login keychain, libsecret to the session keyring, so a copied
+  data directory arrives with secrets that are intact and undecryptable. That now fails
+  closed with a message naming the cause and asking for a re-entry, rather than reading as
+  corruption. Anything portable enough to survive the copy would be portable enough for
+  whoever else obtained the copy.)
 
 ### Phase 10 exit criteria
 
