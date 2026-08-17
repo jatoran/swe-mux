@@ -8,6 +8,7 @@ import {
 } from './voice'
 import { VoiceCommandsButton } from './VoiceCommandsButton'
 import type { Command } from './commands'
+import { sessionDisplayName } from './sessionNames'
 
 const formatSeconds = (value: number) => {
   const total = Math.max(0, Math.floor(value || 0))
@@ -83,7 +84,7 @@ export function VoicePlayer({ session, status, mode, commands, onSession, onOpen
     ? `${clip.content_mode} · ${clip.voice} · ${new Date(clip.created_at * 1000).toLocaleTimeString()}${clip.model ? ` · ${clip.model}` : ''}`
     : 'No clips yet'
 
-  return <div class="voice-strip" role="group" aria-label={`Read aloud for ${session.name}`}>
+  return <div class="voice-strip" role="group" aria-label={`Read aloud for ${sessionDisplayName(session)}`}>
     <button class="voice-play" disabled={!clip || clip.status !== 'ready'} onClick={togglePlay}
       title={clip ? (isCurrent && playback.playing ? 'Pause' : 'Play clip') : 'No clip yet'}
       aria-label={isCurrent && playback.playing ? 'Pause clip' : 'Play clip'}>

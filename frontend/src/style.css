@@ -2951,7 +2951,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-graph-glyph .lane-3{color:#c58af9}
 .git-graph-glyph .lane-4{color:#ff7996}
 .git-commit{min-width:0;display:grid;gap:2px}
-.git-commit-title{min-width:0;display:grid;grid-template-columns:58px minmax(0,1fr);gap:6px;align-items:baseline}
+/* The sha column is `max-content`, not a fixed width: an eight-character sha fills a 58px
+   track at larger UI scales, and the gap then reads as no gap at all. */
+.git-commit-title{min-width:0;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:10px;align-items:baseline}
 .git-commit-title strong{color:var(--accent);font-size:8px;font-weight:400}
 .git-commit-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
 .git-commit-refs{display:flex;flex-wrap:wrap;gap:3px}
@@ -3103,7 +3105,14 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-view-toggle button,.git-toolbar>button,.git-compare select{min-height:25px;border:0;background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
 .git-view-toggle button{padding:0 9px;border-right:1px solid var(--line)}
 .git-view-toggle button.active{color:var(--text);box-shadow:inset 0 -2px var(--accent)}
-.git-toolbar>button{border:1px solid var(--line);padding:0 7px}
+.git-toolbar>button,.git-toolbar-actions>button{border:1px solid var(--line);padding:0 7px}
+/* Pushed to the trailing edge as a group, so the view switch keeps the leading edge it
+   is read from. */
+.git-toolbar-actions{display:flex;align-items:center;gap:5px;margin-left:auto}
+.git-toolbar-actions>button{min-height:25px;background:var(--panel2);color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
+.git-toolbar-actions>button:hover:not(:disabled){border-color:var(--accent);color:var(--text)}
+.git-toolbar-actions>button:disabled{opacity:.45;cursor:not-allowed}
+.git-toolbar-actions .git-refresh{min-width:25px;padding:0;font-size:11px;line-height:1}
 .git-compare{display:grid;gap:3px;padding:6px 9px;border-bottom:1px solid var(--line);background:var(--panel)}
 .git-compare label{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:8px;letter-spacing:.05em}
 .git-compare select{flex:1 1 auto;min-width:0;padding:0 5px;border:1px solid var(--line);color:var(--text)}
@@ -3114,6 +3123,25 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-review-tab .git-map-identity{grid-column:2;grid-row:1;align-self:baseline}
 .git-review-tab .git-map-chevron{grid-column:1;grid-row:2;align-self:baseline;text-align:left}
 .git-review-tab .git-map-metrics{grid-column:2;grid-row:2;align-self:baseline}
+/* A row's expand target and its session-link target are siblings, because a button
+   cannot contain a button. The summary keeps the whole row's width and the link sits at
+   the trailing edge, so the two never compete for the same tap. */
+.git-map-head,.git-commit-head{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center}
+.git-map-live,.git-commit-links,.git-session-open{border:1px solid transparent;background:transparent;color:var(--green);font:inherit;font-size:8px;white-space:nowrap;cursor:pointer}
+.git-map-live,.git-commit-links{align-self:center;min-height:24px;padding:0 7px;margin-right:7px;border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.git-commit-links{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.git-map-live:hover,.git-commit-links:hover{border-color:currentColor;background:var(--panel2)}
+/* The session's name in a provenance row *is* the link to it, so it keeps the name's
+   weight and colour and gains only an underline. */
+.git-session-open{padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.git-session-open:hover:not(:disabled){color:var(--text)}
+.git-session-open:disabled{color:var(--muted);text-decoration:none;cursor:default}
+/* Two lines per entry, so the fixed single-row height of a context menu button has to go:
+   the name alone does not say whether following it lands in a pane or in History. */
+.git-session-links button{height:auto;min-height:calc(34px*var(--ui-scale));display:flex;align-items:center;gap:7px;padding:4px 8px;text-align:left}
+.git-session-link-label{min-width:0;display:grid;gap:1px}
+.git-session-link-label strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.git-session-link-label small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
 .git-review-tab .git-change-group h4{align-items:center}
 .git-review-tab .git-change-group h4 small{color:var(--muted);font-weight:400;letter-spacing:0;text-align:right}
 .git-review-file-row{border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
@@ -3189,7 +3217,9 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-review-footer>span{margin-right:auto;color:var(--muted);font-size:9px}.git-review-footer label{display:flex;align-items:center;gap:4px;color:var(--muted);font-size:8px}.git-review-footer button{padding:0 8px}
 .git-review-recovery{display:grid;gap:4px;padding:7px 10px;color:var(--amber);font-size:9px}.git-review-recovery textarea{min-height:90px;padding:6px;border:1px solid var(--amber);background:var(--bg);color:var(--text);font:inherit}
 @media(max-width:760px){
-  .git-view-toggle button,.git-toolbar>button,.git-compare select{min-height:36px}
+  .git-view-toggle button,.git-toolbar>button,.git-toolbar-actions>button,.git-compare select{min-height:36px}
+  .git-toolbar-actions .git-refresh{min-width:36px}
+  .git-map-live,.git-commit-links,.git-session-links button{min-height:36px}
   .git-review-file-main{min-height:38px;grid-template-columns:28px 22px minmax(0,1fr) max-content 38px}
   .git-review-modal{width:100vw;height:100dvh;border:0;border-radius:0}
   .git-review-layout{display:block;overflow:hidden}.git-review-files{display:none}.git-review-content{height:100%;padding-bottom:45px}

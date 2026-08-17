@@ -51,6 +51,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import session_titles
 from .clipboard_store import looks_like_secret
 from .code_graph import (
     DEFAULT_BLAST_HOPS,
@@ -1460,16 +1461,7 @@ class McpService:
 
     async def _generated_titles(self, run_ids: set[str]) -> dict[str, str]:
         """Latest generated UI title for each requested run."""
-        if not run_ids or self.automation_store is None:
-            return {}
-        annotations = await self.automation_store.annotations(tag="title", limit=1000)
-        titles: dict[str, str] = {}
-        for annotation in annotations:
-            run_id = str(annotation.get("agent_run_id") or "")
-            title = str(annotation.get("content") or "").strip()
-            if run_id in run_ids and title and run_id not in titles:
-                titles[run_id] = title
-        return titles
+        return await session_titles.generated_titles(self.automation_store, run_ids)
 
     async def _matching_generated_title_ids(
         self, project_id: str, query: str
@@ -1492,23 +1484,17 @@ class McpService:
 
     @staticmethod
     def _record_run_id(record: Any) -> str:
-        return str(record.agent_run_id or record.id)
+        return session_titles.record_run_id(record)
 
     @staticmethod
     def _row_run_id(row: dict[str, Any]) -> str:
-        return str(row.get("agent_run_id") or row.get("id") or "")
+        return session_titles.row_run_id(row)
 
     def _record_display_name(self, record: Any, titles: dict[str, str]) -> str:
-        generated = titles.get(self._record_run_id(record))
-        if getattr(record, "auto_named", True) and generated:
-            return generated
-        return str(record.name)
+        return session_titles.record_display_name(record, titles)
 
     def _row_display_name(self, row: dict[str, Any], titles: dict[str, str]) -> str:
-        generated = titles.get(self._row_run_id(row))
-        if bool(row.get("auto_named", 1)) and generated:
-            return generated
-        return str(row.get("name") or "")
+        return session_titles.row_display_name(row, titles)
 
     async def _live_display_names(self, sessions: list[Any]) -> dict[str, str]:
         titles = await self._generated_titles(

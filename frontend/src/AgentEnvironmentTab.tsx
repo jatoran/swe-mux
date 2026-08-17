@@ -14,6 +14,7 @@ import {
 } from './agentEnvironment'
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
+import { sessionDisplayName } from './sessionNames'
 
 function itemTitle(item: AgentEnvironmentItem): string {
   const details = item.meta.map(meta => `${meta.label}: ${meta.value}`)
@@ -81,7 +82,7 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
   }
   if (!isAgent) {
     return <>
-      <p class="drawer-status">{session.name || session.id} · shell</p>
+      <p class="drawer-status">{sessionDisplayName(session) || session.id} · shell</p>
       <p class="drawer-empty">The focused terminal is a shell, not an agent harness.</p>
     </>
   }
@@ -89,7 +90,7 @@ export function AgentEnvironmentTab({ session }: { session: Session | null }) {
   return <div class="agent-environment">
     <header class="agent-environment-header">
       <div>
-        <strong>{session.name || session.id}</strong>
+        <strong>{sessionDisplayName(session) || session.id}</strong>
         <span>{inventory ? `${harnessDisplayName(inventory.backend)}${inventory.runtime.version ? ` · ${inventory.runtime.version}` : ''}` : harnessDisplayName(session.backend)}</span>
       </div>
       <button

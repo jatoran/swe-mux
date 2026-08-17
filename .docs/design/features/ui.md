@@ -1408,6 +1408,15 @@ responsive controls.
 - A live auto-named agent's session menu includes **Regenerate title**. It requests a fresh
   generated title from the latest observed user request. A manual Rename remains authoritative and
   removes this action because automation never overwrites a user title.
+- **One session has one name on every surface.** The rule - a generated title wins only while the
+  session is still `auto_named` - lives in one place per side (`frontend/src/sessionNames.ts`,
+  `src/swe_mux/session_titles.py`) and every surface reads it: sidebar rows, workspace tabs, the
+  drawer's session-scoped headings, prompt and queue targets, the Git tab, voice, and History. A
+  surface that spells the rule out itself is the one that eventually disagrees with the sidebar,
+  which is what a heading still reading `claude-0e7d93` beside a titled pane looked like.
+  The two payload shapes disagree about types and are read through separate entry points: a live
+  session carries `auto_named` as a boolean, a run row carries SQLite's `0`/`1`, and an absent
+  field means auto-named in both.
 - A session showing a standing-activity badge (`⟳`, `≡`, `⑂`) offers **Clear standing activity**
   in its menu and the command palette. Those badges assert work the daemon cannot observe
   directly - live subagents, background shells, an armed wakeup - so any of them can outlive the

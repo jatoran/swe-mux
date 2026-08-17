@@ -167,6 +167,14 @@ test('only live sessions of this Project contribute state', () => {
   assert.equal(repoSessions(sessions, 'p1')[0].dirty, 3)
 })
 
+test('a session contributing Git state is named the way the sidebar names it', () => {
+  const sessions = [
+    { id: 'a', name: 'claude-0e7d93', generated_title: 'Fix the parser', project_id: 'p1', state: 'idle', cwd: '/repo' },
+    { id: 'b', name: 'release prep', generated_title: 'Fix the parser', auto_named: false, project_id: 'p1', state: 'idle', cwd: '/repo' },
+  ] as never[]
+  assert.deepEqual(repoSessions(sessions, 'p1').map(item => item.name), ['Fix the parser', 'release prep'])
+})
+
 test('branch rows join the worktree inventory to live working-tree state', () => {
   const items = parseWorktrees(PORCELAIN)
   const rows = branchRows(items, [
@@ -311,6 +319,8 @@ test('session Git provenance parsing keeps evidence strength and rejects malform
   assert.equal(rows.length, 1)
   assert.equal(rows[0].sessionName, 'Builder')
   assert.equal(rows[0].confidence, 'exact')
+  assert.equal(rows[0].displayName, 'Builder')
+  assert.equal(rows[0].historyId, null)
   assert.equal(rows[0].role, 'committer')
   assert.equal(rows[0].matchMethod, 'command_range')
   assert.deepEqual(rows[0].contributedPaths, ['src/one.py'])
@@ -334,9 +344,29 @@ test('contributor and imported rows survive parsing, and a row without a role re
   assert.deepEqual(rows[1].contributedPaths, [])
 })
 
+test('a provenance row carries both the recorded name and the current one', () => {
+  const base = {
+    session_id: 's', session_name: 'claude-0e7d93', project_id: 'p', worktree_root: '/repo',
+    commit_oid: 'a'.repeat(40), relationship: 'created', confidence: 'exact', ambiguous: false,
+    source: 'session_tool', observed_at: 1,
+  }
+  const [resolved, legacy] = parseGitProvenance({ items: [
+    { ...base, id: 'r', display_name: 'Fix the parser', history_id: 'run-1' },
+    // An older daemon sends neither: the snapshot is then the only name there is, and the
+    // row is not clickable through to a conversation it cannot name.
+    { ...base, id: 'l' },
+  ] })
+  assert.equal(resolved.sessionName, 'claude-0e7d93')
+  assert.equal(resolved.displayName, 'Fix the parser')
+  assert.equal(resolved.historyId, 'run-1')
+  assert.equal(legacy.displayName, 'claude-0e7d93')
+  assert.equal(legacy.historyId, null)
+})
+
 test('a provenance row says what the session did and why it could not be pinned down', () => {
   const row = (over: Partial<GitProvenance>): GitProvenance => ({
-    id: 'r', sessionId: 's', sessionName: 'Builder', agentRunId: null, projectId: 'p',
+    id: 'r', sessionId: 's', sessionName: 'Builder', displayName: 'Builder', historyId: null,
+    agentRunId: null, projectId: 'p',
     worktreeRoot: '/repo', commitOid: 'a'.repeat(40), parentOids: [], subject: '',
     committedAt: null, previousHead: null, relationship: 'created', confidence: 'exact',
     ambiguous: false, role: 'committer', matchMethod: 'command_range', contributedPaths: [],
