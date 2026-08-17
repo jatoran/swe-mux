@@ -251,6 +251,7 @@ A phase here may depend on one, but none of them is a phase.
 | `CROSS_PLATFORM_FINDINGS.md` | research | Feeds Phases 10 and 11; holds the platform-interface inventory and verification matrix those phases would otherwise duplicate. |
 | `NEW_USER_RELEASE_READINESS.md` | active plan | Feeds Phases 7 and 11; holds the fresh-machine onboarding detail those phases depend on: the remote-connection connect flow (connection state, phone DNS, QR), Windows Defender Firewall repair, agent instrumentation toggles, the onboarding-prerequisites surface, and first-use download costs. Records the audit finding that the shippable code is free of hardcoded identity, absolute personal paths, and a hardcoded daemon host, so agnosticism here is a defaults-and-onboarding concern rather than an un-hardcoding one. |
 | `PLUGIN_SYSTEM_FINDINGS.md` | research | Decision-gated. Records what a plugin system would add over the shipped meta-hooks/automation/project-actions substrate, and the constraints any design must accept. |
+| `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
 
@@ -2994,6 +2995,52 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
   process leakage or message duplication.
 - [ ] Artifacts upgrade/uninstall cleanly and public documentation matches the exact tag,
   supported platforms, security boundaries, and optional capabilities.
+
+## Phase 12 - Harness expansion
+
+The registry ships five harnesses (`claude`, `codex`, `omp`, `pi`, `opencode`) against a market
+that has many more, and the abstraction was built so that adding one costs a descriptor plus an
+adapter rather than a branch in every consumer.
+This phase spends that abstraction.
+
+`HARNESS_EXPANSION_CANDIDATES.md` is the evidence base: one parity study per candidate CLI,
+covering launch and terminal surface, conversation identity, record format, hook or extension
+surface, MCP, headless probes, platform and account model, and the achievable capability tier.
+It also records the candidates that were examined and rejected, so a rejection is visible rather
+than a silence.
+This phase does not restate any of it.
+
+A candidate becomes a harness only through the ordinary contract in
+`../design/features/backends.md`: a descriptor, an adapter family, a transcript dialect or a
+declared absence, conversation discovery, replay fixtures meeting its derived corpus floor, an
+adapter-matrix entry, headless probes, and a regenerated frontend seed.
+Exempting a candidate from a gate means changing its descriptor to state the capability it lacks,
+never weakening the gate.
+
+### Integration
+
+- [ ] Settle the four decisions the studies surface, once each rather than per harness, and record
+  each outcome on the descriptors it governs: whether mux may install hooks into a config file the
+  user also owns, whether a harness with no local conversation records is worth integrating,
+  whether an approval channel that also decides the approval may be observed at all, and the two
+  registry changes named next.
+- [ ] Make the two registry changes before the first harness that needs them: a conversation store
+  resolved under the working directory rather than a per-user `data_home`, and a harness with no
+  resume concept, which the descriptor currently rejects.
+- [ ] Work the candidate list in the document's recommended sequence, one harness per branch,
+  ending each with the full registry contract rather than a launchable stub.
+- [ ] Measure each candidate's open questions against a real install before writing its descriptor.
+  Every study ends with the three that matter most for that CLI, and two candidates in the first
+  pass already had vendor documentation contradicted by shipped code.
+- [ ] Record the CLI version each harness was measured against in `TESTED_CLI_VERSIONS`, so the
+  untested-pairing signal fires against evidence rather than against a guess.
+
+### Phase 12 exit criteria
+
+- [ ] Every harness added in this phase clears the declaration, contract, wiring, coverage, and
+  behaviour tiers with no test weakened and no per-harness skip.
+- [ ] `../design/features/backends.md` names the reached tier for each added harness, and
+  `HARNESS_EXPANSION_CANDIDATES.md` records the reason for every candidate not added.
 
 ## Decision-gated capabilities
 
