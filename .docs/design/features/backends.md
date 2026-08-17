@@ -500,8 +500,22 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   cannot be wrapped, so it degrades silently; only explicitly requested cwd-integration still
   refuses such a profile outright. The detected cmd.exe profile currently uses `/Q` without
   `/D`, so registry AutoRun commands can still mutate PATH or command precedence before the
-  prompt; it carries no equivalent guard. WSL cannot use Windows `.cmd` shims at all
-  (`agent-bridge-unavailable`).
+  prompt; it carries no equivalent guard. WSL cannot use Windows `.cmd` shims at all, so a
+  WSL profile is `agent-bridge-unavailable` unless the distro-side bridge is installed and
+  reachable (`wsl_bridge.py`, opt-in through `wsl_bridge_enabled`).
+- **Shims are written in the host's executable-script format**: `.cmd` on Windows, a
+  `#!/bin/sh` script that `exec`s the launcher on POSIX. The POSIX shim is deliberately
+  extensionless, because `claude` is what the user types and what harness detection looks up
+  - which is also why `is_mux_shim` gates on a per-host suffix rule. Accepting only
+  `.cmd`/`.bat` there would make every POSIX shim read as a real CLI, so detection would
+  report every harness installed and every launch would recurse into the shim.
+- **A POSIX host must not launch a Windows agent, and under WSL it easily can.** The Windows
+  install is on PATH through interop, so `which("claude.exe")` succeeds and resolves under
+  `/mnt/`. Such an agent runs, and is wrong in every way that matters: it reports the
+  wsl.localhost share as its working directory, writes its transcript into the Windows home
+  where no Linux path points, and joins no Linux process group, so cleanup cannot reach it.
+  Two rules prevent it - `harness.host_executable` drops the `.exe` off Windows, and
+  `which_real` refuses any resolution `host_platform.is_windows_interop_path` recognizes.
 - Transcript records that already existed when observation attaches (resume, promotion after
   first activity, retargeting) are historical: they still populate tokens/context/model and
   tool-name correlation but never emit events or drive state. After catch-up the session is

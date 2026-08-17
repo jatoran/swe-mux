@@ -147,6 +147,22 @@
   `development/CROSS_PLATFORM_FINDINGS.md`, `design/features/launch-profiles.md`,
   `design/features/backends.md`, `design/features/project-actions.md`,
   `development/ROADMAP.md`
+- Changing anything behind a platform seam - pseudoterminal allocation, process-tree
+  ownership, path identity, where secrets rest, or where the data directory lives:
+  `technical/backend/packages.md` (the per-module map), `development/ROADMAP.md` Phase 10.
+  The rule the seams exist to enforce: `host_platform.py` answers *which host this is* and
+  nothing else, while whether a capability exists is answered by the module that owns it -
+  a capability can be absent on a supported platform, and conflating the two is how a port
+  starts claiming parity it does not have.
+  Verify a change on both hosts, not one: `tools/linux_container_verify.sh` runs the suite
+  on Linux from a Windows host with only Docker, and `.worktree-verify` runs the two
+  `--platform` mypy passes so each host's implementation is typechecked wherever the gate runs.
+- Changing the WSL agent bridge (distro-side discovery, path translation, the bridge script,
+  the WSL listener, or its firewall rule): `src/swe_mux/wsl_bridge.py`,
+  `design/features/backends.md`, `development/ROADMAP.md` Phase 10.
+  Its failure mode is silence by construction - a bridged agent that cannot reach the daemon
+  runs perfectly and simply never reports - so any change must keep the reachability probe
+  and the `reasons` it produces, and must never let "not checked" render as available.
 - Changing usage analytics: `design/features/usage.md`
 - Changing read aloud or hands-free conversation: `design/features/voice.md`;
   completed voice-interaction phases and their decisions:
