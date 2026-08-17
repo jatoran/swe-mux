@@ -251,6 +251,7 @@ A phase here may depend on one, but none of them is a phase.
 | `CROSS_PLATFORM_FINDINGS.md` | research | Feeds Phases 10 and 11; holds the platform-interface inventory and verification matrix those phases would otherwise duplicate. |
 | `NEW_USER_RELEASE_READINESS.md` | active plan | Feeds Phases 7 and 11; holds the fresh-machine onboarding detail those phases depend on: the remote-connection connect flow (connection state, phone DNS, QR), Windows Defender Firewall repair, agent instrumentation toggles, the onboarding-prerequisites surface, and first-use download costs. Records the audit finding that the shippable code is free of hardcoded identity, absolute personal paths, and a hardcoded daemon host, so agnosticism here is a defaults-and-onboarding concern rather than an un-hardcoding one. |
 | `PLUGIN_SYSTEM_FINDINGS.md` | research | Decision-gated. Records what a plugin system would add over the shipped meta-hooks/automation/project-actions substrate, and the constraints any design must accept. |
+| `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
 
@@ -2995,6 +2996,213 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
 - [ ] Artifacts upgrade/uninstall cleanly and public documentation matches the exact tag,
   supported platforms, security boundaries, and optional capabilities.
 
+## Phase 12 - Harness expansion
+
+The registry ships five harnesses (`claude`, `codex`, `omp`, `pi`, `opencode`) against a market
+that has many more, and the abstraction was built so that adding one costs a descriptor plus an
+adapter rather than a branch in every consumer.
+This phase spends that abstraction.
+
+`HARNESS_EXPANSION_CANDIDATES.md` is the evidence base: one parity study per candidate CLI,
+covering launch and terminal surface, conversation identity, record format, hook or extension
+surface, MCP, headless probes, platform and account model, and the achievable capability tier.
+It also records the candidates that were examined and rejected, so a rejection is visible rather
+than a silence.
+This phase does not restate any of it.
+
+A candidate becomes a harness only through the ordinary contract in
+`../design/features/backends.md`: a descriptor, an adapter family, a transcript dialect or a
+declared absence, conversation discovery, replay fixtures meeting its derived corpus floor, an
+adapter-matrix entry, headless probes, and a regenerated frontend seed.
+Exempting a candidate from a gate means changing its descriptor to state the capability it lacks,
+never weakening the gate.
+
+### Integration
+
+- [ ] Settle the four decisions the studies surface, once each rather than per harness, and record
+  each outcome on the descriptors it governs: whether mux may install hooks into a config file the
+  user also owns, whether a harness with no local conversation records is worth integrating,
+  whether an approval channel that also decides the approval may be observed at all, and the two
+  registry changes named next.
+- [ ] Make the two registry changes before the first harness that needs them: a conversation store
+  resolved under the working directory rather than a per-user `data_home`, and a harness with no
+  resume concept, which the descriptor currently rejects.
+- [ ] Work the candidate list in the document's recommended sequence, one harness per branch,
+  ending each with the full registry contract rather than a launchable stub.
+- [ ] Measure each candidate's open questions against a real install before writing its descriptor.
+  Every study ends with the three that matter most for that CLI, and two candidates in the first
+  pass already had vendor documentation contradicted by shipped code.
+- [ ] Record the CLI version each harness was measured against in `TESTED_CLI_VERSIONS`, so the
+  untested-pairing signal fires against evidence rather than against a guess.
+
+### Phase 12 exit criteria
+
+- [ ] Every harness added in this phase clears the declaration, contract, wiring, coverage, and
+  behaviour tiers with no test weakened and no per-harness skip.
+- [ ] `../design/features/backends.md` names the reached tier for each added harness, and
+  `HARNESS_EXPANSION_CANDIDATES.md` records the reason for every candidate not added.
+
+## Phase 13 - Integrated browser: one web surface the operator and the agent share
+
+swe-mux has two browser-shaped surfaces today and neither one is a browser.
+A **Preview** is a reverse proxy of a loopback listener rendered in a sandboxed iframe: its
+registered origin is immutable per request, off-origin redirects are rejected so the route cannot
+become a network proxy, and `allow-same-origin` is deliberately omitted so preview code cannot read
+the parent application (`../design/features/processes-and-previews.md`).
+Those three properties are what make it safe, and each of them independently forbids the thing this
+phase is about: navigating to an arbitrary site, and letting an agent drive the page.
+**Preview capture** already runs a headless Chromium through the optional `preview-capture` extra,
+but it renders one screenshot and exits; it is never interactive and never agent-reachable.
+The third fact is `../design/features/ghost-windows.md`, which exists only because agents launch
+their *own* browsers and closes with the reason the sweep can never be retired: "swe-mux does not
+control which browser stack an agent invokes."
+
+This phase adds the missing surface. One real Chromium per session, owned by mux, driven over the
+Chrome DevTools Protocol, rendered as an ordinary layout leaf on every client including the phone,
+and reachable by the agent through the seams that already carry environment, MCP, and CLI.
+It is the same move the terminal already made: the value is not "a browser", it is that a browser
+becomes a multiplexed, per-session, remotely visible, lifecycle-bound object instead of a window on
+one desktop that nothing else can see.
+
+### The product decision this phase requires
+
+Decision-gated capabilities currently lists "arbitrary HTTP/network destinations" as un-scheduled
+work, and an agent-drivable browser is exactly that capability wearing a different shape.
+This phase does not quietly cross that line; it narrows it and records the narrowing.
+
+- [ ] Decide and record the destination boundary before any navigation code ships: a per-Project
+  browser grant with the same `off`/`draft`/`granted` shape the Phase 7.6 session-control grant
+  already uses, defaulting to the inert state, plus an allowlist mode that constrains agent-issued
+  navigation to declared hosts while operator-issued navigation stays unconstrained.
+  The operator typing a URL into a pane is not the gated act; an agent choosing one is.
+- [ ] Amend the decision-gated entry rather than leaving it contradicted, naming the grant, the
+  allowlist, the audit record, and the kill switch as the conditions under which agent-issued
+  navigation is in scope.
+- [ ] Record the exfiltration property plainly in the feature document: a browser is an outbound
+  HTTP client that routes around every restraint placed on the PTY, so the allowlist is the only
+  thing standing between a prompt-injected agent and an arbitrary POST. Page content is untrusted
+  input on the same footing as a transcript.
+
+### Engine and ownership
+
+- [ ] Drive a real Chromium over CDP. Reject the two cheaper shapes explicitly and record why: an
+  iframe cannot leave its origin or expose a DOM, and an embedded native webview reaches only the
+  desktop shell, leaving the browser-tab and phone clients with no pane at all.
+  The reference implementation that chose a native webview (cmux) returns `not_supported` for
+  network interception, offline emulation, tracing, screencast, and raw input injection, which is
+  precisely the half of the surface this phase wants.
+- [ ] Reuse the existing optional Chromium rather than adding a second browser dependency.
+  `preview-capture` already installs Playwright and resolves the standard per-user browser cache
+  from a frozen desktop build; the browser pane extends that extra instead of introducing a
+  parallel download, and stays a typed `{available: false, reason, install}` when it is absent.
+- [ ] Launch the headless shell binary, not full Chrome under `--headless`.
+  Playwright already defaults to `chromium_headless_shell`, which creates no top-level window, so
+  the pane produces no ghost by construction. The sweep remains, because it defends against browsers
+  mux did not launch.
+- [ ] Own the process from the supervisor through the existing `spawn` message rather than adding a
+  supervisor protocol message. A `PROTOCOL_VERSION` bump reaps every live session, and
+  `PLUGIN_SYSTEM_FINDINGS.md` already settled that non-terminal panes ride the shipped `spawn`
+  path for exactly this reason. A browser pane then survives a daemon restart the way a PTY does.
+- [ ] Bound the resource cost the way every other loop in this repository is bounded: lazy start on
+  first use, idle reap, a cap on concurrent instances, and a documented per-instance memory figure
+  measured rather than estimated.
+
+### The pane
+
+- [ ] Add a non-terminal leaf kind to the recursive layout (`frontend/src/layout.ts` currently
+  models terminals only) and let a browser leaf be tabbed, split, dragged, and restored like any
+  other, including the mobile workspace projection.
+- [ ] Stream `Page.startScreencast` frames over the existing session WebSocket and acknowledge them
+  with `Page.screencastFrameAck`, which supplies the coalescing contract for free: drop intermediate
+  frames, never queue, so a slow link degrades to fewer frames rather than to lag.
+- [ ] Send a lossless settle frame once the page has been quiet briefly, so a page at rest is
+  pixel-accurate rather than showing compression artifacts on text the operator is trying to read.
+- [ ] Forward pointer, scroll, key, and text input through `Input.dispatch*Event`, arbitrated by the
+  device-presence and input-ownership rules already governing a shared PTY
+  (`../design/features/terminal-input.md`), so two devices cannot fight over one page.
+- [ ] Route between the two surfaces instead of merging them: a Preview registration offers "open in
+  browser pane" for the cases the proxy cannot serve (a client-side router that ignores
+  `window.__MUX_PREVIEW_BASE__`, an off-origin OAuth hop), and the browser pane offers the reverse
+  for a loopback URL that has a registration. Preview keeps its boundary unchanged.
+
+### The agent surface
+
+Three injection tiers, in descending reliability, all riding seams that already exist.
+
+- [ ] **Environment**, at spawn (`agent_environment.py`): the session's CDP endpoint and browser id,
+  registered as protected keys that a launch profile cannot override, matching how the MCP token is
+  already handled. This is the floor that works for a harness with no MCP and no skill format.
+- [ ] **MCP**, per harness (`adapters/`): browser tools on the existing mux MCP server, scoped to
+  the caller's own session by the same per-session token, and DAG-gated by the Project grant.
+  No new transport and no second authorization boundary.
+- [ ] **CLI**: `mux browser navigate|snapshot|click|type|console|network`, reading the environment
+  variable, because bash is the one interface every harness has and MCP support is uneven.
+  The reference implementation shipped its entire browser surface this way and never needed MCP.
+- [ ] Return accessibility-tree snapshots with stable per-snapshot element refs and act on refs
+  rather than on model-authored CSS selectors, with a snapshot-after option on mutating actions so
+  the agent sees the result of its own click without a second round trip.
+  Refs go stale on navigation and DOM change, and saying so in the tool description is what keeps an
+  agent from silently acting on the wrong element.
+- [ ] Carry the instruction through the shipped Agent Context surface rather than adding a new
+  writer to instruction files. Phase 6's approved boundary is an explicit, previewed, one-time
+  overwrite, and continuous instruction sync is decision-gated; a browser announcement does not get
+  to reopen that.
+
+### Boundaries and isolation
+
+- [ ] Default to an ephemeral per-session profile. Do **not** import cookies from the operator's
+  real browser profile, and specifically do not adopt the reference implementation's posture, where
+  detecting a coding agent in the environment is what *suppresses* the import confirmation. Reusing
+  a credentialed profile means a prompt injection on any page acts as the operator on every logged-in
+  service, and that is an operator-initiated, per-Project, explicitly confirmed act if it is ever
+  offered at all.
+- [ ] Bind CDP to loopback on an ephemeral port with a per-instance token, never to the tailnet
+  interface. An open CDP port is a full-take vector for any local process and is reachable from a
+  malicious page by DNS rebinding against `127.0.0.1`; the remote-access boundary in
+  `../design/features/remote-access.md` governs what the phone reaches, and it reaches the pane, not
+  the protocol.
+- [ ] Confine downloads to a per-session directory under the data dir rather than letting a page
+  write anywhere the daemon can.
+- [ ] Audit every agent-issued navigation and every allowlist refusal as an observation, and give
+  the whole subsystem a config kill switch plus a per-Project one, per the completion policy's rule
+  that every automatic action has provenance, bounds, auditability, and a kill switch.
+- [ ] Keep console errors and failed requests as the payoff: they are the signal the attention,
+  notification, and status surfaces already know how to consume, and they are what a screenshot
+  cannot give. "This session is idle and its page is throwing" is the thing no external browser
+  automation can report.
+
+### What this phase does not do
+
+- [ ] Do not redirect the repository's own test suite. A project's Playwright configuration owns its
+  browsers, fixtures, isolation, and parallelism; steering `npm test` into one shared session browser
+  breaks test isolation and produces wrong answers. This surface replaces an agent's ad-hoc poking,
+  not a test runner. State it in the feature document, because the temptation is real and the failure
+  is silent.
+- [ ] Do not build a second automation vocabulary. The CDP endpoint stays attachable, so
+  `playwright`, `playwright-mcp`, and `chrome-devtools-mcp` can connect to the same instance; a
+  bespoke scriptable surface that no external tool can attach to is the trap the reference
+  implementation is currently filing issues against itself to escape.
+- [ ] Do not extend the browser to non-loopback hosts as an execution target. Reaching a remote
+  service in a page is ordinary browsing; reaching a remote *host* is the multi-host control plane
+  that remains decision-gated.
+
+### Phase 13 exit criteria
+
+- [ ] The destination decision is recorded, the decision-gated entry is amended, and the default
+  Project state grants an agent no navigation authority.
+- [ ] A browser leaf tabs, splits, restores, and renders on desktop and phone, and survives a
+  session-preserving daemon restart with its page intact.
+- [ ] An agent in every registry harness reaches the browser through at least the environment tier,
+  and through MCP wherever the harness supports it, with no manual per-session configuration.
+- [ ] Navigating, snapshotting, acting on a ref, and reading console and network activity are covered
+  by tests against local fixtures rather than public sites, including one test that a stale ref fails
+  loudly instead of acting on the wrong element.
+- [ ] The allowlist refuses an off-list agent navigation, the refusal is audited, and both kill
+  switches stop the subsystem without reaping sessions.
+- [ ] `../design/features/` carries a browser-pane feature document, `../CLAUDE.md` routes to it, and
+  `../design/features/processes-and-previews.md` states the Preview/browser division so the two are
+  not re-merged by a later change.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
@@ -3005,6 +3213,10 @@ failure behavior:
   machine-owned fingerprinted trust store.
 - Model-authored action selection, autonomous worker spawning, unrestricted PTY writes,
   auto-approval, arbitrary command execution, or arbitrary HTTP/network destinations.
+  The network half of this entry is what Phase 13 must decide before it ships navigation: an
+  agent-drivable browser is agent-chosen HTTP destinations, and Phase 13's per-Project grant plus
+  host allowlist is the proposed narrowing. Until that decision is recorded, the entry stands and
+  agent-issued navigation is out of scope; operator-issued navigation in a pane never was in it.
 - Alternate observer providers/base URLs that weaken the fixed-origin secret/network
   boundary.
 - Autonomous agent-to-agent routing beyond Phase 5 user-authored/user-approved/`mux.notify`

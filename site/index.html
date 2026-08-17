@@ -4,29 +4,71 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>swe-mux</title>
-<meta name="description" content="An agentic development environment and a control plane for CLI coding agents. Keeps every agent alive, records what they actually did, and spends a hard budget of interruptions on you. Windows, phone-first, local." />
+<meta name="description" content="Terminal multiplexer, agent control plane, full mobile parity. Agents don't need replacing, they need infrastructure around them: terminals that outlive the app, a deterministic record of what each agent actually did, and a hard budget of four interruptions a day. Windows-first, no cloud, no relay." />
 <meta name="color-scheme" content="dark" />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101119'/><text y='12' x='2' font-family='monospace' font-size='12' fill='%239ece6a'>%E2%97%A7</text></svg>" />
+<script>
+/* Runs before first paint so the chosen scheme never flashes. */
+(function () {
+  var t;
+  try { t = localStorage.getItem('swemux-theme'); } catch (e) {}
+  if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.currentScript.previousElementSibling.setAttribute('content', t);
+})();
+</script>
+<!-- The wordmark's trapezoid on its own. Transparent ground, so it reads on both
+     a light and a dark browser tab strip. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M2.6 2.3 L13.4 6.1 L13.4 9.9 L2.6 13.7 Z' fill='%238fdb6f'/></svg>" />
 <style>
 /* ------------------------------------------------------------------ tokens */
 :root {
-  --bg:      #101119;
-  --panel:   #171821;
-  --panel-2: #1c1e2a;
-  --line:    #262939;
-  --line-2:  #343850;
-  --fg:      #c6cee6;
-  --fg-2:    #98a1c0;
-  --fg-3:    #6b7492;
-  --fg-4:    #495071;
-  --green:   #9ece6a;
-  --cyan:    #73daca;
-  --orange:  #e0af68;
-  --red:     #f7768e;
+  /* Dark. Every text token is checked against --bg:
+     fg 15.2:1 · fg-2 9.1:1 · fg-3 5.4:1 · fg-4 3.5:1 (decorative and large only). */
+  --bg:      #0e1016;
+  --panel:   #151821;
+  --panel-2: #1b1f2a;
+  --line:    #242a38;
+  --line-2:  #353d51;
+  --fg:      #dfe5f0;
+  --fg-2:    #adb7cc;
+  --fg-3:    #828da6;
+  --fg-4:    #626d88;   /* borders and inert markers only, never body text */
+  --green:   #8fdb6f;
+  --cyan:    #6fd8cb;
+  --orange:  #e8b56b;
+  --red:     #f87f95;
 
+  --hatch:   rgba(255,255,255,.020);
+  --hatch-2: rgba(255,255,255,.034);
+  --sel:     rgba(143,219,111,.15);
+
+  /* Mono carries identity: headings, labels, commands, anything terminal-shaped.
+     Sans carries prose, because monospace paragraphs are what made this page tiring. */
   --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text",
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --pad: clamp(18px, 4vw, 40px);
   --maxw: 1160px;
+}
+
+:root[data-theme="light"] {
+  /* fg 15.8:1 · fg-2 8.6:1 · fg-3 5.5:1 · fg-4 3.2:1 */
+  --bg:      #fbfbfd;
+  --panel:   #ffffff;
+  --panel-2: #f4f5f9;
+  --line:    #e6e8f0;
+  --line-2:  #cbd0de;
+  --fg:      #161923;
+  --fg-2:    #414963;
+  --fg-3:    #626a83;
+  --fg-4:    #8a92a8;
+  --green:   #3f7a12;
+  --cyan:    #0b7a72;
+  --orange:  #8a5806;
+  --red:     #b0243c;
+  --hatch:   rgba(20,24,40,.032);
+  --hatch-2: rgba(20,24,40,.050);
+  --sel:     rgba(63,122,18,.11);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -34,44 +76,155 @@ html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
-  font-family: var(--mono); font-size: 14.5px; line-height: 1.66;
-  -webkit-font-smoothing: antialiased;
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.62;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+
+/* Everything terminal-shaped keeps the monospace face. Prose does not. */
+h1, h2, h3, h4,
+.kick, .name, .secnav, .util, .grouplabel, .half h3,
+.tag, .flat b, .ic-tab, .ic-os, .ic-body, .ic-copy, .copy, .code pre, code, kbd {
+  font-family: var(--mono);
 }
 h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.3; }
-p { margin: 0 0 0.9em; }
+p { margin: 0 0 0.85em; }
 p:last-child { margin-bottom: 0; }
 a { color: var(--cyan); text-decoration: none; border-bottom: 1px solid transparent; }
 a:hover { border-bottom-color: var(--cyan); }
 ul { margin: 0; padding: 0; list-style: none; }
-code { color: var(--fg); }
+/* Mono renders optically larger beside sans, so inline code is stepped down. */
+code { color: var(--fg); font-size: 0.915em; }
+::selection { background: var(--sel); }
 
 .wrap { max-width: var(--maxw); margin-inline: auto; padding-inline: var(--pad); }
 
 /* --------------------------------------------------------------- statusbar */
 .bar { position: sticky; top: 0; z-index: 40; background: var(--panel); border-bottom: 1px solid var(--line); }
-.bar .wrap { display: flex; align-items: center; gap: 16px; height: 40px; font-size: 12px; }
+.bar .wrap { display: flex; align-items: center; gap: 14px; height: 44px; font-size: 12px; }
 .bar .name { color: var(--green); font-weight: 600; flex: none; white-space: nowrap; }
-.bar .kind { color: var(--fg-4); flex: none; white-space: nowrap; }
-.bar nav { margin-left: auto; display: flex; gap: 15px; overflow-x: auto; scrollbar-width: none; }
-.bar nav::-webkit-scrollbar { display: none; }
-.bar nav a { color: var(--fg-3); border: 0; white-space: nowrap; }
-.bar nav a:hover { color: var(--fg); }
-@media (max-width: 640px) { .bar .kind { display: none; } }
+/* Wordmark. Two files rather than a CSS filter, because the mark's green must
+   darken for the light theme while the letterforms go to ink; no filter does both. */
+.brand { flex: none; display: block; border: 0; line-height: 0; }
+.brand img { height: 18px; width: auto; display: block; }
+.brand .lite, :root[data-theme="light"] .brand .dark { display: none; }
+:root[data-theme="light"] .brand .lite { display: block; }
+footer .brandmark { height: 21px; width: auto; display: block; margin-bottom: 9px; }
+footer .brandmark.lite, :root[data-theme="light"] footer .brandmark.dark { display: none; }
+:root[data-theme="light"] footer .brandmark.lite { display: block; }
+/* min-width:0 is load-bearing: a flex item defaults to min-width:auto, so
+   overflow-x:auto alone will not let this strip shrink and it pushes the bar wide. */
+.bar nav.secnav { margin-left: auto; min-width: 0; display: flex; gap: 15px; overflow-x: auto;
+                  scrollbar-width: none;
+                  mask-image: linear-gradient(90deg, #000 calc(100% - 14px), transparent 100%); }
+.bar nav.secnav::-webkit-scrollbar { display: none; }
+.bar nav.secnav a { color: var(--fg-3); border: 0; white-space: nowrap; }
+.bar nav.secnav a:hover { color: var(--fg); }
+
+.util { flex: none; margin-left: auto; display: flex; align-items: center; gap: 2px;
+        padding-left: 12px; border-left: 1px solid var(--line); }
+.bar nav.secnav + .util { margin-left: 0; }
+.util a, .util button {
+  font-family: inherit; font-size: 12px; line-height: 1; color: var(--fg-3); border: 1px solid transparent;
+  background: none; padding: 6px 8px; cursor: pointer; white-space: nowrap; display: flex;
+  align-items: center; gap: 6px; height: 28px;
+}
+.util a:hover, .util button:hover { color: var(--fg); border-color: var(--line-2); background: var(--panel-2); }
+.util svg { width: 14px; height: 14px; fill: currentColor; flex: none; display: block; }
+.util .ghost { display: none; }
+:root[data-theme="light"] .util .moon { display: none; }
+:root[data-theme="light"] .util .sun  { display: block; }
+.util .sun { display: none; }
+.util .moon { display: block; }
+@media (max-width: 720px) { .util .lbl { display: none; } .util a, .util button { padding: 6px; } }
+@media (max-width: 460px) { .brand img { height: 16px; } .bar .wrap { gap: 10px; } }
+
+/* ------------------------------------------------------------ install call */
+.ic { border: 1px solid var(--line-2); background: var(--panel); max-width: 780px;
+      margin-top: clamp(22px, 3.5vw, 34px); }
+.ic-head { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ic-tabs { display: flex; flex-wrap: wrap; min-width: 0; }
+.ic-tab { font-family: inherit; font-size: 11.5px; letter-spacing: .04em; background: none;
+          border: 0; border-right: 1px solid var(--line); color: var(--fg-3);
+          padding: 10px 15px; cursor: pointer; position: relative; white-space: nowrap; }
+.ic-tab:hover { color: var(--fg-2); }
+.ic-tab[aria-selected="true"] { color: var(--fg); background: var(--panel-2); }
+.ic-tab[aria-selected="true"]::before { content: ""; position: absolute; inset: 0 0 auto 0;
+                                        height: 2px; background: var(--green); }
+.ic-os { margin-left: auto; display: flex; align-items: center; gap: 13px; padding: 0 15px;
+         font-size: 10px; letter-spacing: .14em; }
+.ic-os span { color: var(--fg-3); transition: color .13s ease; white-space: nowrap; }
+.ic-os span.on { color: var(--cyan); }
+.ic-os span.on::before { content: "▸ "; color: var(--green); }
+.ic-os span.soon em { font-style: normal; color: var(--fg-4);
+                      text-transform: lowercase; letter-spacing: 0; margin-left: 3px; }
+.ic-body { display: flex; align-items: center; gap: 11px; padding: 14px 15px; min-width: 0; }
+.ic-body .p { color: var(--green); flex: none; user-select: none; }
+.ic-body code { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg);
+                overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+.ic-copy { font-family: inherit; font-size: 10.5px; letter-spacing: .06em; flex: none;
+           background: var(--panel-2); border: 1px solid var(--line-2); color: var(--fg-3);
+           padding: 5px 10px; cursor: pointer; }
+.ic-copy:hover { color: var(--fg); border-color: var(--fg-4); }
+.ic-note { font-size: 13px; color: var(--fg-3); max-width: 780px; margin: 11px 0 0; }
+@media (max-width: 640px) {
+  .ic-os { width: 100%; padding: 8px 15px; border-top: 1px solid var(--line); margin-left: 0; }
+  .ic-tab { flex: 1; text-align: center; padding: 10px 8px; }
+}
 
 /* -------------------------------------------------------------------- hero */
 .hero { padding: clamp(48px, 9vw, 92px) 0 clamp(26px, 4vw, 40px); }
-.hero .kick { color: var(--fg-4); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 20px; }
+.hero .kick { color: var(--fg-3); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 20px; }
 .hero h1 { font-size: clamp(22px, 4.4vw, 38px); letter-spacing: -0.02em; line-height: 1.26; margin-bottom: 22px; }
 .hero h1 .dim { color: var(--fg-3); }
 .cur { display: inline-block; width: .55em; height: 1em; background: var(--green); vertical-align: -.13em; margin-left: .18em; animation: blink 1.15s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0 } }
 @media (prefers-reduced-motion: reduce) { .cur { animation: none } }
-.hero .lede { color: var(--fg-2); max-width: 70ch; font-size: clamp(14.5px, 1.7vw, 16px); }
+.hero .sub { color: var(--fg-2); font-size: clamp(15px, 2vw, 19px); line-height: 1.45;
+             max-width: 72ch; margin-bottom: 24px; padding-left: 14px;
+             border-left: 1px solid var(--line-2); text-wrap: pretty; }
+.hero .sub b { color: var(--fg); font-weight: 600; }
+.hero .lede { color: var(--fg-2); max-width: 68ch; font-size: clamp(15px, 1.7vw, 16.5px);
+              line-height: 1.66; }
 .hero .lede b { color: var(--fg); }
 
-.spec { margin-top: 28px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
-        padding: 10px 0; display: flex; flex-wrap: wrap; gap: 3px 11px; font-size: 12px; color: var(--fg-3); }
-.spec span + span::before { content: "·"; color: var(--fg-4); margin-right: 11px; }
+
+/* ------------------------------------------------------------- hero visual */
+.herovis { position: relative; margin-top: clamp(30px, 5vw, 52px); margin-bottom: clamp(26px, 4vw, 46px); }
+.herovis .frame {
+  border: 1px dashed var(--line-2); aspect-ratio: 16 / 9; padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 7px; background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
+}
+.herovis .phone {
+  position: absolute; right: clamp(14px, 4vw, 58px); bottom: clamp(-46px, -7%, -20px);
+  width: clamp(84px, 15%, 186px); aspect-ratio: 9 / 19.5;
+  border: 1px dashed var(--line-2); border-radius: 11px; padding: 8px 7px;
+  display: flex; flex-direction: column; gap: 5px; box-shadow: 0 0 0 7px var(--bg); background:
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch-2) 8px 9px), var(--panel);
+}
+.herovis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+                border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.herovis .frame .tag { color: var(--cyan); }
+.herovis .phone .tag { color: var(--orange); border-bottom-color: var(--line-2); font-size: 8px;
+                       padding-bottom: 4px; letter-spacing: .06em; }
+.herovis p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-3); max-width: 62ch; }
+.herovis .phone p { font-size: 8.5px; line-height: 1.4; }
+@media (max-width: 620px) {
+  .herovis { padding-right: 0; }
+  .herovis .phone { position: static; width: 96px; margin: 10px 0 0 auto; }
+  .herovis .phone p { display: none; }
+}
+
+/* --------------------------------------------------- inline visualizations */
+.vis { border: 1px dashed var(--line-2); padding: 9px 11px; margin-top: 14px;
+       display: flex; flex-direction: column; gap: 6px; background:
+       repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2); }
+.vis.wide { aspect-ratio: 21 / 9; }
+.vis.box { aspect-ratio: 4 / 3; }
+.vis .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
+            color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+.vis p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-3); overflow: hidden; }
 
 /* --------------------------------------------------------------- two halves */
 .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px;
@@ -80,8 +233,9 @@ code { color: var(--fg); }
 .half h3 { font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 10px; }
 .half.ade h3 { color: var(--cyan); }
 .half.acp h3 { color: var(--orange); }
-.half p { color: var(--fg-2); font-size: 13.5px; }
-.halves-note { margin-top: 16px; color: var(--fg-2); max-width: 78ch; font-size: 13.5px; }
+.half p { color: var(--fg-2); font-size: 14.5px; line-height: 1.6; }
+.halves-note { margin-top: 16px; color: var(--fg-2); max-width: 74ch; font-size: 14.5px;
+               line-height: 1.62; }
 .halves-note b { color: var(--fg); }
 
 /* ---------------------------------------------------------------- sections */
@@ -91,18 +245,9 @@ code { color: var(--fg); }
 .head h2 { font-size: clamp(16px, 2.2vw, 20px); }
 .head .fill { flex: 1; border-top: 1px solid var(--line); }
 @media (max-width: 700px) { .head .fill { display: none } }
-.sec > .wrap > .intro { color: var(--fg-2); max-width: 76ch; margin-bottom: clamp(20px, 3vw, 30px); font-size: 13.5px; }
+.sec > .wrap > .intro { color: var(--fg-2); max-width: 72ch; margin-bottom: clamp(20px, 3vw, 30px);
+                        font-size: 15px; line-height: 1.66; }
 .sec > .wrap > .intro b { color: var(--fg); }
-
-/* ------------------------------------------------------------------- cards */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 1px;
-         background: var(--line); border: 1px solid var(--line); }
-.card { background: var(--panel); padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
-.card h3 { font-size: 14.5px; display: flex; gap: 9px; align-items: baseline; }
-.card h3 .ix { color: var(--green); font-size: 11.5px; flex: none; }
-.card > p { color: var(--fg-2); font-size: 13.5px; margin: 0; }
-.card > p b { color: var(--fg); }
-.card .crops { margin-top: auto; }
 
 /* --------------------------------------------------------- crop placeholders */
 .crops { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.46fr); gap: 10px; align-items: start; }
@@ -110,64 +255,102 @@ code { color: var(--fg); }
 .crops.trio { grid-template-columns: repeat(auto-fit, minmax(160px, 224px)); justify-content: start; gap: 14px; }
 .crop {
   border: 1px dashed var(--line-2); background:
-    repeating-linear-gradient(135deg, transparent 0 8px, rgba(255,255,255,.018) 8px 9px), var(--panel-2);
+    repeating-linear-gradient(135deg, transparent 0 8px, var(--hatch) 8px 9px), var(--panel-2);
   padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
 }
 .crop.d { aspect-ratio: 3 / 2; }
 .crop.m { aspect-ratio: 9 / 16; }
 .crop .tag { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; flex: none;
-             color: var(--fg-4); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+             color: var(--fg-3); border-bottom: 1px solid var(--line); padding-bottom: 5px; }
 .crop.d .tag { color: var(--cyan); }
 .crop.m .tag { color: var(--orange); }
-.crop p { font-size: 11px; line-height: 1.5; color: var(--fg-3); margin: 0; overflow: hidden; }
+.crop p { font-size: 12px; line-height: 1.5; color: var(--fg-3); margin: 0; overflow: hidden; }
 @media (max-width: 460px) { .crops { grid-template-columns: minmax(0, 1fr); } .crop.m { max-width: 190px; } }
 
+/* ---------------------------------------------------------- real screenshots */
+figure.shot { margin: 0; border: 1px solid var(--line-2); background: var(--panel-2); min-width: 0; }
+figure.shot img { display: block; width: 100%; height: auto; }
+figure.shot figcaption { font-size: 12px; line-height: 1.5; color: var(--fg-3);
+                         padding: 8px 10px; border-top: 1px solid var(--line); }
+.shotpair { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+            gap: clamp(16px, 3vw, 30px); align-items: start; }
+@media (max-width: 700px) { .shotpair { grid-template-columns: minmax(0, 1fr); }
+                            .shotpair figure.shot { max-width: 300px; } }
+.shotpair .claims li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px;
+                       padding: 10px 0; border-top: 1px solid var(--line); font-size: 14.5px;
+                       line-height: 1.58; color: var(--fg-2); }
+.shotpair .claims li:first-child { border-top: 0; padding-top: 0; }
+.shotpair .claims li::before { content: "▸"; color: var(--green); }
+.shotpair .claims b { color: var(--fg); }
+
 /* --------------------------------------------------------------- flat lists */
-.flat li { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 4px 24px;
-           padding: 11px 0; border-top: 1px solid var(--line); }
+.flat li { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 4px 26px;
+           padding: 13px 0; border-top: 1px solid var(--line); }
 .flat li:first-child { border-top: 0; }
-.flat b { color: var(--fg); font-weight: 600; }
+.flat b { color: var(--fg); font-weight: 600; font-size: 13.5px; letter-spacing: .01em; }
 .flat b::before { content: "▸ "; color: var(--green); }
-.flat span { color: var(--fg-3); font-size: 13px; }
+.flat span { color: var(--fg-2); font-size: 14.5px; line-height: 1.58; }
 @media (max-width: 700px) { .flat li { grid-template-columns: minmax(0, 1fr); } }
 
-.rules li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px;
-            padding: 10px 0; border-top: 1px solid var(--line); color: var(--fg-2); font-size: 13.5px; }
-.rules li:first-child { border-top: 0; }
-.rules li::before { content: "[x]"; color: var(--red); font-size: 11px; padding-top: 3px; letter-spacing: -.05em; }
-.rules b { color: var(--fg); }
+.grouplabel { color: var(--orange); font-size: 11.5px; letter-spacing: 0.13em; text-transform: uppercase;
+              margin: 30px 0 2px; padding-bottom: 7px; border-bottom: 1px solid var(--line-2); }
+.grouplabel:first-of-type { margin-top: 0; }
+.grouplabel span { color: var(--fg-3); text-transform: none; letter-spacing: 0; margin-left: 8px; }
+@media (max-width: 560px) { .grouplabel span { display: block; margin-left: 0; } }
 
 /* -------------------------------------------------------------------- code */
 .code { border: 1px solid var(--line-2); background: var(--panel-2); padding: 14px 16px; overflow-x: auto; position: relative; }
 .code pre { margin: 0; font-size: 12.5px; line-height: 1.8; color: var(--fg-2); }
-.code .c { color: var(--fg-4); }
+.code .c { color: var(--fg-3); }
 .code .p { color: var(--green); user-select: none; }
 .copy { position: absolute; top: 7px; right: 7px; font-family: inherit; font-size: 10.5px;
         background: var(--panel); border: 1px solid var(--line-2); color: var(--fg-3); padding: 2px 6px; cursor: pointer; }
 .copy:hover { color: var(--fg); }
-.note { font-size: 12.5px; color: var(--fg-3); margin-top: 10px; }
+.note { font-size: 13.5px; color: var(--fg-3); margin-top: 12px; line-height: 1.55; }
 
-footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line); padding: 24px 0 52px; font-size: 12px; color: var(--fg-4); }
+footer { margin-top: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line);
+         padding: 26px 0 54px; font-size: 13px; color: var(--fg-3); }
 footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 22px 44px; }
 footer h4 { margin: 0 0 5px; color: var(--fg-3); font-size: 12px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
 footer .todo { color: var(--orange); }
+.colophon { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+            font-family: var(--mono); font-size: 12.5px; color: var(--fg-3); }
+.colophon .h { color: var(--fg-4); user-select: none; margin-right: 2px; }
 
-@media (max-width: 700px) { body { font-size: 13.5px; } }
+@media (max-width: 700px) { body { font-size: 15px; }
+                            .flat span, .half p, .shotpair .claims li { font-size: 14px; } }
 </style>
 </head>
 <body>
 
 <div class="bar">
   <div class="wrap">
-    <span class="name">swe-mux</span>
-    <span class="kind">ADE + ACP</span>
-    <nav>
+    <a class="brand" href="#" aria-label="swe-mux, home">
+      <img class="dark" src="img/logo.png" width="640" height="73" alt="" />
+      <img class="lite" src="img/logo-light.png" width="640" height="73" alt="" />
+    </a>
+    <nav class="secnav">
       <a href="#mobile">mobile</a>
-      <a href="#ade">workbench</a>
-      <a href="#acp">control plane</a>
-      <a href="#limits">limits</a>
-      <a href="#install">install</a>
+      <a href="#fleet">fleet</a>
+      <a href="#workbench">workbench</a>
+      <a href="#normalize">harnesses</a>
+      <a href="#notes">notes</a>
+      <a href="#git">git</a>
+      <a href="#voice">voice</a>
+      <a href="#control">control plane</a>
     </nav>
+    <div class="util">
+      <a href="#" data-todo="docs URL">docs</a>
+      <a href="#" data-todo="blog URL">blog</a>
+      <a href="#" data-todo="repository URL" aria-label="Source on GitHub" title="Source on GitHub">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="lbl">github</span>
+      </a>
+      <button type="button" id="themebtn" aria-label="Toggle colour scheme" title="Toggle colour scheme">
+        <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7Z"/></svg>
+        <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 4.6A3.4 3.4 0 1 0 8 11.4 3.4 3.4 0 0 0 8 4.6Zm0-4.6h0a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V.7A.7.7 0 0 1 8 0Zm0 13.3a.7.7 0 0 1 .7.7v1.3a.7.7 0 0 1-1.4 0V14a.7.7 0 0 1 .7-.7ZM16 8a.7.7 0 0 1-.7.7H14a.7.7 0 0 1 0-1.4h1.3A.7.7 0 0 1 16 8ZM2.7 8a.7.7 0 0 1-.7.7H.7a.7.7 0 0 1 0-1.4H2a.7.7 0 0 1 .7.7Zm10.96-5.66a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0ZM4.28 11.72a.7.7 0 0 1 0 1l-.94.94a.7.7 0 1 1-1-1l.94-.94a.7.7 0 0 1 1 0Zm9.38 1.94a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 1 1 1-1l.94.94a.7.7 0 0 1 0 1ZM4.28 4.28a.7.7 0 0 1-1 0l-.94-.94a.7.7 0 0 1 1-1l.94.94a.7.7 0 0 1 0 1Z"/></svg>
+      </button>
+    </div>
   </div>
 </div>
 
@@ -176,57 +359,125 @@ footer .todo { color: var(--orange); }
 <!-- ================================================================== HERO -->
 <section class="hero">
   <div class="wrap">
-    <div class="kick">agentic dev environment + agent control plane</div>
-    <h1>You can run ten coding agents.<br />
-      <span class="dim">You cannot watch ten coding agents.</span><span class="cur"></span></h1>
+    <div class="kick">for the coding agents you already run</div>
+    <h1>Terminal multiplexer. Agent control plane.<br />
+      Full mobile parity.<span class="cur"></span></h1>
+    <p class="sub"><b>Infrastructure built on what agents do, rather than what they are.</b></p>
     <div class="lede">
-      <p>swe-mux keeps every agent and terminal alive on your machine, and records what those
-      agents <b>actually did</b> from the bytes they wrote and the exit codes they got, not from
-      what they said about it.</p>
-      <p>Then it spends a hard budget of four interruptions a day on you. Everything else waits
-      somewhere you can find it.</p>
+      <p>Your harness does the work. <b>swe-mux is the structure around it:</b> terminals that
+      outlive the app itself, a deterministic record of what every agent actually did, and one
+      place to reach all of it from. It sits beside the agents rather than in front of them, so
+      whatever your CLI ships next already works here, and what the record measures does not
+      change when the agents do.</p>
     </div>
-    <div class="spec">
-      <span>Windows 10/11</span>
-      <span>claude · codex · opencode · omp · pi · shell</span>
-      <span>desktop, browser, phone PWA</span>
-      <span>localhost and Tailscale only</span>
-      <span>no account, no cloud</span>
+    <div class="ic">
+      <div class="ic-head">
+        <div class="ic-tabs" role="tablist" aria-label="Install method">
+          <button class="ic-tab" role="tab" type="button" data-m="powershell" aria-selected="true">powershell</button>
+          <button class="ic-tab" role="tab" type="button" data-m="curl" aria-selected="false">curl</button>
+          <button class="ic-tab" role="tab" type="button" data-m="uv" aria-selected="false">uv</button>
+          <button class="ic-tab" role="tab" type="button" data-m="source" aria-selected="false">source</button>
+        </div>
+        <div class="ic-os" aria-hidden="true">
+          <span data-os="windows" class="on">WINDOWS</span>
+          <span data-os="linux">LINUX</span>
+          <span data-os="macos" class="soon">MACOS <em>soon</em></span>
+        </div>
+      </div>
+      <div class="ic-body">
+        <span class="p">$</span>
+        <code id="iccmd">irm https://get.swe-mux.dev/install.ps1 | iex</code>
+        <button class="ic-copy" type="button" id="iccopy">copy</button>
+      </div>
+    </div>
+    <p class="ic-note" id="icnote">Windows 10 or 11. Installs the desktop app, the daemon, and the
+    <code>mux</code> CLI.</p>
+
+
+    <div class="herovis">
+      <div class="frame">
+        <span class="tag">hero visual · full width</span>
+        <p>The desktop workspace at full width, real screenshot, scrubbed: sidebar of projects and
+        live sessions on the left, a split pane region in the middle with a working agent beside a
+        second tab strip, and the utility drawer open on the right. Wide crop, chrome included,
+        because this one shot has to read as a whole application rather than a panel.</p>
+      </div>
+      <div class="phone">
+        <span class="tag">phone</span>
+        <p>Same workspace on a device shell, overlapping the lower right corner: a live agent pane
+        with the touch key rail.</p>
+      </div>
     </div>
 
     <div class="halves">
       <div class="half ade">
-        <h3>ADE / the workbench</h3>
+        <h3>The workbench</h3>
         <p>Sessions, panes, tabs, notes, files, git, previews, a Run menu you define. Everything
-        you look at. This part is table stakes, and every tool in the category has some of it.</p>
+        you look at.</p>
+        <div class="vis box">
+          <span class="tag">diagram</span>
+          <p>The split tree: one Project containing a recursive pane layout, each leaf holding a
+          tab stack with mixed tab kinds (terminal, note, preview, queue), and the same tree
+          flattened into the single mobile rail beside it.</p>
+        </div>
       </div>
       <div class="half acp">
-        <h3>ACP / the control plane</h3>
+        <h3>The control plane</h3>
         <p>Deterministic evidence, model-free detectors, incident ranking, an interrupt budget, and
-        a return path agents can read. Decides <em>what</em> you look at. Nobody else ships this.</p>
+        a return path agents can read. Decides <em>what</em> you look at.</p>
+        <div class="vis box">
+          <span class="tag">diagram</span>
+          <p>The escalating-cost stack: raw facts at the base (free), detectors above them (free),
+          the budgeted model layer above that (capped), attention routing at the top, and a single
+          gate marked "human" on every arrow that leaves the stack toward a session.</p>
+        </div>
       </div>
     </div>
-    <p class="halves-note"><b>swe-mux is both, and that is the point.</b> The control plane is only
-    buildable on top of the workbench: you cannot measure a fleet whose terminals, shells, and input
-    telemetry you do not own.</p>
+    <p class="halves-note"><b>The second half is only buildable because of the first.</b> You cannot
+    measure a fleet whose terminals, shells, and input telemetry you do not own.</p>
   </div>
 </section>
+
 
 <!-- ================================================================ MOBILE -->
 <section class="sec" id="mobile">
   <div class="wrap">
-    <div class="head"><span class="n">01</span><h2>Your phone is not a status page</h2><span class="fill"></span></div>
-    <p class="intro">Full terminal, full workspace, Markdown editor, file tree, git, Run menu,
-    attention inbox, drag reorder, lock-screen push. Installable as a PWA, reachable over Tailscale.
-    <b>One session, several devices, exactly one writer</b> - the phone renders a projection of the
-    same workspace tree, never a second layout.</p>
+    <div class="head"><span class="n">01</span><h2>The whole workspace, on your phone</h2><span class="fill"></span></div>
+    <p class="intro">Live terminals, git review, the Markdown editor, the file tree, the queue,
+    previews, the Run menu, drag reorder, lock-screen push. <b>No feature exists on the desktop and
+    not on the phone.</b> The only desktop-only things left are hidden terminal pre-warming, the
+    collapsed sidebar rail, and keyboard chords a phone cannot produce. Every other orchestrator's
+    phone client is a monitor, and their own pages call them companions. This one is the machine.</p>
 
-    <div class="crops trio">
-      <div class="crop m">
-        <span class="tag">mobile</span>
-        <p>Full-bleed terminal pane with a live agent mid-turn: the tab rail across the top, the
-        status line (working · context %), and the touch key rail at the bottom.</p>
-      </div>
+    <div class="shotpair">
+      <figure class="shot">
+        <img src="img/mobile-session.webp" width="1206" height="2622" loading="lazy" decoding="async"
+             alt="swe-mux on a phone: a live Claude session showing a syntax-highlighted diff, the
+                  session tab rail, a working status line with context percentage, and a two-row
+                  touch key rail with Esc, newline, Tab, and arrow keys." />
+        <figcaption>Real screenshot. A live agent mid-turn on a phone: tab rail, status line,
+        context meter, quota chips, and the touch key rail that makes a TUI usable without a
+        keyboard.</figcaption>
+      </figure>
+      <ul class="claims">
+        <li><span><b>The actual terminal.</b> Not a rendered chat log. The real TUI, with the diff
+        colours, the picker, and the approval prompt exactly as the CLI drew them.</span></li>
+        <li><span><b>One session, several devices, exactly one writer.</b> Input ownership is
+        arbitrated and the size is negotiated, so the desktop does not fight the phone over the
+        same PTY.</span></li>
+        <li><span><b>A projection, not a second layout.</b> The phone flattens the same workspace
+        tree into one rail. There is no separate mobile build to drift.</span></li>
+        <li><span><b>Your dev server, on your phone.</b> A listener a session owns is proxied
+        through swe-mux's own URL, so you open <code>127.0.0.1:5173</code> from the couch with no
+        port exposed anywhere.</span></li>
+        <li><span><b>Built for touch, not shrunk for it.</b> Long-press drag reorder, a touch key
+        rail, sticky read mode, and a keyboard that stays down until you ask for it.</span></li>
+        <li><span><b>No relay.</b> It reaches your machine over your own tailnet. Nothing is
+        brokered through a third party, because there is no third party.</span></li>
+      </ul>
+    </div>
+
+    <div class="crops trio" style="margin-top:22px">
       <div class="crop m">
         <span class="tag">mobile</span>
         <p>Navigation overlay: two projects expanded with their session rows, status dots, elapsed
@@ -234,283 +485,246 @@ footer .todo { color: var(--orange); }
       </div>
       <div class="crop m">
         <span class="tag">mobile</span>
-        <p>Markdown editor open in the drawer, soft keyboard up, formatting toolbar visible.
-        Shows that editing is real, not a textarea.</p>
+        <p>Git review on a phone: changed-file rows with added and removed counts, one file
+        expanded to a diff. Proves review is not desktop-only.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>A dev-server preview tab rendering a local site over the tailnet, with the terminal tab
+        still in the rail beside it.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- =================================================================== ADE -->
-<section class="sec" id="ade">
+<!-- ================================================================= FLEET -->
+<section class="sec" id="fleet">
   <div class="wrap">
-    <div class="head"><span class="n">02</span><h2>The workbench</h2><span class="fill"></span></div>
-    <p class="intro">One Project is one folder you register. It owns its sessions, layout, notes,
-    files, and history for their whole lifetime.</p>
-
-    <div class="cards">
-
-      <article class="card">
-        <h3><span class="ix">01</span> Sessions outlive their windows</h3>
-        <p>Every terminal is a ConPTY held by a supervisor separate from the daemon and the UI. The
-        daemon restarts, the app rebuilds, the browser closes. Nothing stops.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Sidebar column only, cropped tight: one project expanded with six session rows,
-            status dots in green/blue/amber, elapsed times, model names, and the vertical thread
-            marking tabbed sessions.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>Same rows in the mobile nav overlay.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">02</span> Any shell becomes an agent</h3>
-        <p>No backend picker. Type <code>claude</code> in a shell and the session promotes in
-        place: same pane, same scrollback, now with a transcript, status, and queue.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Two-frame before/after of one tab: a plain <code>shell</code> tab with a grey dot,
-            then the same tab carrying the agent glyph, a green status dot, and a context meter.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The same tab in the mobile rail, after promotion.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">03</span> Mixed workspace</h3>
-        <p>A recursive split tree where each leaf holds its own tab stack. A tab is a terminal, a
-        note, a file, a dev-server preview, history, or a queue.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Just the pane region, sidebar and drawer cropped out: a vertical split with a
-            terminal above and a preview below, plus a second pane with its own tab strip. Tab
-            strips must be legible.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The unified tab rail alone, cropped to the strip, showing terminal, note, and
-            preview tabs coexisting.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">04</span> Utility drawer</h3>
-        <p>Notes, Files, Clipboard, Actions, Context, Git, Processes, Queue, Transcript, Insight,
-        Agent, Alerts. Session-scoped tabs follow the focused session.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p><b>Drawer panel only</b>, cropped at its left border: the full tab strip across the
-            top with one tab active and the panel body beneath it. No terminal, no sidebar.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The drawer as a sheet, its tab strip scrolled to show the same active tab.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">05</span> Git and worktrees</h3>
-        <p>Branch, HEAD, dirty count, divergence, and lines changed against a comparison ref. Every
-        linked checkout with ahead/behind, live, and locked state.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>The worktree map list alone: trunk row plus six worktree rows, each with branch
-            name, <code>clean</code>, ahead/behind counts, and the live/locked markers. Crop out
-            everything around it.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The same list on a phone, four rows visible.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">06</span> A Run menu you define</h3>
-        <p>Imports <code>tasks.json</code>, <code>package.json</code> scripts, and its own
-        <code>actions.toml</code>. Nothing runs until you approve the file's exact bytes; any edit
-        revokes that.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>The open Run popover only: built-in launchers at the top, then the imported action
-            entries with their source sections, one carrying a lock marker instead of a play
-            marker.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The same menu as a mobile sheet from the contextual toolbar.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">07</span> Prompt queue</h3>
-        <p>Ordered messages staged against one conversation, durable across restarts. A message
-        binds to the first run and never rebinds, so a cleared conversation strands it visibly.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>The Queue panel only: three queued items with their states, one stranded item
-            showing its reason and retarget control, and the auto-delivery toggle row.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The same queue on a phone, composer visible.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">08</span> Notes, files, previews</h3>
-        <p>Markdown notes as plain files with revision-checked writes. Listeners a session owns
-        become previews, proxied to remote browsers with no port exposed.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Split of two crops if it reads cleanly: the note editor body with headings and
-            nested bullets, and a preview tab rendering a local dev server.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The preview tab on a phone, reaching a loopback dev server over the tailnet.</p>
-          </div>
-        </div>
-      </article>
-
+    <div class="head"><span class="n">02</span><h2>Know which agent needs you</h2><span class="fill"></span></div>
+    <p class="intro">Every session carries a state you can trust: working, ready, awaiting
+    approval, or blocked. It is derived from provider hooks first, then the transcript, then the
+    PTY, then the CLI's own reported state, and <b>every transition is written to a durable ledger
+    with the layer readings that produced it</b>. When a status looks wrong you can go read exactly
+    why it changed, hours later. A watchdog catches sessions that stopped reporting, and the
+    sidebar rolls the whole fleet up so a collapsed group still shows the strongest state it is
+    hiding.</p>
+    <div class="crops">
+      <div class="crop d">
+        <span class="tag">desktop crop</span>
+        <p>Sidebar column only, cropped tight: one project expanded with a full column of session
+        rows carrying status dots in green, blue and amber, elapsed times, model names, context
+        meters, and the vertical thread marking tabbed sessions.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>The same rows in the mobile nav overlay, three different states visible at once.</p>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- =================================================================== ACP -->
-<section class="sec" id="acp">
+<!-- =========================================================== PERSISTENCE -->
+<section class="sec" id="persistence">
   <div class="wrap">
-    <div class="head"><span class="n">03</span><h2>The control plane</h2><span class="fill"></span></div>
+    <div class="head"><span class="n">03</span><h2>Sessions that outlive the app itself</h2><span class="fill"></span></div>
+    <p class="intro">Every terminal is a pseudoterminal held by a supervisor process that is
+    separate from the daemon and separate from the UI. Close the browser, restart the daemon,
+    <b>rebuild and redeploy the entire desktop application</b>, and the agents keep working. The
+    next daemon rediscovers the supervisor, reattaches every live session, and rebuilds it from
+    mirrored metadata plus a scrollback snapshot. Reconnecting a terminal replays only the bytes
+    you missed rather than resetting the screen, so a phone that slept through a long turn comes
+    back to an intact buffer.</p>
+    <div class="crops">
+      <div class="crop d">
+        <span class="tag">desktop crop</span>
+        <p>Two-frame before and after: a session mid-turn, then the same session still mid-turn
+        with an "updated" banner or a fresh build id visible, proving the app reloaded underneath
+        a running agent. The elapsed timer must have advanced, not reset.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>A phone reattaching after sleep, scrollback intact above the current turn.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== WORKBENCH -->
+<section class="sec" id="workbench">
+  <div class="wrap">
+    <div class="head"><span class="n">04</span><h2>The workbench</h2><span class="fill"></span></div>
+    <p class="intro">One Project is one folder you register. It owns its sessions, layout, notes,
+    files, and history for their whole lifetime, and a terminal that wanders elsewhere with
+    <code>cd</code> never changes who owns it.</p>
+    <ul class="flat">
+      <li><b>Mixed workspace</b><span>A recursive split tree where every leaf holds its own tab stack. A tab is a terminal, a note, a file, a dev-server preview, a transcript, history, or a queue. Panes and tabs are viewports, so closing one never kills a process or deletes a file.</span></li>
+      <li><b>Promotion in place</b><span>No backend picker. Type <code>claude</code> in a plain shell and the session promotes where it stands: same pane, same scrollback, now carrying a transcript, a status, a queue, and a context meter.</span></li>
+      <li><b>Utility drawer</b><span>Notes, Files, Clipboard, Actions, Context, Git, Processes, Queue, Transcript, Insight, Agent, and Alerts. Session-scoped tabs follow whichever session has focus; the drawer itself is a recursive layout you arrange per device.</span></li>
+      <li><b>A Run menu you define</b><span>Imports your existing <code>tasks.json</code>, root <code>package.json</code> scripts, and its own <code>actions.toml</code>. Nothing runs until you approve that file's exact bytes, and any edit revokes the approval.</span></li>
+      <li><b>Prompt queue</b><span>Stage ordered messages against a conversation while it is mid-turn. Durable across restarts, strict head-of-line, bound to the first run so a cleared conversation strands the queue visibly instead of firing into a stranger.</span></li>
+      <li><b>Previews without exposed ports</b><span>A loopback listener a session owns becomes a Preview tab, proxied through swe-mux's own URL. HTTP and websocket traffic both, so hot reload works from a phone.</span></li>
+      <li><b>Attachments</b><span>Drop files and images straight into a session. They land in the workspace, gitignored, and stay there after the session ends.</span></li>
+      <li><b>Worktrees, atomically</b><span>Create the worktree, run your setup command, and start a session in its exact root as one operation. Worktrees stay git artifacts and never become sidebar rows.</span></li>
+      <li><b>Clipboard history</b><span>A searchable ring of everything you copied, with pins. Memory-only by default, secret-shaped copies refused before an entry exists.</span></li>
+      <li><b>Broadcast and rails</b><span>Send one input to several sessions. Build your own action rails per device, with agent skills and slash commands discovered from the CLIs themselves.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================= NORMALIZE -->
+<section class="sec" id="normalize">
+  <div class="wrap">
+    <div class="head"><span class="n">05</span><h2>Every harness, and every shell</h2><span class="fill"></span></div>
+    <p class="intro">This is a terminal multiplexer before it is anything else. <b>Anything that
+    runs in a terminal runs here, unchanged.</b> PowerShell, CMD, Git Bash, WSL, bash, zsh, vim,
+    lazygit, htop, a TUI you wrote yourself, an agent CLI that shipped this morning and has never
+    heard of swe-mux. Real pseudoterminals, real signals, real Unicode widths, real bracketed
+    paste. A harness swe-mux does not recognize still works perfectly; you simply do not get the
+    layer on top of it.</p>
+    <p class="intro">For the harnesses it does know, that layer normalizes what every vendor
+    invents separately. Adding another is a descriptor and an adapter, not a branch through every
+    feature, which is why the list keeps growing.</p>
+    <ul class="flat">
+      <li><b>Input</b><span>Newline, submit, paste, copy, and caret placement behave the same in every CLI. Each harness's measured composer quirks live in one resolver instead of being relearned by your fingers.</span></li>
+      <li><b>Status</b><span>One vocabulary across vendors: working, ready, awaiting approval, blocked. Derived from hooks, then transcript, then PTY, then the CLI's own state.</span></li>
+      <li><b>Transcripts</b><span>One reader over every conversation format, including the store-backed ones that are not files at all.</span></li>
+      <li><b>History</b><span>One search box over every conversation any supported harness has ever written on this machine. Full text across prompts and replies, and resume back into any of them.</span></li>
+      <li><b>Accounts</b><span>One switcher and one quota view across providers. Saved accounts, one-click login swap, per-account reset windows, and usage that survives the switch.</span></li>
+      <li><b>Events</b><span>One lifecycle stream regardless of harness, so hooks, sounds, push, and the detectors all consume the same normalized shape.</span></li>
+      <li><b>Launch profiles</b><span>Per-harness and per-shell launch definitions with your own arguments, environment, and working directory, resolved per Project.</span></li>
+    </ul>
+    <p class="note">Native transcripts are never moved, rewritten, or deleted. The searchable copy
+    is a local derivative you can throw away and rebuild.</p>
+  </div>
+</section>
+
+<!-- ================================================================= NOTES -->
+<section class="sec" id="notes">
+  <div class="wrap">
+    <div class="head"><span class="n">06</span><h2>Notes that are a real editor</h2><span class="fill"></span></div>
+    <p class="intro">A proper WYSIWYG Markdown editor, built in house, not a textarea and not a
+    preview pane bolted to one. Headings, lists, tables, code blocks, chords, outline navigation,
+    find, and a formatting rail that works with a soft keyboard up. <b>Every note is an ordinary
+    Markdown file in your Project</b>, written with revision checks so two devices cannot clobber
+    each other, and gitignored by default. Select a passage and send it straight to an agent, or
+    have an agent write into the same file and watch it update. There is a global scratchpad too,
+    deliberately outside any Project, because its whole job is to survive switching between
+    them.</p>
+    <div class="crops">
+      <div class="crop d">
+        <span class="tag">desktop crop</span>
+        <p>The note editor body only, cropped out of the drawer: real rendered headings, nested
+        bullets, a table, and a fenced code block, with the outline rail visible on one side.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>The same editor on a phone with the soft keyboard up and the formatting toolbar sitting
+        above it. This is the shot that proves editing is real on mobile.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== GIT -->
+<section class="sec" id="git">
+  <div class="wrap">
+    <div class="head"><span class="n">07</span><h2>Git that knows which agent did it</h2><span class="fill"></span></div>
+    <p class="intro">Branch, HEAD, dirty count, upstream divergence, and lines changed against a
+    comparison ref you choose per Project, polled read-only so a status check never takes a lock in
+    a repository your agents are working in. Review changed files and annotate a diff line by line,
+    then send the comments back to the agent that wrote them. And every commit carries durable
+    provenance: <b>which session and which conversation produced it</b>, split into committer and
+    contributor, with a confidence level and the files each contributor's writes account for.</p>
+    <div class="crops">
+      <div class="crop d">
+        <span class="tag">desktop crop</span>
+        <p>The worktree map list alone: trunk row plus several worktree rows with branch names,
+        clean or dirty markers, ahead and behind counts, and live or locked state. Or the commit
+        log with session-attribution badges showing committer against contributor.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>The review modal on a phone: changed-file rows with counts, one expanded to a diff.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= VOICE -->
+<section class="sec" id="voice">
+  <div class="wrap">
+    <div class="head"><span class="n">08</span><h2>Drive it without touching it</h2><span class="fill"></span></div>
+    <p class="intro">Local voice activity detection and local Whisper, with a configurable wake
+    word and no audio leaving the machine. Dictate a prompt across natural pauses and send it.
+    Navigate by spoken coordinate, ask the fleet for status, approve a prompt, interrupt a run.
+    Completed replies play back as short clips you can talk over to stop, and Comms mode pins one
+    agent into a back-and-forth conversation. <b>Push notifications reach your lock screen</b> when
+    a session actually needs a person, routed to the device you are actually at.</p>
+    <div class="crops">
+      <div class="crop d">
+        <span class="tag">desktop crop</span>
+        <p>The voice overlay attached to a focused pane: the live transcript draft, the named
+        target session, and the wake-word indicator mid-listen.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>An Android lock-screen notification from swe-mux naming the session and its reason,
+        beside the phone's voice overlay with a draft staged.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================= CONTROL PLANE -->
+<section class="sec" id="control">
+  <div class="wrap">
+    <div class="head"><span class="n">09</span><h2>The control plane</h2><span class="fill"></span></div>
     <p class="intro">The agent CLIs are the data plane; they do the work. This layer observes,
     records, and routes attention without ever sitting in an agent's execution path.
-    <b>It never types, approves, spawns, or edits anything.</b></p>
+    <b>It never types, approves, spawns, or edits anything</b>, and every write path ends at a
+    human pressing something. Cost escalates one layer at a time: capture and detection are
+    deterministic and spend nothing, a model is reached for only at the last mile and under a hard
+    cap, and nothing runs at all on a Project that did not opt in.</p>
 
-    <div class="cards">
+    <div class="grouplabel">What it records <span>deterministic, no model, no tokens</span></div>
+    <ul class="flat">
+      <li><b>Tier 0 facts</b><span>Every file write hashed on the exact bytes written, every command with its exit class, test output parsed down to the failing set, git operations, tool calls. Each fact keeps a pointer back to the moment it happened.</span></li>
+      <li><b>Git provenance</b><span>Commits attributed to the session and conversation that produced them, committer against contributor, with confidence and the changed files each one accounts for.</span></li>
+      <li><b>Operational telemetry</b><span>Durable process, quota, reset, compaction, and tool evidence, plus a status timeline you can query by time range long after the incident.</span></li>
+    </ul>
 
-      <article class="card">
-        <h3><span class="ix">09</span> Attention inbox</h3>
-        <p>Findings merge into incidents and route to one of four channels split by what they cost
-        <b>you</b>: interrupt now, next breakpoint, inbox, digest. Four interrupts a day.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Inbox panel only. Must show the budget line (<code>1/4 interrupts today</code>), the
-            fan-out reading, and at least one item held back with its visible suppressed reason.
-            That last part is the whole argument.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>Two ranked items and the same budget line on a phone.</p>
-          </div>
-        </div>
-      </article>
+    <div class="grouplabel">What it notices <span>still deterministic, still free</span></div>
+    <ul class="flat">
+      <li><b>Model-free detectors</b><span>Loops with a no-progress gate, work declared done that never ran a test, documentation debt, and provenance edges. Annotations only, with the full set of facts each finding rests on attached.</span></li>
+      <li><b>Code graph</b><span>Blast radius, test gaps, dead code, import cycles, and a per-session change map. Tree-sitter parsing, not a language model.</span></li>
+      <li><b>Fleet faults</b><span>Sessions that stopped reporting, conversations two sessions both claim, transcripts that went stale underneath a running agent.</span></li>
+    </ul>
 
-      <article class="card">
-        <h3><span class="ix">10</span> Facts, not narrative</h3>
-        <p>File writes hashed on the exact bytes written, commands with exit classes, test output
-        parsed into a failing-test set, git tree hashes. Every fact keeps a pointer to its source.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>One finding expanded to its evidence set: the fact rows with kind, target, and
-            content hash, plus the source pointers. Crop to the card, not the drawer.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The same expanded finding on a phone.</p>
-          </div>
-        </div>
-      </article>
+    <div class="grouplabel">What it makes of it <span>budgeted model, hard caps, off by default</span></div>
+    <ul class="flat">
+      <li><b>Behavior timeline</b><span>A cheap model reads the conversation forward and extracts structured records, including the dead ends. Three separate gates, daily and hourly and per-run budgets, and it writes nothing at all rather than guess when the response fails validation.</span></li>
+      <li><b>Attention ranking</b><span>Findings merge into incidents and route to one of four channels by what they cost you to resolve. A hard daily interrupt budget with an hourly burst limit. Held-back items stay counted and visible with the reason they were suppressed, because a hidden item is indistinguishable from a broken detector.</span></li>
+      <li><b>Narration</b><span>One budgeted call explaining why an incident ranked, drawn as an aside beneath the deterministic summary and never in place of it.</span></li>
+    </ul>
 
-      <article class="card">
-        <h3><span class="ix">11</span> Model-free detectors</h3>
-        <p>Loop with a no-progress gate, done-claimed-without-a-test-run, doc debt, and provenance.
-        No tokens, annotations only, full evidence attached.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Findings list only: three or four annotations of different kinds with their anchors
-            and timestamps, one declared-vs-verified entry visible.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>Same list, phone width.</p>
-          </div>
-        </div>
-      </article>
+    <div class="grouplabel">What your agents can read <span>the return path</span></div>
+    <ul class="flat">
+      <li><b>An MCP endpoint per session</b><span>Registered at spawn. Agents read sibling status, run briefs, transcripts, history, Project notes, and Agent Context sources, scoped to their own Project by default and widened only when asked.</span></li>
+      <li><b>Cross-session memory</b><span>What a previous session already resolved, what it verified, and what it tried and abandoned. A new agent can find the dead end instead of walking into it.</span></li>
+      <li><b>Bounded writes</b><span>Message another session, request a spawn, interrupt, or end a run. Every one of them waits for a human by default, and refusals are typed rather than silent.</span></li>
+    </ul>
 
-      <article class="card">
-        <h3><span class="ix">12</span> Behavior timeline</h3>
-        <p>The one feature that spends tokens. Three gates, all off by default. Reports its own
-        coverage remainder and per-call spend.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>Timeline segment only: two or three scan records with behavior labels and evidence
-            targets, a rollover boundary marker, and the budget row showing tokens spent today.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>Two timeline records on a phone.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">13</span> Status you can audit</h3>
-        <p>Working, ready, awaiting approval, blocked, from hooks then transcript then PTY then CLI
-        state. Every transition written to a ledger with the readings that produced it.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>A state-log excerpt: transitions with timestamps, the layer readings beside each
-            one, and the reason string. Terminal output of the endpoint is fine if the UI view is
-            thin.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>Status badges on the mobile session rows, cropped tight, showing three different
-            states at once.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="card">
-        <h3><span class="ix">14</span> The agent's return path</h3>
-        <p>A per-session MCP endpoint, registered at spawn. Agents read sibling status, transcripts,
-        history, and what a previous session already tried and abandoned.</p>
-        <div class="crops">
-          <div class="crop d">
-            <span class="tag">desktop crop</span>
-            <p>A terminal crop of an agent calling a mux tool and getting fleet state back, or the
-            Fleet Queue showing an agent-authored message awaiting human arming.</p>
-          </div>
-          <div class="crop m">
-            <span class="tag">mobile</span>
-            <p>The Fleet Queue approval card on a phone.</p>
-          </div>
-        </div>
-      </article>
-
+    <div class="crops" style="margin-top:26px">
+      <div class="crop d">
+        <span class="tag">desktop crop</span>
+        <p>The attention inbox, on a project with ranking enabled. Must show the budget line, the
+        fan-out reading, and at least one item held back with its suppressed reason visible. An
+        empty inbox proves nothing and is the wrong screenshot.</p>
+      </div>
+      <div class="crop m">
+        <span class="tag">mobile</span>
+        <p>Two ranked items and the same budget line on a phone.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -518,56 +732,30 @@ footer .todo { color: var(--orange); }
 <!-- ================================================================== REST -->
 <section class="sec" id="rest">
   <div class="wrap">
-    <div class="head"><span class="n">04</span><h2>Also in the box</h2><span class="fill"></span></div>
+    <div class="head"><span class="n">10</span><h2>Also in the box</h2><span class="fill"></span></div>
     <ul class="flat">
-      <li><b>History and search</b><span>One row per conversation including the ones <code>/clear</code> retired. Full-text over prompts and replies, resumable. Native transcripts never modified.</span></li>
-      <li><b>Voice</b><span>Local VAD, local Whisper, configurable wake word, spoken navigation by coordinate, reply playback you can talk over to stop.</span></li>
-      <li><b>Remote access</b><span>Tailscale only. No swe-mux login, no port forwarding, no Funnel. Optional Serve for real HTTPS, which the mic and clipboard require.</span></li>
-      <li><b>Accounts and usage</b><span>Saved provider accounts with one-click login switching and per-account quota windows. Optional historical cost analytics.</span></li>
-      <li><b>Process ownership</b><span>Attribution by PID plus creation time, unioned with job-object membership, so a detached grandchild is still yours.</span></li>
-      <li><b>Diagnostics</b><span>Supervised background loops, per-loop cost accounting, event-loop lag. <code>mux doctor</code> exports the whole picture.</span></li>
+      <li><b>Process ownership</b><span>Attribution by PID plus creation time, unioned with job-object membership, so a detached grandchild is still yours. Find the dev server from Tuesday that is still holding the port, and the headless browser windows nothing else can see.</span></li>
+      <li><b>Agent environment</b><span>What skills, MCP servers, hooks, plugins, and policies this CLI is actually running right now, and whether any of it has drifted since it started. Read-only, and it never prints a hook's command line.</span></li>
+      <li><b>Agent context</b><span>Which instruction files the agent actually loads, with reversible, revision-guarded sync across harnesses so your instruction files stop disagreeing with each other.</span></li>
+      <li><b>History and resume</b><span>Every conversation, including the ones a <code>/clear</code> retired, searchable and resumable. A held-conversation marker replaces Resume when a live process still owns the row.</span></li>
+      <li><b>Remote access</b><span>Your tailnet only. No swe-mux login, no port forwarding, no Funnel, no relay. Optional HTTPS for the microphone and clipboard APIs that demand a secure context.</span></li>
+      <li><b>Usage analytics</b><span>Cost and token history by source, model, and tool, with quota windows and reset tracking per saved account.</span></li>
+      <li><b>Diagnostics</b><span>Supervised background loops with per-loop cost accounting, event-loop lag sampling, a durable state log, and <code>mux doctor</code> to export the whole picture.</span></li>
+      <li><b>Prompt library</b><span>Reusable templates, Project and global, inert until you insert one. Selection never submits.</span></li>
+      <li><b>Small things</b><span>Themes, per-device UI scale, configurable session rows, command palette, network accounting, device presence, guided onboarding, QR pairing for a phone.</span></li>
     </ul>
   </div>
 </section>
 
-<!-- ================================================================ LIMITS -->
-<section class="sec" id="limits">
-  <div class="wrap">
-    <div class="head"><span class="n">05</span><h2>What it will not do</h2><span class="fill"></span></div>
-    <ul class="rules">
-      <li><span><b>Observers never act.</b> The injection-safety endpoint always answers <code>authorized: false</code>.</span></li>
-      <li><span><b>Nothing runs on a project that did not opt in.</b> No machine-wide automations.</span></li>
-      <li><span><b>Unknown fails closed.</b> Readiness that cannot be established never authorizes input.</span></li>
-      <li><span><b>A summary is never the only copy.</b> Every derived fact points back at its source.</span></li>
-      <li><span><b>Silence never reads as absence.</b> Suppressed items are counted and shown with their reason.</span></li>
-      <li><span><b>Your provider setup is not touched.</b> Transcripts, config, and skills stay where they are.</span></li>
-      <li><span><b>Nothing leaves the machine.</b> No account, no cloud, no telemetry. Model calls only through your key, per project, against your budget.</span></li>
-      <li><span><b>It does not orchestrate.</b> No roles, no lead agents, no task decomposition. Findings are advisory.</span></li>
-    </ul>
-  </div>
-</section>
-
-<!-- ================================================================= SCOPE -->
-<section class="sec" id="scope">
-  <div class="wrap">
-    <div class="head"><span class="n">06</span><h2>Not for you if</h2><span class="fill"></span></div>
-    <ul class="flat">
-      <li><b>Not on Windows</b><span>ConPTY and Win32 job objects. WSL is not a supported host.</span></li>
-      <li><b>You want an editor</b><span>It opens files and edits Markdown. No language server, no IDE ambitions.</span></li>
-      <li><b>You want a task board</b><span>Sessions are long-lived processes, not tickets. Disposable worktree task cards are a different tool.</span></li>
-      <li><b>You want it hosted</b><span>One machine, one person, one data directory. No tenancy model.</span></li>
-      <li><b>You run one agent</b><span>Almost none of the control plane matters below about three concurrent sessions.</span></li>
-    </ul>
-  </div>
-</section>
 
 <!-- =============================================================== INSTALL -->
 <section class="sec" id="install">
   <div class="wrap">
-    <div class="head"><span class="n">07</span><h2>Install</h2><span class="fill"></span></div>
-    <p class="intro">Windows 10 or 11, <a href="https://docs.astral.sh/uv/">uv</a>, Node, WebView2
-    for desktop mode, and at least one agent CLI already installed and logged in. swe-mux does not
-    manage the agent CLIs.</p>
+    <div class="head"><span class="n">11</span><h2>Install</h2><span class="fill"></span></div>
+    <p class="intro">Windows 10 or 11 (or Linux), <a href="https://docs.astral.sh/uv/">uv</a>, Node,
+    WebView2 for desktop mode, and at least one agent CLI already installed and logged in. swe-mux
+    does not install, manage, or proxy the agent CLIs. It runs the ones you already have, on the
+    subscription you already pay for.</p>
     <div class="code">
       <button class="copy" type="button" data-copy="#c1">copy</button>
       <pre id="c1"><span class="p">$</span> uv sync --extra desktop
@@ -585,9 +773,10 @@ footer .todo { color: var(--orange); }
   <div class="wrap">
     <div class="cols">
       <div>
-        <h4>swe-mux</h4>
-        <div>Agentic dev environment and agent control plane.</div>
-        <div>Windows. Local-first. No account.</div>
+        <img class="brandmark dark" src="img/logo.png" width="640" height="73" alt="swe-mux" />
+        <img class="brandmark lite" src="img/logo-light.png" width="640" height="73" alt="swe-mux" />
+        <div>Agentic development environment and agent control plane.</div>
+        <div>Windows-first. Local-only. No account.</div>
       </div>
       <div>
         <h4>source</h4>
@@ -600,10 +789,75 @@ footer .todo { color: var(--orange); }
         <div>Olsen &amp; Goodrich, fan-out from neglect time</div>
       </div>
     </div>
+    <p class="colophon"><span class="h">#</span> A multiplexer. For software engineers.
+    The name is not doing anything clever.</p>
   </div>
 </footer>
 
 <script>
+/* ------------------------------------------------------------------ theme */
+(function () {
+  var btn = document.getElementById('themebtn');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    document.querySelector('meta[name=color-scheme]').setAttribute('content', t);
+  }
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    apply(next);
+    try { localStorage.setItem('swemux-theme', next); } catch (e) {}
+  });
+})();
+
+/* ---------------------------------------------------------------- install */
+(function () {
+  var M = {
+    powershell: {
+      cmd: 'irm https://get.swe-mux.dev/install.ps1 | iex',
+      os: ['windows'],
+      note: 'Windows 10 or 11. Installs the desktop app, the daemon, and the <code>mux</code> CLI.'
+    },
+    curl: {
+      cmd: 'curl -fsSL https://get.swe-mux.dev/install.sh | sh',
+      os: ['linux'],
+      note: 'Installs the daemon and the <code>mux</code> CLI. Open the browser UI on <code>127.0.0.1:8765</code>.'
+    },
+    uv: {
+      cmd: 'uv tool install swe-mux',
+      os: ['windows', 'linux'],
+      note: 'If you already run <a href="https://docs.astral.sh/uv/">uv</a>. Add <code>--extra desktop</code> on Windows for the tray app.'
+    },
+    source: {
+      cmd: 'git clone https://github.com/REPLACE/swe-mux',
+      os: ['windows', 'linux'],
+      note: 'Then <code>uv sync --extra desktop</code> and <code>npm --prefix frontend ci &amp;&amp; npm --prefix frontend run build</code>. Full steps below.'
+    }
+  };
+  var cmdEl = document.getElementById('iccmd');
+  var noteEl = document.getElementById('icnote');
+  var osEls = document.querySelectorAll('.ic-os span');
+  var tabs = document.querySelectorAll('.ic-tab');
+
+  function select(name) {
+    var m = M[name];
+    if (!m) return;
+    cmdEl.textContent = m.cmd;
+    noteEl.innerHTML = m.note;
+    tabs.forEach(function (t) { t.setAttribute('aria-selected', String(t.dataset.m === name)); });
+    osEls.forEach(function (s) { s.classList.toggle('on', m.os.indexOf(s.dataset.os) !== -1); });
+  }
+  tabs.forEach(function (t) { t.addEventListener('click', function () { select(t.dataset.m); }); });
+
+  document.getElementById('iccopy').addEventListener('click', function (b) {
+    var el = document.getElementById('iccopy');
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(cmdEl.textContent).then(function () {
+      el.textContent = 'copied';
+      setTimeout(function () { el.textContent = 'copy'; }, 1300);
+    });
+  });
+})();
+
 document.querySelectorAll('.copy').forEach(function (b) {
   b.addEventListener('click', function () {
     var el = document.querySelector(b.getAttribute('data-copy'));
