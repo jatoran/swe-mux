@@ -1,4 +1,5 @@
 import { serverNow } from './serverClock.ts'
+import { sessionDisplayName } from './sessionNames.ts'
 import type { Project, Session } from './types.ts'
 import type { VoiceSessionAddress } from './voiceNavigation.ts'
 
@@ -90,6 +91,6 @@ export function fleetRundownDetail(
     const freshness = item.activity.ageSeconds < 2 ? 'now' : `${item.activity.ageSeconds} seconds ago`
     const address=addressing?.addressFor(item)
     const project=addressing?.compound&&address?`Project ${address.projectNumber}, `:''
-    return `${index?'Next session. ':''}${project}Session ${address?.sessionNumber??index+1}. Name, ${item.session.name}. Project, ${item.projectName}. Status,${reason}. Observed ${freshness} from ${item.state.source}.`
+    return `${index?'Next session. ':''}${project}Session ${address?.sessionNumber??index+1}. Name, ${sessionDisplayName(item.session)}. Project, ${item.projectName}. Status,${reason}. Observed ${freshness} from ${item.state.source}.`
   }).join(' ')} End of detailed fleet status.`
 }

@@ -38,7 +38,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
-from . import git_review
+from . import git_review, session_titles
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -4613,7 +4613,11 @@ async def _decorate_generated_titles(app: web.Application, items: list[dict[str,
     }
     if not run_ids:
         return
-    annotations = await app["automation_store"].annotations(tag="title", limit=1000)
+    # Filtered by run id, not swept off the newest N: a page of old History rows would
+    # otherwise fall outside the window and render as never having been titled.
+    annotations = await app["automation_store"].annotations(
+        agent_run_ids=sorted(run_ids), tag="title", limit=1000
+    )
     by_run: dict[str, dict[str, Any]] = {}
     for annotation in annotations:
         run_id = str(annotation["agent_run_id"])
@@ -10559,10 +10563,73 @@ async def git_provenance(request: web.Request) -> web.Response:
         commit_oids=commit_oids or None,
         limit=limit,
     )
+    await _decorate_provenance_identity(request.app, items)
     # `items` stays one row per session per commit, which is what each piece of
     # evidence is about. `commits` answers the reader's question — who made this
     # commit and whose work is in it — without a second round trip.
     return json_response({"items": items, "commits": summarize_git_provenance(items)})
+
+
+async def _decorate_provenance_identity(
+    app: web.Application, items: list[dict[str, Any]]
+) -> None:
+    """Add the session's *current* display name and History row to provenance rows.
+
+    `session_name` on a provenance row is durable evidence: it is what the session was
+    called when the commit was observed, and rewriting it would corrupt the ledger. It
+    is also the wrong thing to show, because the reader is looking at a fleet whose
+    sessions are named by the sidebar's rule — a row still reading `claude-0e7d93`
+    after a title arrived names a session nobody can find.
+
+    So both travel: `session_name` stays untouched, `display_name` is resolved live
+    (session manager first, History second, the snapshot last), and `history_id` is
+    the row the History browser opens for an ended session. A row whose session left
+    no History behind keeps the snapshot and gets no `history_id`, which is what makes
+    the click a no-op instead of a dead end.
+    """
+    if not items:
+        return
+    manager: SessionManager = app["sessions"]
+    lookup_ids: set[str] = set()
+    for item in items:
+        session_id = str(item.get("session_id") or "")
+        run_id = str(item.get("agent_run_id") or "")
+        if session_id and session_id not in manager.sessions:
+            lookup_ids.add(session_id)
+            if run_id:
+                lookup_ids.add(run_id)
+    rows = await app["history"].history_naming_rows(sorted(lookup_ids))
+    run_ids = {
+        session_titles.record_run_id(session.record)
+        for session in manager.sessions.values()
+    }
+    run_ids |= {session_titles.row_run_id(row) for row in rows.values()}
+    titles = await session_titles.generated_titles(app["automation_store"], run_ids)
+    unresolved = 0
+    for item in items:
+        session_id = str(item.get("session_id") or "")
+        run_id = str(item.get("agent_run_id") or "")
+        live = manager.sessions.get(session_id)
+        if live is not None:
+            item["display_name"] = session_titles.record_display_name(live.record, titles)
+            item["history_id"] = session_titles.record_run_id(live.record)
+            continue
+        # The run row is the exact conversation; the session row is the fallback for
+        # provenance captured before a run id existed.
+        row = rows.get(run_id) or rows.get(session_id)
+        if row is None:
+            item["display_name"] = str(item.get("session_name") or "")
+            unresolved += 1
+            continue
+        item["display_name"] = session_titles.row_display_name(row, titles)
+        item["history_id"] = row["id"]
+    if unresolved:
+        log.debug(
+            "git provenance: %d of %d rows have no live session or History row; "
+            "showing the recorded name",
+            unresolved,
+            len(items),
+        )
 
 
 async def git_commit_changes(request: web.Request) -> web.Response:

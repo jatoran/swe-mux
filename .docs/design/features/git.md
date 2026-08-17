@@ -178,6 +178,25 @@ uncommitted work together.
 ## Git drawer tab
 
 - The Project-scoped Git tab has Map, Log, and Provenance readings of one repository.
+- The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
+
+### Reaching a session from the repository
+
+- Every place the tab names a session is a link to that session, in all three views: a worktree's live occupants, a commit's session links, and the provenance ledger.
+- One destination rule serves all three, decided by the session's own liveness rather than by which view named it.
+  A live session is focused in its pane, activating an already-open tab instead of duplicating it.
+  Anything ended goes to its History conversation, which is where its work now is.
+  An entry with neither is inert and says so, rather than offering a click that resolves to nothing.
+- Lists open at the pointer, so the row that was pressed stays visible and identifiable.
+  The list is a dismiss level of its own, so back and Escape close it rather than the drawer under it.
+- A session is named by the same rule as the sidebar and the tab strip, so one session has one name everywhere.
+  The daemon resolves the current name for every provenance row: from the live session when the fleet still holds it, from the row's History conversation otherwise.
+
+### Worktree occupancy
+
+- A worktree's live-session count excludes ended sessions, whose processes no longer occupy the checkout and therefore no longer block a worktree removal.
+  A session still starting up does occupy it.
+- The count is a control rather than a label: it opens that worktree's sessions at the pointer, and it is a sibling of the row's expand button rather than a span inside it.
 - Map reports every registered worktree, its exact root, checked-out branch or detached commit, locks, prune warnings, live-session attribution, local changes, and comparison-ref changes.
 - A prunable worktree is unmeasured and shown as unavailable rather than clean.
   Overview measurement first requires Git's reported top-level to equal the exact listed root, so a broken nested worktree cannot inherit status from an enclosing checkout.
@@ -225,11 +244,16 @@ uncommitted work together.
 - A merge commit permits selecting another actual parent and caches immutable summaries by full commit and parent OID.
 - A root commit uses Git's initial-commit comparison support and has no hardcoded empty-tree object ID.
 - Commits with recorded provenance show their session-link count in the collapsed row and the associated session, role, confidence, and contributed files when expanded.
+  The count is a control rather than a label: it opens the commit's sessions at the pointer without expanding the commit, and it is a sibling of the expand button rather than a span inside it, because interactive content nested in a button is neither valid nor reliably clickable.
 
 ### Provenance ledger
 
 - Provenance lists durable session-to-commit associations newest first for the selected Project.
 - Each row shows the short commit OID, copied subject, session label, run-id prefix, what the session did (committed, amended, wrote N files in it, or was in the checkout), confidence, the contributed file paths, checkout root, and first observation time.
+- A row carries two names and keeps them apart.
+  `session_name` is durable evidence: what the session was called when the commit was observed, never rewritten by a later read.
+  `display_name` is what that session is called now, resolved on read so a reader sees the name the rest of the app uses.
+  `history_id` names the conversation to open, and is absent for a session with no History row rather than pointing at one that does not exist.
 - Ambiguous rows state which of the two named cases applies: concurrent commits in one window, or a reference that moved many commits at once.
 - The ledger accepts any evidence source rather than an allowlist of them.
   An allowlist silently discarded every imported row, whose source is a compound `transcript_backfill:<method>`.
@@ -335,6 +359,8 @@ and provider-managed worktrees may live outside that root.
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
 - Routes: `src/swe_mux/server.py`
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`
+- Display-name resolution shared by every surface that names a session: `src/swe_mux/session_titles.py`, `frontend/src/sessionNames.ts`
 - Drawer Map, Log, Provenance ledger, Run launcher, and defensive response parsing: `frontend/src/GitTab.tsx`, `frontend/src/gitWorktrees.ts`, `frontend/src/ProjectRunMenu.tsx`, `frontend/src/worktreeLaunch.ts`
+- Session-link list and its destination rule: `frontend/src/GitSessionLinks.tsx`
 - Shared file rows, lazy renderer, modal, and pure review state: `frontend/src/GitFileRow.tsx`, `frontend/src/LazyGitDiff.tsx`, `frontend/src/GitDiffView.tsx`, `frontend/src/GitReviewModal.tsx`, `frontend/src/gitReview.ts`
 - Pane-header chip and the `mux:git-changed` re-dispatch: `frontend/src/App.tsx`

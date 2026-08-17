@@ -1,5 +1,8 @@
+import type { JSX } from 'preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api, type ApiError } from './api'
+import { GitSessionLinks, sessionLinkDestination, type SessionLinkItem, type SessionLinkMenu } from './GitSessionLinks'
+import { sessionDisplayName } from './sessionNames'
 import {
   isAbsolutePath,
   graphDecorations,
@@ -72,6 +75,10 @@ type Props={
   onOpenWorktreeFile:(worktree:string,path:string)=>void
   onSendToAgent?:(request:SendToAgentRequest)=>void
   onProjectUpdated:(project:Project)=>void
+  /** Focus a live session: activates its open tab, or opens one in the focused pane. */
+  onOpenSession:(sessionId:string)=>void
+  /** Read an ended session's conversation, which is where its work now lives. */
+  onOpenHistory:(historyId:string)=>void
 }
 
 type ReviewState={files:ReviewFileChange[];locator:ReviewLocator;initialPath:string;truncated:boolean;provenance:GitProvenance[]}
@@ -91,8 +98,9 @@ function ReviewGroup(props:{
   </section>
 }
 
-export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToAgent,onProjectUpdated}:Props) {
+export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToAgent,onProjectUpdated,onOpenSession,onOpenHistory}:Props) {
   const [view,setView]=useState<GitView>('map')
+  const [links,setLinks]=useState<SessionLinkMenu|null>(null)
   const [overview,setOverview]=useState<GitWorktreeOverview|null>(null)
   const [graph,setGraph]=useState<GitGraph|null>(null)
   const [provenance,setProvenance]=useState<GitProvenance[]>([])
@@ -183,11 +191,63 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     finally{setBusy(false)}
   }
   const openFor=(root:string,path:string)=>normalizePath(root)===normalizePath(project.root)?onOpenFile(path):onOpenWorktreeFile(root,path)
+  // An ended session is not an occupant: its process is gone, so it neither uses the
+  // checkout nor belongs under a "live" count, and it cannot block a worktree removal.
+  // A pending one does occupy it — it is starting up in that directory.
+  const isEnded=(session:Session)=>session.state==='exited'||session.state==='crashed'
   const sessionsFor=(root:string)=>sessions.filter(session=>{
-    if(session.project_id!==project.id)return false
+    if(session.project_id!==project.id||isEnded(session))return false
     const cwd=normalizePath(sessionGitCwd(session)),worktree=normalizePath(root)
     return cwd===worktree||cwd.startsWith(`${worktree}/`)
   })
+  // Live sessions win over the row's own name even though the daemon already resolved
+  // one: a rename lands in this array immediately, while provenance is refetched only
+  // when Git changes, and the drawer would otherwise show the old name until it did.
+  const liveById=new Map(sessions.map(session=>[session.id,session]))
+  const provenanceName=(item:GitProvenance)=>{
+    const live=liveById.get(item.sessionId)
+    return live?sessionDisplayName(live):item.displayName||item.sessionName
+  }
+  const provenanceLinks=(entries:GitProvenance[]):SessionLinkItem[]=>entries.map(item=>({
+    key:item.id,
+    label:provenanceName(item),
+    detail:provenanceRoleLabel(item),
+    session:liveById.get(item.sessionId)||null,
+    // The daemon resolves the exact History row; the run/session id is the fallback for
+    // a row it could not resolve, and History reports a miss rather than failing silently.
+    historyId:item.historyId||item.agentRunId||item.sessionId,
+  }))
+  const worktreeLinks=(occupants:Session[]):SessionLinkItem[]=>occupants.map(session=>({
+    key:session.id,
+    label:sessionDisplayName(session)||session.id,
+    detail:session.git?.branch||undefined,
+    session,
+    historyId:session.agent_run_id||session.id,
+  }))
+  /** Open the list at the pointer, or under the control when a keyboard opened it. */
+  const openLinks=(event:JSX.TargetedMouseEvent<HTMLElement>,title:string,items:SessionLinkItem[])=>{
+    event.stopPropagation()
+    const rect=event.currentTarget.getBoundingClientRect()
+    setLinks({title,x:event.clientX||rect.left,y:event.clientY||rect.bottom,items})
+  }
+  /** One rule for every session link here: a running session is a pane, anything else
+   *  is the conversation it left behind. */
+  const followLink=(item:SessionLinkItem)=>{
+    const destination=sessionLinkDestination(item)
+    if(destination==='session'&&item.session)onOpenSession(item.session.id)
+    else if(destination==='history'&&item.historyId)onOpenHistory(item.historyId)
+  }
+  /** The session's name in a provenance row, as the link to that session. */
+  const provenanceSessionButton=(item:GitProvenance)=>{
+    const link=provenanceLinks([item])[0]
+    const destination=sessionLinkDestination(link)
+    return <button
+      class="git-session-open"
+      disabled={destination==='none'}
+      title={destination==='session'?`Open ${link.label}`:destination==='history'?`Read ${link.label} in History`:'This session left no conversation behind'}
+      onClick={()=>followLink(link)}
+    >{link.label}</button>
+  }
   const startReview=(summary:ReviewChangeSummary,locator:ReviewLocator,file:ReviewFileChange,commitProvenance:GitProvenance[]=[])=>setReview({files:summary.files,locator,initialPath:file.path,truncated:summary.truncated,provenance:commitProvenance})
   const loadCommit=async(oid:string,parent?:string)=>{
     const key=`${oid}:${parent||''}`
@@ -223,8 +283,13 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
   return <div class="git-tab git-review-tab">
     <div class="git-toolbar">
       <div class="git-view-toggle" role="tablist" aria-label="Git view"><button class={view==='map'?'active':''} onClick={()=>setView('map')}>Map</button><button class={view==='log'?'active':''} onClick={()=>setView('log')}>Log</button><button class={view==='provenance'?'active':''} onClick={()=>setView('provenance')}>Provenance</button></div>
-      <button disabled={busy} onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map')void refresh();else if(view==='log')void refreshGraph(graphLimit);void refreshProvenance()}}>↻ Refresh</button>
-      {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
+      {/* Right-aligned as a group: the view switch is what the eye returns to, and the
+          actions belong at the opposite edge rather than crowding it. The refresh control
+          is its glyph alone, so it keeps an explicit accessible name. */}
+      <div class="git-toolbar-actions">
+        <button class="git-refresh" disabled={busy} aria-label="Refresh" title="Refresh" onClick={()=>{window.dispatchEvent(new Event('mux:git-review-refresh'));if(view==='map')void refresh();else if(view==='log')void refreshGraph(graphLimit);void refreshProvenance()}}>↻</button>
+        {view==='map'&&<button onClick={()=>setAdding(value=>!value)}>+ worktree</button>}
+      </div>
     </div>
     {overview&&<div class="git-compare"><label>COMPARE <select disabled={busy} value={compareOverride} onChange={event=>void saveComparison(event.currentTarget.value)}><option value="">Auto{overview.comparison.available?` (${overview.comparison.display})`:''}</option>{compareOverride&&!overview.comparison.candidates.includes(compareOverride)&&<option value={compareOverride}>{compareOverride} (unavailable)</option>}{overview.comparison.candidates.map(ref=><option value={ref}>{ref}</option>)}</select></label><small>{comparisonSourceLabel(overview.comparison)}</small></div>}
     {error&&<p class="git-state error" role="alert">{error}</p>}
@@ -238,12 +303,23 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
         const removalBlocked=tree.locked!==null||attached.length>0
         const worktreeName=pathTail(tree.path),identityQualifier=tree.main?'main tree':worktreeName!==tree.branch?worktreeName:''
         return <article class="git-map-row" key={tree.path}>
-          <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
-            <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
-            <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
-            <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{attached.length>0&&<em class="live">{attached.length} live</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
-            <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
-          </button>
+          {/* The live count is a sibling of the expand button, not a span inside it: it is
+              its own affordance now, and interactive content nested in a button is neither
+              valid nor reliably clickable. */}
+          <div class="git-map-head">
+            <button class="git-map-summary" aria-expanded={expanded} onClick={()=>setExpandedTree(expanded?'':tree.path)}>
+              <span class={`git-map-rail ${tree.main?'main':''}`} aria-hidden="true">{tree.main?'●':'○'}</span>
+              <span class="git-map-identity"><strong class={tree.detached?'detached':''}>{tree.branch||`detached @ ${shortSha(tree.head)}`}</strong>{identityQualifier&&<small>{identityQualifier}</small>}</span>
+              <span class="git-map-metrics">{localMeasured&&total===0&&<em class="clean">clean</em>}{localMeasured&&total>0&&<em class="local">{total} local</em>}{!localMeasured&&<em class="warn">unavailable</em>}{tree.comparisonCounts?.ahead?<em class="ahead">{tree.comparisonCounts.ahead} ahead</em>:null}{tree.comparisonCounts?.behind?<em>{tree.comparisonCounts.behind} behind</em>:null}{upstream&&<em class="diverged">upstream {upstream.ahead?`↑${upstream.ahead}`:''}{upstream.behind?` ↓${upstream.behind}`:''}</em>}{tree.locked!==null&&<em class="warn">locked</em>}{tree.prunable!==null&&<em class="warn">prunable</em>}</span>
+              <span class="git-map-chevron" aria-hidden="true">{expanded?'−':'+'}</span>
+            </button>
+            {attached.length>0&&<button
+              class="git-map-live"
+              aria-haspopup="menu"
+              title={`${attached.length} live session${attached.length===1?'':'s'} in this worktree`}
+              onClick={event=>openLinks(event,`${pathTail(tree.path)} · live sessions`,worktreeLinks(attached))}
+            >{attached.length} live</button>}
+          </div>
           {expanded&&<div class="git-map-detail"><p class="git-map-path">{tree.path}</p>
             {tree.prunable!==null&&<p class="git-change-empty">Git cannot use this checkout: {tree.prunable||'the worktree registration is prunable'}.</p>}
             {tree.conflicted&&tree.conflicted.total>0&&<ReviewGroup id={`${tree.path}:conflicted`} title="CONFLICTS" summary={tree.conflicted} projectId={project.id} locator={{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null}} openRoot={tree.path} preview={preview[`${tree.path}:conflicted`]||''} onPreview={value=>setPreview(current=>({...current,[`${tree.path}:conflicted`]:value}))} onReview={file=>startReview(tree.conflicted!,{scope:'conflicted',worktree:tree.path,commit:null,parent:null,comparisonRef:null},file)} onOpen={file=>openFor(tree.path,file.path)}/>}
@@ -264,15 +340,25 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
          const parent=parentByCommit[line.oid]??line.parents[0]??'',key=`${line.oid}:${parent}`,changes=commitCache.get(key),expanded=expandedCommit===line.oid
          const commitProvenance=provenanceByCommit.get(line.oid)||[]
          const lane=graphNodeLane(line.graph),decorations=graphDecorations(line,overview)
-         return <article class="git-graph-row git-review-commit" key={line.oid}><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph} commit/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span>{decorations.length>0&&<span class="git-commit-refs">{decorations.map((item,refIndex)=><em class={`${item.kind} lane-${lane}`} title={item.title} key={`${item.kind}:${item.label}:${refIndex}`}>{item.label}</em>)}</span>}<small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}{commitProvenance.length?` · ${commitProvenance.length} session link${commitProvenance.length===1?'':'s'}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
+         return <article class="git-graph-row git-review-commit" key={line.oid}><div class="git-commit-head"><button class="git-commit-summary" aria-expanded={expanded} onClick={()=>toggleCommit(line.oid)}><GraphGlyph value={line.graph} commit/><span class="git-commit"><span class="git-commit-title"><strong>{shortSha(line.oid)}</strong><span>{line.subject}</span></span>{decorations.length>0&&<span class="git-commit-refs">{decorations.map((item,refIndex)=><em class={`${item.kind} lane-${lane}`} title={item.title} key={`${item.kind}:${item.label}:${refIndex}`}>{item.label}</em>)}</span>}<small>{line.author}{line.committedAt?` · ${committedLabel(line.committedAt)}`:''}</small></span><span>{expanded?'−':'+'}</span></button>
+          {/* Outside the expand button on purpose: a commit's sessions are reachable
+              without first expanding it, and a button cannot contain another. */}
+          {commitProvenance.length>0&&<button
+            class="git-commit-links"
+            aria-haspopup="menu"
+            title={`${commitProvenance.length} session${commitProvenance.length===1?'':'s'} linked to ${shortSha(line.oid)}`}
+            onClick={event=>openLinks(event,`${shortSha(line.oid)} · session links`,provenanceLinks(commitProvenance))}
+          >{commitProvenance.length} session link{commitProvenance.length===1?'':'s'}</button>}
+          </div>
           {/* The summary row can only ever show one elided line of the subject, so the whole
               message - subject, blank line, body - is reproduced here. `pre-wrap` because a
               commit message is pre-formatted prose: its own hard wraps and paragraph breaks
               are part of what was written, and only the over-long line needs the browser. */}
-          {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}><strong>{item.sessionName}</strong><span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
+          {expanded&&<div class="git-commit-detail">{commitProvenance.length>0&&<div class="git-provenance-links">{commitProvenance.map(item=><p key={item.id}>{provenanceSessionButton(item)}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span>{item.contributedPaths.length>0&&<small title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,3).join(', ')}{item.contributedPaths.length>3?` +${item.contributedPaths.length-3}`:''}</small>}</p>)}</div>}{commitBusy&&!changes&&<p>Loading commit changes…</p>}{commitError&&!changes&&<p class="error">{commitError}</p>}{changes&&<>{changes.message&&<pre class="git-commit-message">{changes.message}</pre>}<div class="git-commit-parent"><span>{changes.parentLabel}</span>{changes.parents.length>1&&<select aria-label="Comparison parent" value={changes.parent||''} onChange={event=>changeParent(line.oid,event.currentTarget.value)}>{changes.parents.map((oid,index)=><option value={oid}>{index===0?`first parent ${shortSha(oid)}`:shortSha(oid)}</option>)}</select>}</div><ReviewGroup id={`commit:${key}`} title="COMMIT CHANGES" summary={changes.summary} projectId={project.id} locator={{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null}} openRoot={project.root} preview={preview[`commit:${key}`]||''} onPreview={value=>setPreview(current=>({...current,[`commit:${key}`]:value}))} onReview={file=>startReview(changes.summary,{scope:'commit',worktree:null,commit:changes.commit,parent:changes.parent,comparisonRef:null},file,commitProvenance)} onOpen={file=>onOpenFile(file.path)}/></>}</div>}
         </article>
     })())}{graph.hasMore&&graphLimit<GRAPH_MAX&&<button class="git-load-more" onClick={()=>{const next=Math.min(GRAPH_MAX,graphLimit+GRAPH_STEP);setGraphLimit(next);void refreshGraph(next)}}>Load more commits</button>}</section></>}</>}
-    {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">{provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}{!provenanceError&&provenance.length===0?<p class="git-state">No session-to-commit associations recorded yet.</p>:provenance.map(item=><article key={item.id}><div><strong>{shortSha(item.commitOid)}</strong><span>{item.subject||'Commit observed without readable metadata'}</span></div><p><strong>{item.sessionName}</strong>{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span></p>{item.contributedPaths.length>0&&<small class="git-provenance-paths" title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,4).join(', ')}{item.contributedPaths.length>4?` +${item.contributedPaths.length-4} more`:''}</small>}<small>{item.worktreeRoot} · observed {new Date(item.observedAt*1000).toLocaleString()}</small>{item.ambiguous&&<em>{provenanceAmbiguityNote(item)}</em>}</article>)}</section>}
+    {view==='provenance'&&<section class="git-provenance" aria-label="Session Git provenance">{provenanceError&&<p class="git-state error" role="alert">{provenanceError}</p>}{!provenanceError&&provenance.length===0?<p class="git-state">No session-to-commit associations recorded yet.</p>:provenance.map(item=><article key={item.id}><div><strong>{shortSha(item.commitOid)}</strong><span>{item.subject||'Commit observed without readable metadata'}</span></div><p>{provenanceSessionButton(item)}{item.agentRunId&&<code title={`Agent run ${item.agentRunId}`}>{item.agentRunId.slice(0,8)}</code>}<span class={`git-provenance-role ${item.role}`}>{provenanceRoleLabel(item)}</span><span class={`git-provenance-confidence ${item.confidence}`}>{item.confidence}</span></p>{item.contributedPaths.length>0&&<small class="git-provenance-paths" title={item.contributedPaths.join('\n')}>{item.contributedPaths.slice(0,4).join(', ')}{item.contributedPaths.length>4?` +${item.contributedPaths.length-4} more`:''}</small>}<small>{item.worktreeRoot} · observed {new Date(item.observedAt*1000).toLocaleString()}</small>{item.ambiguous&&<em>{provenanceAmbiguityNote(item)}</em>}</article>)}</section>}
     {review&&<GitReviewModal project={project} repositoryRoot={overview?.repository.root||project.root} files={review.files} locator={review.locator} initialPath={review.initialPath} truncated={review.truncated} provenance={review.provenance} onClose={()=>setReview(null)} onOpenFile={openFor} onSendToAgent={onSendToAgent}/>}
+    {links&&<GitSessionLinks menu={links} onClose={()=>setLinks(null)} onFollow={followLink}/>}
   </div>
 }
