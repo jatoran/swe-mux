@@ -2279,9 +2279,12 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .note-open-as-tab{flex:none;align-self:stretch;min-width:26px;padding:0 7px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
 .note-open-as-tab:hover,.note-open-as-tab:focus-visible{background:var(--panel);color:var(--text)}
 .note-delete{flex:none;align-self:stretch;min-width:26px;padding:0 7px;border:0;border-left:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;cursor:pointer}
-.note-delete:hover,.note-delete:focus-visible{background:color-mix(in srgb,var(--red) 10%,var(--panel));color:var(--red)}
+.note-delete:hover:not(:disabled),.note-delete:focus-visible:not(:disabled){background:color-mix(in srgb,var(--red) 10%,var(--panel));color:var(--red)}
 .note-delete.confirming{min-width:54px;padding:0 6px;background:color-mix(in srgb,var(--red) 18%,var(--panel));color:var(--red)}
 .note-delete:disabled{opacity:.55;cursor:progress}
+/* Disabled means "in flight" everywhere else here; a Project's last note is disabled
+   because the rule forbids it, which is a different pointer and a different feeling. */
+.note-delete.protected{opacity:.35;cursor:not-allowed}
 .project-note-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:stretch}
 .project-note-row>.note-delete,.project-note-row>.note-open-as-tab{border-bottom:1px solid var(--line)}
 .note-row-menu button.confirming{width:100%}

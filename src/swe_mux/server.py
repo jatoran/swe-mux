@@ -170,6 +170,7 @@ from .project_files import (
     ObservationsUnreadableError,
     ProjectFileRevisionConflict,
     ProjectImageUnavailable,
+    ProjectNoteProtected,
     ProjectResourceExists,
     append_observation,
     create_note,
@@ -477,6 +478,11 @@ async def error_middleware(request: web.Request, handler: Handler) -> web.Stream
         return json_response({"error": str(exc), "code": "image_unavailable"}, 415)
     except ProjectResourceExists as exc:
         return json_response({"error": str(exc), "code": "resource_exists"}, 409)
+    except ProjectNoteProtected as exc:
+        # A policy refusal, not a malformed request: the note exists and the
+        # caller's revision was current. The browser branches on the code to
+        # explain the rule rather than reporting a failed delete.
+        return json_response({"error": str(exc), "code": "note_protected"}, 409)
     except (ValueError, TypeError, ProviderAccountError) as exc:
         return json_response({"error": str(exc)}, 400)
     except Exception:
@@ -3902,10 +3908,11 @@ async def delete_project_note(request: web.Request) -> web.Response:
             return json_response({"error": str(exc), "code": "revision_conflict"}, 409)
         raise
     log.info(
-        "project note deleted project_id=%s note_id=%s bytes=%d",
+        "project note deleted project_id=%s note_id=%s bytes=%d trashed=%s",
         project.id,
         note_id,
         result["bytes"],
+        result["trashed_path"],
     )
     await request.app["events"].emit(
         "note_changed",
@@ -3915,7 +3922,14 @@ async def delete_project_note(request: web.Request) -> web.Response:
         note_id=note_id,
         revision="missing",
     )
-    return json_response({"deleted": True, "project_id": project.id, "note_id": note_id})
+    return json_response(
+        {
+            "deleted": True,
+            "project_id": project.id,
+            "note_id": note_id,
+            "trashed_path": result["trashed_path"],
+        }
+    )
 
 
 def _observations_project(request: web.Request):  # type: ignore[no-untyped-def]

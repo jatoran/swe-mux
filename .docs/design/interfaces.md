@@ -319,6 +319,14 @@ The historical initial note remains at `.swe-mux/notes/project.md`; additional n
 Non-empty legacy session notes migrate into this collection and their source files move to the
 recoverable `.swe-mux/notes/legacy/` tree.
 
+`DELETE /projects/{project_id}/notes/{note_id} {revision}` retires one note rather than
+erasing it: the file moves to `.swe-mux/notes/trash/` and the response carries
+`{deleted, project_id, note_id, trashed_path}`.
+A stale revision is `409 revision_conflict`, as with a write.
+A Project's last note is refused with `409 note_protected` and is not moved; a Project always
+keeps at least one note, which is a rule about the collection and not about the seeded
+`project.md`.
+
 `GET /global-notes/scratchpad` returns the fixed global Scratchpad.
 Before the first save it returns an editable `missing` payload with empty Markdown and revision `missing` without creating a file.
 `PUT /global-notes/scratchpad {markdown, revision}` writes `<data_dir>/notes/items/scratchpad.md` with the same 1 MiB body limit and optimistic revision contract as Project notes.

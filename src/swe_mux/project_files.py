@@ -124,6 +124,10 @@ class ProjectResourceExists(ValueError):
     """An exclusive Project file/folder create collided with an existing entry."""
 
 
+class ProjectNoteProtected(ValueError):
+    """A Project keeps at least one note, so its final note cannot be deleted."""
+
+
 def revision(data: bytes | None) -> str:
     return hashlib.sha256(data or b"").hexdigest()[:24] if data is not None else "missing"
 
@@ -454,12 +458,19 @@ def _note_mtime(path: Path) -> float:
         return 0
 
 
+def _move_note_aside(destination: Path, path: Path) -> Path:
+    """Move one note file to a recoverable location without overwriting anything there."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        destination = destination.with_name(
+            f"{destination.stem}-{uuid.uuid4().hex[:8]}{destination.suffix}"
+        )
+    os.replace(path, destination)
+    return destination
+
+
 def _archive_legacy_note(root: Path, path: Path, category: str) -> None:
-    archive = root / ".swe-mux" / "notes" / "legacy" / category / path.name
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    if archive.exists():
-        archive = archive.with_name(f"{archive.stem}-{uuid.uuid4().hex[:8]}{archive.suffix}")
-    os.replace(path, archive)
+    _move_note_aside(root / ".swe-mux" / "notes" / "legacy" / category / path.name, path)
 
 
 def migrate_legacy_notes(
@@ -544,6 +555,23 @@ def migrate_legacy_notes(
             archived_empty,
         )
     return {"migrated": migrated, "archived_empty": archived_empty}
+
+
+def project_note_count(root: str | Path) -> int:
+    """Count the Project's note files without reading, migrating, or capping them.
+
+    `project_note_summaries` answers the same question, but only by reading and
+    bounding every file to build a listing. Deletion needs one number, and it
+    needs the untruncated one: the summary cap would make a Project past the cap
+    look like it had exactly that many notes.
+    """
+    notes_root = Path(root).resolve() / ".swe-mux" / "notes"
+    total = 1 if (notes_root / "project.md").is_file() else 0
+    try:
+        total += sum(1 for path in (notes_root / "items").glob("*.md") if path.is_file())
+    except OSError:
+        pass
+    return total
 
 
 def project_note_summaries(
@@ -1722,20 +1750,38 @@ async def delete_note(
     *,
     project: ProjectIdentity | None = None,
 ) -> dict[str, Any]:
-    """Delete one note only if the caller observed its current revision."""
+    """Retire one note into the Project's note trash, only at its observed revision.
+
+    Deletion is recoverable rather than forbidden. The file moves into
+    `.swe-mux/notes/trash/` instead of being unlinked, which is what makes an
+    ordinary two-click delete safe enough to offer from a tab the user is
+    reading. The whole `notes/` tree is Git-ignored and Project-local, so the
+    retained copy costs nothing and leaks nowhere.
+
+    The single refusal is a Project's last note. Protecting one *particular*
+    note instead - the seeded `project.md` - would be invisible in a rail where
+    it stays renameable and looks like every other tab, so the rule is about the
+    collection rather than about one member of it.
+    """
     current = await read_note(cwd, identity, project=project)
     if current["revision"] != expected_revision:
         raise ValueError("note changed externally; reload before deleting")
     if not current["exists"]:
         raise ValueError("note does not exist")
+    project_root = Path(str(current["project"]["root"]))
+    if project_note_count(project_root) <= 1:
+        raise ProjectNoteProtected(
+            "a Project keeps at least one note; rename or empty this one instead"
+        )
     path = Path(current["path"])
     try:
-        path.unlink()
+        trashed = _move_note_aside(project_root / ".swe-mux" / "notes" / "trash" / path.name, path)
     except FileNotFoundError as exc:
         raise ValueError("note changed externally; reload before deleting") from exc
     return {
         "deleted": True,
         "path": str(path),
+        "trashed_path": str(trashed),
         "bytes": int(current.get("bytes") or 0),
         "revision": expected_revision,
     }

@@ -288,7 +288,11 @@
   The header is stripped on read and rebuilt on save, matched byte-exactly, and written LF-only.
 - `<project>/.swe-mux/notes/legacy/`: recoverable source archive for migrated pre-collection
   session-note files, including empty legacy artifacts that are not promoted to notes.
-- `<project>/.swe-mux/notes/.gitignore`: generated `*` rule that excludes the entire Project-owned note tree, including current notes, legacy session notes, and migration archives, from Git.
+- `<project>/.swe-mux/notes/trash/`: deleted Project notes, moved here rather than unlinked,
+  keeping their identity header and their filename with a short suffix on collision.
+  Nothing reads this tree: it is outside `items/`, so it never re-enters a listing or the
+  note count, and no sweep removes it.
+- `<project>/.swe-mux/notes/.gitignore`: generated `*` rule that excludes the entire Project-owned note tree, including current notes, deleted notes, legacy session notes, and migration archives, from Git.
 - `<data_dir>/notes/items/scratchpad.md`: global Scratchpad Markdown with a `global-notes` identity header.
   The file is absent until the first save and is independent of Project registration, deletion, and Git state.
 - `<project>/.swe-mux/prompts/<uuid>.md`: Project prompt templates with TOML frontmatter and
