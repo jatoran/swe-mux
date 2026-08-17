@@ -385,17 +385,40 @@ class DocDebtFinding:
         )
 
 
+def _reach_owners(
+    target: str,
+    ownership: dict[str, tuple[str, ...]],
+    dependents: dict[str, tuple[str, ...]] | None,
+) -> tuple[str, ...]:
+    """Docs owning a *dependent* of ``target`` — the Phase 7.9 reach refinement."""
+    if not dependents:
+        return ()
+    owners: dict[str, None] = {}
+    for dependent in dependents.get(target, ()):
+        for owner in ownership.get(dependent, ()):
+            owners.setdefault(owner, None)
+    return tuple(owners)
+
+
 def detect_doc_debt(
     facts: Sequence[dict[str, Any]],
     ownership: dict[str, tuple[str, ...]],
     *,
     project_root: str | None = None,
+    dependents: dict[str, tuple[str, ...]] | None = None,
 ) -> DocDebtFinding | None:
     """Accumulate doc debt from changed files; never nag per turn.
 
     A doc the same window already edited is not dirty — the debt was paid as it
     was incurred. The output is a ledger entry with a count, deliberately not an
     interrupt: one expensive pass at a stopping point beats forty interruptions.
+
+    ``dependents`` is the Phase 7.9 dependency-reach refinement (optional, default
+    off so behaviour is unchanged): a map from a changed file to the files that
+    depend on it (its reverse callers/importers). When present, a doc that owns a
+    *dependent* of a changed file is also dirty — changing a file can invalidate
+    the documentation of the code that calls it, not only the file's own doc. It
+    is a lower bound over the static graph, like every reach signal.
     """
     dirty: dict[str, None] = {}
     changed: dict[str, None] = {}
@@ -411,11 +434,14 @@ def detect_doc_debt(
             edited_docs.add(target.split(".docs/", 1)[-1])
             continue
         owners = ownership.get(target)
-        if not owners:
+        reach_owners = _reach_owners(target, ownership, dependents)
+        if not owners and not reach_owners:
             continue
         changed.setdefault(target, None)
         contributing.append(fact)
-        for owner in owners:
+        for owner in (owners or ()):
+            dirty.setdefault(owner, None)
+        for owner in reach_owners:
             dirty.setdefault(owner, None)
     remaining = tuple(doc for doc in dirty if doc.casefold() not in edited_docs)
     if not remaining:
@@ -432,6 +458,7 @@ def build_doc_debt_map(
     ownership: dict[str, tuple[str, ...]],
     *,
     project_root: str | None = None,
+    dependents: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Invert doc debt to ``owning doc -> the changed source files that owe it``.
 
@@ -455,9 +482,14 @@ def build_doc_debt_map(
             edited_docs.add(target.split(".docs/", 1)[-1])
             continue
         owners = ownership.get(target)
-        if not owners:
+        reach_owners = _reach_owners(target, ownership, dependents)
+        if not owners and not reach_owners:
             continue
-        for owner in owners:
+        for owner in (owners or ()):
+            per_doc.setdefault(owner, {}).setdefault(target, None)
+        # A doc owning a dependent of `target` owes an update *for* `target`: the
+        # changed file it lists depends on the one that changed.
+        for owner in reach_owners:
             per_doc.setdefault(owner, {}).setdefault(target, None)
     return {
         doc: tuple(files)
@@ -591,6 +623,23 @@ def provenance_dedupe_key(project_id: str, edge: ProvenanceEdge) -> str:
     )
 
 
+def blast_radius_dedupe_key(agent_run_id: str, path: str) -> str:
+    # One finding per edited file per run: the reach count lives in the content,
+    # not the key, so a growing blast radius does not mint a second row for the
+    # same edit the way a set-hash key would.
+    return _dedupe_key("blast-radius", agent_run_id, path)
+
+
+def unexamined_callers_dedupe_key(agent_run_id: str, path: str) -> str:
+    return _dedupe_key("unexamined-callers", agent_run_id, path)
+
+
+def code_structure_dedupe_key(project_id: str, kind: str, target: str) -> str:
+    # Structural findings (dead code, god node, import cycle) are properties of
+    # the project, keyed on the finding kind and its target so each is one row.
+    return _dedupe_key("code-structure", project_id, kind, target)
+
+
 # --------------------------------------------------------------------- runner
 
 
@@ -620,6 +669,13 @@ CLAIM_TRANSCRIPT_BYTES = 256 * 1024
 # busy window; later passes pick up the remainder because per-edge dedupe skips
 # everything already recorded.
 PROVENANCE_MAX_NEW_PER_PASS = 50
+# Code-graph (Phase 7.9) thresholds. A blast-radius finding fires only when an
+# edit reaches at least this many dependents — a change with a handful of callers
+# is not worth a human's attention, and the noise floor is what keeps the signal
+# usable. Structural findings are bounded per pass and each dedupes to one row.
+BLAST_MIN_REACH = 5
+GOD_NODE_MIN_FAN_IN = 12
+CODE_STRUCTURE_MAX_PER_PASS = 8
 
 
 class DeterministicConsumerService:
@@ -639,6 +695,7 @@ class DeterministicConsumerService:
         *,
         resolve_context: Callable[[str], Awaitable[ConsumerContext | None]],
         docs_root_name: str = ".docs",
+        code_graph: Any = None,
     ) -> None:
         self.tier0 = tier0
         self.store = store
@@ -646,6 +703,13 @@ class DeterministicConsumerService:
         self.events = events
         self._resolve_context = resolve_context
         self._docs_root_name = docs_root_name
+        #: The Phase 7.9 structural graph store, or None when the graph substrate
+        #: is not constructed. When present, the `code_graph` consumer maintains it
+        #: off this same turn-boundary stream and reads it for blast-radius findings.
+        self.code_graph = code_graph
+        #: Projects whose source tree has had its one-time index. The consumer loop
+        #: is serial, so a plain set needs no lock.
+        self._graph_indexed: set[str] = set()
         self._queue: asyncio.Queue[Any] | None = None
         self._ownership: dict[str, tuple[dict[str, tuple[str, ...]], float]] = {}
         self.findings = 0
@@ -716,6 +780,8 @@ class DeterministicConsumerService:
             written.extend(await self._doc_debt(context, now))
         if context.wants("provenance_graph"):
             written.extend(await self._provenance(context, now))
+        if context.wants("code_graph") and self.code_graph is not None:
+            written.extend(await self._code_graph(context, session_id, run_facts))
         self.findings += len(written)
         return written
 
@@ -793,7 +859,13 @@ class DeterministicConsumerService:
             context.project_id, since=now - PROJECT_FACT_WINDOW_SECONDS
         )
         ownership = await asyncio.to_thread(self._ownership_for, context.project_root)
-        finding = detect_doc_debt(facts, ownership, project_root=context.project_root)
+        # Phase 7.9 precision upgrade: when the code graph is enabled, a doc owning
+        # a *dependent* of a changed file also owes an update (dependency reach, not
+        # only direct ownership). Off when the graph is absent — behaviour unchanged.
+        dependents = await self._doc_debt_dependents(context, facts)
+        finding = detect_doc_debt(
+            facts, ownership, project_root=context.project_root, dependents=dependents
+        )
         if finding is None:
             return []
         written = await self._annotate(
@@ -807,6 +879,30 @@ class DeterministicConsumerService:
             run_scoped=False,
         )
         return [written] if written else []
+
+    async def _doc_debt_dependents(
+        self, context: ConsumerContext, facts: Sequence[dict[str, Any]]
+    ) -> dict[str, tuple[str, ...]] | None:
+        """For each changed source file, the files that depend on it — so a doc
+        owning a dependent is dirtied by dependency reach. None (no refinement)
+        when the graph is absent or the project has not opted `code_graph` in."""
+        if self.code_graph is None or not context.wants("code_graph"):
+            return None
+        from . import code_graph as cg
+
+        changed: list[str] = []
+        for fact in facts:
+            if str(fact.get("kind") or "") not in _WRITE_KINDS:
+                continue
+            target = normalize_target(fact.get("target"), context.project_root)
+            if target and cg.spec_for_path(target) is not None and target not in changed:
+                changed.append(target)
+        dependents: dict[str, tuple[str, ...]] = {}
+        for target in changed:
+            deps = await self.code_graph.reverse_dependents(context.project_id, target, hops=1)
+            if deps:
+                dependents[target] = tuple(dep.path for dep in deps)
+        return dependents or None
 
     async def _provenance(
         self, context: ConsumerContext, now: float
@@ -837,6 +933,188 @@ class DeterministicConsumerService:
             )
             if annotation:
                 written.append(annotation)
+        return written
+
+    async def _code_graph(
+        self, context: ConsumerContext, session_id: str, run_facts: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Maintain the structural graph off this turn's writes, then emit the
+        human-passive structural findings. Pull-only agent tools read the same
+        graph on their own initiative; nothing here writes toward a session."""
+        from . import code_graph as cg  # lazy: breaks the normalize_target cycle
+
+        pid = context.project_id
+        root = context.project_root
+        # One-time index so reverse-dependency edges exist for importers this
+        # session never edited. Runs at most once per project per process.
+        if pid not in self._graph_indexed:
+            self._graph_indexed.add(pid)
+            try:
+                await cg.index_project(self.code_graph, pid, root)
+            except Exception as exc:  # noqa: BLE001 - graph upkeep never kills the loop
+                self.last_error = f"code_graph index: {exc}"[:200]
+
+        edited = self._graph_source_targets(run_facts, root, cg)
+        if edited:
+            try:
+                await cg.maintain_files(self.code_graph, pid, root, edited)
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"code_graph maintain: {exc}"[:200]
+
+        written: list[dict[str, Any]] = []
+        if context.agent_run_id:
+            written.extend(await self._blast_radius(context, session_id, edited))
+            written.extend(
+                await self._unexamined_callers(context, session_id, run_facts, edited, root)
+            )
+        written.extend(await self._code_structure(context))
+        return written
+
+    @staticmethod
+    def _graph_source_targets(
+        facts: list[dict[str, Any]], root: str, cg: Any
+    ) -> list[str]:
+        """Normalized identities of the parseable source files written in the
+        window, in first-seen order."""
+        out: list[str] = []
+        for fact in facts:
+            if fact.get("kind") not in ("file_write", "file_write_result"):
+                continue
+            identity = normalize_target(fact.get("target"), root)
+            if identity is None or cg.spec_for_path(identity) is None:
+                continue
+            if identity not in out:
+                out.append(identity)
+        return out
+
+    async def _blast_radius(
+        self, context: ConsumerContext, session_id: str, edited: list[str]
+    ) -> list[dict[str, Any]]:
+        written: list[dict[str, Any]] = []
+        for path in edited:
+            deps = await self.code_graph.reverse_dependents(context.project_id, path, hops=2)
+            if len(deps) < BLAST_MIN_REACH:
+                continue
+            content = (
+                f"Edit to {path} reaches {len(deps)} dependent file(s) within 2 hops. "
+                "Static reverse-callers are a lower bound; dynamic dispatch (getattr, "
+                "dict dispatch, decorators, DI, dynamic import) is not shown."
+            )
+            evidence = [
+                {"path": dep.path, "hop": dep.hop, "via": dep.via} for dep in deps[:50]
+            ]
+            annotation = await self._annotate(
+                context,
+                tag="blast-radius",
+                content=content,
+                evidence=evidence,
+                dedupe_key=blast_radius_dedupe_key(context.agent_run_id or "", path),
+                session_id=session_id,
+            )
+            if annotation:
+                written.append(annotation)
+        return written
+
+    async def _unexamined_callers(
+        self,
+        context: ConsumerContext,
+        session_id: str,
+        run_facts: list[dict[str, Any]],
+        edited: list[str],
+        root: str,
+    ) -> list[dict[str, Any]]:
+        """The mux-unique signal: reverse callers of an edited file that the
+        session never opened, so it may have changed their behaviour blind. No
+        standalone code-graph tool can produce this — it needs the agent's reads."""
+        read_files = {
+            n
+            for fact in run_facts
+            if fact.get("kind") in ("file_read", "file_read_result")
+            if (n := normalize_target(fact.get("target"), root)) is not None
+        }
+        edited_set = set(edited)
+        written: list[dict[str, Any]] = []
+        for path in edited:
+            callers = await self.code_graph.callers_of_symbol(context.project_id, path)
+            caller_files = {
+                c["src_path"] for c in callers if c["src_path"] != path
+            }
+            unexamined = sorted(caller_files - read_files - edited_set)
+            if not unexamined:
+                continue
+            shown = ", ".join(unexamined[:8])
+            content = (
+                f"Edited {path}; {len(unexamined)} caller file(s) were not opened this "
+                f"session and may be affected: {shown}. Static lower bound."
+            )
+            evidence = [{"caller": caller} for caller in unexamined[:50]]
+            annotation = await self._annotate(
+                context,
+                tag="unexamined-callers",
+                content=content,
+                evidence=evidence,
+                dedupe_key=unexamined_callers_dedupe_key(context.agent_run_id or "", path),
+                session_id=session_id,
+            )
+            if annotation:
+                written.append(annotation)
+        return written
+
+    async def _code_structure(
+        self, context: ConsumerContext
+    ) -> list[dict[str, Any]]:
+        """Project-scoped structural findings: dead-code candidates, god nodes,
+        and import cycles. Each dedupes to one row so re-running per turn is a
+        no-op, and each is bounded per pass."""
+        pid = context.project_id
+        written: list[dict[str, Any]] = []
+        budget = CODE_STRUCTURE_MAX_PER_PASS
+
+        async def emit(kind: str, tag: str, target: str, content: str, evidence: Any) -> None:
+            nonlocal budget
+            if budget <= 0:
+                return
+            annotation = await self._annotate(
+                context,
+                tag=tag,
+                content=content,
+                evidence=evidence,
+                dedupe_key=code_structure_dedupe_key(pid, kind, target),
+                run_scoped=False,
+            )
+            if annotation:
+                written.append(annotation)
+                budget -= 1
+
+        for orphan in await self.code_graph.orphans(pid):
+            await emit(
+                "dead-code",
+                "dead-code",
+                orphan["path"],
+                f"{orphan['path']} has no inbound import or call in the graph — a "
+                "dead-code candidate. Guarded against nothing: an entry point or a "
+                "dynamic caller (test discovery, plugin registry) is a false positive.",
+                [orphan],
+            )
+        for god in await self.code_graph.god_nodes(pid, min_fan_in=GOD_NODE_MIN_FAN_IN):
+            await emit(
+                "god-node",
+                "god-node",
+                god["path"],
+                f"{god['path']} is imported or called by {god['fan_in']} files — a "
+                "high fan-in hub whose change reaches widely.",
+                [god],
+            )
+        for cycle in await self.code_graph.import_cycles(pid):
+            signature = " -> ".join(sorted(cycle))
+            await emit(
+                "import-cycle",
+                "import-cycle",
+                signature,
+                f"Import cycle among {len(cycle)} files: {' -> '.join(cycle)} -> "
+                f"{cycle[0]}.",
+                [{"cycle": cycle}],
+            )
         return written
 
     async def _last_assistant_text(self, session_id: str) -> str:

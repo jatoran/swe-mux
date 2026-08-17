@@ -25,12 +25,18 @@
 // the terminal, a modal covers it; the docked column is the one placement that keeps the
 // target and the control on screen together.
 //
+// Change Map follows Insight because it answers the other half of the same question.
+// Insight reports what a session said it was doing; Change Map reports which source files
+// it actually wrote and what those writes reach. Both are read-only session surfaces, and
+// reading them together is the point, so they sit adjacent rather than one being a segment
+// of the other: the map is a graph that wants the whole column, not a third segment.
+//
 // That argument is exactly why the *fleet* queue is not a tab. It has no send button —
 // nothing there needs a terminal beside it — so it is a modal opened from the Queue tab
 // and the app menu, the same watch-here/act-there split Processes has with the process
 // fleet. Two queue-shaped tabs in one rail also read as a duplicate of each other.
 
-export type DrawerTabId = 'clipboard' | 'actions' | 'queue' | 'transcript' | 'insight' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
+export type DrawerTabId = 'clipboard' | 'actions' | 'queue' | 'transcript' | 'insight' | 'changemap' | 'agent' | 'files' | 'notes' | 'context' | 'git' | 'processes' | 'notifications'
 
 /** What a tab acts on: the focused terminal, the active Project, or the app itself. */
 export type DrawerTabScope = 'session' | 'project' | 'app'
@@ -55,6 +61,7 @@ export const DRAWER_TABS: DrawerTab[] = [
   { id: 'queue', label: 'Queue', heading: 'Prompt Queue', title: 'Queue - messages staged for the focused agent', scope: 'session' },
   { id: 'transcript', label: 'Transcript', heading: 'Transcript', title: 'Transcript - read and copy this session’s conversation', scope: 'session' },
   { id: 'insight', label: 'Insight', heading: 'Insight', title: 'Insight - scan timeline and deterministic findings for this session', scope: 'session' },
+  { id: 'changemap', label: 'Change Map', heading: 'Change Map', title: 'Change Map - what this session edited, and what those edits reach', scope: 'session' },
   { id: 'agent', label: 'Agent', heading: 'Agent Environment', title: 'Agent - inspect tools, extensions, policies, and configuration for this session', scope: 'session' },
   { id: 'files', label: 'Files', heading: 'File Explorer', title: 'Files - browse or search this Project, then open into a pane', scope: 'project' },
   { id: 'notes', label: 'Notes', heading: 'Notes', title: 'Notes - create and edit Project-owned notes here, or open one in a pane', scope: 'project' },

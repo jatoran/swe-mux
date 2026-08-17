@@ -12,7 +12,18 @@ datas = [
 ]
 binaries = []
 hiddenimports = []
-for package in ("PIL", "pystray", "webview", "winpty"):
+# `tree_sitter_language_pack` ships the compiled grammar shared libraries as
+# package data / binaries; without collecting them the frozen app parses no code
+# and the Phase 7.9 code-structure graph is silently empty. This is the named
+# acceptance check in the roadmap: the grammar binaries must load in the bundle.
+for package in (
+    "PIL",
+    "pystray",
+    "webview",
+    "winpty",
+    "tree_sitter",
+    "tree_sitter_language_pack",
+):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries

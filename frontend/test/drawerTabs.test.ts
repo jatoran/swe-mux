@@ -43,8 +43,8 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   // reads that session back instead of writing into it. Processes closes the Project block
   // for the same shape of reason as Git: Project-scoped, reports rather than opens, and is
   // the watch half of a surface whose acting half stays modal.
-  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'insight', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
-  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'insight', 'agent'])
+  assert.deepEqual(DRAWER_TABS.map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent', 'files', 'notes', 'context', 'git', 'processes', 'notifications'])
+  assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'session').map(tab => tab.id), ['clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent'])
   assert.deepEqual(DRAWER_TABS.filter(tab => tab.scope === 'project').map(tab => tab.id), ['files', 'notes', 'context', 'git', 'processes'])
   // Alerts is the only app-scoped tab. The fleet queue is app-scoped too but is a modal:
   // it has no send button, so it needs no terminal beside it, and a second queue-shaped
@@ -60,7 +60,7 @@ test('session surfaces lead, then Project surfaces, then application surfaces', 
   const labels = DRAWER_TABS.map(tab => tab.label)
   assert.equal(new Set(labels).size, labels.length, 'tab labels must be distinct')
   assert.deepEqual(DRAWER_TABS.map(tab => tab.heading), [
-    'Clipboard History', 'Actions', 'Prompt Queue', 'Transcript', 'Insight', 'Agent Environment',
+    'Clipboard History', 'Actions', 'Prompt Queue', 'Transcript', 'Insight', 'Change Map', 'Agent Environment',
     'File Explorer', 'Notes', 'Instructions & Memory', 'Git', 'Processes', 'Alerts',
   ])
   for (const tab of DRAWER_TABS) {

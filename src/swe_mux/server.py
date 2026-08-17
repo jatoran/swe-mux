@@ -64,6 +64,7 @@ from .background_tasks import background
 from .behavioral_consumers import BehavioralConsumerService
 from .bundle_locks import bundle_lock_holders, describe_holders, frozen_bundle_root
 from .clipboard_store import ClipboardStore
+from .code_graph import CodeGraphStore
 from .composer_input import note_composer_write
 from .config import Config, load_config, update_config
 from .deterministic_consumers import ConsumerContext, DeterministicConsumerService
@@ -825,6 +826,8 @@ def create_app(
                 "/api/sessions/{sid}/scan-timeline/{record_id}",
                 session_scan_timeline_record,
             ),
+            # Phase 7.9 per-session code change map.
+            web.get("/api/sessions/{sid}/change-map", session_change_map),
             # Phase 7.7 near-term scan-timeline consumers.
             web.get("/api/sessions/{sid}/catch-me-up", session_catch_me_up),
             web.get("/api/attention/blockers", fleet_live_blockers),
@@ -1019,6 +1022,11 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         )
     # Pruned by `RETENTION_LOOP` a minute after start, not here.
     tier0 = Tier0Store(config.database_path, retention_days=config.process_evidence_retention_days)
+    # Phase 7.9 structural graph, maintained off the same Tier 0 file_write stream
+    # by the deterministic consumer and read by the blast-radius/navigation MCP
+    # tools and the per-session change map. Shares mux.db.
+    code_graph_store = CodeGraphStore(config.database_path)
+    app["code_graph"] = code_graph_store
     # Durable per-session detection timeline: every ledger entry survives
     # daemon restarts and session ends so status incidents stay investigable
     # (status-detection.md § durable timeline). Pruned by its own flush loop.
@@ -1382,7 +1390,12 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # Phase 3.7: model-free detectors over the facts Tier 0 just captured. Same
     # gate, same cache; writes annotations and nothing else.
     consumers = DeterministicConsumerService(
-        tier0, automation_store, sessions, events, resolve_context=consumer_context
+        tier0,
+        automation_store,
+        sessions,
+        events,
+        resolve_context=consumer_context,
+        code_graph=code_graph_store,
     )
     consumers.start()
     # Phase 6.5: the consumer of everything above. It routes findings into four
@@ -1470,6 +1483,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         history_backfills=history_backfills,
         history_scan=history_scan,
         sessions=sessions,
+        tier0=tier0,
         mcp=McpService(
             sessions,
             history,
@@ -1491,6 +1505,9 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
             tier0=tier0,
             automation_gate=_enabled_automations,
             session_control=session_control,
+            # Phase 7.9: the structural graph the blast-radius/navigation/context/
+            # test-gap reads answer from, gated on the same `code_graph` opt-in.
+            code_graph=code_graph_store,
         ),
         reaper=reaper,
         supervisor=supervisor_client,
@@ -1511,7 +1528,6 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
                 for project in projects.ordered_projects()
             ],
         ),
-        tier0=tier0,
         deterministic_consumers=consumers,
         attention_ranking=attention_ranking,
         attention_narrator=attention_narrator,
@@ -8709,6 +8725,131 @@ def _record_project_root(request: web.Request, record: Any) -> str:
     if root:
         return str(root)
     return _project_root_for(request.app, str(record.project_id or ""), getattr(record, "cwd", ""))
+
+
+_CHANGE_MAP_EXCLUDES = (
+    "Concurrent other-session edits are excluded by construction: the red seeds are "
+    "this session's own file writes, filtered by session/run."
+)
+_CHANGE_MAP_LOWER_BOUND = (
+    "Static reverse-callers are a lower bound; dynamic dispatch (getattr, dict "
+    "dispatch, decorators, dependency injection, dynamic import) is not shown."
+)
+
+
+async def session_change_map(request: web.Request) -> web.Response:
+    """The per-session code change map (Phase 7.9, Surface 3).
+
+    Red = this session's edited source files (seeds), yellow = their blast radius
+    (reverse dependents), blue = immediate imports (context). Server-side and
+    bounded: only the changed nodes plus blast radius plus one hop ship, never the
+    whole codebase graph. `unify=true` widens to the union of every session's edits
+    since the baseline, each session coloured a distinct hue.
+    """
+    from . import code_graph as cg
+    from .deterministic_consumers import RUN_FACT_WINDOW_SECONDS, normalize_target
+
+    session = request.app["sessions"].resolve(request.match_info["sid"])
+    record = session.record
+    run_id = str(record.agent_run_id or "")
+    pid = str(record.project_id or "")
+    root = _record_project_root(request, record)
+    unify = request.query.get("unify") in ("1", "true", "yes")
+    try:
+        hops = int(request.query.get("hops", "1"))
+    except ValueError:
+        hops = 1
+    hops = max(1, min(hops, cg.MAX_BLAST_HOPS))
+    baseline_head = getattr(getattr(record, "git", None), "head", None)
+    base: dict[str, Any] = {
+        "session_id": record.id,
+        "project_id": pid or None,
+        "baseline_head": baseline_head,
+        "nodes": [],
+        "edges": [],
+        "sessions": [],
+        "excludes_note": _CHANGE_MAP_EXCLUDES,
+        "lower_bound_note": _CHANGE_MAP_LOWER_BOUND,
+    }
+
+    store = request.app.get("code_graph")
+    tier0 = request.app.get("tier0")
+    if store is None or tier0 is None:
+        return json_response({**base, "available": False, "disabled_reason": "unsupported"})
+    if not pid or not root:
+        return json_response({**base, "available": False, "disabled_reason": "no_project"})
+    enabled = await request.app["automation_gate"](root)
+    if "code_graph" not in enabled:
+        return json_response({**base, "available": False, "disabled_reason": "automation_disabled"})
+
+    since = time.time() - RUN_FACT_WINDOW_SECONDS
+    if unify:
+        facts = await tier0.facts_for_project(pid, since=since)
+    elif run_id:
+        facts = await tier0.facts_for_run(run_id, since=since)
+    else:
+        facts = []
+
+    # Per-session seed sets: this session (or every session, unified) mapped to the
+    # source files it wrote. Concurrent other-session edits are excluded from the
+    # non-unified view by construction, because facts_for_run is one run's facts.
+    seed_sessions: dict[str, set[str]] = {}
+    for fact in facts:
+        if fact.get("kind") not in ("file_write", "file_write_result"):
+            continue
+        identity = normalize_target(fact.get("target"), root)
+        if identity is None or cg.spec_for_path(identity) is None:
+            continue
+        owner = str(fact.get("session_id") or record.id)
+        seed_sessions.setdefault(identity, set()).add(owner)
+
+    seeds = sorted(seed_sessions)
+    if not seeds:
+        return json_response(
+            {**base, "available": True, "disabled_reason": None, "empty_reason": "no_edits"}
+        )
+
+    subgraph = await store.subgraph(pid, seeds, hops=hops)
+
+    # Session legend + per-seed session attribution (unify mode colours by session).
+    session_ids: list[str] = []
+    for owners in seed_sessions.values():
+        for owner in owners:
+            if owner not in session_ids:
+                session_ids.append(owner)
+    session_ids.sort()
+    hue_by_session = {
+        sid: f"hsl({(index * 360) // max(1, len(session_ids)) % 360}, 70%, 55%)"
+        for index, sid in enumerate(session_ids)
+    }
+    manager = request.app["sessions"]
+    sessions_legend = []
+    for sid in session_ids:
+        other = manager.sessions.get(sid)
+        name = str(getattr(other.record, "name", sid)) if other is not None else sid
+        sessions_legend.append({"id": sid, "name": name, "hue": hue_by_session[sid]})
+
+    nodes = []
+    for node in subgraph.get("nodes", []):
+        path = node.get("path")
+        entry = dict(node)
+        if node.get("role") == "seed":
+            seed_owners = sorted(seed_sessions.get(path, set()))
+            entry["sessions"] = seed_owners
+            if unify and seed_owners:
+                entry["hue"] = hue_by_session.get(seed_owners[0])
+        nodes.append(entry)
+
+    return json_response(
+        {
+            **base,
+            "available": True,
+            "disabled_reason": None,
+            "nodes": nodes,
+            "edges": subgraph.get("edges", []),
+            "sessions": sessions_legend if unify else [],
+        }
+    )
 
 
 async def session_catch_me_up(request: web.Request) -> web.Response:

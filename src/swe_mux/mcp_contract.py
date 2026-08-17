@@ -26,6 +26,16 @@ READ_TOOL_NAMES = (
     # re-derived from each doc's "Key files" section and gated on the doc-debt
     # detector's own per-Project opt-in.
     "doc_debt",
+    # Phase 7.9 code-structure graph reads (deterministic, model-free). Pull-only:
+    # the agent consults them on its own initiative, nothing is pushed. Each is
+    # gated on the per-Project `code_graph` opt-in and returns empty rather than a
+    # low-confidence guess; static reverse-caller sets are labelled a lower bound.
+    "blast_radius",
+    "find_definition",
+    "find_callers",
+    "find_references",
+    "code_context",
+    "test_gap",
 )
 
 WRITE_TOOL_NAMES = (

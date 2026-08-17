@@ -9,14 +9,14 @@ test('the default order is the registry order', () => {
 })
 
 test('a stored arrangement round-trips', () => {
-  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'actions', 'queue', 'transcript', 'insight', 'agent', 'notifications']
+  const custom: DrawerTabId[] = ['files', 'notes', 'context', 'git', 'processes', 'clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent', 'notifications']
   assert.deepEqual(normalizeDrawerTabOrder(custom), custom)
 })
 
 test('legacy Commands and Prompts positions migrate to one Actions tab', () => {
   assert.deepEqual(
     normalizeDrawerTabOrder(['files', 'prompts', 'clipboard', 'commands', 'queue']),
-    ['files', 'notes', 'context', 'git', 'processes', 'notifications', 'actions', 'clipboard', 'queue', 'transcript', 'insight', 'agent'],
+    ['files', 'notes', 'context', 'git', 'processes', 'notifications', 'actions', 'clipboard', 'queue', 'transcript', 'insight', 'changemap', 'agent'],
   )
 })
 
@@ -56,7 +56,7 @@ test('a tab the stored order predates lands beside its default neighbour, not at
   const custom = ['notifications', 'files', 'clipboard']
   assert.deepEqual(
     normalizeDrawerTabOrder(custom),
-    ['notifications', 'files', 'notes', 'context', 'git', 'processes', 'clipboard', 'actions', 'queue', 'transcript', 'insight', 'agent'],
+    ['notifications', 'files', 'notes', 'context', 'git', 'processes', 'clipboard', 'actions', 'queue', 'transcript', 'insight', 'changemap', 'agent'],
   )
 
   // A first tab the order predates goes to the front rather than after everything.

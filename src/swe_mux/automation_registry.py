@@ -49,6 +49,12 @@ _AUTOMATIONS: tuple[Automation, ...] = (
         "Dead-end memory",
         ("tier0", "scan_timeline"),
     ),
+    # Phase 7.9: the deterministic code-structure graph. Model-free — it parses
+    # the Tier 0 file_write stream with tree-sitter and stores nodes/edges, so it
+    # reads Tier 0 and nothing else. Gates the blast-radius/navigation/context/
+    # test-gap MCP reads, the human blast-radius annotations, and the per-session
+    # change map. Off by default; costs no tokens.
+    Automation("code_graph", CONSUMER, "Code-structure graph", ("tier0",)),
     # Phase 7.5: the per-project opt-in that gates the `mux.prior_resolutions`
     # MCP read. It reads the experience corpus (model-scored verified fixes,
     # keyed by normalized error signature), which no detector produces, so it is

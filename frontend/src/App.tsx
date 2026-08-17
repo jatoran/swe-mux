@@ -13,6 +13,7 @@ import { ProjectResource } from './ProjectResource'
 import { SendToAgentPicker, type SendToAgentRequest, type SendToAgentResult, type SendToAgentTarget } from './SendToAgentPicker'
 import { pastePayload } from './noteSelection'
 import { QueuePane } from './QueuePane'
+import { ChangeMapPane } from './ChangeMapPane'
 import { editQueueMessage, enqueueMessage, fetchAutoStatus, fetchQueueSummary, sendQueueMessage, setAutoPaused, type QueueAutoStatus, type QueueTargetSummary } from './queueApi'
 import { FleetQueue } from './FleetQueue'
 import { ContinuityBanner } from './ContinuityBanner'
@@ -176,7 +177,7 @@ import {
 import {
   browserUuid, emptyLayout, leaves, noteResourceId, paneStack, parseLayout, parseNoteResourceId, resourceLeaf, worktreeFileResourceId,
   reconcilePreviews, reconcileTerminals, removeLeaf, replaceTerminal, setSplitRatio,
-  activateContainingStack, activateStackChild, addLeafToStack, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, moveTerminalBeside, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
+  activateContainingStack, activateStackChild, addLeafToStack, changeMapLeafId, changeMapLeafSessionId, dissolveStack, groupTerminalsInStack, moveLeafToSplit, moveLeafToStack, moveTerminalBeside, openAnchorId, openTab, paneNeighborIds, paneStacks, queueLeafId, queueLeafSessionId, reorderStack, resolveLayout, spawnAnchorId, splitTerminal, splitView, stackForView, stackTerminal, terminalIds, terminalLeaf, visibleTerminalIds, type PaneLayout,
   type PaneDirection, type PaneLeaf, type PaneLeafKind, type PaneNode, type SplitDirection,
 } from './layout'
 
@@ -3326,6 +3327,24 @@ export function App() {
     await updateLayout(targetProject, openTab(current, focused, resourceLeaf('queue', resourceId)))
   }
 
+  /** Pop one session's change map out into a workspace tab.
+   *
+   *  Mirrors `openQueueTab`, and for a sharper reason than the queue had: the map is a
+   *  force-directed graph, and the drawer column is the narrowest surface in the app.
+   *  Nothing creates one implicitly — the drawer tab stays the primary home. */
+  const openChangeMapTab = async (sessionId: string) => {
+    const session = sessionsRef.current.find(item => item.id === sessionId)
+    const targetProject = session?.project_id || projectId
+    if (!targetProject) return
+    const current = resolveLayout(layoutMap[targetProject], projects.find(project => project.id === targetProject)?.layout)
+    const resourceId = changeMapLeafId(sessionId)
+    const focused = openAnchorId(current, sessionId)
+    setProjectId(targetProject)
+    setFocusedViewId(resourceId)
+    setContextMenu(null); setTabMenu(null); setMainMenuOpen(false)
+    await updateLayout(targetProject, openTab(current, focused, resourceLeaf('changemap', resourceId)))
+  }
+
   /**
    * Deliver a note/markdown/file selection — Phase 4 shape. A new session is seeded through
    * `seed_text` (the daemon inlines short bodies into argv and stages long ones into the
@@ -3538,11 +3557,18 @@ export function App() {
     return owner ? `Queue · ${sessionName(owner)}` : 'Queue'
   }
 
+  const changeMapTabLabel = (resourceId: string): string => {
+    const targetSessionId = changeMapLeafSessionId(resourceId)
+    const owner = targetSessionId ? sessions.find(item => item.id === targetSessionId) : undefined
+    return owner ? `Map · ${sessionName(owner)}` : 'Change Map'
+  }
+
   const mobileTabLabel = (leaf: PaneLeaf): string => {
     if (leaf.kind === 'terminal') { const session = sessions.find(item => item.id === leaf.id); return session ? sessionName(session) : leaf.id }
     if (leaf.kind === 'preview') { const preview = previews[leaf.id]; return preview ? `:${preview.port}` : leaf.id }
     if (leaf.kind === 'history') return 'History'
     if (leaf.kind === 'queue') return queueTabLabel(leaf.id)
+    if (leaf.kind === 'changemap') return changeMapTabLabel(leaf.id)
     return noteTabLabel(leaf.id)
   }
 
@@ -4767,6 +4793,10 @@ export function App() {
             const label=queueTabLabel(child.id)
             return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} queue tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">⇥</span>{label}</button>{closeTab(child,label)}</div>
           }
+          if(child.kind==='changemap'){
+            const label=changeMapTabLabel(child.id)
+            return <div key={child.id} data-reorder-id={child.id} data-tutorial="tab-drag-source" style={dragStyle} class={`stack-tab-shell draggable-tab resource-tab ${dragStackTab?.childId===child.id?'dragging':''} ${dragClass}`} onPointerDown={event=>beginWorkspaceTabDrag(event,{stackId:node.id,childId:child.id,kind:child.kind,targetStackId:node.id,zone:'tabs',previewIds:node.children.map(item=>item.id),overId:null,side:null},label)}><button role="tab" aria-label={`${label} change map tab`} title={label} aria-selected={child.id===activeChild.id} class={`tab-main ${child.id===activeChild.id?'active':''}`} onClick={activate} onContextMenu={event=>{event.preventDefault();event.stopPropagation();openTabMenu(child,label,event.clientX,event.clientY)}}><span class="preview-tab-glyph" aria-hidden="true">◈</span>{label}</button>{closeTab(child,label)}</div>
+          }
           const session=sessions.find(item=>item.id===child.id)
           // sessionName, not session.name: the generated title is the whole point of
           // titling, and a tab strip showing `claude-15036b` while the sidebar shows
@@ -4799,6 +4829,17 @@ export function App() {
       // The pop-out rendering: target pinned to the leaf rather than following focus, and
       // no pop-out button of its own. Everything else is the same panel the drawer shows.
       return <QueuePane key={node.id} sessionId={targetSessionId} sessions={sessions} onSelectSession={sid=>{const owner=sessions.find(item=>item.id===sid);if(owner)void selectSession(owner)}}/>
+    }
+    if(node.kind==='changemap'){
+      const targetSessionId=changeMapLeafSessionId(node.id)
+      const owner=targetSessionId?sessions.find(item=>item.id===targetSessionId):undefined
+      if(!targetSessionId)return <section class="workspace-leaf-placeholder"><strong>change map unavailable</strong><span>{node.id}</span></section>
+      // The map is built from one session's recorded writes, so an ended target has no
+      // map to draw rather than an empty one — say so instead of reading as "no edits".
+      if(!owner)return <section class="workspace-leaf-placeholder"><strong>session ended</strong><span>Its change map is no longer available.</span><button onClick={()=>void updateLayout(projectId,removeLeaf(layoutValues.current[projectId]||emptyLayout(),'changemap',node.id))}>close tab</button></section>
+      // Pinned to the leaf rather than following focus, and with no pop-out button of
+      // its own — the same panel the drawer tab shows, already popped out.
+      return <ChangeMapPane key={node.id} session={owner} project={activeProject}/>
     }
     if (node.kind === 'preview') {
       const preview = previews[node.id]
@@ -5078,9 +5119,9 @@ export function App() {
     const selected=leaf.id===mobileProjection.selected?.id
     const session=leaf.kind==='terminal'?sessions.find(item=>item.id===leaf.id):undefined
     const preview=leaf.kind==='preview'?previews[leaf.id]:undefined
-    const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):noteTabLabel(leaf.id)
+    const label=leaf.kind==='terminal'?(session?sessionName(session):leaf.id):leaf.kind==='preview'?preview?.url||leaf.id:leaf.kind==='history'?'History':leaf.kind==='queue'?queueTabLabel(leaf.id):leaf.kind==='changemap'?changeMapTabLabel(leaf.id):noteTabLabel(leaf.id)
     const visibleLabel=mobileTabLabel(leaf)
-    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':'◇'}</span>
+    const glyph=leaf.kind==='terminal'?<>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionGlyph(session)}{activityGlyphs(session,rowConfig.standing)}{mobileDraftIndicator(leaf.id)}</>:<span class="preview-tab-glyph" aria-hidden="true">{leaf.kind==='preview'?'◱':leaf.kind==='history'?'◷':leaf.kind==='queue'?'⇥':leaf.kind==='changemap'?'◈':'◇'}</span>
     // Mobile tabs carry no close button: it ate label width and was a mis-tap
     // hazard next to tab activation. Closing/killing lives in the long-press
     // menu (session menu for terminals, tab menu for resources), which is also
@@ -5305,6 +5346,7 @@ export function App() {
         onSendToAgent={request=>{if(mobileWorkspace)setClipboardOpen(false);setSendToAgent(request)}}
         queueOpenToken={queueOpenToken || undefined}
         onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
+        onChangeMapOpenAsTab={sessionId=>void openChangeMapTab(sessionId)}
         processSnapshot={processFleet}
         projects={projects}
         // '' (all Projects) is the stored default; an unscoped tab means the Project the

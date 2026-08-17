@@ -52,6 +52,11 @@ from pathlib import Path
 from typing import Any
 
 from .clipboard_store import looks_like_secret
+from .code_graph import (
+    DEFAULT_BLAST_HOPS,
+    MAX_BLAST_HOPS,
+    co_change_net,
+)
 from .deterministic_consumers import (
     CLAIM_PATTERN,
     PROJECT_FACT_WINDOW_SECONDS,
@@ -147,6 +152,14 @@ MEMORY_TOOL_AUTOMATION = {
     # writes, so it is gated on that detector's own per-Project opt-in rather
     # than a new consumer id.
     "doc_debt": "doc_debt",
+    # Phase 7.9 code-structure graph reads. All six gate on the one `code_graph`
+    # consumer that maintains the graph they read.
+    "blast_radius": "code_graph",
+    "find_definition": "code_graph",
+    "find_callers": "code_graph",
+    "find_references": "code_graph",
+    "code_context": "code_graph",
+    "test_gap": "code_graph",
 }
 
 #: The `project` argument, identical on every tool that has one. Written once so
@@ -1063,6 +1076,151 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "blast_radius",
+        "description": (
+            "What can a change to this file reach? Returns the reverse callers "
+            "(who imports or calls it, hop-ordered), the git co-change net (files "
+            "repeatedly committed with it), the covering tests among the reachable "
+            "set, and the docs that own it. The static reverse set is a LOWER "
+            "BOUND: callers reached through getattr, dict dispatch, decorators, "
+            "dependency injection, or dynamic imports are not shown, so an empty "
+            "result is not proof a change is safe - the co-change net is the recall "
+            'net for those. Defaults to your own Project; pass project:"fleet" or a '
+            "Project name to widen. Needs the Code-structure graph automation "
+            "enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Path (repo-relative or absolute) to trace",
+                },
+                "hops": {
+                    "type": "integer",
+                    "description": f"Reverse-dependency hops to walk (1-{MAX_BLAST_HOPS})",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["file"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "find_definition",
+        "description": (
+            "Where is this symbol defined? Returns the file, qualified name, kind, "
+            "and line for every definition matching the name (leaf name or "
+            "qualname). This is the precise structural answer instead of grepping "
+            'for "def name". Needs the Code-structure graph automation enabled for '
+            "the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Symbol name (leaf like 'run' or qualname like 'Foo.run')",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "find_callers",
+        "description": (
+            "Who calls into this file (or a specific symbol in it)? Returns the "
+            "(file, symbol) pairs whose calls resolve here import-aware, so a "
+            "same-named symbol in an unrelated module is not a false caller. A "
+            "LOWER BOUND - dynamic dispatch is not shown - so unresolved callers of "
+            "the same name are reported separately. This removes the expensive "
+            "who-calls-this traversal, not the cheap exact-string grep. Needs the "
+            "Code-structure graph automation enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Path (repo-relative or absolute) whose callers to find",
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "Optional symbol in the file; omit for any symbol",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["file"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "find_references",
+        "description": (
+            "Every call or reference to a symbol in this file - the precise "
+            "structural neighborhood, not a grep. A lower bound over static edges. "
+            "Needs the Code-structure graph automation enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Path (repo-relative or absolute)",
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "Optional symbol in the file; omit for any symbol",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["file"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "code_context",
+        "description": (
+            "A compact structural neighborhood for context packing: for each file, "
+            "its key symbol signatures, what it imports, and its direct callers - "
+            "instead of you reading whole files. Ranked and token-budgeted. Needs "
+            "the Code-structure graph automation enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Files (repo-relative or absolute) to pack context for",
+                },
+                "project": _PROJECT_ARG,
+            },
+            "required": ["files"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "test_gap",
+        "description": (
+            "Which recently-changed files have no covering test in their blast "
+            "radius? Surfaces changed code a test never reaches. A LOWER BOUND: a "
+            "test that exercises the code through dynamic dispatch is invisible "
+            "here, so a listed file is a candidate, not a proof of missing "
+            'coverage. Defaults to your own Project; pass project:"fleet" to widen. '
+            "Needs the Code-structure graph automation enabled for the Project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": _PROJECT_ARG,
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "interrupt",
         "description": (
             "Stop another agent session's current turn. The session keeps living "
@@ -1203,6 +1361,7 @@ class McpService:
         tier0: Any = None,
         automation_gate: Any = None,
         session_control: Any = None,
+        code_graph: Any = None,
     ) -> None:
         self.sessions = sessions
         self.history = history
@@ -1229,6 +1388,9 @@ class McpService:
         # Phase 7.6 session control. Absent (tests, minimal wiring) the tools list
         # but answer unavailable - never a partial actuation.
         self.session_control = session_control
+        # Phase 7.9 code-structure graph store. Absent it, the structural reads
+        # answer `unsupported` (the substrate is not running), never a fake empty.
+        self.code_graph = code_graph
         self.calls = 0
         self.denied = 0
         self.writes = 0
@@ -3139,6 +3301,264 @@ class McpService:
             **self._scope_envelope(scope),
         }
 
+    # ------------------------------------------------ code graph reads (7.9)
+
+    #: Static reverse-caller results are always a lower bound; the blind spots are
+    #: named in every result so an agent never reads an empty set as "safe".
+    _GRAPH_BLIND_SPOTS = (
+        "Static analysis only — a lower bound. Callers reached through getattr, "
+        "dict dispatch, decorators, dependency injection, or dynamic imports are "
+        "not shown. The co-change net is the recall net for those."
+    )
+
+    def _require_code_graph(self, tool_name: str) -> None:
+        if self.code_graph is None:
+            raise QueueError(
+                "unsupported",
+                f"{tool_name} needs the code-structure graph, which this daemon "
+                "does not run.",
+                status=503,
+            )
+
+    @staticmethod
+    def _is_test_path(path: str) -> bool:
+        lowered = path.lower()
+        return (
+            "test" in lowered
+            or lowered.endswith(".spec.ts")
+            or lowered.endswith(".spec.tsx")
+            or "/tests/" in lowered
+            or lowered.startswith("tests/")
+        )
+
+    async def _git_rows(self, project_id: str) -> list[dict[str, Any]]:
+        reader = getattr(self.history, "git_provenance", None)
+        if reader is None:
+            return []
+        try:
+            rows = await reader(project_id=project_id, limit=500)
+        except Exception:
+            return []
+        return list(rows or [])
+
+    async def _owning_docs(self, project_root: str, identity: str) -> list[str]:
+        ownership = await asyncio.to_thread(build_doc_ownership, Path(project_root) / ".docs")
+        docs: set[str] = set()
+        for source_path, owners in (ownership or {}).items():
+            if normalize_target(source_path, project_root) == identity:
+                docs.update(str(d) for d in owners)
+        return sorted(docs)
+
+    async def blast_radius(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.blastRadius(file)`: everything a change to a file can reach.
+
+        Reverse callers (who imports/calls it, hop-ordered), the git co-change net
+        (files repeatedly committed with it — the recall net for dynamic edges),
+        covering tests among the reachable set, and the docs that own it. The
+        static reverse set is a lower bound and says so; empty is never proof a
+        change is safe.
+        """
+        self._require_code_graph("blast_radius")
+        target_arg = str(args.get("file") or "").strip()
+        if not target_arg:
+            raise ValueError("file is required")
+        hops = max(1, min(int(args.get("hops") or DEFAULT_BLAST_HOPS), MAX_BLAST_HOPS))
+        scope, projects, disabled, _t = await self._memory_scope(caller, args, "blast_radius")
+        results: list[dict[str, Any]] = []
+        for project in projects:
+            root = str(project.root)
+            identity = normalize_target(target_arg, root)
+            if identity is None:
+                continue
+            pid = str(project.id)
+            reverse = await self.code_graph.reverse_dependents(pid, identity, hops=hops)
+            callers = [
+                {"path": node.path, "hop": node.hop, "via": node.via} for node in reverse
+            ]
+            co_changed = co_change_net(await self._git_rows(pid), identity, project_root=root)
+            covering_tests = sorted({c["path"] for c in callers if self._is_test_path(c["path"])})
+            owning_docs = await self._owning_docs(root, identity)
+            if not (callers or co_changed or owning_docs):
+                continue
+            results.append(
+                {
+                    "file": identity,
+                    "project_id": pid,
+                    "callers": callers[:MEMORY_MAX_RESULTS],
+                    "co_changed_files": [
+                        {"path": p, "shared_commits": n}
+                        for p, n in co_changed[:MEMORY_MAX_RESULTS]
+                    ],
+                    "covering_tests": covering_tests,
+                    "owning_docs": owning_docs,
+                    "has_no_covering_test": not covering_tests,
+                }
+            )
+        returned = sum(len(r["callers"]) + len(r["co_changed_files"]) for r in results)
+        self._record_memory_outcome("blast_radius", returned=returned, suppressed=0)
+        return {
+            "blast_radius": results,
+            "note": self._GRAPH_BLIND_SPOTS,
+            **self._disabled_note(disabled, "code_graph"),
+            **self._scope_envelope(scope),
+        }
+
+    async def find_definition(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.findDefinition(name)`: where a symbol is defined, by leaf or qualname."""
+        self._require_code_graph("find_definition")
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        scope, projects, disabled, _t = await self._memory_scope(caller, args, "find_definition")
+        results: list[dict[str, Any]] = []
+        for project in projects:
+            for row in await self.code_graph.definitions(str(project.id), name):
+                results.append({**row, "project_id": str(project.id)})
+        self._record_memory_outcome("find_definition", returned=len(results), suppressed=0)
+        return {
+            "definitions": results[:MEMORY_MAX_RESULTS],
+            **self._disabled_note(disabled, "code_graph"),
+            **self._scope_envelope(scope),
+        }
+
+    async def find_callers(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.findCallers(file[, symbol])`: the (file, symbol) pairs that call
+        a symbol, resolved import-aware. A lower bound — dynamic dispatch is not
+        shown, so unresolved same-name callers are reported separately."""
+        self._require_code_graph("find_callers")
+        file_arg = str(args.get("file") or "").strip()
+        if not file_arg:
+            raise ValueError("file is required")
+        symbol = str(args.get("symbol") or "").strip() or None
+        scope, projects, disabled, _t = await self._memory_scope(caller, args, "find_callers")
+        results: list[dict[str, Any]] = []
+        unresolved: list[dict[str, Any]] = []
+        for project in projects:
+            root = str(project.root)
+            identity = normalize_target(file_arg, root)
+            if identity is None:
+                continue
+            pid = str(project.id)
+            for row in await self.code_graph.callers_of_symbol(pid, identity, symbol):
+                results.append({**row, "project_id": pid})
+            if symbol:
+                for row in await self.code_graph.unresolved_callers_by_name(pid, symbol):
+                    unresolved.append({**row, "project_id": pid})
+        self._record_memory_outcome("find_callers", returned=len(results), suppressed=0)
+        return {
+            "callers": results[:MEMORY_MAX_RESULTS],
+            "unresolved_same_name_callers": unresolved[:MEMORY_MAX_RESULTS],
+            "note": self._GRAPH_BLIND_SPOTS,
+            **self._disabled_note(disabled, "code_graph"),
+            **self._scope_envelope(scope),
+        }
+
+    async def find_references(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.findReferences(file[, symbol])`: every call or reference to a
+        symbol in a file — the precise structural neighborhood, not a grep."""
+        self._require_code_graph("find_references")
+        file_arg = str(args.get("file") or "").strip()
+        if not file_arg:
+            raise ValueError("file is required")
+        symbol = str(args.get("symbol") or "").strip() or None
+        scope, projects, disabled, _t = await self._memory_scope(caller, args, "find_references")
+        results: list[dict[str, Any]] = []
+        for project in projects:
+            root = str(project.root)
+            identity = normalize_target(file_arg, root)
+            if identity is None:
+                continue
+            for row in await self.code_graph.references_to(str(project.id), identity, symbol):
+                results.append({**row, "project_id": str(project.id)})
+        self._record_memory_outcome("find_references", returned=len(results), suppressed=0)
+        return {
+            "references": results[:MEMORY_MAX_RESULTS],
+            "note": self._GRAPH_BLIND_SPOTS,
+            **self._disabled_note(disabled, "code_graph"),
+            **self._scope_envelope(scope),
+        }
+
+    async def code_context(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.codeContext(files)`: a compact structural neighborhood for context
+        packing — each file's key symbols, what it imports, and its direct callers,
+        instead of the agent reconstructing it by reading whole files."""
+        self._require_code_graph("code_context")
+        raw = args.get("files")
+        files = [raw] if isinstance(raw, str) else list(raw or [])
+        files = [str(f).strip() for f in files if str(f).strip()]
+        if not files:
+            raise ValueError("files is required")
+        scope, projects, disabled, _t = await self._memory_scope(caller, args, "code_context")
+        results: list[dict[str, Any]] = []
+        for project in projects:
+            root = str(project.root)
+            pid = str(project.id)
+            for file_arg in files[:MEMORY_MAX_RESULTS]:
+                identity = normalize_target(file_arg, root)
+                if identity is None:
+                    continue
+                symbols = await self.code_graph.symbols_in(pid, identity)
+                if not symbols:
+                    continue
+                imports = await self.code_graph.imports_of(pid, identity)
+                callers = await self.code_graph.callers_of_symbol(pid, identity)
+                results.append(
+                    {
+                        "file": identity,
+                        "project_id": pid,
+                        "symbols": symbols[:MEMORY_MAX_RESULTS],
+                        "imports": imports[:MEMORY_MAX_RESULTS],
+                        "callers": [
+                            {"src_path": c["src_path"], "src_symbol": c.get("src_symbol")}
+                            for c in callers[:MEMORY_MAX_RESULTS]
+                        ],
+                    }
+                )
+        self._record_memory_outcome("code_context", returned=len(results), suppressed=0)
+        return {
+            "context": results,
+            "note": self._GRAPH_BLIND_SPOTS,
+            **self._disabled_note(disabled, "code_graph"),
+            **self._scope_envelope(scope),
+        }
+
+    async def test_gap(self, caller: Any, args: dict[str, Any]) -> dict[str, Any]:
+        """`mux.testGap()`: recently changed files whose blast radius contains no
+        covering test — changed code a test never reaches. A lower bound: a test
+        that exercises the code through dynamic dispatch is invisible here."""
+        self._require_code_graph("test_gap")
+        scope, projects, disabled, _t = await self._memory_scope(caller, args, "test_gap")
+        since = time.time() - PROJECT_FACT_WINDOW_SECONDS
+        results: list[dict[str, Any]] = []
+        for project in projects:
+            root = str(project.root)
+            pid = str(project.id)
+            facts = await self.tier0.facts_for_project(pid, since=since)
+            changed: set[str] = set()
+            for fact in facts:
+                if fact.get("kind") not in PROVENANCE_WRITE_KINDS:
+                    continue
+                identity = normalize_target(fact.get("target"), root)
+                if identity and not self._is_test_path(identity):
+                    changed.add(identity)
+            for identity in sorted(changed):
+                reverse = await self.code_graph.reverse_dependents(pid, identity, hops=2)
+                reachable = {node.path for node in reverse} | {identity}
+                if any(self._is_test_path(p) for p in reachable):
+                    continue
+                results.append({"file": identity, "project_id": pid})
+        self._record_memory_outcome("test_gap", returned=len(results), suppressed=0)
+        return {
+            "untested_changes": results[:MEMORY_MAX_RESULTS],
+            "note": (
+                "Changed files whose static blast radius contains no test file. "
+                "A lower bound: a test reaching the code through dynamic dispatch "
+                "is not visible, so a listed file is a candidate, not a proof."
+            ),
+            **self._disabled_note(disabled, "code_graph"),
+            **self._scope_envelope(scope),
+        }
+
     # ----------------------------------------------------------- write tools
 
     def _messaging(self) -> Any:
@@ -3316,6 +3736,12 @@ class McpService:
             "prior_resolutions": self.prior_resolutions,
             "dead_ends": self.dead_ends,
             "doc_debt": self.doc_debt,
+            "blast_radius": self.blast_radius,
+            "find_definition": self.find_definition,
+            "find_callers": self.find_callers,
+            "find_references": self.find_references,
+            "code_context": self.code_context,
+            "test_gap": self.test_gap,
             "notify": self.notify,
             "request_spawn": self.request_spawn,
             "run_action": self.run_action,

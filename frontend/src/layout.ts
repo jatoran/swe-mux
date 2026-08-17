@@ -1,4 +1,4 @@
-export type PaneLeafKind = 'terminal' | 'note' | 'preview' | 'history' | 'queue'
+export type PaneLeafKind = 'terminal' | 'note' | 'preview' | 'history' | 'queue' | 'changemap'
 export type SplitDirection = 'horizontal' | 'vertical'
 export type PaneDirection = 'left'|'right'|'up'|'down'
 
@@ -64,6 +64,21 @@ export function queueLeafSessionId(resourceId: string): string | null {
   }
 }
 
+/** A change-map leaf's id is prefixed for the same reason a queue leaf's is: focus
+ *  tracking resolves views by bare id, so a session's map and its terminal must never
+ *  collide. */
+export const changeMapLeafId = (sessionId: string): string => `changemap:${encodeURIComponent(sessionId)}`
+
+export function changeMapLeafSessionId(resourceId: string): string | null {
+  if (!resourceId.startsWith('changemap:')) return null
+  try {
+    const id = decodeURIComponent(resourceId.slice('changemap:'.length))
+    return id || null
+  } catch {
+    return null
+  }
+}
+
 export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null {
   const separator = resourceId.indexOf(':')
   if (separator < 1) return null
@@ -94,7 +109,7 @@ export function parseNoteResourceId(resourceId: string): NoteLeafIdentity | null
 const isLeaf=(value:unknown):value is PaneLeaf=>{
   if(!value||typeof value!=='object')return false
   const leaf=value as Record<string,unknown>
-  return leaf.type==='leaf'&&['terminal','note','preview','history','queue'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
+  return leaf.type==='leaf'&&['terminal','note','preview','history','queue','changemap'].includes(String(leaf.kind))&&typeof leaf.id==='string'&&!!leaf.id
 }
 
 /** The Files browser was a `files:` resource leaf through layout v6. It is now the utility

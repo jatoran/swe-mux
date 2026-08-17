@@ -8,6 +8,7 @@ import { NotesTab } from './NotesTab'
 import { QueuePane } from './QueuePane'
 import { TranscriptTab } from './TranscriptTab'
 import { InsightTab } from './InsightTab'
+import { ChangeMapPane } from './ChangeMapPane'
 import { GitTab } from './GitTab'
 import { ProjectResource } from './ProjectResource'
 import { NotificationsTab, type NotificationData } from './Notifications'
@@ -131,6 +132,9 @@ type Props = {
   queueOpenToken?: number
   /** Queue: pop the focused target's queue out into a workspace tab. */
   onQueueOpenAsTab: (sessionId: string) => void
+  /** Change Map: pop the focused session's map out into a workspace tab. A graph
+   *  wants width, and the drawer column is the narrowest surface in the app. */
+  onChangeMapOpenAsTab: (sessionId: string) => void
   /** Queue: open the fleet-wide review overlay, the watch-here/act-there counterpart to
    *  this session-scoped tab. */
   onOpenFleetQueue: () => void
@@ -305,6 +309,15 @@ export function UtilityDrawer(props: Props) {
         return <TranscriptTab session={session} />
       case 'insight':
         return <InsightTab session={session} project={project} onOpenProjectSettings={props.onOpenProjectSettings} onOpenAutomationDashboard={props.onOpenAutomationDashboard} />
+      case 'changemap':
+        // No `onDone`. Like Transcript and Insight, this is read beside the terminal
+        // rather than acted on, so popping the drawer shut after a node click would end
+        // the reading it exists for.
+        return <ChangeMapPane
+          session={session}
+          project={project}
+          onPopOut={session ? () => props.onChangeMapOpenAsTab(session.id) : undefined}
+        />
       case 'agent':
         return <AgentEnvironmentTab session={session} />
       case 'files':

@@ -116,6 +116,18 @@ export const InsightIcon = () => <svg {...stroke}>
   <path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.4 1 2.5h6c0-1.1.3-1.8 1-2.5A6 6 0 0 0 12 3Z" />
 </svg>
 
+/** A node with two dependents hanging off it: one changed file and what it reaches.
+ *
+ * Deliberately not the Git fork — that mark is about branches, and this tab is about the
+ * import graph. The filled centre node is the edited file; the two it feeds are the blast
+ * radius, which is the one relationship the map exists to draw. */
+export const ChangeMapIcon = () => <svg {...stroke}>
+  <circle cx="6" cy="12" r="2.5" fill="currentColor" />
+  <circle cx="18" cy="5" r="2" />
+  <circle cx="18" cy="19" r="2" />
+  <path d="M8.2 10.7 16 6.2M8.2 13.3 16 17.8" />
+</svg>
+
 /** A hexagonal agent core with three capability ports. */
 export const AgentIcon = () => <svg {...stroke}>
   <path d="m12 3 6 3.5v7L12 17l-6-3.5v-7z" />
@@ -197,6 +209,7 @@ export const DRAWER_TAB_ICONS: Record<DrawerTabId, () => VNode> = {
   queue: QueueIcon,
   transcript: TranscriptIcon,
   insight: InsightIcon,
+  changemap: ChangeMapIcon,
   agent: AgentIcon,
   files: FilesIcon,
   notes: NotesIcon,

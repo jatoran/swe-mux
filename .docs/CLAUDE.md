@@ -115,6 +115,13 @@
 - Changing Tier 0 deterministic fact capture or its source pointers/fingerprints:
   `design/features/tier0-facts.md`, `design/data-model.md`,
   `technical/backend/packages.md`, `technical/backend/sqlite.md`
+- Changing the code-structure graph (tree-sitter engine, import resolution, the
+  graph tables, blast-radius/navigation/context/test-gap MCP tools, the
+  blast-radius/dead-code/god-node/import-cycle annotations, the doc-debt reach
+  refinement, or the per-session change map): `design/features/code-graph.md`,
+  `design/features/mux-mcp.md`, `design/features/deterministic-consumers.md`,
+  `design/features/automation-enablement.md`, `design/features/desktop-shell.md`
+  (grammar bundling), `design/interfaces.md`
 - Changing the user-owned Project context card (its fixed file, editor, bounds, revision contract, setup prompt, or scan prefix): `design/features/project-card.md`, `design/features/automation-enablement.md`, `design/data-model.md`, `design/interfaces.md`, `technical/backend/packages.md`, `technical/frontend/packages.md`
 - Changing the scan timeline, per-run scan grant, rollover boundary, scan budgets, source
   rehydration, or dead-end extraction: `design/features/scan-timeline.md`,
