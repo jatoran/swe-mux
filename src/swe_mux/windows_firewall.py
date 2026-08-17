@@ -44,6 +44,23 @@ FIREWALL_RULE_DESCRIPTION = (
     "Allows a phone on this tailnet to reach swe-mux on private networks."
 )
 
+# The WSL bridge needs its own rule, and for the same reason the tailnet one
+# exists: swe-mux binds a real host socket on the WSL virtual adapter, and
+# Defender governs inbound connections to it. Measured on this host - a listener
+# on the WSL adapter is reachable from Windows and *times out* from inside the
+# distribution, which is the signature of a DROP rather than a missing listener.
+# Without the rule an agent in the distro runs perfectly and its hooks never
+# arrive, which is the silent-uninstrumented state the bridge exists to end.
+#
+# A separate rule rather than widening the mobile one: the two have different
+# scopes (a host-local virtual subnet versus the tailnet range), and a user who
+# enables the bridge has not thereby consented to phone access, or the reverse.
+WSL_FIREWALL_RULE_NAME = "swe-mux WSL Bridge"
+WSL_FIREWALL_RULE_DISPLAY_NAME = "swe-mux WSL Bridge Access"
+WSL_FIREWALL_RULE_DESCRIPTION = (
+    "Allows an agent running inside a WSL distribution to reach swe-mux hooks on this host."
+)
+
 # Inspection is a read; repair launches an elevated shell and waits for the UAC
 # prompt plus the rule change, so it needs a far longer ceiling.
 POWERSHELL_TIMEOUT_SECONDS = 10.0
@@ -325,6 +342,19 @@ foreach ($rule in $blockingRules) {{
 }}
 Get-NetFirewallRule -Name {_quote_ps(FIREWALL_RULE_NAME)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -Name {_quote_ps(FIREWALL_RULE_NAME)} -DisplayName {_quote_ps(FIREWALL_RULE_DISPLAY_NAME)} -Description {_quote_ps(FIREWALL_RULE_DESCRIPTION)} -Direction Inbound -Action Allow -Enabled True -Profile Private -Protocol TCP -LocalPort {port} -Program {_quote_ps(program_path)} -EdgeTraversalPolicy Block | Out-Null"""
+
+
+def build_wsl_repair_script(port: int, program_path: str, remote_subnet: str) -> str:
+    """One inbound Allow rule scoped to the WSL virtual subnet.
+
+    Scoped to `remote_subnet` rather than Any: the only peers that need to reach
+    this socket are distributions on this machine, and the WSL adapter's own
+    subnet names exactly those. Widening it to Any would make the bridge's opt-in
+    quietly grant more than it says.
+    """
+    return f"""$ErrorActionPreference = 'Stop'
+Get-NetFirewallRule -Name {_quote_ps(WSL_FIREWALL_RULE_NAME)} -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -Name {_quote_ps(WSL_FIREWALL_RULE_NAME)} -DisplayName {_quote_ps(WSL_FIREWALL_RULE_DISPLAY_NAME)} -Description {_quote_ps(WSL_FIREWALL_RULE_DESCRIPTION)} -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort {port} -RemoteAddress {_quote_ps(remote_subnet)} -Program {_quote_ps(program_path)} -EdgeTraversalPolicy Block | Out-Null"""
 
 
 def build_elevation_script(powershell_path: str, encoded_repair_script: str) -> str:

@@ -78,7 +78,9 @@ async def serve(
     desktop_control_token: str | None = None,
     relaunch_command: list[str] | None = None,
 ) -> None:
-    hosts = await listener_hosts(config.host, config.tailnet_enabled)
+    hosts = await listener_hosts(
+        config.host, config.tailnet_enabled, config.wsl_bridge_enabled
+    )
     if config.tailnet_enabled and len(hosts) == 1:
         logging.getLogger(__name__).warning(
             "Tailscale listener requested but no active Tailscale IPv4 address was "
@@ -108,12 +110,12 @@ async def serve(
                         f"cannot bind {host}:{config.port} ({exc}); "
                         "another daemon may already be running on this port"
                     ) from exc
-                # A tailnet address that was reported before its interface was
-                # actually plumbed (the ordinary login-autostart race) used to
+                # A tailnet or WSL-adapter address reported before its interface
+                # was actually plumbed (the ordinary login-autostart race) used to
                 # kill the whole daemon instead of degrading the way the
                 # no-address-detected path already does.
                 log.warning(
-                    "could not bind the tailnet listener on %s:%s (%s); "
+                    "could not bind the secondary listener on %s:%s (%s); "
                     "continuing on localhost",
                     host,
                     config.port,

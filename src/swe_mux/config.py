@@ -382,6 +382,14 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8765
     tailnet_enabled: bool = True
+    # Whether the daemon also listens on the WSL virtual adapter, which is what an
+    # agent running natively inside a distribution needs in order to reach its hook
+    # ingress. Off by default and deliberately not inferred from "WSL exists":
+    # binding it lets any process in any distribution on this machine reach the
+    # daemon, and swe-mux has no application login, so that is a real widening of
+    # who holds terminal and code-execution authority. `design/features/backends.md`
+    # states the boundary; `wsl_bridge.py` explains why loopback cannot serve here.
+    wsl_bridge_enabled: bool = False
     default_backend: str = "shell"
     shell_exe: str = field(default_factory=lambda: default_shell_executable())
     harness_exe: dict[str, str] = field(default_factory=default_harness_executables)

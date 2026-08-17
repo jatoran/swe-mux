@@ -2507,13 +2507,63 @@ Read it before scoping any item here rather than re-deriving it.
 
 ### WSL agent bridge
 
-- [ ] Build a distro-side bridge for native WSL Claude/Codex executable discovery,
+- [x] Build a distro-side bridge for native WSL Claude/Codex executable discovery,
   promotion/demotion, hook-secret delivery/execution, transcripts, and native-id
   correlation. Windows interop commands alone do not qualify.
-- [ ] Translate Project, transcript, clipboard-media, preview/listener, instruction, and
+  (`wsl_bridge.py`. Discovery runs *inside* the distribution and rejects anything
+  resolving under `/mnt/`, which is not a nicety: a WSL PATH normally carries the Windows
+  npm directory through interop, so `command -v codex` frequently resolves to a Windows
+  binary that runs - and accepting it would produce a session that looks bridged while the
+  agent writes its transcript into the Windows home. Verified live against Ubuntu 24.04:
+  the native `claude` at `/home/atora/.local/bin/claude` is found and the two interop
+  `/mnt/c/.../npm` binaries are correctly refused.
+  Instrumentation is a single dependency-free stdlib script (`mux_bridge.py`) plus
+  per-harness shims materialized under `~/.mux-bridge/`, rather than installing swe-mux
+  into every distribution - the distro side only has to run the real CLI and POST a hook.)
+- [x] Translate Project, transcript, clipboard-media, preview/listener, instruction, and
   process ownership paths without leaking Windows-only paths or trusting guest listeners.
-- [ ] Keep WSL profiles labelled `agent-bridge-unavailable` until native agents and
+  (`wslpath` in both directions, with the drive-letter regex as a fallback only, because
+  `wslpath` reads the distro's real mount table and a custom `automount.root` would defeat
+  the regex. Verified live: `D:\PROJECTS\swe-mux` -> `/mnt/d/PROJECTS/swe-mux`, and
+  `/home/atora/.claude` -> `\\wsl.localhost\Ubuntu\home\atora\.claude`, which is how the
+  daemon reads a transcript written inside the distribution without executing anything
+  there.)
+- [x] Keep WSL profiles labelled `agent-bridge-unavailable` until native agents and
   promotion/state/history tests match Windows contracts.
+  (`derive_capabilities` now takes `wsl_bridge_ready`, and **`None` - "not checked" -
+  reports the same unavailable label as `False`**. That asymmetry is the whole point:
+  claiming a bridge nobody verified would present an uninstrumented agent as an observed
+  one, and the pane looks entirely normal while producing no hooks, no transcript link and
+  no status. The readiness answer is injected rather than computed, because it costs
+  `wsl.exe` round trips and the profile list re-renders on ordinary polls.)
+
+**The network boundary, which is why the bridge is opt-in.** WSL2's default NAT networking
+forwards `localhost` from Windows *into* a distribution but not back out: from inside, the
+Windows host is the default gateway. A hook fired by a bridged agent therefore cannot reach
+a loopback-bound daemon at all, and fails silently. So `wsl_bridge_enabled` (default off)
+adds a listener on the WSL adapter, and that is a real widening - every process in every
+distribution on the machine can then reach a daemon that has no application login - which is
+why it is named in config rather than inferred from "this host has WSL".
+
+**Measured on this host, and it took two live corrections.** First, the gateway lookup
+shelled out to `ip route show default | awk '{print $3}'`; the pipeline came back
+*unfiltered* across the Python -> `wsl.exe` -> `sh -lc` boundary, which parsed as "no
+gateway" and fell back to loopback - the one address that cannot work. It now reads
+`/proc/net/route` and parses in Python, which also removes the dependency on `iproute2`.
+Second, with the address correct, a listener on the WSL adapter is reachable from Windows
+and **times out** from inside the distribution: Windows Defender Firewall drops it. That is
+the same class of problem the tailnet listener already has a rule for, so
+`windows_firewall.build_wsl_repair_script` adds a matching inbound rule scoped to the WSL
+subnet (`172.17.96.0/20` here) and to the swe-mux executable, never to `Any`. The rule was
+created and confirmed present on this host.
+`bridge_status(daemon_port=...)` probes reachability and names the firewall in its
+`reasons`, and `mux doctor` reports one row per distribution - because a bridge that is
+merely quiet is indistinguishable from one that is working.
+
+Outstanding for this item: an end-to-end hook from a bridged agent through the firewall rule
+to a live daemon. It needs the daemon actually binding the WSL adapter, which needs the
+frozen-app redeploy that is deliberately deferred (see the supervisor note below), so it is
+recorded as unproven rather than claimed.
 
 ### Platform interfaces
 

@@ -5398,10 +5398,31 @@ async def get_doctor_report(request: web.Request) -> web.Response:
         },
         daemon={"host": config.host, "port": config.port},
         now=now,
+        wsl_bridges=await asyncio.to_thread(_wsl_bridge_report, config),
     )
     response = json_response(report)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+def _wsl_bridge_report(config: Any) -> list[dict[str, Any]]:
+    """Bridge status per WSL distribution, or nothing when the bridge is off.
+
+    Off the opt-in this returns an empty list rather than probing: starting a
+    stopped distribution takes seconds, and doing it from a diagnostics read the
+    user did not ask for would be a surprise with a visible cost.
+    """
+    if not getattr(config, "wsl_bridge_enabled", False):
+        return []
+    from .profiles import _wsl_distros
+    from .wsl_bridge import cached_bridge_status, wsl_available
+
+    if not wsl_available():
+        return []
+    return [
+        cached_bridge_status(distro, daemon_port=config.port).as_dict()
+        for distro in _wsl_distros()
+    ]
 
 
 async def patch_session(request: web.Request) -> web.Response:

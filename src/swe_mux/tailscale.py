@@ -370,17 +370,36 @@ async def direct_mobile_voice_tls(
 
 
 def listener_host_values(
-    local_host: str, tailnet_enabled: bool, tailnet_ip: str | None
+    local_host: str,
+    tailnet_enabled: bool,
+    tailnet_ip: str | None,
+    wsl_ip: str | None = None,
 ) -> list[str]:
+    """Every address the daemon binds, loopback first.
+
+    The WSL adapter is a third possible listener and not a variant of the tailnet
+    one: it is host-local rather than remote, it is opted into separately, and it
+    exists for a different reason - an agent running inside a distribution cannot
+    reach a loopback-bound daemon at all, because WSL2 NAT forwards loopback into
+    the distro and not back out of it.
+    """
     hosts = [local_host]
-    if tailnet_enabled and tailnet_ip:
-        if tailnet_ip not in hosts:
-            hosts.append(tailnet_ip)
+    if tailnet_enabled and tailnet_ip and tailnet_ip not in hosts:
+        hosts.append(tailnet_ip)
+    if wsl_ip and wsl_ip not in hosts:
+        hosts.append(wsl_ip)
     return hosts
 
 
-async def listener_hosts(local_host: str, tailnet_enabled: bool) -> list[str]:
-    return listener_host_values(local_host, tailnet_enabled, await tailscale_ipv4())
+async def listener_hosts(
+    local_host: str, tailnet_enabled: bool, wsl_bridge_enabled: bool = False
+) -> list[str]:
+    wsl_ip = None
+    if wsl_bridge_enabled:
+        from .wsl_bridge import wsl_adapter_address
+
+        wsl_ip = wsl_adapter_address()
+    return listener_host_values(local_host, tailnet_enabled, await tailscale_ipv4(), wsl_ip)
 
 
 _TS_STATUS_TTL = 15.0

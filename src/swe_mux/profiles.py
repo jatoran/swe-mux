@@ -232,7 +232,13 @@ def profile_payload(config: Config) -> dict[str, object]:
     def published(profile: LaunchProfile, **extra: object) -> dict[str, object]:
         return {
             **asdict(profile),
-            "capabilities": list(derive_capabilities(profile, breakpoints=breakpoints)),
+            "capabilities": list(
+                derive_capabilities(
+                    profile,
+                    breakpoints=breakpoints,
+                    wsl_bridge_ready=_wsl_bridge_ready(config, profile),
+                )
+            ),
             **extra,
         }
 
@@ -245,6 +251,35 @@ def profile_payload(config: Config) -> dict[str, object]:
             for profile in detected_profiles()
         ],
     }
+
+
+def wsl_distro_of(profile: LaunchProfile) -> str | None:
+    """The distribution a WSL profile starts, read from its own argv."""
+    if profile.cwd_strategy != "wsl":
+        return None
+    args = list(profile.args)
+    if "--distribution" in args:
+        index = args.index("--distribution")
+        if index + 1 < len(args):
+            return args[index + 1]
+    return None
+
+
+def _wsl_bridge_ready(config: Config, profile: LaunchProfile) -> bool | None:
+    """Whether this WSL profile's distribution can actually host a bridged agent.
+
+    Returns None - "not checked" - whenever the bridge is off, which is the honest
+    answer and renders as unavailable. Nothing here probes a distribution the user
+    has not opted into bridging, because starting one costs seconds and doing it
+    from a settings render would be a surprise.
+    """
+    distro = wsl_distro_of(profile)
+    if not distro or not getattr(config, "wsl_bridge_enabled", False):
+        return None
+    from .wsl_bridge import cached_bridge_status
+
+    status = cached_bridge_status(distro, daemon_port=config.port)
+    return status.available and status.installed
 
 
 def find_profile(config: Config, profile_id: str) -> LaunchProfile | None:
@@ -400,7 +435,9 @@ def _powershell_bootstrap(*, osc7: bool, breakpoints: bool = False) -> str:
     )
 
 
-def derive_capabilities(profile: LaunchProfile, *, breakpoints: bool) -> tuple[str, ...]:
+def derive_capabilities(
+    profile: LaunchProfile, *, breakpoints: bool, wsl_bridge_ready: bool | None = None
+) -> tuple[str, ...]:
     """What a pane started from this profile will actually support.
 
     Derived, never stored. `capabilities` used to be a free-text field the user
@@ -424,8 +461,16 @@ def derive_capabilities(profile: LaunchProfile, *, breakpoints: bool) -> tuple[s
     scripted = any(item.casefold() in _POWERSHELL_SCRIPT_ARGS for item in profile.args)
     if profile.cwd_strategy == "wsl":
         # The agent shims live on the Windows PATH, which a WSL process does not
-        # share, so a CLI launched inside the distribution is never mux-instrumented.
-        found.extend(["wsl", "agent-bridge-unavailable"])
+        # share, so a CLI launched inside the distribution is not mux-instrumented
+        # *unless* the distro-side bridge is installed and reachable. The caller
+        # supplies that answer because deciding it costs `wsl.exe` round trips and
+        # this function is pure and rendered on every poll.
+        #
+        # `None` means "not checked", and it deliberately reports the same
+        # unavailable label as False. Claiming a bridge nobody verified is the one
+        # outcome that matters here: it would present an uninstrumented agent as an
+        # observed one, which is exactly what the label exists to prevent.
+        found.extend(["wsl", "agent-bridge" if wsl_bridge_ready else "agent-bridge-unavailable"])
         return tuple(found)
     found.append("agent-aware")
     if executable_name in _POWERSHELL_NAMES and not scripted:
@@ -461,7 +506,11 @@ def resolve_profile(
         raise ValueError({"profile_id": f"executable not found: {profile.executable}"})
     argv = list(profile.args)
     breakpoints = bool(getattr(config, "attention_breakpoint_markers", True))
-    capabilities = list(derive_capabilities(profile, breakpoints=breakpoints))
+    capabilities = list(
+        derive_capabilities(
+            profile, breakpoints=breakpoints, wsl_bridge_ready=_wsl_bridge_ready(config, profile)
+        )
+    )
     executable_name = Path(executable).name.casefold()
     if interactive and executable_name in _POWERSHELL_NAMES:
         if any(item.casefold() in _POWERSHELL_SCRIPT_ARGS for item in argv):

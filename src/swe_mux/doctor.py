@@ -581,6 +581,58 @@ def _freshness_checks(freshness: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _wsl_bridge_checks(bridges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per WSL distribution the bridge was asked about.
+
+    Reported at all because the bridge's failure mode is silent by construction:
+    an agent inside a distribution starts perfectly, runs perfectly, and simply
+    never reports - no hooks, no transcript link, no status. There is nothing for
+    a user to notice, so the only place the truth can appear is a diagnostic that
+    goes looking.
+
+    Severity is `optional`: a host that has not opted into the bridge is not
+    broken, and neither is one whose distributions have no agent installed.
+    """
+    checks: list[dict[str, Any]] = []
+    for bridge in bridges:
+        distro = str(bridge.get("distro") or "?")
+        reasons = [str(item) for item in (bridge.get("reasons") or [])]
+        if bridge.get("available") and bridge.get("installed"):
+            checks.append(
+                _check(
+                    id=f"wsl_bridge:{distro}",
+                    category="wsl",
+                    title=f"WSL bridge ({distro})",
+                    status="ok",
+                    severity="optional",
+                    detail=(
+                        f"{distro} can host a bridged agent: "
+                        + ", ".join(
+                            str(item.get("name")) for item in (bridge.get("harnesses") or [])
+                        )
+                    ),
+                )
+            )
+            continue
+        remedy = None
+        if bridge.get("available") and not bridge.get("installed"):
+            remedy = f"install the distro-side bridge into {distro}"
+        elif reasons:
+            remedy = reasons[0]
+        checks.append(
+            _check(
+                id=f"wsl_bridge:{distro}",
+                category="wsl",
+                title=f"WSL bridge ({distro})",
+                status="unavailable",
+                severity="optional",
+                detail="; ".join(reasons) or f"the bridge is not usable for {distro}",
+                remedy=remedy,
+            )
+        )
+    return checks
+
+
 def build_doctor_report(
     *,
     health: dict[str, Any],
@@ -594,6 +646,7 @@ def build_doctor_report(
     platform: dict[str, Any],
     daemon: dict[str, Any],
     now: float,
+    wsl_bridges: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the consolidated doctor report from already-fetched diagnostics.
 
@@ -611,6 +664,7 @@ def build_doctor_report(
     checks += _status_checks(status_health)
     checks += _background_checks(background)
     checks += _freshness_checks(freshness)
+    checks += _wsl_bridge_checks(wsl_bridges or [])
 
     summary = {"ok": 0, "warn": 0, "fail": 0, "unavailable": 0}
     for check in checks:
