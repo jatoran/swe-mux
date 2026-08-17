@@ -628,6 +628,30 @@ class Config:
     # Back-off after a refused automatic attempt, so a session whose readiness
     # flaps cannot spin the audit log.
     auto_delivery_refusal_backoff_seconds: float = 30.0
+    # Control-plane approvals (`approvals.py`). The master switch is off by
+    # default: with it off, `PermissionRequest` is observed exactly as before and
+    # no session can hold a non-`wait` mode. The bounds below are what every
+    # grant runs under; the grant itself is per-conversation runtime state on the
+    # session record, not config, so switching it back off is instant.
+    approval_auto_enabled: bool = False
+    # How long a grant lives before it decays back to `wait`. Short on purpose:
+    # the failure mode this bounds is an operator who switched `allow_all` on for
+    # one task and left it on for the day.
+    approval_grant_ttl_minutes: int = 30
+    # Requests one grant may answer before it disables itself. The cap is per
+    # grant rather than per hour so a runaway loop is bounded by count, which is
+    # the thing that actually runs away.
+    approval_max_auto_per_grant: int = 200
+    # What the generated hook settings tell the CLI to wait for. Claude's own
+    # default is 600 s and a timed-out hook falls through to the normal prompt,
+    # so this is not a correctness gate — it is the difference between a daemon
+    # hiccup costing a second and costing ten minutes of a stalled agent.
+    approval_hook_timeout_seconds: float = 5.0
+    # Whether `allow_all` may be selected at all on this install. Separate from
+    # the master switch because "let mux answer the boring ones" and "let mux
+    # answer everything" are different decisions, and the first is the one most
+    # installs want.
+    approval_allow_all_permitted: bool = True
     # Phase 5 agent-to-agent messaging (`mux.notify`). The tool exists by
     # default because a notify lands as an inert draft unless the *receiving*
     # session opted in to accepting agent messages.
@@ -673,6 +697,23 @@ class Config:
     # Spawn's blast radius is a single injection into fan-out, so this is smaller
     # than the interrupt/end budget and is what bounds that fan-out.
     agent_spawn_hourly_budget: int = 10
+    # Scheduled runs. The install-wide master switch is here rather than
+    # per-Project because it is the emergency stop: off means no schedule fires
+    # anywhere, whatever any Project opted into. The caps are global for the same
+    # reason spend limits are - what a scheduled fleet may cost this machine is
+    # not a per-repository decision.
+    scheduled_runs_enabled: bool = True
+    # How many schedule-started sessions may be alive at once. Unattended agents
+    # that accumulate are the failure mode this bounds: nothing ends an agent
+    # session automatically, so without a ceiling a nightly job on five Projects
+    # is five forgotten panes a week later.
+    scheduled_runs_max_concurrent: int = 3
+    # Sweep cadence. Schedules resolve to the minute, so this only decides how
+    # promptly a due minute is noticed.
+    scheduled_runs_poll_seconds: float = 5.0
+    # How long the run history behind each schedule is kept. Long enough that
+    # "has this been failing all week" is answerable.
+    scheduled_run_retention_days: int = 60
     automation_concurrency: int = 2
     automation_queue_size: int = 256
     automation_max_input_tokens: int = 4096
@@ -1075,6 +1116,15 @@ def _validate(config: Config) -> None:
         errors["auto_delivery_session_ttl_minutes"] = "must be between 1 and 1440 minutes"
     if not 0 <= config.auto_delivery_refusal_backoff_seconds <= 3600:
         errors["auto_delivery_refusal_backoff_seconds"] = "must be between 0 and 3600 seconds"
+    # Approval bounds. Every lower bound here is the point: an unbounded grant or
+    # an unbounded answer count is standing authority, which is the one thing
+    # this feature must not become.
+    if not 1 <= config.approval_grant_ttl_minutes <= 480:
+        errors["approval_grant_ttl_minutes"] = "must be between 1 and 480 minutes"
+    if not 1 <= config.approval_max_auto_per_grant <= 5000:
+        errors["approval_max_auto_per_grant"] = "must be between 1 and 5000 requests"
+    if not 1 <= config.approval_hook_timeout_seconds <= 60:
+        errors["approval_hook_timeout_seconds"] = "must be between 1 and 60 seconds"
     for field_name in ("auto_delivery_quiet_start", "auto_delivery_quiet_end"):
         value = str(getattr(config, field_name) or "")
         if value and not QUIET_TIME.fullmatch(value):
@@ -1095,6 +1145,12 @@ def _validate(config: Config) -> None:
         errors["session_control_graceful_timeout_s"] = "must be between 1 and 120 seconds"
     if not 0 <= config.agent_spawn_hourly_budget <= 1000:
         errors["agent_spawn_hourly_budget"] = "must be between 0 and 1000 spawns per hour"
+    if not 0 <= config.scheduled_runs_max_concurrent <= 50:
+        errors["scheduled_runs_max_concurrent"] = "must be between 0 and 50 sessions"
+    if not 1 <= config.scheduled_runs_poll_seconds <= 300:
+        errors["scheduled_runs_poll_seconds"] = "must be between 1 and 300 seconds"
+    if not 1 <= config.scheduled_run_retention_days <= 3650:
+        errors["scheduled_run_retention_days"] = "must be between 1 and 3650 days"
     if not 1 <= config.automation_concurrency <= 16:
         errors["automation_concurrency"] = "must be between 1 and 16"
     if not 16 <= config.automation_queue_size <= 4096:

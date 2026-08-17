@@ -20,6 +20,100 @@ AwaitingReason = Literal["approval", "question", "elicitation", "rate_limit", "a
 # hold several) and every one either self-expires or is positively cleared.
 StandingActivityKind = Literal["loop", "cron", "background_tasks", "subagents"]
 
+# What mux may answer on the agent's behalf when the harness asks for tool
+# permission. Three positions and no more: `wait` routes every request to the
+# human (the default and the only one that changes nothing), `allowlisted`
+# answers requests matching the Project's rules, `allow_all` answers everything
+# the hard floor in `approvals.py` does not forbid. "Deny" is deliberately not a
+# position — see that module's docstring.
+ApprovalMode = Literal["wait", "allowlisted", "allow_all"]
+APPROVAL_MODES: tuple[ApprovalMode, ...] = ("wait", "allowlisted", "allow_all")
+
+
+@dataclass(slots=True)
+class ApprovalPolicy:
+    """The live auto-approval grant for one agent conversation.
+
+    **Keyed on `agent_run_id`, not on the session.** A session outlives its
+    task: `/clear`, `/resume`, Branch, and conversation rollover all start work
+    the operator never granted anything for, and a grant that survived them
+    would be the stuck-status bug class applied to authority. `run_id` is
+    therefore compared on every decision and a mismatch reads as `wait`.
+
+    Bounded the same way for the same reason: `expires_at` is always set for a
+    non-`wait` mode, so a mode nobody remembers switching on decays by itself
+    rather than waiting to be noticed.
+    """
+
+    mode: ApprovalMode = "wait"
+    #: The conversation this grant was made against. None while mode is `wait`.
+    run_id: str | None = None
+    #: Wall clock. Always set for a non-`wait` mode; the grant reads as `wait`
+    #: past it without needing anything to sweep.
+    expires_at: float | None = None
+    granted_at: float | None = None
+    #: Free-text origin of the grant ("ui", "palette", "voice") for the ledger.
+    set_by: str = ""
+    #: The allow rules resolved from the Project at the moment the grant was
+    #: made, rather than re-read per request. Two reasons, and both matter: the
+    #: decision runs on the agent's critical path and must do no file I/O, and a
+    #: grant is authorization of *the rules the operator saw*, so an edit to the
+    #: committed Project file must not silently widen a grant already standing.
+    #: Empty while mode is `wait` or `allow_all`, neither of which consults them.
+    rules: list[str] = field(default_factory=list)
+    #: Requests answered under this grant, and the last one, so the strip can
+    #: say what the mode has actually been doing rather than only that it is on.
+    auto_approved: int = 0
+    #: How many requests this grant may answer in total, fixed when it was made.
+    #: Carried on the grant rather than read from config per decision so the
+    #: strip can render "4 of 200" and so lowering the setting cannot retroactively
+    #: revoke a grant mid-task.
+    max_auto: int = 200
+    last_decision_at: float | None = None
+    last_request: str | None = None
+    #: Requests the floor refused to answer while the mode was on. Surfaced
+    #: because "allow_all is on and it still asked me" is otherwise a bug report.
+    floor_deferred: int = 0
+
+    def snapshot(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_snapshot(cls, data: dict[str, Any]) -> ApprovalPolicy:
+        known = set(cls.__dataclass_fields__)
+        kwargs = {key: value for key, value in data.items() if key in known}
+        try:
+            policy = cls(**kwargs)
+        except TypeError:
+            return cls()
+        if policy.mode not in APPROVAL_MODES:
+            return cls()
+        # A grant restored without its rules would silently become "allowlisted
+        # with an empty allowlist", which reads as the feature being broken
+        # rather than as the drift it is. Drop to `wait` instead, which is the
+        # only safe direction and is visible in the strip.
+        policy.rules = [rule for rule in policy.rules if isinstance(rule, str) and rule.strip()]
+        if policy.mode == "allowlisted" and not policy.rules:
+            return cls()
+        return policy
+
+    def effective_mode(self, run_id: str | None, now: float) -> ApprovalMode:
+        """The mode that actually applies right now.
+
+        Expiry and run-scoping are evaluated at read time rather than swept,
+        because a sweep that does not run leaves authority standing while a
+        read-time check cannot.
+        """
+        if self.mode == "wait":
+            return "wait"
+        if self.expires_at is not None and now >= self.expires_at:
+            return "wait"
+        if self.run_id and run_id and self.run_id != run_id:
+            return "wait"
+        if self.run_id and not run_id:
+            return "wait"
+        return self.mode
+
 
 @dataclass(slots=True)
 class StandingActivity:
@@ -184,6 +278,10 @@ class SessionRecord:
     # delivery_state / this): standing engagements that outlive the turn.
     # Run-scoped — every site that resets observation identity clears it.
     standing_activity: list[StandingActivity] = field(default_factory=list)
+    # Whether mux answers this conversation's tool-permission requests itself.
+    # Run-scoped and self-expiring (see `ApprovalPolicy`); cleared wherever
+    # observation identity resets, exactly like `standing_activity`.
+    approval_policy: ApprovalPolicy = field(default_factory=ApprovalPolicy)
     tokens_in: int = 0
     tokens_out: int = 0
     tokens_cache_read: int = 0
@@ -347,9 +445,16 @@ class SessionRecord:
         when adopting metadata written by an older one.
         """
         known = set(cls.__dataclass_fields__)
-        nested = {"git", "standing_activity"}
+        nested = {"git", "standing_activity", "approval_policy"}
         kwargs = {key: value for key, value in data.items() if key in known and key not in nested}
         record = cls(**kwargs)
+        policy = data.get("approval_policy")
+        if isinstance(policy, dict):
+            # A grant survives a session-preserving daemon restart, which is a
+            # routine operation here — losing it mid-task would silently return
+            # the session to `wait` and read as the feature not working. Its own
+            # expiry and run check still bound it on the other side.
+            record.approval_policy = ApprovalPolicy.from_snapshot(policy)
         git = data.get("git")
         if isinstance(git, dict):
             record.git = GitState(

@@ -268,6 +268,16 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   (`status-detection.md`). The settings directory is removed when its owning terminal ends.
 - When mux MCP is registered, the same generated Claude settings allow only the closed read-tool set without a permission prompt.
   `notify` and `request_spawn` are deliberately absent from that allowlist and retain Claude's normal tool approval.
+- **`hook_approval_decisions`** declares whether a harness lets a hook *answer* a permission
+  request rather than only observe one — whether it reads a decision back off the hook command's
+  stdout. Claude does (`PermissionRequest` fires only when a prompt would be shown, carries
+  `tool_name`/`tool_input`, and takes `hookSpecificOutput.decision`); the rest publish their
+  permission events on a one-way bus, and opencode's decision-capable plugin hook is not the one
+  the mux plugin subscribes to. Declared rather than inferred because the failure is silent in
+  the worst direction: a harness wrongly marked capable renders an approval-mode selector that
+  changes nothing while the operator believes requests are being answered. Only a harness
+  declaring it receives the explicit `timeout` on its decision hook, and only it can hold a
+  non-`wait` approval mode (`approvals.md`).
 - Claude executes hook commands through Bash even on Windows. Generated commands use
   Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
   written by atomic replacement, and must never use raw Windows `list2cmdline` output.

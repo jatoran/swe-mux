@@ -127,7 +127,9 @@ test('a session heading never restates its Project or its only row', async ({ pa
       rollup: (heading.querySelector('small') as HTMLElement | null)?.innerText.trim() || '',
     })))
 
-  expect(headings.map(heading => heading.title)).toEqual(['swe-mux runtime', 'claude-d92695', 'codex-a13f'])
+  // Sessions are named the way the sidebar names them: a generated title while a session is
+  // still auto-named, the hand-given name once it has been renamed.
+  expect(headings.map(heading => heading.title)).toEqual(['swe-mux runtime', 'Fix the parser', 'release prep'])
   expect(headings[1].rollup).toBe('')
   // The multi-process session keeps its rollup, because there it aggregates.
   expect(headings[2].rollup).toContain('4 proc')

@@ -253,6 +253,16 @@ approval unless this session's own screen proves the dialog is gone (see below).
 
 ### Approval stabilization
 
+**A request mux answers itself never enters this machinery at all.**
+When the conversation holds a non-`wait` approval mode and the request clears the floor and the
+allowlist (`approvals.md`), `apply_hook_observation` returns a decision and returns *before*
+`_request_stabilized_approval`: no candidate, no timer, no `approval_detected`, no `awaiting`,
+no sound, and no web push.
+This is the one case where mux knows the decision instant rather than inferring it, which is
+precisely the evidence the delegated-approval rules below have to recover from the screen.
+A request the mode declines to answer — including every floor deferral — takes the ordinary path
+unchanged, so the contract below still describes every approval a human ever sees.
+
 Approval detection has an internal and a user-visible boundary.
 `approval_detected` blocks delivery readiness immediately but does not change `SessionState`, run automation attention, play a sound, or route web push.
 If the approval remains unresolved for `APPROVAL_STABILIZATION_SECONDS` (5 s), the daemon transitions to `awaiting(approval)` and emits one stabilized `approval_needed` event.

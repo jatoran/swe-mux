@@ -52,10 +52,27 @@ PROJECT_CONFIG_FIELDS = {
     # approves; "granted" lets an agent create a session here directly, inside a
     # per-origin budget. Authority is by target Project, as for interrupt/end.
     "spawn_grant",
+    # Which tool-permission requests mux may answer for sessions in this Project
+    # while a conversation holds the `allowlisted` mode, as `Tool` /
+    # `Tool(pattern)` rules. The rules live here rather than on the session
+    # because "reading this repo's .claude config is fine" is a property of the
+    # codebase, and because a rules editor is the wrong thing to hand someone in
+    # the moment they want to switch a mode on. Unset means the built-in
+    # `approvals.DEFAULT_ALLOW_RULES`; an explicit empty list means "nothing".
+    "approval_allow",
+    # The strongest mode a session in this Project may hold, whatever the
+    # operator picks. A repository can therefore refuse `allow_all` outright
+    # without depending on everyone remembering not to select it.
+    "approval_ceiling",
 }
 #: The two authority levels a grant field may hold. "off" is not a value here -
 #: it is the absence of the `session_control` automation opt-in.
 SESSION_CONTROL_GRANTS = ("draft", "granted")
+#: Values `approval_ceiling` may hold, weakest first. Mirrors
+#: `models.APPROVAL_MODES` and is asserted equal to it in the test suite; it is
+#: restated rather than imported to keep this module free of model imports.
+APPROVAL_CEILINGS = ("wait", "allowlisted", "allow_all")
+MAX_PROJECT_APPROVAL_RULES = 256
 # Read and discarded, never written. The scan-timeline dollar budget was a
 # per-project field; it is one global setting now, because a cap that lives in
 # a committed file nobody opens is a cap nobody can find when it stops the
@@ -785,6 +802,48 @@ def project_spawn_grant(root: str | Path) -> str:
     return "draft"
 
 
+def project_approval_rules(root: str | Path) -> list[str] | None:
+    """This Project's declared auto-approval allowlist.
+
+    ``None`` means the Project declared nothing and the built-in defaults apply;
+    ``[]`` means it declared an empty list, which is a real and different answer
+    ("approve nothing automatically here"). A malformed config returns ``None``
+    rather than a partial list, so a broken file cannot widen the allowlist.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            rules = values.get("approval_allow")
+            if isinstance(rules, list):
+                return [str(rule).strip() for rule in rules if str(rule).strip()]
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        pass
+    return None
+
+
+def project_approval_ceiling(root: str | Path) -> str:
+    """The strongest approval mode a session in this Project may hold.
+
+    Defaults to ``allow_all`` (no Project-level restriction) so the feature's
+    bounds come from the install switch and the per-conversation grant rather
+    than from every repository having to opt in. A malformed config falls back
+    to the *safe* end instead, because an unreadable ceiling is not evidence of
+    permission.
+    """
+    path = Path(root) / ".swe-mux" / "config.toml"
+    try:
+        if path.is_file():
+            values = parse_project_config(path.read_bytes())
+            ceiling = values.get("approval_ceiling")
+            if ceiling in APPROVAL_CEILINGS:
+                return str(ceiling)
+            return "allow_all"
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError):
+        return "wait"
+    return "allow_all"
+
+
 def effective_project_ignores(root: str | Path, global_patterns: list[str]) -> list[str]:
     patterns = list(global_patterns)
     path = Path(root) / ".swe-mux" / "config.toml"
@@ -1106,6 +1165,18 @@ def parse_project_config(data: bytes) -> dict[str, Any]:
         raise ValueError("session_control_grant must be draft or granted")
     if parsed.get("spawn_grant") not in {None, *SESSION_CONTROL_GRANTS}:
         raise ValueError("spawn_grant must be draft or granted")
+    if parsed.get("approval_ceiling") not in {None, *APPROVAL_CEILINGS}:
+        raise ValueError("approval_ceiling must be wait, allowlisted, or allow_all")
+    if "approval_allow" in parsed and (
+        not isinstance(parsed["approval_allow"], list)
+        or not all(isinstance(item, str) for item in parsed["approval_allow"])
+        or len(parsed["approval_allow"]) > MAX_PROJECT_APPROVAL_RULES
+        or any(not item.strip() or len(item) > 200 for item in parsed["approval_allow"])
+    ):
+        raise ValueError(
+            "approval_allow must be an array of at most "
+            f"{MAX_PROJECT_APPROVAL_RULES} non-empty rule strings"
+        )
     if "notification_sounds_enabled" in parsed and not isinstance(
         parsed["notification_sounds_enabled"], bool
     ):
@@ -1168,6 +1239,7 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
         "prompt_library_scope",
         "session_control_grant",
         "spawn_grant",
+        "approval_ceiling",
     ):
         if value := values.get(key):
             escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
@@ -1191,6 +1263,12 @@ def serialize_project_config(values: dict[str, Any]) -> bytes:
     if patterns := values.get("ignore_patterns"):
         encoded = ", ".join(json.dumps(str(pattern)) for pattern in patterns)
         lines.append(f"ignore_patterns = [{encoded}]")
+    if "approval_allow" in values and isinstance(values["approval_allow"], list):
+        # Written even when empty, because an empty allowlist is a *decision*
+        # ("this Project approves nothing automatically") and dropping it would
+        # silently restore the built-in defaults on the next read.
+        encoded = ", ".join(json.dumps(str(rule)) for rule in values["approval_allow"])
+        lines.append(f"approval_allow = [{encoded}]")
     if automations := values.get("automations"):
         pairs = ", ".join(
             f"{key} = {'true' if bool(value) else 'false'}"

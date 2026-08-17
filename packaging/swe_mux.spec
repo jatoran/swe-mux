@@ -16,6 +16,11 @@ hiddenimports = []
 # package data / binaries; without collecting them the frozen app parses no code
 # and the Phase 7.9 code-structure graph is silently empty. This is the named
 # acceptance check in the roadmap: the grammar binaries must load in the bundle.
+#
+# `tzdata` is pure data with no importable code path of its own: nothing in the
+# source graph references it, so a bundle built without collecting it explicitly
+# has no IANA database, and every schedule that names a timezone fails in the
+# frozen app while working in a source run (`design/features/scheduled-runs.md`).
 for package in (
     "PIL",
     "pystray",
@@ -23,6 +28,7 @@ for package in (
     "winpty",
     "tree_sitter",
     "tree_sitter_language_pack",
+    "tzdata",
 ):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas

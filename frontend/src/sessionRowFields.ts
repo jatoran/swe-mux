@@ -9,6 +9,7 @@
 // complete` are duplication, not information, and the space they cost is the
 // space every other field is competing for.
 
+import { MODE_LABELS, effectiveApprovalMode } from './approvals.ts'
 import { activityBadges, awaitingLabel, type ActivityBadge } from './sessionStatus.ts'
 import { hasHarnessMeasurement, isAgentBackend, isObservedHarness } from './harnessRegistry.ts'
 import { displayModelName } from './modelDisplay.ts'
@@ -473,6 +474,27 @@ function candidateFor(
       return badges.length
         ? make({ kind: 'badges', text: badges.map(badge => badge.label).join(', '), badges }, true)
         : null
+    }
+    case 'approvals': {
+      // Reads the mode that is actually in force, not the stored one: a grant
+      // that expired or was made against a replaced conversation applies as
+      // `wait`, and a badge claiming otherwise would be the sidebar asserting
+      // authority the daemon has already dropped.
+      if (session.pending) return null
+      const mode = effectiveApprovalMode(session, context.now)
+      if (mode === 'wait') return null
+      const answered = session.approval_policy?.auto_approved ?? 0
+      return make(
+        {
+          kind: 'text',
+          text: mode === 'allow_all' ? 'auto ALL' : 'auto',
+          tone: 'warn',
+          title:
+            `swe-mux is answering this conversation's approval requests (${MODE_LABELS[mode]})` +
+            `; ${answered} answered so far`,
+        },
+        true,
+      )
     }
     case 'draft': {
       const since = unsentInputSince(session, context)

@@ -66,6 +66,9 @@ export const SECTION_ALIASES:Record<string,SettingsTab> = {
   'hooks and notifications':'notifications',notifications:'notifications',
   'remote and security':'remote',
   'auto-delivery':'queue','agent messaging':'queue','prompt queue':'queue',
+  // The schedules themselves live in the drawer's Schedule tab; only the install-wide
+  // limits are here, under Automation.
+  'scheduled runs':'automation',schedules:'automation',
   'read aloud (tts)':'voice',
 }
 

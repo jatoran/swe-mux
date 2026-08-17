@@ -171,7 +171,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                         -> Phase 8  Telegram control            [descoped to decision-gated]
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
-                                            -> Phase 11  Public packaging and release    [open]
+                                            -> Phase 10.5 Distribution licensing + voice-stack replacement [open]
+                                              -> Phase 11  Public packaging and release  [open]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -251,6 +252,7 @@ A phase here may depend on one, but none of them is a phase.
 | `CROSS_PLATFORM_FINDINGS.md` | research | Feeds Phases 10 and 11; holds the platform-interface inventory and verification matrix those phases would otherwise duplicate. |
 | `NEW_USER_RELEASE_READINESS.md` | active plan | Feeds Phases 7 and 11; holds the fresh-machine onboarding detail those phases depend on: the remote-connection connect flow (connection state, phone DNS, QR), Windows Defender Firewall repair, agent instrumentation toggles, the onboarding-prerequisites surface, and first-use download costs. Records the audit finding that the shippable code is free of hardcoded identity, absolute personal paths, and a hardcoded daemon host, so agnosticism here is a defaults-and-onboarding concern rather than an un-hardcoding one. |
 | `PLUGIN_SYSTEM_FINDINGS.md` | research | Decision-gated. Records what a plugin system would add over the shipped meta-hooks/automation/project-actions substrate, and the constraints any design must accept. |
+| `HARNESS_EXPANSION_CANDIDATES.md` | research | Feeds Phase 12. Holds the per-candidate parity study for the agent CLIs not yet in the registry: what each one can give the declared capability axes, which registry gates it clears, and which candidates are rejected and why. Phase 12 sequences the work; this document holds the evidence behind each descriptor. |
 | `PERFORMANCE_RUNBOOK.md`, `STATUS_INCIDENT_RUNBOOK.md`, `TERMINAL_INPUT_INCIDENT_RUNBOOK.md` | operational | Investigation procedures for shipped subsystems, not planned work. |
 | `CONTINUITY_TOUCH_KEYBOARD_ASK.md` | open ask against a vendored dependency | Blocked on the note editor upstream, not on a phase. |
 
@@ -955,7 +957,13 @@ before Phase 5.
   `constraints_json` (`not_before`/`expires_at`, 30-day horizon, `delay_seconds` resolved at
   write time). Both paths honour it: an early manual send is refused `delivery_not_due` and
   keeps its state, "Send now" is the explicit human override, and an expired item is
-  cancelled rather than delivered late. Recurring/schedule-driven sends remain out of scope.
+  cancelled rather than delivered late. Recurring/schedule-driven *sends* remain out of scope:
+  a queue item is still delivered once and never re-armed.
+  **Recurrence exists one layer up instead, as scheduled runs** (`design/features/scheduled-runs.md`):
+  a schedule starts a *session* on a cron/interval/one-off trigger and stages its follow-up
+  messages as ordinary queue items with these same constraints. That is deliberately not a
+  repeating queue item - the recurring thing is the conversation, and a message that re-armed
+  itself would have no run to bind to.
 
 ### Human/device fleet queue
 
@@ -2950,10 +2958,155 @@ every live session, which is why it was a deliberate act rather than part of the
   sockets are bound, so it needs setting plus a daemon restart before a bridged agent's hook
   can reach the daemon at all. Nothing has yet run that path end to end.
 
+## Phase 10.5 - Distribution licensing and the voice-stack replacement
+
+swe-mux has no `LICENSE` file, and the frozen desktop bundle it hands to a user redistributes GPL-2.0 code.
+Both facts are inert while this machine is the only distribution, and both become real the moment Phase 11 publishes an artifact.
+This phase is the precondition for that publication: it removes every copyleft component from the shipped closure, replaces the two voice engines that put them there, and states the project's own license.
+
+The audit behind it ran on 2026-08-17 against the live `dist/swe-mux` bundle and the resolved dependency closure rather than against declared metadata.
+Declared metadata is precisely what hid the defects: PyAV declares BSD-3-Clause and sherpa-onnx declares Apache-2.0, and both ship GPL binaries inside the wheel.
+
+### Measured baseline
+
+Copyleft in the shipped bundle:
+
+- `dist/swe-mux/_internal/av.libs/` is 63 MB of FFmpeg, and `avcodec-62`'s import table links `libx264` and `libx265`, which are GPL-2.0-or-later.
+  Its configure string carries `--enable-libx264 --enable-libx265 --enable-version3` while `av_license()` compiles to the single string `LGPL version 3 or later`.
+  The linkage governs, not the self-description.
+- Nothing in swe-mux uses it.
+  `av` enters only through `faster_whisper/__init__` into `faster_whisper/audio.py`, whose module-level `import av` exists for `decode_audio`.
+  `voice.py:1514` builds a float32 array from int16 PCM taken from a validated WAV header and hands it straight to `WhisperModel`, and no call site reaches `decode_audio`.
+- `edge-tts` is LGPL-3.0 and is the default engine (`tts_engine: str = "edge"`, `config.py:760`).
+  It is not a client of a public API: it reproduces Microsoft Edge's read-aloud call against an undocumented endpoint using an embedded client token.
+  The three-attempt 403 retry in `_synthesize_edge` is the visible symptom of a gate Microsoft rotates.
+  Every user of a published build would be making unauthorised calls to a Microsoft service, and the text sent is a distillation of the operator's own sessions.
+- `pystray` is LGPL-3.0 and stays, under notice and relink terms rather than removal.
+- MPL-2.0 (`certifi`, `pywebpush`, `py-vapid`, `pathspec`, `tqdm`) is file-level copyleft and needs license text only.
+
+Attribution owed regardless of the voice work:
+
+- No `LICENSE`, `NOTICE`, or `THIRD-PARTY-NOTICES` exists anywhere in the repository, so the default is all rights reserved, which contradicts what `site/index.html` announces.
+- Apache-2.0 dependencies that carry a NOTICE (`huggingface_hub`, `tokenizers`, `requests`, `aiohttp`) need it reproduced.
+- The frontend bundle redistributes **modified** `@xterm/*` (MIT), patched at install time by `patch-xterm-webgl.mjs` and `patch-xterm-requestmode.mjs`, so the notice must state that modification.
+- `ctranslate2` ships Intel's `libiomp5md.dll` under Intel's own redistribution terms.
+- The notification sounds already carry `LICENSE.orca.txt` (MIT) and are compliant.
+
+Replacements measured and **rejected**, recorded so they are not re-proposed:
+
+- **sherpa-onnx with Parakeet TDT**, the stack Orca uses for dictation.
+  Its published wheel statically links espeak-ng: `_sherpa_onnx.cp312-win_amd64.pyd` contains `espeak_Initialize`, `espeak_ng_Cancel`, and `ESPEAK_DATA_PATH`.
+  TTS is compiled in by default, so espeak-ng ships whether or not TTS is ever called.
+  Upstream agrees it is a licensing defect (k2-fsa/sherpa-onnx#3731, open since 2026-07-08, deferred to a 2.0.0 that has not shipped against a current 1.13.5).
+  Reopen when 2.0.0 ships, not before, because the alternative is maintaining a `SHERPA_ONNX_ENABLE_TTS=OFF` source build per platform.
+- **`kokoro-onnx`** as the Kokoro runtime.
+  It requires `espeakng-loader` and `phonemizer-fork` unconditionally, and `import kokoro_onnx` fails outright without them.
+  `espeakng-loader` ships `espeak-ng.dll` plus 18 MB of espeak data, so the dependency is a real GPL payload rather than a nominal one.
+- **`misaki[en]`** as an extra, because the `en` extra pulls those same two packages.
+  The base `misaki` distribution plus `spacy` and `num2words` must be depended on directly instead.
+- **Piper**, which embeds espeak-ng from 1.3 onward, and **KittenTTS**, which uses the same phonemizer family.
+- **Rebuilding PyAV against an LGPL-only FFmpeg**, and **relicensing swe-mux as GPL** so the current bundle becomes lawful.
+  Both spend real effort solving a problem that disappears when an unused dependency is dropped.
+- **Browser `speechSynthesis`.**
+  It cannot produce the server-side clip that `/api/voice/clips/{clip_id}/audio`, clip history, and phone playback are built on.
+- **AGPL or a source-available license.**
+  The strip-mining threat model does not fit a local desktop app that drives local CLIs, and both repel the users and the investors the project wants.
+
+Kokoro replacement baseline, measured on the development host: int8 ONNX through a direct onnxruntime session, misaki G2P, `fallback=None`.
+
+| case | chars | g2p | synth | audio | RTF |
+|---|---|---|---|---|---|
+| short | 37 | 10.5 ms | 1.62 s | 2.39 s | 0.68 |
+| medium | 125 | 3.9 ms | 3.49 s | 6.34 s | 0.55 |
+| long | 383 | 7.3 ms | 10.60 s | 21.74 s | 0.49 |
+
+Model load is 0.77 s against 89 MB of int8 weights plus 27 MB of voices.
+The ONNX interface is three inputs (`tokens` int64, `style` float32[1, 256], `speed` float32[1]) and one `audio` output, which is why the runtime is a direct session rather than a wrapper library.
+The G2P produces identical output with `espeakng_loader` and `phonemizer` physically removed from the environment, which is what makes the GPL-free path verified rather than intended.
+
+Out-of-vocabulary behaviour without an espeak fallback was measured against this project's own vocabulary.
+Unresolved words return a `❓` token: `pyproject`, `Worktree`, `healthcheck`, and the `swe` of `swe-mux`, which is roughly one word per sentence of release-note prose.
+Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, and every failure is a compound, so the fix is a splitter that retries on camelCase, hyphens, and underscores before giving up, with a small project lexicon behind it.
+
+### Decisions
+
+- **swe-mux is licensed Apache-2.0.**
+  Over MIT for three reasons that matter to a project that may later take investment: an explicit patent grant with retaliation termination where MIT is silent, an explicit trademark reservation that keeps the name and mark out of the grant, and §5, which states the license inbound contributions arrive under instead of relying on convention.
+  The cost is length and a per-file header convention that this phase declines; one `LICENSE` plus a README section is the whole ceremony.
+- **Contributions use a DCO sign-off, not a CLA.**
+  Sole authorship today means relicensing is still possible; the first outside contribution ends that permanently, and a CLA only binds what follows it.
+  The trigger to revisit is a funding conversation becoming concrete, not a contribution arriving.
+  Copyright should sit with an entity rather than an individual if one is ever formed.
+- **`av` is dropped, not replaced.**
+  A stub module satisfying the unused import is the entire fix, and it removes 66 MB along with the GPL closure.
+- **STT stays on faster-whisper.**
+  Once `av` is gone the remaining closure is MIT throughout (faster-whisper, CTranslate2, the Whisper weights), so there is no licensing reason to migrate, and no user-visible change to make.
+- **TTS moves to Kokoro-82M** (Apache-2.0 model, trained on public-domain and permissively-licensed audio) driven directly through onnxruntime, which the bundle already carries.
+- **Phonemization is lexicon-only, and no espeak-ng package may enter the closure.**
+  This is the constraint that rejected three otherwise-reasonable libraries, and it is a dependency-review rule, not a preference.
+- **Models are downloaded on demand and never bundled**, matching what already happens for the Whisper weights and the Silero VAD assets.
+- **The OS voice stays the always-available fallback and becomes the default**, so a fresh install speaks without a 116 MB download and without a network call.
+
+### Remove the GPL closure
+
+- [ ] Add an `av` stub and `--exclude-module av` to the PyInstaller spec, so `faster_whisper` imports cleanly with no FFmpeg present.
+  Assert in a test that `av.libs` is absent from a built bundle, because this regresses silently the next time the spec is regenerated.
+- [ ] Prove the STT path end to end on the built bundle rather than in the source checkout, since the source venv keeps its own working `av`.
+- [ ] Add a dependency-review gate that fails on a GPL or LGPL distribution entering the resolved closure without an explicit allowlist entry, with `pystray` as the only initial entry.
+  The audit's whole lesson is that declared package metadata does not describe shipped binaries, so the gate must read the resolved closure.
+
+### Replace the TTS engine
+
+- [ ] Add a `kokoro` engine behind the existing `tts_engine` seam in `voice.py`, alongside `edge` and `sapi`, producing the same clip contract into `<data_dir>/voice/` and `voice_clips`.
+- [ ] Drive the model through a direct onnxruntime session over the three-input interface; do not take a wrapper dependency.
+- [ ] Depend on base `misaki` plus `spacy` and `num2words` directly, construct the G2P with `fallback=None`, and add an import-time assertion that no espeak module is present.
+- [ ] Add the compound splitter and a project lexicon for the vocabulary the measurement found unresolved, with an unambiguous last resort (spell the word) so an unknown token is never silently dropped from speech.
+- [ ] Synthesize sentence by sentence and begin playback on the first clip, so perceived latency is the first sentence rather than the whole summary at RTF 0.5.
+- [ ] Remove `edge-tts` from the dependency set once `kokoro` and `sapi` cover both quality tiers, and migrate an existing `tts_engine: "edge"` config forward rather than failing on it.
+- [ ] Change the default `tts_engine` to the OS voice, and make `kokoro` selectable only once its model is present.
+
+### Model acquisition
+
+- [ ] Add a Voice settings surface that downloads the Kokoro weights and voices into the data directory with visible progress, pinned by immutable revision and per-file SHA-256, with explicit `not-downloaded` / `downloading` / `ready` / `error` state so a partial download can never be loaded.
+- [ ] Fold this into the same first-use-download inventory Phase 11 already owns for the Whisper model and the Silero VAD assets (`NEW_USER_RELEASE_READINESS.md`), rather than inventing a second mechanism.
+- [ ] Account for the G2P dependency weight (about 110 MB installed, mostly spaCy) as a deliberate bundle cost, against 66 MB removed with `av`.
+  If it becomes a problem, the lever is a lighter lexicon-only G2P, not a return to espeak.
+
+### License and notices
+
+- [ ] Add `LICENSE` (Apache-2.0), a short `NOTICE`, and a `CONTRIBUTING.md` carrying the DCO sign-off requirement.
+- [ ] Generate `THIRD-PARTY-NOTICES.md` from the lockfiles so it cannot drift, covering the Python closure, the frontend bundle, and the downloaded models (Kokoro Apache-2.0, Whisper MIT, Silero VAD MIT).
+  Reproduce the Apache-2.0 NOTICE files, the MPL license texts, the Intel OpenMP terms, and the LGPL notice for `pystray` with a pointer to the build instructions that satisfy its relink condition.
+- [ ] State that the shipped `@xterm/*` copies are modified, and name the two patch scripts.
+- [ ] Add the license section to `README.md` and resolve the `github.com/REPLACE/swe-mux` placeholder in `site/index.html`.
+
+### Terms that are not licenses
+
+- [ ] Add a "not affiliated with or endorsed by" line covering Anthropic, OpenAI, and the other harness vendors wherever the landing page and README name their CLIs, and keep vendor logos out of the site.
+- [ ] Document managed provider accounts as one operator switching between accounts they own, in `design/features/provider-accounts.md`, so the feature is not read as rate-limit evasion by someone reviewing the project cold.
+- [ ] Record that OpenRouter and HuggingFace access run on the user's own key and quota under the user's own agreement with those services.
+
+### Docs, tests, and ship
+
+- [ ] Update `design/features/voice.md` (the engine set, the G2P constraint, the model download, the new default) and the audio quick reference in `.docs/CLAUDE.md`, which names edge-tts as the TTS path.
+- [ ] Update `design/features/desktop-shell.md` for the bundle contents that change, and `technical/backend/packages.md` for the new modules.
+- [ ] Backend tests: the `av` stub satisfies `faster_whisper`; the Kokoro engine produces a playable clip for the same inputs as the other engines; the G2P refuses to construct if an espeak module is importable; the splitter resolves the measured vocabulary; and a partial model download is rejected.
+- [ ] Verify on the isolated daemon that read aloud works end to end with `edge-tts` uninstalled, then commit and redeploy.
+
+### Phase 10.5 exit criteria
+
+- [ ] A built bundle contains no GPL or unallowlisted LGPL component, proven by a test over the resolved closure rather than by inspection, and `av.libs` is absent.
+- [ ] Read aloud works with `edge-tts` absent from the environment, and no swe-mux code path reaches a Microsoft endpoint.
+- [ ] No espeak-ng binary, data directory, or Python wrapper exists anywhere in the closure, and the G2P fails loudly rather than silently falling back if one appears.
+- [ ] `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, and a generated `THIRD-PARTY-NOTICES.md` exist, and the notices file regenerates from the lockfiles with no manual edit.
+- [ ] A fresh install speaks using the OS voice with no download, and Kokoro is one explicit, hash-verified download away.
+
 ## Phase 11 — Public packaging and release
 
 This phase carries forward original Roadmap Phase 12. Source-checkout development remains
 acceptable until Windows proving and the supported platform matrix are complete.
+Licensing, third-party notices, and the copyleft removal are Phase 10.5's and are not restated here;
+this phase consumes their result and must not publish an artifact before they land.
 The packaging and external-trial readiness gaps, and the CI matrices, are inventoried in
 `CROSS_PLATFORM_FINDINGS.md`.
 
@@ -2961,8 +3114,9 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
 
 - [ ] Guarantee every wheel contains a frontend bundle from the same revision; fail release
   validation on stale or missing assets.
-- [ ] Complete package metadata/governance: license, URLs, platform classifiers, changelog,
-  release policy, security/contact path, and accurate capability documentation.
+- [ ] Complete package metadata/governance: URLs, platform classifiers, changelog, release
+  policy, security/contact path, and accurate capability documentation. The license field
+  reads whatever Phase 10.5 settled, and is not decided here.
 - [ ] Test wheel/sdist install, upgrade, uninstall, config/database migration/backup,
   embedded frontend, and `mux`/`muxd` on clean machines without source checkout or Node.js.
 - [ ] Validate `uv tool install swe-mux` and `pipx install swe-mux`; document clean install,
@@ -2995,6 +3149,213 @@ The packaging and external-trial readiness gaps, and the CI matrices, are invent
 - [ ] Artifacts upgrade/uninstall cleanly and public documentation matches the exact tag,
   supported platforms, security boundaries, and optional capabilities.
 
+## Phase 12 - Harness expansion
+
+The registry ships five harnesses (`claude`, `codex`, `omp`, `pi`, `opencode`) against a market
+that has many more, and the abstraction was built so that adding one costs a descriptor plus an
+adapter rather than a branch in every consumer.
+This phase spends that abstraction.
+
+`HARNESS_EXPANSION_CANDIDATES.md` is the evidence base: one parity study per candidate CLI,
+covering launch and terminal surface, conversation identity, record format, hook or extension
+surface, MCP, headless probes, platform and account model, and the achievable capability tier.
+It also records the candidates that were examined and rejected, so a rejection is visible rather
+than a silence.
+This phase does not restate any of it.
+
+A candidate becomes a harness only through the ordinary contract in
+`../design/features/backends.md`: a descriptor, an adapter family, a transcript dialect or a
+declared absence, conversation discovery, replay fixtures meeting its derived corpus floor, an
+adapter-matrix entry, headless probes, and a regenerated frontend seed.
+Exempting a candidate from a gate means changing its descriptor to state the capability it lacks,
+never weakening the gate.
+
+### Integration
+
+- [ ] Settle the four decisions the studies surface, once each rather than per harness, and record
+  each outcome on the descriptors it governs: whether mux may install hooks into a config file the
+  user also owns, whether a harness with no local conversation records is worth integrating,
+  whether an approval channel that also decides the approval may be observed at all, and the two
+  registry changes named next.
+- [ ] Make the two registry changes before the first harness that needs them: a conversation store
+  resolved under the working directory rather than a per-user `data_home`, and a harness with no
+  resume concept, which the descriptor currently rejects.
+- [ ] Work the candidate list in the document's recommended sequence, one harness per branch,
+  ending each with the full registry contract rather than a launchable stub.
+- [ ] Measure each candidate's open questions against a real install before writing its descriptor.
+  Every study ends with the three that matter most for that CLI, and two candidates in the first
+  pass already had vendor documentation contradicted by shipped code.
+- [ ] Record the CLI version each harness was measured against in `TESTED_CLI_VERSIONS`, so the
+  untested-pairing signal fires against evidence rather than against a guess.
+
+### Phase 12 exit criteria
+
+- [ ] Every harness added in this phase clears the declaration, contract, wiring, coverage, and
+  behaviour tiers with no test weakened and no per-harness skip.
+- [ ] `../design/features/backends.md` names the reached tier for each added harness, and
+  `HARNESS_EXPANSION_CANDIDATES.md` records the reason for every candidate not added.
+
+## Phase 13 - Integrated browser: one web surface the operator and the agent share
+
+swe-mux has two browser-shaped surfaces today and neither one is a browser.
+A **Preview** is a reverse proxy of a loopback listener rendered in a sandboxed iframe: its
+registered origin is immutable per request, off-origin redirects are rejected so the route cannot
+become a network proxy, and `allow-same-origin` is deliberately omitted so preview code cannot read
+the parent application (`../design/features/processes-and-previews.md`).
+Those three properties are what make it safe, and each of them independently forbids the thing this
+phase is about: navigating to an arbitrary site, and letting an agent drive the page.
+**Preview capture** already runs a headless Chromium through the optional `preview-capture` extra,
+but it renders one screenshot and exits; it is never interactive and never agent-reachable.
+The third fact is `../design/features/ghost-windows.md`, which exists only because agents launch
+their *own* browsers and closes with the reason the sweep can never be retired: "swe-mux does not
+control which browser stack an agent invokes."
+
+This phase adds the missing surface. One real Chromium per session, owned by mux, driven over the
+Chrome DevTools Protocol, rendered as an ordinary layout leaf on every client including the phone,
+and reachable by the agent through the seams that already carry environment, MCP, and CLI.
+It is the same move the terminal already made: the value is not "a browser", it is that a browser
+becomes a multiplexed, per-session, remotely visible, lifecycle-bound object instead of a window on
+one desktop that nothing else can see.
+
+### The product decision this phase requires
+
+Decision-gated capabilities currently lists "arbitrary HTTP/network destinations" as un-scheduled
+work, and an agent-drivable browser is exactly that capability wearing a different shape.
+This phase does not quietly cross that line; it narrows it and records the narrowing.
+
+- [ ] Decide and record the destination boundary before any navigation code ships: a per-Project
+  browser grant with the same `off`/`draft`/`granted` shape the Phase 7.6 session-control grant
+  already uses, defaulting to the inert state, plus an allowlist mode that constrains agent-issued
+  navigation to declared hosts while operator-issued navigation stays unconstrained.
+  The operator typing a URL into a pane is not the gated act; an agent choosing one is.
+- [ ] Amend the decision-gated entry rather than leaving it contradicted, naming the grant, the
+  allowlist, the audit record, and the kill switch as the conditions under which agent-issued
+  navigation is in scope.
+- [ ] Record the exfiltration property plainly in the feature document: a browser is an outbound
+  HTTP client that routes around every restraint placed on the PTY, so the allowlist is the only
+  thing standing between a prompt-injected agent and an arbitrary POST. Page content is untrusted
+  input on the same footing as a transcript.
+
+### Engine and ownership
+
+- [ ] Drive a real Chromium over CDP. Reject the two cheaper shapes explicitly and record why: an
+  iframe cannot leave its origin or expose a DOM, and an embedded native webview reaches only the
+  desktop shell, leaving the browser-tab and phone clients with no pane at all.
+  The reference implementation that chose a native webview (cmux) returns `not_supported` for
+  network interception, offline emulation, tracing, screencast, and raw input injection, which is
+  precisely the half of the surface this phase wants.
+- [ ] Reuse the existing optional Chromium rather than adding a second browser dependency.
+  `preview-capture` already installs Playwright and resolves the standard per-user browser cache
+  from a frozen desktop build; the browser pane extends that extra instead of introducing a
+  parallel download, and stays a typed `{available: false, reason, install}` when it is absent.
+- [ ] Launch the headless shell binary, not full Chrome under `--headless`.
+  Playwright already defaults to `chromium_headless_shell`, which creates no top-level window, so
+  the pane produces no ghost by construction. The sweep remains, because it defends against browsers
+  mux did not launch.
+- [ ] Own the process from the supervisor through the existing `spawn` message rather than adding a
+  supervisor protocol message. A `PROTOCOL_VERSION` bump reaps every live session, and
+  `PLUGIN_SYSTEM_FINDINGS.md` already settled that non-terminal panes ride the shipped `spawn`
+  path for exactly this reason. A browser pane then survives a daemon restart the way a PTY does.
+- [ ] Bound the resource cost the way every other loop in this repository is bounded: lazy start on
+  first use, idle reap, a cap on concurrent instances, and a documented per-instance memory figure
+  measured rather than estimated.
+
+### The pane
+
+- [ ] Add a non-terminal leaf kind to the recursive layout (`frontend/src/layout.ts` currently
+  models terminals only) and let a browser leaf be tabbed, split, dragged, and restored like any
+  other, including the mobile workspace projection.
+- [ ] Stream `Page.startScreencast` frames over the existing session WebSocket and acknowledge them
+  with `Page.screencastFrameAck`, which supplies the coalescing contract for free: drop intermediate
+  frames, never queue, so a slow link degrades to fewer frames rather than to lag.
+- [ ] Send a lossless settle frame once the page has been quiet briefly, so a page at rest is
+  pixel-accurate rather than showing compression artifacts on text the operator is trying to read.
+- [ ] Forward pointer, scroll, key, and text input through `Input.dispatch*Event`, arbitrated by the
+  device-presence and input-ownership rules already governing a shared PTY
+  (`../design/features/terminal-input.md`), so two devices cannot fight over one page.
+- [ ] Route between the two surfaces instead of merging them: a Preview registration offers "open in
+  browser pane" for the cases the proxy cannot serve (a client-side router that ignores
+  `window.__MUX_PREVIEW_BASE__`, an off-origin OAuth hop), and the browser pane offers the reverse
+  for a loopback URL that has a registration. Preview keeps its boundary unchanged.
+
+### The agent surface
+
+Three injection tiers, in descending reliability, all riding seams that already exist.
+
+- [ ] **Environment**, at spawn (`agent_environment.py`): the session's CDP endpoint and browser id,
+  registered as protected keys that a launch profile cannot override, matching how the MCP token is
+  already handled. This is the floor that works for a harness with no MCP and no skill format.
+- [ ] **MCP**, per harness (`adapters/`): browser tools on the existing mux MCP server, scoped to
+  the caller's own session by the same per-session token, and DAG-gated by the Project grant.
+  No new transport and no second authorization boundary.
+- [ ] **CLI**: `mux browser navigate|snapshot|click|type|console|network`, reading the environment
+  variable, because bash is the one interface every harness has and MCP support is uneven.
+  The reference implementation shipped its entire browser surface this way and never needed MCP.
+- [ ] Return accessibility-tree snapshots with stable per-snapshot element refs and act on refs
+  rather than on model-authored CSS selectors, with a snapshot-after option on mutating actions so
+  the agent sees the result of its own click without a second round trip.
+  Refs go stale on navigation and DOM change, and saying so in the tool description is what keeps an
+  agent from silently acting on the wrong element.
+- [ ] Carry the instruction through the shipped Agent Context surface rather than adding a new
+  writer to instruction files. Phase 6's approved boundary is an explicit, previewed, one-time
+  overwrite, and continuous instruction sync is decision-gated; a browser announcement does not get
+  to reopen that.
+
+### Boundaries and isolation
+
+- [ ] Default to an ephemeral per-session profile. Do **not** import cookies from the operator's
+  real browser profile, and specifically do not adopt the reference implementation's posture, where
+  detecting a coding agent in the environment is what *suppresses* the import confirmation. Reusing
+  a credentialed profile means a prompt injection on any page acts as the operator on every logged-in
+  service, and that is an operator-initiated, per-Project, explicitly confirmed act if it is ever
+  offered at all.
+- [ ] Bind CDP to loopback on an ephemeral port with a per-instance token, never to the tailnet
+  interface. An open CDP port is a full-take vector for any local process and is reachable from a
+  malicious page by DNS rebinding against `127.0.0.1`; the remote-access boundary in
+  `../design/features/remote-access.md` governs what the phone reaches, and it reaches the pane, not
+  the protocol.
+- [ ] Confine downloads to a per-session directory under the data dir rather than letting a page
+  write anywhere the daemon can.
+- [ ] Audit every agent-issued navigation and every allowlist refusal as an observation, and give
+  the whole subsystem a config kill switch plus a per-Project one, per the completion policy's rule
+  that every automatic action has provenance, bounds, auditability, and a kill switch.
+- [ ] Keep console errors and failed requests as the payoff: they are the signal the attention,
+  notification, and status surfaces already know how to consume, and they are what a screenshot
+  cannot give. "This session is idle and its page is throwing" is the thing no external browser
+  automation can report.
+
+### What this phase does not do
+
+- [ ] Do not redirect the repository's own test suite. A project's Playwright configuration owns its
+  browsers, fixtures, isolation, and parallelism; steering `npm test` into one shared session browser
+  breaks test isolation and produces wrong answers. This surface replaces an agent's ad-hoc poking,
+  not a test runner. State it in the feature document, because the temptation is real and the failure
+  is silent.
+- [ ] Do not build a second automation vocabulary. The CDP endpoint stays attachable, so
+  `playwright`, `playwright-mcp`, and `chrome-devtools-mcp` can connect to the same instance; a
+  bespoke scriptable surface that no external tool can attach to is the trap the reference
+  implementation is currently filing issues against itself to escape.
+- [ ] Do not extend the browser to non-loopback hosts as an execution target. Reaching a remote
+  service in a page is ordinary browsing; reaching a remote *host* is the multi-host control plane
+  that remains decision-gated.
+
+### Phase 13 exit criteria
+
+- [ ] The destination decision is recorded, the decision-gated entry is amended, and the default
+  Project state grants an agent no navigation authority.
+- [ ] A browser leaf tabs, splits, restores, and renders on desktop and phone, and survives a
+  session-preserving daemon restart with its page intact.
+- [ ] An agent in every registry harness reaches the browser through at least the environment tier,
+  and through MCP wherever the harness supports it, with no manual per-session configuration.
+- [ ] Navigating, snapshotting, acting on a ref, and reading console and network activity are covered
+  by tests against local fixtures rather than public sites, including one test that a stale ref fails
+  loudly instead of acting on the wrong element.
+- [ ] The allowlist refuses an off-list agent navigation, the refusal is audited, and both kill
+  switches stop the subsystem without reaping sessions.
+- [ ] `../design/features/` carries a browser-pane feature document, `../CLAUDE.md` routes to it, and
+  `../design/features/processes-and-previews.md` states the Preview/browser division so the two are
+  not re-merged by a later change.
+
 ## Decision-gated capabilities
 
 These remain recorded but are not committed roadmap work. Scheduling one requires a new
@@ -3005,6 +3366,10 @@ failure behavior:
   machine-owned fingerprinted trust store.
 - Model-authored action selection, autonomous worker spawning, unrestricted PTY writes,
   auto-approval, arbitrary command execution, or arbitrary HTTP/network destinations.
+  The network half of this entry is what Phase 13 must decide before it ships navigation: an
+  agent-drivable browser is agent-chosen HTTP destinations, and Phase 13's per-Project grant plus
+  host allowlist is the proposed narrowing. Until that decision is recorded, the entry stands and
+  agent-issued navigation is out of scope; operator-issued navigation in a pane never was in it.
 - Alternate observer providers/base URLs that weaken the fixed-origin secret/network
   boundary.
 - Autonomous agent-to-agent routing beyond Phase 5 user-authored/user-approved/`mux.notify`

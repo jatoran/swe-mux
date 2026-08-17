@@ -233,6 +233,14 @@ PUT     /projects/{project_id}/observations   {observations, revision}   replace
 POST    /projects/{project_id}/observations/{observation_id}/decide {decision: approve|dismiss}
 GET     /projects/{project_id}/automations
 PUT     /projects/{project_id}/automations    {automations, revision?}
+GET     /schedules?project_id=                every schedule, or one Project's
+POST    /schedules/preview                    {definition}          next fire times, unsaved
+GET     /projects/{project_id}/schedules
+POST    /projects/{project_id}/schedules      {definition}
+PATCH   /schedules/{schedule_id}              {definition, revision?} | {enabled}
+DELETE  /schedules/{schedule_id}
+POST    /schedules/{schedule_id}/run          fire now, guards intact
+GET     /schedules/{schedule_id}/runs?limit=
 GET     /projects/{project_id}/project-context
 PUT     /projects/{project_id}/project-context {markdown, revision}
 GET     /sessions/{session_id}/scan-timeline
@@ -283,6 +291,14 @@ can show a dependency tree rather than a flat checkbox list. `PUT` replaces the 
 through the ordinary project-config write: `409 revision_conflict` on a stale revision,
 `409 automation_not_implemented` for a reserved id with no code behind it. The same table is
 also carried by the typed portable Project options (`features/automation-enablement.md`).
+
+The schedule routes are the scheduled-run surface (`features/scheduled-runs.md`).
+A definition belongs to exactly one Project, because a spawn does; the unscoped `GET` exists because "what fires tonight" spans Projects and is what the Schedule tab's fleet toggle reads.
+Writing one is always allowed and firing it is what permission gates, so every row carries `blocked` - a live answer (`project_missing`, `automation_disabled`, `install_disabled`), recomputed per request rather than stored, plus the recent `runs` behind it.
+`PATCH` with only `enabled` is the pause switch and keeps the definition; any other body is a full replacement validated exactly like a create, with `409 revision_conflict` on a stale revision.
+A rejected definition answers `400` with a machine `code` (`invalid_cron`, `invalid_interval`, `invalid_timezone`, `invalid_run_at`, `invalid_backend`, `invalid_follow_ups`) and a `fields` map, so the editor can mark the field rather than print a sentence.
+`POST /schedules/preview` answers the next five fire times for an unsaved definition: cron plus a timezone plus daylight saving has one implementation, in the daemon, and the editor must not grow a second one that disagrees with it twice a year.
+`POST .../run` is subject to every fire-time guard except lateness, so it cannot walk around the Project opt-in, the overlap policy, or the concurrency ceiling.
 
 The Project-context routes read and revision-check one fixed user-owned Markdown file.
 `GET` returns blank content and revision `missing` when it does not exist.
@@ -509,6 +525,9 @@ PATCH  /sessions/{id}
 POST   /sessions/{id}/read
 POST   /sessions/{id}/title/regenerate
 POST   /sessions/{id}/standing-activity/clear
+GET    /sessions/{id}/approvals
+PUT    /sessions/{id}/approvals                 {mode: wait|allowlisted|allow_all, set_by?}
+POST   /sessions/{id}/approvals/approve-once    {fingerprint?}
 DELETE /sessions/{id}
 POST   /sessions/{id}/input
 GET    /sessions/{id}/branch-points[?limit=]
@@ -603,6 +622,41 @@ are not states, so this cannot move `state`, `awaiting_reason`, or `delivery_sta
 assert activity. An unknown `kind` is rejected. Every clear is ledgered with evidence `manual` and
 drops the run-scoped launch bookkeeping, so a later duplicate completion cannot decrement a fresh
 annotation (`design/features/status-detection.md`).
+
+`GET`/`PUT /sessions/{id}/approvals` read and set what mux answers on this conversation's behalf
+(`design/features/approvals.md`). Both return the same body:
+
+```ts
+interface ApprovalStatus {
+  supported: boolean            // this harness can answer a permission request through a hook
+  enabled: boolean              // the install master switch
+  ceiling: ApprovalMode         // the strongest mode this Project permits
+  rules: string[]               // what `allowlisted` would resolve against right now
+  rules_source: 'project' | 'default'
+  unavailable: string | null    // why no mode above `wait` can be selected, phrased for display
+  ttl_seconds: number
+  max_auto: number
+  policy: ApprovalPolicy        // the stored grant
+  effective_mode: ApprovalMode  // what is actually in force
+  modes: ApprovalMode[]
+}
+```
+
+`policy.mode` and `effective_mode` are both present and answer different questions: an expired
+grant, or one made against a conversation since replaced, reports its stored mode *and* an
+effective `wait`, because "it lapsed" reads differently from "it was refused".
+
+`PUT` refuses with a named code rather than silently downgrading: `invalid_mode` (400),
+`approvals_unavailable` (409, the install switch, an unsupported harness, no live conversation,
+or a Project ceiling of `wait`), `above_ceiling` (409), and `empty_allowlist` (409). Setting
+`wait` is never refused — taking authority back must not depend on the install switch, the
+Project ceiling, or the conversation still being the one the grant was made against.
+
+`POST /sessions/{id}/approvals/approve-once` answers the approval the session is showing, once.
+It is not a mode. It re-checks the agent run, this session's own screen still classifying as an
+approval, and the supplied `fingerprint` when present, then writes one `\r`; it refuses with
+`no_approval` (409) or `fingerprint_changed` (409). The browser routes through the daemon rather
+than writing Enter itself because only the server can make those checks.
 
 ```ts
 interface SpawnRequest {
