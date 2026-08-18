@@ -27,7 +27,7 @@ import threading
 import time
 import tomllib
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -9789,6 +9789,47 @@ _CHANGE_MAP_LOWER_BOUND = (
     "dispatch, decorators, dependency injection, dynamic import) is not shown."
 )
 
+#: The three honest answers to "what changed", in the order a selector offers them.
+_CHANGE_MAP_SCOPES = ("session", "branch", "project")
+#: Provenance rows read per map. One row is one commit, so this covers a long-lived
+#: session's whole history of landed work without an unbounded read.
+_CHANGE_MAP_PROVENANCE_LIMIT = 300
+
+
+def _project_compare_ref(app: web.Application, project_id: str) -> str | None:
+    """The Project's comparison-base override, or None to let git_review infer one.
+
+    The same override the Git drawer and the sidebar measure against, so a branch
+    delta on the change map cannot disagree with the numbers beside it.
+    """
+    projects = app.get("projects")
+    if not project_id or projects is None:
+        return None
+    project = projects.projects.get(project_id)
+    value = getattr(project, "git_compare_ref", None) if project else None
+    return str(value) if value else None
+
+
+def _change_map_scope(
+    query: Mapping[str, str], *, worktree_name: str | None, comparable: bool
+) -> str:
+    """Which scope this request gets, honouring the caller and then the checkout.
+
+    An explicit ``scope`` wins, then the legacy ``unify=true`` alias, and only then
+    the default — which is ``branch`` in a worktree, because a worktree exists to
+    hold a branch and the session's own facts are the *narrower* answer there.
+    A ``branch`` request against a checkout with no comparison base falls back
+    rather than returning an empty map that blames the session for it.
+    """
+    requested = str(query.get("scope") or "").strip().lower()
+    if requested not in _CHANGE_MAP_SCOPES:
+        requested = "project" if str(query.get("unify") or "") in ("1", "true", "yes") else ""
+    if not requested:
+        requested = "branch" if (worktree_name and comparable) else "session"
+    if requested == "branch" and not comparable:
+        return "session"
+    return requested
+
 
 def _same_root(left: str, right: str) -> bool:
     """Whether two checkout roots name the same directory, spelling aside."""
@@ -9799,73 +9840,213 @@ def _same_root(left: str, right: str) -> bool:
     return bool(left) and bool(right) and shape(left) == shape(right)
 
 
-def _change_map_seeds(
+#: How long a checkout's membership in a Project's repository is trusted. Worktrees
+#: are added and removed by hand, never between two turns, so re-running `git
+#: worktree list` per change-map fetch would buy nothing.
+_WORKTREE_MEMBERSHIP_TTL_SECONDS = 60.0
+_worktree_membership: dict[tuple[str, str], tuple[float, str | None]] = {}
+
+
+async def _validated_worktree(project_root: str, checkout: str) -> str | None:
+    """`checkout` as git spells it, if it is a worktree of this Project's repository.
+
+    The authoritative test, not a path-shape guess: a Codex worktree can live
+    anywhere, and a directory that merely sits under the Project is not a worktree
+    at all. None means "do not treat this as the same repository".
+    """
+    key = (project_root.casefold(), checkout.casefold())
+    now = time.monotonic()
+    cached = _worktree_membership.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    resolved: str | None
+    try:
+        repository, _common = await git_review.repository_identity(project_root)
+        resolved = await git_review.validate_worktree_root(repository, checkout)
+    except (git_review.GitReviewError, OSError, ValueError):
+        resolved = None
+    if len(_worktree_membership) > 256:
+        for stale in [k for k, (expiry, _) in _worktree_membership.items() if expiry <= now]:
+            _worktree_membership.pop(stale, None)
+    _worktree_membership[key] = (now + _WORKTREE_MEMBERSHIP_TTL_SECONDS, resolved)
+    return resolved
+
+
+async def _change_map_checkout(record: Any, project_root: str) -> tuple[str, str | None]:
+    """The checkout a session's writes are relative to, and its worktree name.
+
+    `project_root` is where the *Project* was registered; it is not where the
+    agent is working. A session in a linked worktree writes files whose only
+    correct path identity is the repository-relative one, and normalizing those
+    against the Project root instead yields `.claude/worktrees/<name>/…`, which
+    the graph refuses as a hidden directory — so the whole session's work reads as
+    unmappable. The git monitor already resolves the live working tree
+    (`rev-parse --show-toplevel`) and already knows whether it is a linked
+    worktree, so this only has to ask.
+
+    Two roots that differ are *not* automatically the same repository. A nested
+    repository inside a Project (a vendored checkout, a sub-project) reports its
+    own root with no worktree name, and re-anchoring its paths onto this Project's
+    identities would join two unrelated trees. Only a validated linked worktree
+    re-anchors.
+    """
+    git = getattr(record, "git", None)
+    checkout = str(getattr(git, "root", "") or "")
+    worktree_name = getattr(git, "worktree", None)
+    if not checkout or not project_root or _same_root(checkout, project_root):
+        return project_root, None
+    if not worktree_name:
+        return project_root, None
+    validated = await _validated_worktree(project_root, checkout)
+    if validated is None:
+        return project_root, None
+    return validated, str(worktree_name)
+
+
+class _SeedAdmission:
+    """Path admission for change-map seeds, with honest exclusion counts.
+
+    Every seed source funnels through here — this run's write facts, the session's
+    landed commits, and a branch's change set — so one rule decides what the map
+    can draw, and one count reports what it refused.
+
+    The graph only ever indexes files under the Project root and refuses
+    generated, vendored, and hidden directories outright (`is_indexable_path`), so
+    a path failing either test can never acquire an edge, never show a blast
+    radius, and never be opened from the pane. Counts are of distinct files, not
+    of facts: a scratchpad script rewritten twenty times is one omission to
+    report, not twenty.
+    """
+
+    def __init__(self) -> None:
+        self.seeds: dict[str, set[str]] = {}
+        self.outside_root: set[str] = set()
+        self.unindexable: set[str] = set()
+
+    def admit(self, identity: str | None, owner: str | None) -> bool:
+        from . import code_graph as cg
+
+        if identity is None or cg.spec_for_path(identity) is None:
+            return False
+        if not cg.is_project_relative(identity):
+            self.outside_root.add(identity)
+            return False
+        if not cg.is_indexable_path(identity):
+            self.unindexable.add(identity)
+            return False
+        owners = self.seeds.setdefault(identity, set())
+        if owner:
+            owners.add(owner)
+        return True
+
+    @property
+    def excluded(self) -> dict[str, int]:
+        return {"outside_root": len(self.outside_root), "unindexable": len(self.unindexable)}
+
+
+def _seeds_from_facts(
+    admission: _SeedAdmission,
     facts: Iterable[dict[str, Any]],
     roots: Sequence[str],
     default_session_id: str,
-) -> tuple[dict[str, set[str]], dict[str, int]]:
-    """Which written files become red seeds, and an honest count of what was dropped.
+) -> None:
+    """Tier 0 write facts, re-anchored against whichever checkout contains them.
 
-    Two admission rules the map used to skip, both of which produced permanently
-    isolated dots. The graph only ever indexes files under the Project root, and
-    it refuses generated/vendored/hidden directories outright
-    (``is_indexable_path``) — so a seed failing either test can never acquire an
-    edge, can never show a blast radius, and can never be opened from the pane.
-    Drawing it anyway is what put scratchpad and temp-directory scripts on the map.
+    `roots` is every checkout the facts may be recorded against: the requesting
+    session's own, plus (in project scope) the checkout of every other session
+    that contributed a write. Re-anchoring against all of them is what keeps a
+    sibling worktree's session on the map — its writes are absolute paths under
+    *its* checkout, which this session's root cannot strip, so without this they
+    would all read as outside-root.
 
-    ``roots`` is the ordered set of checkout roots the facts may be recorded
-    against: the requesting session's own root first, then (in unify mode) the
-    root of every other session that contributed a write. Re-anchoring against all
-    of them is what keeps a sibling worktree's session on the unified map — its
-    writes are absolute paths under *its* checkout, which the requesting session's
-    root cannot strip, so without this they would all be dropped as outside-root.
-
-    Counts are of distinct files, not facts: a scratchpad script rewritten twenty
-    times is one omission to report, not twenty.
+    **Deepest root first, and the best candidate wins.** A worktree usually lives
+    *inside* the Project root (`.claude/worktrees/<name>`), so stripping the
+    Project root off a worktree write does produce a relative path — the useless
+    one, `.claude/worktrees/<name>/src/…`, which the hidden-directory rule then
+    refuses. Taking the first merely-relative answer is how a whole worktree
+    session's work reads as unmappable even with its own root in the list.
     """
     from . import code_graph as cg
     from .deterministic_consumers import normalize_target
 
-    seeds: dict[str, set[str]] = {}
-    outside_root: set[str] = set()
-    unindexable: set[str] = set()
+    def rank(candidate: str) -> int:
+        if not cg.is_project_relative(candidate):
+            return 0
+        return 2 if cg.is_indexable_path(candidate) else 1
+
+    ordered = sorted(roots, key=len, reverse=True)
     for fact in facts:
         if fact.get("kind") not in ("file_write", "file_write_result"):
             continue
         target = fact.get("target")
         identity: str | None = None
-        for root in roots:
+        best = -1
+        for root in ordered:
             candidate = normalize_target(target, root)
             if candidate is None:
                 continue
-            # The first root that actually contains the file wins; failing that,
-            # keep the first spelling seen so an unanchorable path is still counted.
-            if cg.is_project_relative(candidate):
-                identity = candidate
+            score = rank(candidate)
+            if score > best:
+                identity, best = candidate, score
+            if score == 2:
                 break
-            if identity is None:
-                identity = candidate
-        if identity is None or cg.spec_for_path(identity) is None:
+        admission.admit(identity, str(fact.get("session_id") or default_session_id))
+
+
+def _seeds_from_provenance(admission: _SeedAdmission, rows: Iterable[dict[str, Any]]) -> None:
+    """Files this session has actually landed, from the git provenance ledger.
+
+    Tier 0 facts expire twice over — a six-hour window and a conversation
+    rollover — so a session whose work merged hours ago reads as having edited
+    nothing at all. Provenance rows do not expire: they name repository-relative
+    paths per commit per session, and merging the branch does not disturb them.
+    """
+    from .deterministic_consumers import normalize_target
+
+    for row in rows:
+        owner = str(row.get("session_id") or "")
+        paths = row.get("contributed_paths")
+        if not isinstance(paths, list):
             continue
-        if not cg.is_project_relative(identity):
-            outside_root.add(identity)
-            continue
-        if not cg.is_indexable_path(identity):
-            unindexable.add(identity)
-            continue
-        owner = str(fact.get("session_id") or default_session_id)
-        seeds.setdefault(identity, set()).add(owner)
-    return seeds, {"outside_root": len(outside_root), "unindexable": len(unindexable)}
+        for path in paths:
+            if isinstance(path, str) and path:
+                admission.admit(normalize_target(path, None), owner)
+
+
+def _seeds_from_branch(admission: _SeedAdmission, paths: Iterable[str]) -> None:
+    """A checkout's whole change set against its comparison base.
+
+    Deliberately unattributed. A branch delta describes the *checkout*, and two
+    sessions sharing one worktree cannot be told apart by anything git can answer
+    — claiming a per-session hue for it would be an invention.
+    """
+    from .deterministic_consumers import normalize_target
+
+    for path in paths:
+        if path:
+            admission.admit(normalize_target(path, None), None)
 
 
 async def session_change_map(request: web.Request) -> web.Response:
     """The per-session code change map (Phase 7.9, Surface 3).
 
-    Red = this session's edited source files (seeds), yellow = their blast radius
-    (reverse dependents), blue = immediate imports (context). Server-side and
-    bounded: only the changed nodes plus blast radius plus one hop ship, never the
-    whole codebase graph. `unify=true` widens to the union of every session's edits
-    since the baseline, each session coloured a distinct hue.
+    Red = edited source files (seeds), yellow = their blast radius (reverse
+    dependents), blue = immediate imports (context). Server-side and bounded: only
+    the changed nodes plus blast radius plus one hop ship, never the whole codebase
+    graph.
+
+    Three scopes, because "what changed" has three honest answers and they expire
+    at different rates:
+
+    * ``session`` — this session's own work: this run's Tier 0 write facts, plus
+      every path it has landed according to the git provenance ledger. The facts
+      are precise and short-lived; the ledger is durable and survives the merge.
+    * ``branch`` — everything the session's checkout has changed against its
+      comparison base. Checkout-scoped, so it carries no per-session attribution,
+      and immune to both fact expiries. The default in a worktree, because a
+      worktree exists to hold a branch.
+    * ``project`` — every session's edits, one hue each. The former ``unify=true``,
+      which is still accepted as an alias.
     """
     from . import code_graph as cg
     from .deterministic_consumers import RUN_FACT_WINDOW_SECONDS
@@ -9874,21 +10055,18 @@ async def session_change_map(request: web.Request) -> web.Response:
     record = session.record
     run_id = str(record.agent_run_id or "")
     pid = str(record.project_id or "")
-    root = _record_project_root(request, record)
-    unify = request.query.get("unify") in ("1", "true", "yes")
     try:
         hops = int(request.query.get("hops", "1"))
     except ValueError:
         hops = 1
     hops = max(1, min(hops, cg.MAX_BLAST_HOPS))
     baseline_head = getattr(getattr(record, "git", None), "head", None)
-    # The checkout the map's files actually live in. It is the Project root for an
-    # ordinary session and the worktree root for a worktree session, and the two
-    # need different file endpoints — so the payload names it rather than letting
-    # the client assume the Project root and open the wrong copy. An unresolvable
-    # Project root claims nothing: the client's default (the Project's own file
-    # endpoint) is right far more often than a guess would be.
-    project_root = _project_root_for(request.app, pid, "")
+
+    # Where the Project was registered, and where this session is *actually*
+    # working. They differ for every worktree session, and normalizing writes
+    # against the first is what made a worktree's whole map read as unmappable.
+    project_root = _project_root_for(request.app, pid, "") or _record_project_root(request, record)
+    root, worktree_name = await _change_map_checkout(record, project_root)
     worktree = root if root and project_root and not _same_root(root, project_root) else ""
     base: dict[str, Any] = {
         "session_id": record.id,
@@ -9898,6 +10076,9 @@ async def session_change_map(request: web.Request) -> web.Response:
         "edges": [],
         "sessions": [],
         "worktree": worktree or None,
+        "scope": "session",
+        "scopes": list(_CHANGE_MAP_SCOPES),
+        "checkout": None,
         "excluded": {"outside_root": 0, "unindexable": 0},
         "excludes_note": _CHANGE_MAP_EXCLUDES,
         "lower_bound_note": _CHANGE_MAP_LOWER_BOUND,
@@ -9909,41 +10090,88 @@ async def session_change_map(request: web.Request) -> web.Response:
         return json_response({**base, "available": False, "disabled_reason": "unsupported"})
     if not pid or not root:
         return json_response({**base, "available": False, "disabled_reason": "no_project"})
-    enabled = await request.app["automation_gate"](root)
+    # The opt-in is the *Project's*, so it is asked of the Project root even when
+    # the session is working in one of its worktrees.
+    enabled = await request.app["automation_gate"](project_root)
     if "code_graph" not in enabled:
         return json_response({**base, "available": False, "disabled_reason": "automation_disabled"})
 
-    since = time.time() - RUN_FACT_WINDOW_SECONDS
+    # Offerability is decided from the comparison ref the git monitor already
+    # resolved and cached on the record — free — and the branch diff itself only
+    # runs when the branch scope is actually the one being served. A detached
+    # checkout with no base has no branch to describe.
+    git_state = getattr(record, "git", None)
+    comparable = bool(getattr(git_state, "compare_ref", None))
+    scope = _change_map_scope(request.query, worktree_name=worktree_name, comparable=comparable)
+    branch = (
+        await git_review.branch_changed_paths(root, _project_compare_ref(request.app, pid))
+        if scope == "branch"
+        else None
+    )
+    if scope == "branch" and branch is None:
+        # The ref resolved a moment ago and the diff did not: say so rather than
+        # drawing an empty branch and letting it read as "nothing changed".
+        scope = "session"
+        base["scope_fallback"] = "no_comparison_base"
+    unify = scope == "project"
+    base["scope"] = scope
+    base["scopes"] = ["session", *(["branch"] if comparable else []), "project"]
+    if worktree_name or branch is not None:
+        base["checkout"] = {
+            "root": root,
+            "worktree": worktree_name,
+            "branch": getattr(git_state, "branch", None),
+            "ref": branch["ref"] if branch else getattr(git_state, "compare_ref", None),
+            "base": branch["base"] if branch else None,
+            "truncated": bool(branch["truncated"]) if branch else False,
+        }
+
+    admission = _SeedAdmission()
     manager = request.app["sessions"]
-    if unify:
-        facts = await tier0.facts_for_project(pid, since=since)
-    elif run_id:
-        facts = await tier0.facts_for_run(run_id, since=since)
+    if scope == "branch" and branch is not None:
+        _seeds_from_branch(admission, branch["paths"])
     else:
-        facts = []
+        since = time.time() - RUN_FACT_WINDOW_SECONDS
+        if unify:
+            facts = await tier0.facts_for_project(pid, since=since)
+        elif run_id:
+            facts = await tier0.facts_for_run(run_id, since=since)
+        else:
+            facts = []
 
-    # The checkout roots the facts may be recorded against. One run's facts share a
-    # cwd, so the non-unified view needs only this session's root; the unified view
-    # spans every session in the Project, and a sibling worktree's writes are
-    # absolute paths this root cannot strip.
-    roots = [root]
-    if unify:
-        for fact in facts:
-            if fact.get("kind") not in ("file_write", "file_write_result"):
-                continue
-            owner_id = str(fact.get("session_id") or "")
-            other = manager.sessions.get(owner_id) if owner_id else None
-            if other is None:
-                continue
-            other_root = _record_project_root(request, other.record)
-            if other_root and not any(_same_root(other_root, known) for known in roots):
-                roots.append(other_root)
+        # The checkout roots the facts may be recorded against. One run's facts
+        # share a cwd, so the session view needs only this session's checkout; the
+        # project view spans every session, and a sibling worktree's writes are
+        # absolute paths this root cannot strip.
+        roots = [root]
+        if unify:
+            for fact in facts:
+                if fact.get("kind") not in ("file_write", "file_write_result"):
+                    continue
+                owner_id = str(fact.get("session_id") or "")
+                other = manager.sessions.get(owner_id) if owner_id else None
+                if other is None:
+                    continue
+                other_root, _name = await _change_map_checkout(other.record, project_root)
+                if other_root and not any(_same_root(other_root, known) for known in roots):
+                    roots.append(other_root)
 
-    # Per-session seed sets: this session (or every session, unified) mapped to the
-    # source files it wrote. Concurrent other-session edits are excluded from the
-    # non-unified view by construction, because facts_for_run is one run's facts.
-    seed_sessions, excluded = _change_map_seeds(facts, roots, record.id)
+        _seeds_from_facts(admission, facts, roots, record.id)
+        # Landed work, which the fact window and the run rollover both drop. Without
+        # it a session reads as having edited nothing the moment its branch merges.
+        history = request.app.get("history")
+        if history is not None:
+            _seeds_from_provenance(
+                admission,
+                await history.git_provenance(
+                    project_id=pid,
+                    session_id=None if unify else record.id,
+                    limit=_CHANGE_MAP_PROVENANCE_LIMIT,
+                ),
+            )
 
+    seed_sessions = admission.seeds
+    excluded = admission.excluded
     seeds = sorted(seed_sessions)
     if not seeds:
         # "Nothing written" and "everything written was unmappable" are different

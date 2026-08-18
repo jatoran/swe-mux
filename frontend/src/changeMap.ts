@@ -28,6 +28,16 @@ export type ChangeMapNode = {
    * filesystem path: opening a file must always use this, never `path`.
    */
   display_path?: string
+  /**
+   * Seeds only, and only when false: the code index has never seen this file.
+   *
+   * A file created on a branch exists in that worktree alone, while the graph is
+   * built from the primary checkout — so it has no structure *yet*. That is a
+   * different statement from "nothing depends on it", and drawing the two the
+   * same way is how an unreferenced file and a brand-new one become
+   * indistinguishable.
+   */
+  indexed?: boolean
 }
 export type ChangeMapEdge = { source: string; target: string; kind: ChangeMapEdgeKind }
 export type ChangeMapSession = { id: string; name: string; hue: string }
@@ -38,6 +48,42 @@ export type ChangeMapExcluded = {
   /** Edited source files inside the checkout but in a directory the graph refuses
    *  (generated, vendored, or hidden). */
   unindexable: number
+}
+
+/**
+ * Which question the map is answering. They expire at different rates, which is
+ * why all three exist rather than one "best" source:
+ *
+ *  * `session` — this session's own work: this run's write facts, plus every path
+ *    it has landed according to the git provenance ledger.
+ *  * `branch`  — everything this checkout has changed against its comparison base.
+ *    Checkout-scoped, so it carries no per-session attribution, and immune to the
+ *    fact window and the conversation rollover alike.
+ *  * `project` — every session's edits, one hue each.
+ */
+export type ChangeMapScope = 'session' | 'branch' | 'project'
+
+export const SCOPE_LABELS: Record<ChangeMapScope, string> = {
+  session: 'this session',
+  branch: 'this branch',
+  project: 'all sessions',
+}
+export const SCOPE_DESCRIPTIONS: Record<ChangeMapScope, string> = {
+  session: 'Files this session wrote this run, plus everything it has landed in a commit.',
+  branch: 'Every file this checkout has changed against its base, committed or not. '
+    + 'Describes the checkout, so it is not attributed to a session.',
+  project: 'Every session’s edits in this Project, one hue per session.',
+}
+
+export type ChangeMapCheckout = {
+  root: string
+  /** Leaf name when this checkout is a linked worktree; null for the primary one. */
+  worktree: string | null
+  branch: string | null
+  /** The comparison base the branch scope is measured against. */
+  ref: string | null
+  base: string | null
+  truncated: boolean
 }
 
 export type ChangeMap = {
@@ -52,8 +98,18 @@ export type ChangeMap = {
   empty_reason?: string
   nodes: ChangeMapNode[]
   edges: ChangeMapEdge[]
-  /** Legend, populated only in unify mode. */
+  /** Legend, populated only in the project scope. */
   sessions: ChangeMapSession[]
+  /** The scope actually served, which is not always the one asked for. */
+  scope: ChangeMapScope
+  /** The scopes this session can be asked for. `branch` is absent when the
+   *  checkout has no comparison base to measure against. */
+  scopes: ChangeMapScope[]
+  /** Set when a `branch` request could not be served, naming why. */
+  scope_fallback?: string
+  /** The checkout the session is working in, when there is anything to say
+   *  about it beyond the Project root. */
+  checkout: ChangeMapCheckout | null
   /** The checkout `display_path` is relative to, when it is not the Project root —
    *  a worktree session's files live in the worktree, not the primary checkout. */
   worktree: string | null
@@ -215,6 +271,42 @@ export function shortPath(path: string): string {
   return parts.length <= 2 ? path : parts.slice(-2).join('/')
 }
 
+/**
+ * Marks a node the code index has never seen.
+ *
+ * A dotted ring, because the node is drawn but its structure is not known — the
+ * reading is "unread", not "empty". Sigma's node programs are filled discs with
+ * no border channel, and the label is the only per-node surface left that can
+ * carry a distinction; a colour would collide with the three roles and a smaller
+ * size would fight the role ranking that size already encodes.
+ */
+export const UNINDEXED_MARK = '◌'
+
+/** `text` with the unindexed mark, when this node carries one.
+ *
+ *  Kept separate from `nodeLabel` because the two surfaces show different text:
+ *  the graph has room for the last two segments, the list shows the whole path,
+ *  and both need the same mark. */
+export const markUnindexed = (node: ChangeMapNode, text: string): string =>
+  node.indexed === false ? `${UNINDEXED_MARK} ${text}` : text
+
+/** The graph label for a node: short path, marked when the index has not seen it. */
+export const nodeLabel = (node: ChangeMapNode): string =>
+  markUnindexed(node, shortPath(node.path))
+
+export const unindexedCount = (nodes: ChangeMapNode[]): number =>
+  nodes.reduce((total, node) => total + (node.indexed === false ? 1 : 0), 0)
+
+/** Why some nodes are marked, or '' when every node is in the index.
+ *
+ *  Worth a caption of its own: a file the index has never parsed draws with no
+ *  edges, and "nothing depends on this" is a conclusion a reader would act on. */
+export function unindexedNote(count: number): string {
+  if (count <= 0) return ''
+  return `${UNINDEXED_MARK} ${count} file${count === 1 ? '' : 's'} not in the code index yet`
+    + ' — new on this branch, so nothing here can link to them until they land.'
+}
+
 export type RoleGroup = { role: ChangeMapRole; label: string; nodes: ChangeMapNode[] }
 
 /** The mobile projection: the same three roles, as lists rather than a graph.
@@ -315,6 +407,20 @@ export function neighborNodes(
     .sort((left, right) =>
       ROLE_ORDER.indexOf(left.role) - ROLE_ORDER.indexOf(right.role)
       || left.path.localeCompare(right.path))
+}
+
+/** What the map is measured from, for the header, or '' when there is nothing to add.
+ *
+ *  The branch scope needs it most: "since <base>" is not the whole story when the
+ *  reader is looking at one worktree of several, and the branch name is what they
+ *  actually think in. */
+export function checkoutNote(map: Pick<ChangeMap, 'scope' | 'checkout'>): string {
+  const checkout = map.checkout
+  if (!checkout) return ''
+  const where = checkout.worktree ? `worktree ${checkout.worktree}` : checkout.branch || ''
+  if (map.scope !== 'branch') return where
+  const against = checkout.ref ? ` vs ${checkout.ref}` : ''
+  return `${where || 'this checkout'}${against}`
 }
 
 /** What the map refused to draw, as one sentence, or '' when it drew everything. */

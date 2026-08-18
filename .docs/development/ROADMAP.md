@@ -2429,6 +2429,43 @@ One incidental fix: `vite.config.ts` now pre-bundles `sigma`, `graphology`, and
 vite answers a newly discovered dependency with a full page reload that lands mid-test and reads
 as an unrelated random failure across the renderer suite.
 
+### Phase 7.9 follow-up 2 — the change map works in a worktree
+
+Live measurement after the first follow-up: of twelve running sessions, four were in linked
+worktrees, and **every one of them reported `project_root: D:\PROJECTS\swe-mux`** while
+`git.root` pointed at `.claude/worktrees/<name>`. Their maps read `unindexable: 24`, `7`, `9`,
+`2` — the whole session's work refused — and one read `no_edits` outright. Details in
+`design/features/code-graph.md`; the endpoint contract is in `design/interfaces.md`.
+
+- [x] **The endpoint asks where the session is actually working.** `record.git.root` and
+  `record.git.worktree` are already resolved by the git monitor (`rev-parse --show-toplevel`, plus
+  `--git-dir` ≠ `--git-common-dir` for linked-worktree identity); the map now reads them instead of
+  the Project root, which is merely where the Project was *registered*. Re-anchoring is gated on
+  `git worktree list` for this Project's repository, TTL-cached, so a **nested** repository inside
+  a Project keeps its own identity rather than being merged into this one.
+  Candidate roots are ranked deepest-first, because a worktree lives inside the Project root and
+  stripping the outer root does yield a relative path — the useless one.
+  (`tests/test_change_map_endpoint.py`, which builds real git worktrees.)
+- [x] **Three scopes, defaulting to the branch in a worktree.** `session` unions this run's write
+  facts with the session's landed paths from the git provenance ledger; `branch` seeds from
+  `git_review.branch_changed_paths` (working tree vs merge base, plus untracked); `project` is the
+  former `unify`, still accepted as an alias. Offerability is decided from the `compare_ref` the
+  monitor already cached, so the branch diff runs only when it is served, and a `branch` request
+  with no base falls back to `session` and says so rather than drawing an empty branch.
+- [x] **Landed work survives.** Tier 0 facts expire on a six-hour window *and* on a conversation
+  rollover, which is why a session read "no source edits yet" hours after its branch merged.
+  Provenance rows do not expire, so a merged session's map is now built from its commits.
+- [x] **A branch-only file is drawn and marked.** It has no node in the canonical graph — that is
+  built from the primary checkout — so `indexed: false` says "not indexed here" where an empty
+  neighbourhood would otherwise read as "nothing depends on this".
+
+The boundary this rests on, stated so it is not eroded later: **re-anchor reads, never
+ingestion.** `is_indexable_path` keeps worktree copies out of the graph on purpose. One
+structural graph per repository, built from the primary checkout; a worktree's edits are located
+in it by repository-relative path, and blast radius is therefore "what this reaches when it
+lands". Indexing worktrees would make the graph a superposition of divergent trees where two
+worktrees fight over one file's edges.
+
 ## Phase 7.10 — Findings surface: annotation filters, the doc_debt tool, and the Insight tab
 
 The deterministic consumers (Phase 3.7) already produce findings as `automation_annotations` — loop, declared-vs-verified, doc-debt, provenance — but nothing surfaces them scoped and readable to the human, and only some are reachable by an agent.

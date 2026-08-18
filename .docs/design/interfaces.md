@@ -257,7 +257,7 @@ GET     /sessions/{session_id}/scan-timeline/{record_id}?rehydrate=0|1
 GET     /sessions/{session_id}/catch-me-up
 GET     /attention/blockers
 GET     /history/scan-search?q=&run_id=|project_id=
-GET     /sessions/{session_id}/change-map?unify=<bool>&hops=<1..4>
+GET     /sessions/{session_id}/change-map?scope=<session|branch|project>&hops=<1..4>
 ```
 
 `catch-me-up`, `attention/blockers`, and `history/scan-search` are the Phase 7.7 scan-timeline
@@ -265,12 +265,24 @@ pull consumers (`catch_me_up`, `live_blockers`, `semantic_history_search`). Each
 `enabled: false` rather than a fabricated empty when its Project opt-in is off, and every result
 names the `agent_run_id` it came from (`features/scan-timeline.md`).
 
-`change-map` is the Phase 7.9 per-session code change map: a bounded server-side subgraph of the
-files this run wrote, their blast radius, and one hop of forward context
-(`features/code-graph.md`). `available: false` with a typed `disabled_reason` (`unsupported`,
-`no_project`, `automation_disabled`) is the answer when the graph cannot be built, never a fake
-empty graph. Three fields carry the contract the client cannot infer:
+`change-map` is the Phase 7.9 per-session code change map: a bounded server-side subgraph of
+edited files, their blast radius, and one hop of forward context (`features/code-graph.md`).
+`available: false` with a typed `disabled_reason` (`unsupported`, `no_project`,
+`automation_disabled`) is the answer when the graph cannot be built, never a fake empty graph.
 
+`scope` selects which question is answered — `session` (this run's write facts plus everything
+the session has landed, from the git provenance ledger), `branch` (everything this checkout has
+changed against its comparison base, committed or not), or `project` (every session's edits, one
+hue each; `unify=true` is still accepted as an alias). Omitting it lets the daemon choose, which
+is what makes a worktree session default to its branch without the client knowing it is in one.
+The response carries what the client cannot infer:
+
+- `scope` is what was **served**, `scopes` is what may be asked for, and `scope_fallback` names
+  why a `branch` request was not honoured. `branch` is absent from `scopes` when the checkout has
+  no comparison base; an empty branch map would read as "this branch changed nothing", which is a
+  claim rather than an absence.
+- `checkout: {root, worktree, branch, ref, base, truncated}` names the checkout the session is
+  actually working in — not the Project root, which is merely where the Project was registered.
 - `excluded: {outside_root, unindexable}` counts the distinct edited files the map refused to
   draw, because the graph only ever indexes files inside the checkout and outside generated,
   vendored, and hidden directories. A map left with no nodes reports
@@ -278,6 +290,9 @@ empty graph. Three fields carry the contract the client cannot infer:
 - Each node's `path` is a **casefolded graph identity and is not a filesystem path**; its
   `display_path` is the true-cased, checkout-relative one, and is absent when the file no longer
   exists. Opening a file uses `display_path` or nothing.
+- A node with `indexed: false` is a seed the code index has never parsed — a file that exists
+  only on this branch. Its empty neighbourhood means "not indexed here", not "nothing depends on
+  it".
 - `worktree` names the checkout `display_path` is relative to when that is not the Project root,
   so a worktree session's files open from the worktree rather than the primary checkout.
 

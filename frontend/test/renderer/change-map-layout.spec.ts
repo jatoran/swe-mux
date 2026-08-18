@@ -75,7 +75,7 @@ test('ForceAtlas2 runs in the bundled module worker and moves the graph', async 
 
   const result = await page.evaluate(() => window.changeMapLayoutResults[0])
   const positions = Object.entries(result.positions)
-  expect(positions.length).toBe(8)
+  expect(positions.length).toBe(9)
   for (const [path, point] of positions) {
     expect(Number.isFinite(point.x), path).toBe(true)
     expect(Number.isFinite(point.y), path).toBe(true)
@@ -83,7 +83,7 @@ test('ForceAtlas2 runs in the bundled module worker and moves the graph', async 
   // Every node at the origin, or every node still on its seeded ring, would both mean the
   // layout never ran. Distinct coordinates are what says it did.
   const distinct = new Set(positions.map(([, point]) => `${point.x.toFixed(4)},${point.y.toFixed(4)}`))
-  expect(distinct.size).toBe(8)
+  expect(distinct.size).toBe(9)
   expect(consoleErrors.join('\n')).not.toContain('Content Security Policy')
 })
 
@@ -103,7 +103,7 @@ test('at phone width the pane draws lists instead of a WebGL canvas', async ({ p
       const rect = row.getBoundingClientRect()
       return { height: rect.height, right: rect.right }
     }))
-  expect(rows.length).toBe(8)
+  expect(rows.length).toBe(9)
   for (const row of rows) {
     expect(row.height).toBeGreaterThanOrEqual(38)
     expect(row.right).toBeLessThanOrEqual(390.5)
@@ -151,8 +151,10 @@ test('a selected file lists what it links to and opens by its real path', async 
 
   await page.locator('.change-map-group li button', { hasText: 'server.py' }).first().click()
   await detail.locator('button', { hasText: 'open file' }).click()
+  // The worktree travels with the path: this map describes a worktree checkout, so
+  // opening a file must reach that copy and not the primary checkout's.
   expect(await page.evaluate(() => window.changeMapOpened)).toEqual([
-    { path: 'src/swe_mux/Server.py', worktree: null },
+    { path: 'src/swe_mux/Server.py', worktree: 'D:/repo/.claude/worktrees/wt' },
   ])
 })
 
@@ -176,6 +178,58 @@ test('the map states what it refused to draw', async ({ page }) => {
   // the failure this caption exists to prevent.
   await expect(page.locator('.change-map-status')).toContainText('1 edited file not shown')
   await expect(page.locator('.change-map-status')).toContainText('1 outside this checkout')
+  // And a file the index has never parsed is drawn but not passed off as one whose
+  // empty neighbourhood means anything.
+  await expect(page.locator('.change-map-status')).toContainText('1 file not in the code index yet')
+})
+
+/**
+ * A worktree session's map describes its branch by default, and the header has to say
+ * which checkout that is: "since <sha>" cannot tell one worktree of several apart, and
+ * several open at once is exactly when the reader needs it to.
+ */
+test('a worktree map names its checkout and the base it is measured against', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/change-map-harness.html')
+  await page.waitForSelector(`${CANVAS} canvas`)
+
+  await expect(page.locator('.change-map-header small')).toHaveText('worktree wt vs master')
+  const scope = page.locator('.change-map-scope select')
+  await expect(scope).toHaveValue('branch')
+  await expect(scope.locator('option')).toHaveText(['this session', 'this branch', 'all sessions'])
+})
+
+test('picking a scope is what the daemon is asked for', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/change-map-harness.html')
+  await page.waitForSelector(`${CANVAS} canvas`)
+
+  // The first load asks for nothing, which is what lets the daemon apply the
+  // worktree default the client cannot know about.
+  const first = await page.evaluate(() => window.changeMapRequests[0])
+  expect(first).not.toContain('scope=')
+
+  await page.locator('.change-map-scope select').selectOption('session')
+  await expect.poll(async () =>
+    await page.evaluate(() => window.changeMapRequests.some(url => url.includes('scope=session'))),
+  ).toBe(true)
+})
+
+test('a file the index has never seen is marked wherever it is listed', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 })
+  await page.goto('/change-map-harness.html')
+  await page.waitForSelector('.change-map-group')
+
+  const row = page.locator('.change-map-group li button', { hasText: 'brandnew.py' })
+  await expect(row.locator('code')).toHaveText('◌ src/swe_mux/brandnew.py')
+  await row.click()
+  const detail = page.locator('.change-map-detail')
+  await expect(detail.locator('.change-map-unindexed')).toContainText('not in the code index yet')
+  // Still openable: it exists on disk in the worktree, which is the whole point.
+  await detail.locator('button', { hasText: 'open file' }).click()
+  expect(await page.evaluate(() => window.changeMapOpened)).toEqual([
+    { path: 'src/swe_mux/brandnew.py', worktree: 'D:/repo/.claude/worktrees/wt' },
+  ])
 })
 
 /**
