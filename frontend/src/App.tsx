@@ -5075,7 +5075,7 @@ export function App() {
     const id = session.id
     const agentSession=isAgent(session)
     if(session.pending)return <section class={`terminal-pane pending-terminal-pane ${activeId===id?'focused':''}`} onPointerDown={()=>{setActiveId(id);setFocusedViewId(id)}}>
-      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">{session.pending_label||'starting terminal…'}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
+      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div class="pane-identity"><span class="pane-title" title={sessionName(session)||id}>{sessionName(session)||id}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
       <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>{session.pending_label||'Starting terminal'}</strong><small>{session.pending_detail||'Resolving the project and opening the shell…'}</small></div>
     </section>
     const remoteBoundary=session.runtime_boundary==='remote'
@@ -5122,16 +5122,40 @@ export function App() {
     const voiceOverlayNode=voiceStripNode||conversationSurface
       ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
       :null
+    // The header names the session and nothing else. Its state is on the tab, on the sidebar
+    // row, and in the terminal the reader is already looking at, whereas the *name* is the one
+    // thing those surfaces crop: a tab is only as wide as the strip allows. The name therefore
+    // takes the column the status line used to hold, bounded by `fit-content()` in the
+    // stylesheet so a long generated title cannot squeeze the path, voice chips, or tools.
+    const paneTitle=sessionName(session)||id
+    // Faults are not state, and they have no other pane-level surface — an agent header draws
+    // no path chip, which is where the boundary warning otherwise lives — so they keep a marker
+    // beside the name rather than disappearing with the status line. A stale transcript is the
+    // one fault that looks like a healthy session: the pane may be reading a conversation this
+    // PTY is no longer running (an unfollowable /clear or /new), so it is marked visibly and
+    // not only in the tooltip.
+    const paneFaults=[
+      nonLocalBoundary&&'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable',
+      session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',
+      session.observation_diagnostic,
+      session.parser_diagnostic,
+    ].filter((entry):entry is string=>!!entry)
+    // The full name leads the tooltip because the rendered one is truncated. The status line
+    // follows it, unrendered: it costs no width on hover, and it keeps one reading of the state
+    // within reach of the pane without competing with the name for the bar. Delivery readiness
+    // rides along as detail rather than triggering the marker: every session reports one.
+    const paneTitleHint=[
+      paneTitle,
+      sessionStatus(session),
+      ...paneFaults,
+      session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`,
+    ].filter(Boolean).join('\n')
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
     const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
-        {/* A stale transcript is the one fault that looks like a healthy session: the state
-            below is being read off a conversation this PTY may no longer be running (an
-            unfollowable /clear or /new). Marked visibly, not just in the tooltip, because the
-            whole failure mode is that nothing looks wrong. */}
-        <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[nonLocalBoundary&&'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable',session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
+        <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`Session diagnostics: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
         {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
         <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and

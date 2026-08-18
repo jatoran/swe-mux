@@ -892,8 +892,8 @@ responsive controls.
   surface. Terminal visibility does not depend on convergence with a separate global active ID.
 - Agent headers omit cwd on every device. A spawn path marked `last-known::` is stale metadata,
   not an actionable session control, and consumed the header's central space. Shell headers keep
-  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so status and tools remain
-  on one row.
+  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so the name, voice group,
+  and tools remain on one row.
 - Touch gestures are configurable command slots: single-finger horizontal swipes, two-finger
   horizontal *and vertical* swipes, and a two-finger tap. Only the **single**-finger vertical
   channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real
@@ -1137,11 +1137,17 @@ responsive controls.
   that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
   opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
   operation with nothing open (`features/auto-delivery.md`).
-- The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**.
+- The pane header is `[name] [cwd] [voice] [tools]` and **must stay one row**.
   It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
   The pane-local voice group contains read-aloud only; workspace talk is in the app-level Conversation layer.
   Overflow is absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade and never grows the bar.
-  Phones drop the cwd column and cap the status width so the group keeps room.
+  Phones drop the cwd column, and every device caps the name track so the group keeps room.
+- The header's first field is the session's display name (`sessionNames.ts`), not its status.
+  State is already carried by the tab, the sidebar row, and the terminal being read, while the name is the field those surfaces crop: a tab is only as wide as its strip allows.
+  The name track is `fit-content()` rather than `auto`, because an `auto` track takes its max-content size before the flexible track expands - a sentence-length generated title would take the cwd's space and squeeze the voice chips to their floor.
+  The rendered name ellipsizes; the whole of it leads the `title` tooltip, followed by the status line, any faults, and delivery readiness.
+  Faults keep a visible marker beside the name (`.pane-fault`) because they have no other pane-level surface - an agent header draws no path chip, which is where a non-local boundary is otherwise reported - and because a stale observation is the one fault that looks like a healthy session.
+  Routine state never re-enters the bar: that is what the tab and the row are for.
 - **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
   The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
