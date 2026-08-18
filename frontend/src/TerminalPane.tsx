@@ -36,7 +36,8 @@ import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
-import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
+import { isRepeatableRailKey } from './railKeyRepeat'
+import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
@@ -3208,27 +3209,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(sequence===APP_TAIL_KEY)clearAppTail('rail_tail_key')
     if(!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }
-  const railKeySendRef=useRef(sendKey)
-  railKeySendRef.current=sendKey
-  const railKeyRepeaterRef=useRef<ReturnType<typeof createRailKeyRepeater>|null>(null)
-  if(!railKeyRepeaterRef.current){
-    railKeyRepeaterRef.current=createRailKeyRepeater(
-      sequence=>railKeySendRef.current(sequence),
-      (callback,delayMs)=>window.setTimeout(callback,delayMs),
-      timer=>window.clearTimeout(timer),
-    )
-  }
-  const railKeyRepeater=railKeyRepeaterRef.current
-  useEffect(()=>{
-    const cancel=()=>railKeyRepeater.cancel()
-    window.addEventListener('blur',cancel)
-    document.addEventListener('visibilitychange',cancel)
-    return()=>{
-      window.removeEventListener('blur',cancel)
-      document.removeEventListener('visibilitychange',cancel)
-      cancel()
-    }
-  },[session.id])
+  const railKeyRepeat=useRailKeyRepeat(sendKey,session.id)
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
   // the terminal alone is what left this dead on a phone in a Claude session while the rail's
   // `^End` — which happens to send the same key on its way past — kept working.
@@ -3437,12 +3418,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     if(item.type==='key'){
       const sequence=item.bytes||''
-      if(isRepeatableRailKey(item.id))return <button key={key} class={`${item.className||'term-key'} rail-key-repeat`} title={`${item.title||item.label} (hold to repeat)`} onPointerDown={event=>{
-        if(!event.isPrimary||event.button!==0)return
-        event.preventDefault()
-        event.currentTarget.setPointerCapture?.(event.pointerId)
-        railKeyRepeater.press(event.pointerId,sequence)
-      }} onPointerUp={event=>railKeyRepeater.release(event.pointerId)} onPointerCancel={event=>railKeyRepeater.release(event.pointerId)} onLostPointerCapture={event=>railKeyRepeater.release(event.pointerId)} onContextMenu={event=>event.preventDefault()} onClick={event=>{if(event.detail===0)sendKey(sequence)}}>{item.label}</button>
+      if(isRepeatableRailKey(item.id))return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={sequence} label={item.label} title={item.title||item.label} className={item.className||'term-key'}/>
       return <button key={key} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
     }
     if(item.type==='action')return null

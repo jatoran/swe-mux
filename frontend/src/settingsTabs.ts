@@ -38,6 +38,15 @@ export type SettingsTab = typeof settingsTabs[number]['id']
 export type SettingsTabEntry = typeof settingsTabs[number]
 
 /**
+ * Commands that work the narrow layout's section drawer — the slide-in twin of the
+ * docked column above. They are the shell's, not the panel's, because the gesture
+ * recognizer lives at the shell level and the command bus is the only channel a
+ * resolved gesture has.
+ */
+export const SETTINGS_NAV_TOGGLE = 'settingsNav.toggle'
+export const SETTINGS_NAV_CLOSE = 'settingsNav.close'
+
+/**
  * Contiguous runs of one group, in tab order. Derived, so adding a tab to the
  * list is the whole change — there is no second list of group memberships to
  * keep in step, and a tab that drifts away from its group shows up as a repeated

@@ -142,6 +142,21 @@ export const BACK_COMMAND = 'nav.back'
 const BACK_SLOTS = new Set<GestureSlot>(['swipe_right', 'two_finger_swipe_right'])
 const HORIZONTAL_SLOTS = new Set<GestureSlot>(['swipe_left', 'swipe_right', 'two_finger_swipe_left', 'two_finger_swipe_right'])
 
+// The workspace sidebar's own commands. A slot bound to any of them is "the gesture that
+// works the left drawer" as far as the user is concerned, which is what an overlay with a
+// left drawer of its own borrows — see `OverlayLeftPanel`.
+const SIDEBAR_COMMANDS = new Set(['sidebar.toggle', 'sidebar.open', 'sidebar.close'])
+
+/**
+ * An overlay that carries a left slide-in navigation of its own — Settings on a phone.
+ *
+ * Its two command ids are supplied by the caller rather than named here, because this
+ * module decides *which gesture means the left drawer*, not which surface owns one.
+ */
+export type OverlayLeftPanel = { open: boolean; toggle: string; close: string }
+
+export type OverlayContext = { depth: number; enabled: boolean; panel?: OverlayLeftPanel }
+
 // While the left sidebar is open, either horizontal direction closes it. The
 // right-edge drawer keeps its directional rule: a rightward swipe pushes it
 // away. These overrides are keyed on the open panel rather than the slot's
@@ -151,7 +166,7 @@ export function resolveGestureCommand(
   settings: MobileGestureSettings,
   panels: OverlayPanels,
   swipeAwayClose: boolean,
-  overlay: { depth: number; enabled: boolean } = { depth: 0, enabled: false },
+  overlay: OverlayContext = { depth: 0, enabled: false },
 ): string {
   // An open overlay level shadows everything below it, panels included: it is painted on
   // top, so a gesture over it can only mean something about it. The back swipe pops one
@@ -160,7 +175,24 @@ export function resolveGestureCommand(
   // which is exactly the hijacking the recognizer's target filter used to prevent by
   // refusing to look at overlays at all. With the config off, that original immunity is
   // what is restored, rather than the bindings coming back.
-  if (overlay.depth > 0) return overlay.enabled && BACK_SLOTS.has(slot) ? BACK_COMMAND : ''
+  if (overlay.depth > 0) {
+    if (!overlay.enabled) return ''
+    // An overlay with a left drawer answers to the same two rules the workspace sidebar
+    // does, one level up: whichever slot the user bound the workspace sidebar to opens
+    // this one, and while it is open either horizontal direction closes it. Deriving the
+    // opening slot from the binding rather than hard-coding one is what makes this a
+    // mirror — rebinding the workspace sidebar moves both drawers together.
+    //
+    // Every other slot still falls through to the back swipe, so backing out of the
+    // overlay never stops working: with the defaults that is the single-finger rightward
+    // swipe, which is not bound to the sidebar.
+    const panel = overlay.panel
+    if (panel) {
+      if (panel.open && swipeAwayClose && HORIZONTAL_SLOTS.has(slot)) return panel.close
+      if (SIDEBAR_COMMANDS.has(settings[slot])) return panel.open ? panel.close : panel.toggle
+    }
+    return BACK_SLOTS.has(slot) ? BACK_COMMAND : ''
+  }
   if (swipeAwayClose) {
     // The right-edge drawer overlays the sidebar, so it wins when both are open.
     if (panels.drawerOpen && (slot === 'swipe_right' || slot === 'two_finger_swipe_right')) return 'drawer.toggle'
