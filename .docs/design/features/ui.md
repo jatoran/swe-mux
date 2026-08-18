@@ -1194,16 +1194,18 @@ responsive controls.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
   It keeps its 44px tap height and its accessible name; only the width fell.
-  The four arrows are non-focusing pointer controls: press sends once, then a 350 ms hold repeats every 75 ms until release or cancellation.
-  Preventing pointer focus keeps an open mobile keyboard open; keyboard and assistive activation remain one-shot.
-  A touch beginning on an arrow steers the terminal rather than horizontally scrolling the rail.
+  The four arrows are non-focusing keys with two verbs: a clean tap sends once, and a press held in place starts repeating after 350 ms and then every 75 ms until release or cancellation.
+  The tap is delivered by the button's own click, exactly as every other rail item is, which is what makes an arrow a legal place to begin a swipe: a touch the rail turns into a horizontal pan has its click suppressed, so a flick that merely started on an arrow scrolls the rail and sends nothing.
+  This is the whole reason the arrows do not send on pointer-down; sending there is a decision the pan can no longer take back, and it made the arrows the one part of the rail a finger could not push off of.
+  A press stops being a candidate for repetition once it has travelled as far as the pan needs to start scrolling, and a hold that *has* committed claims the pointer so the strip cannot scroll out from under the key being spammed.
+  Focus is refused on mouse-down rather than pointer-down — the same guard the rest of the rail uses — because the click now carries the tap; this keeps an open mobile keyboard open, and keyboard and assistive activation remain one-shot.
   The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only.
   Shell and desktop Enter behavior is unchanged.
 - On touch, an overflowing Action rail owns horizontal pointer movement directly instead of depending on native overflow-scroll arbitration inside the keyboard-translated terminal surface.
   The first drag therefore moves the rail even while the soft keyboard is open.
   A modest drag gain compensates for the lost native fling without making nearby actions hard to target.
   The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the resulting click.
-  Repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps priority when a gesture starts on an arrow.
+  Every button on the rail is a legal place to begin that drag, the repeating arrow keys included; the suppressed click is what settles what a swipe did or did not activate.
 - Activating an Action rail item preserves the mobile soft keyboard state it found.
   Keys, Send, Paste, prompt templates, skills, slash commands, and literal text execute with the keyboard down when it was down, while an already-open keyboard remains open.
   Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.
