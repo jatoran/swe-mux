@@ -15,10 +15,11 @@ Asked for something that is coding, it routes: queue a message to an existing se
   A spoken command's latency never includes a model call.
 - **The model never emits an identifier and never executes.**
   Tools take project and session *names*; `resolve_session`/`resolve_project` map them onto live entities and answer ambiguity with candidate lists the assistant reads back.
+  Session names are **display names**: the snapshot, `session_detail`, restatements, and resolution all apply the same rule every UI surface does (`session_titles.py` — a generated title wins while the session is auto-named), so the assistant never quotes a spawn id at a session the operator knows by its title, and a title it quotes always resolves back.
   Every side effect travels an existing path: the prompt queue, the spawn contract, the PTY interrupt operation, the graceful end operation, project-note writes.
   `NON_OVERRIDABLE_REASONS` and the approval floor therefore bind structurally, not by prompt.
 - **Trust is enforced daemon-side per action class**, in `AssistantService._run_tool`:
-  - *read* (session detail, transcripts, history search, notes): executes silently.
+  - *read* (session detail, transcripts, history search, note listing and reads, queue state): executes silently.
   - *navigation* (`run_ui_command`): dispatched to the operator's device (below), no confirmation.
   - *reversible* (queue an inert draft, append to a project note, spawn a session): follows `assistant_trust_reversible` — `auto`, `cancel_window` (default: announce, execute after ~6 s unless cancelled), or `confirm`.
   - *consequential* (armed send, interrupt, end session): always an explicit confirmation with a bounded TTL; this floor is deliberately not configurable.
@@ -43,7 +44,9 @@ Interrupt cancels the running task; nothing already executed is undone.
 ## UI command dispatch
 
 Focus, drawer tabs, and panels are per-device UI state the daemon cannot run.
-The `run_ui_command` tool records a `dispatched` action and waits (bounded) for a device acknowledgement; the client executor resolves the label against the live command registry — the same resolver spoken phrases compile to, then the fuzzy pass, then a label match — runs it, and reports `POST /api/assistant/actions/{id}/ui-result`.
+The `run_ui_command` tool records a `dispatched` action and waits (bounded) for a device acknowledgement; the client executor resolves the phrase with `planUiCommand` (`uiCommand.ts`) — registry aliases first, then the closed query grammar (which owns "open project X" navigation and answers entity misses with candidates), then the fuzzy pass, then an exact label match — runs the plan, and reports `POST /api/assistant/actions/{id}/ui-result`.
+The `{text}` catch-all is excluded from that ladder by construction: for a dispatched command it matches anything, and it once turned "move to project X" into a voice lookup instead of a failure the assistant could react to.
+The per-turn context also names the reliable command shapes ("open project <name>", "open the <tab> tab", …) so the model prefers them over free paraphrase.
 No connected client is an honest tool failure, not a silent success.
 
 ## Voice attachment

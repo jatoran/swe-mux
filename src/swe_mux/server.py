@@ -1427,13 +1427,61 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
     # so an assistant-driven mutation travels no path of its own.
     assistant_store = AssistantStore(config.database_path)
 
-    async def _assistant_note_read(project_id: str) -> dict[str, Any]:
+    async def _assistant_note_summaries(project: Any) -> list[dict[str, Any]]:
+        titles: dict[str, str] = {}
+        owners = await history.note_owner_labels(project.id)
+        titles.update(
+            {str(note_id): str(owner.get("name") or note_id) for note_id, owner in owners.items()}
+        )
+        for session in sessions.sessions.values():
+            if session.record.project_id == project.id:
+                titles[session.record.id] = session.record.name
+        return await asyncio.to_thread(
+            project_note_summaries,
+            project.root,
+            default_note_id=project.id,
+            default_title=f"{project.name} notes",
+            legacy_titles=titles,
+        )
+
+    async def _assistant_note_list(project_id: str) -> list[dict[str, Any]]:
         project = projects.projects.get(project_id)
         if project is None:
             raise ValueError("unknown project")
+        return await _assistant_note_summaries(project)
+
+    async def _assistant_note_read(
+        project_id: str, note_reference: str | None = None
+    ) -> dict[str, Any]:
+        project = projects.projects.get(project_id)
+        if project is None:
+            raise ValueError("unknown project")
+        note_id = project.id
+        if note_reference:
+            # Resolve a spoken/typed title against the real note inventory —
+            # exact casefold first, then a unique substring; ambiguity is
+            # answered with the candidate titles, never a guess.
+            summaries = await _assistant_note_summaries(project)
+            needle = note_reference.strip().casefold()
+            exact = [
+                item for item in summaries
+                if str(item.get("title") or "").casefold() == needle
+            ]
+            matches = exact or [
+                item for item in summaries
+                if needle in str(item.get("title") or "").casefold()
+            ]
+            if len(matches) != 1:
+                return {
+                    "error": "note did not resolve"
+                    if not matches
+                    else "more than one note matches",
+                    "candidates": [str(item.get("title") or "") for item in matches[:6]],
+                }
+            note_id = str(matches[0]["id"])
         return await read_note(
             project.root,
-            _storage_note_id(project, project.id),
+            _storage_note_id(project, note_id),
             default_title=f"{project.name} notes",
             project=_registered_identity(project),
         )
@@ -1488,6 +1536,7 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         history_search=_assistant_history_search,
         note_read=_assistant_note_read,
         note_append=_assistant_note_append,
+        note_list=_assistant_note_list,
     )
     app["assistant"] = assistant
     app["assistant_store"] = assistant_store

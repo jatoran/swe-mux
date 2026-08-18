@@ -37,8 +37,11 @@ pytestmark = pytest.mark.asyncio
 
 
 class LedgerStub:
-    def __init__(self, spent_usd: float = 0.0) -> None:
+    def __init__(
+        self, spent_usd: float = 0.0, titles: dict[str, str] | None = None
+    ) -> None:
         self.spent_usd = spent_usd
+        self.titles = titles or {}
         self.started: list[dict[str, Any]] = []
         self.finished: list[dict[str, Any]] = []
         self.spend_rows: list[dict[str, Any]] = []
@@ -46,6 +49,21 @@ class LedgerStub:
     async def spend(self, *, rule_id: str | None = None) -> dict[str, float | int]:
         assert rule_id == ASSISTANT_RULE_ID
         return {"tokens": 0, "cost_usd": self.spent_usd}
+
+    async def annotations(
+        self,
+        *,
+        agent_run_ids: Any = None,
+        tag: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        assert tag == "title"
+        wanted = set(agent_run_ids or [])
+        return [
+            {"agent_run_id": run_id, "content": title}
+            for run_id, title in self.titles.items()
+            if run_id in wanted
+        ]
 
     async def observer_started(self, **kwargs: Any) -> str:
         self.started.append(kwargs)
@@ -265,13 +283,38 @@ async def test_store_roundtrip_and_restart_expires_pending_actions(tmp_path: Pat
 async def test_session_resolution_exact_unique_and_ambiguous(tmp_path: Path) -> None:
     service, _events, _queue, _effects = make_service(tmp_path)
     try:
-        exact, _ = service.resolve_session("backend agent")
+        exact, _ = await service.resolve_session("backend agent")
         assert exact is not None and exact.record.id == "s1"
-        unique, _ = service.resolve_session("worker")
+        unique, _ = await service.resolve_session("worker")
         assert unique is not None and unique.record.id == "s2"
-        none, candidates = service.resolve_session("backend")
+        none, candidates = await service.resolve_session("backend")
         assert none is None
         assert len(candidates) == 2
+    finally:
+        service.store.close()
+
+
+async def test_display_titles_reach_the_snapshot_and_resolution(tmp_path: Path) -> None:
+    """The assistant must speak and accept the same names the UI shows.
+
+    The live gap this pins: sessions listed by their spawn ids instead of their
+    generated titles, and a title the model then quoted failing to resolve.
+    """
+    ledger = LedgerStub(titles={"run-1": "Top Districts Mississippi West"})
+    service, _events, _queue, _effects = make_service(tmp_path, ledger=ledger)
+    try:
+        snapshot = await service.fleet_snapshot()
+        names = {row["name"] for row in snapshot["sessions"]}
+        assert "Top Districts Mississippi West" in names
+        assert "backend agent" not in names  # the spawn name is superseded
+        by_title, _ = await service.resolve_session("top districts mississippi west")
+        assert by_title is not None and by_title.record.id == "s1"
+        by_substring, _ = await service.resolve_session("mississippi")
+        assert by_substring is not None and by_substring.record.id == "s1"
+        # A rename is the human overriding the generator: the title stops winning.
+        service.sessions.sessions["s1"].record.auto_named = False
+        renamed = await service.fleet_snapshot()
+        assert "backend agent" in {row["name"] for row in renamed["sessions"]}
     finally:
         service.store.close()
 
@@ -295,7 +338,7 @@ async def test_context_snapshot_carries_computed_ages(tmp_path: Path) -> None:
     service, _events, _queue, _effects = make_service(tmp_path)
     try:
         service.sessions.sessions["s2"].record.state_since = 0.0  # unknown, not "now"
-        snapshot = service.fleet_snapshot()
+        snapshot = await service.fleet_snapshot()
         names = {row["name"] for row in snapshot["sessions"]}
         assert names == {"backend agent", "backend worker"}
         assert snapshot["projects"][0]["name"] == "pixel lab"

@@ -103,6 +103,7 @@ import {
   type AssistantClientContext, type AssistantStatus,
 } from './assistant'
 import { resolveVoiceFuzzy } from './voiceFuzzy'
+import { planUiCommand } from './uiCommand'
 import { resolveConversationTarget } from './conversationTarget'
 import type { VoiceSessionCandidate } from './conversationTarget'
 import { autoplayEnabled, beginRequestedStream, cancelRequestedStream, enqueueAutoplay, enqueueRequestedStreamClip, newVoiceStreamId, playClip, playRequestedStreamFirst, setAutoplayEnabled, stopAllPlayback, stopSessionPlayback, unlockPlayback } from './voice'
@@ -2195,27 +2196,33 @@ export function App() {
       if(!actionId||!commandText)return
       void (async()=>{
         const registry=commandRegistryRef.current
-        const resolution=resolveVoiceIntent(registry,commandText)
-        let target=resolution.match?.command||null
-        if(!target){
-          const fuzzy=resolveVoiceFuzzy(registry,commandText)
-          if(fuzzy)target=fuzzy.command
-        }
-        if(!target){
-          const normalized=normalizeSpokenText(commandText)
-          target=registry.find(item=>item.available&&normalizeSpokenText(item.label)===normalized)
-            ||searchCommands(registry.filter(item=>item.available),commandText)[0]
-            ||null
-        }
-        if(!target){
-          await reportUiResult(actionId,{ok:false,detail:'no command matched',candidates:resolution.candidates.map(item=>item.command.label)}).catch(()=>{})
+        const plan=planUiCommand(registry,commandText)
+        if(plan.kind==='none'){
+          await reportUiResult(actionId,{ok:false,detail:'no command matched',candidates:plan.candidates}).catch(()=>{})
           return
         }
-        const ran=runCommand(registry,target.id)
-        await reportUiResult(actionId,{
-          ok:ran==='ran',
-          detail:ran==='ran'?`ran ${target.label}`:(target.disabledReason||`${target.label} is unavailable`),
-        }).catch(()=>{})
+        try{
+          if(plan.kind==='query'){
+            // The closed grammar executes and reports in its own words —
+            // including entity-resolution failures with candidates — which is
+            // exactly what the assistant should hear back.
+            const outcome=await voiceQueryHandler.current(plan.query)
+            await reportUiResult(actionId,{ok:true,detail:outcome.detail.slice(0,380)}).catch(()=>{})
+            return
+          }
+          if(plan.command.voice?.execute){
+            const outcome=await plan.command.voice.execute(plan.captured)
+            await reportUiResult(actionId,{ok:true,detail:outcome.detail.slice(0,380)}).catch(()=>{})
+            return
+          }
+          const ran=runCommand(registry,plan.command.id)
+          await reportUiResult(actionId,{
+            ok:ran==='ran',
+            detail:ran==='ran'?`ran ${plan.command.label}`:(plan.command.disabledReason||`${plan.command.label} is unavailable`),
+          }).catch(()=>{})
+        }catch(cause){
+          await reportUiResult(actionId,{ok:false,detail:cause instanceof Error?cause.message.slice(0,380):'the command failed'}).catch(()=>{})
+        }
       })()
     }
     window.addEventListener('mux:assistant-event',handler)

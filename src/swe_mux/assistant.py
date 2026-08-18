@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from .config import Config
 from .event_bus import EventBus
 from .openrouter import OpenRouterClient, OpenRouterError
+from .session_titles import generated_titles, record_display_name, record_run_id
 from .sqlite_store import (
     connect_or_quarantine,
     database_operation_lock,
@@ -389,8 +390,9 @@ class AssistantService:
         interrupt_op: Callable[[Session], Awaitable[Any]],
         end_op: Callable[[Session, str], Awaitable[Any]],
         history_search: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-        note_read: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        note_read: Callable[[str, str | None], Awaitable[dict[str, Any]]] | None = None,
         note_append: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None,
+        note_list: Callable[[str], Awaitable[list[dict[str, Any]]]] | None = None,
     ) -> None:
         self.config = config
         self.events = events
@@ -405,6 +407,7 @@ class AssistantService:
         self.end_op = end_op
         self.history_search = history_search
         self.note_read = note_read
+        self.note_list = note_list
         self.note_append = note_append
         self.diagnostic: str | None = None
         # One turn at a time per dialog; concurrent turns would interleave the
@@ -534,27 +537,62 @@ class AssistantService:
             return partial[0], []
         return None, [record.name for record in (exact or partial)][:6]
 
-    def resolve_session(self, reference: str) -> tuple[Session | None, list[str]]:
-        needle = reference.strip().casefold()
-        if not needle:
-            return None, []
-        live = [
+    def _live_sessions(self) -> list[Session]:
+        return [
             session
             for session in self.sessions.sessions.values()
             if session.record.state not in {"exited", "crashed"} and not session.record.cold
         ]
+
+    async def _display_names(self, sessions: list[Session]) -> dict[str, str]:
+        """Display name per session id — the same rule every UI surface applies.
+
+        A generated title wins only while the session is still auto-named; the
+        model sees these names in the snapshot, so resolution must accept them
+        too, or the assistant quotes a name it then cannot act on.
+        """
+        run_ids = {record_run_id(session.record) for session in sessions}
+        try:
+            titles = await generated_titles(self.automation_store, run_ids)
+        except Exception:  # noqa: BLE001 - a title lookup failure must not fail a turn
+            log.warning("assistant title lookup failed", exc_info=True)
+            titles = {}
+        return {
+            session.record.id: record_display_name(session.record, titles)
+            for session in sessions
+        }
+
+    async def resolve_session(self, reference: str) -> tuple[Session | None, list[str]]:
+        """Resolve by id, spawn name, or display title — exact first, then unique substring."""
+        needle = reference.strip().casefold()
+        if not needle:
+            return None, []
+        live = self._live_sessions()
+        display = await self._display_names(live)
+
+        def names(session: Session) -> set[str]:
+            return {
+                session.record.name.casefold(),
+                display.get(session.record.id, "").casefold(),
+            }
+
         exact = [
             session
             for session in live
-            if session.record.id == reference or session.record.name.casefold() == needle
+            if session.record.id == reference or needle in names(session)
         ]
         if len(exact) == 1:
             return exact[0], []
-        partial = [session for session in live if needle in session.record.name.casefold()]
+        partial = [
+            session
+            for session in live
+            if any(needle in name for name in names(session) if name)
+        ]
         if len(partial) == 1:
             return partial[0], []
         return None, [
-            f"{session.record.name} (project {self._project_name(session.record.project_id)})"
+            f"{display.get(session.record.id, session.record.name)} "
+            f"(project {self._project_name(session.record.project_id)})"
             for session in (exact or partial)
         ][:6]
 
@@ -577,24 +615,31 @@ class AssistantService:
             return f"{int(seconds / 60)}m"
         return f"{seconds / 3600:.1f}h"
 
-    def fleet_snapshot(self) -> dict[str, Any]:
+    async def fleet_snapshot(self) -> dict[str, Any]:
         """The compact read model every turn carries.
 
-        Assembled from the same session records the UI renders; ages are
-        computed here so no freshness claim is ever the model's own.
+        Assembled from the same session records the UI renders — including the
+        same display-name rule, so the assistant never quotes a spawn id at a
+        session the operator knows by its generated title. Ages are computed
+        here so no freshness claim is ever the model's own.
         """
         now = time.time()
         projects = [
             {"name": record.name, "id": record.id}
             for record in self.projects.ordered_projects()
         ]
+        live = self._live_sessions()
+        cold = [
+            session
+            for session in self.sessions.sessions.values()
+            if session.record.cold
+        ]
+        display = await self._display_names([*live, *cold])
         rows: list[dict[str, Any]] = []
-        for session in self.sessions.sessions.values():
+        for session in [*live, *cold]:
             record = session.record
-            if record.state in {"exited", "crashed"} and not record.cold:
-                continue
             entry: dict[str, Any] = {
-                "name": record.name,
+                "name": display.get(record.id, record.name),
                 "project": self._project_name(record.project_id),
                 "backend": record.backend,
                 "state": record.state,
@@ -615,13 +660,15 @@ class AssistantService:
                 break
         return {"projects": projects, "sessions": rows, "captured_at": now}
 
-    def _context_message(self, client_context: dict[str, Any]) -> str:
-        snapshot = self.fleet_snapshot()
+    async def _context_message(self, client_context: dict[str, Any]) -> str:
+        snapshot = await self.fleet_snapshot()
         focused = str(client_context.get("focused_session_id") or "")
         focused_name = None
         if focused:
             session = self.sessions.sessions.get(focused)
-            focused_name = session.record.name if session else None
+            if session is not None:
+                names = await self._display_names([session])
+                focused_name = names.get(session.record.id, session.record.name)
         commands = client_context.get("commands")
         command_lines: list[str] = []
         if isinstance(commands, list):
@@ -634,10 +681,18 @@ class AssistantService:
         ]
         if focused_name:
             parts.append(f"The operator's focused session is: {focused_name}")
+        parts.append(
+            "run_ui_command executes on the operator's device through the workspace's "
+            "deterministic spoken grammar. Reliable command shapes: 'open project "
+            "<name>', 'open session <name>' (a name from the snapshot), 'go to next "
+            "session', 'open the <Notes|Queue|Git|Transcript|Actions|Insight> tab', "
+            "'list voice commands', 'fleet status'. Prefer these shapes over free "
+            "paraphrase."
+        )
         if command_lines:
             parts.append(
-                "UI commands available on the operator's device (run_ui_command takes "
-                "one of these labels or a close paraphrase): " + "; ".join(command_lines)
+                "Additional UI command labels available on the operator's device: "
+                + "; ".join(command_lines)
             )
         return "\n".join(parts)
 
@@ -689,10 +744,29 @@ class AssistantService:
                 ["query"],
             ),
             tool(
-                "read_project_note",
-                "Read a project's primary note.",
+                "list_project_notes",
+                "List a project's notes: titles, sizes, and update times.",
                 {"project": project_property},
                 ["project"],
+            ),
+            tool(
+                "read_project_note",
+                "Read one of a project's notes; omit `note` for the primary note.",
+                {
+                    "project": project_property,
+                    "note": {
+                        "type": "string",
+                        "description": "The note's title from list_project_notes",
+                    },
+                },
+                ["project"],
+            ),
+            tool(
+                "list_queue",
+                "Prompt-queue state: per-session pending counts, or one session's "
+                "queued messages when `session` is given.",
+                {"session": {**session_property, "description": "Optional session name"}},
+                [],
             ),
             tool(
                 "append_project_note",
@@ -755,7 +829,14 @@ class AssistantService:
 
     @staticmethod
     def _classify(kind: str, arguments: dict[str, Any]) -> str:
-        if kind in {"session_detail", "read_transcript", "search_history", "read_project_note"}:
+        if kind in {
+            "session_detail",
+            "read_transcript",
+            "search_history",
+            "read_project_note",
+            "list_project_notes",
+            "list_queue",
+        }:
             return ACTION_CLASS_READ
         if kind == "run_ui_command":
             return ACTION_CLASS_NAVIGATION
@@ -960,7 +1041,7 @@ class AssistantService:
     ) -> dict[str, Any] | None:
         """Resolve names now so ambiguity is answered before anything pends."""
         if kind in {"send_to_session", "interrupt_session", "end_session"}:
-            session, candidates = self.resolve_session(str(arguments.get("session") or ""))
+            session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 return {"error": "session did not resolve", "candidates": candidates}
             arguments["session"] = session.record.name
@@ -996,7 +1077,7 @@ class AssistantService:
 
     async def _execute_mutation(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if kind == "send_to_session":
-            session, _candidates = self.resolve_session(str(arguments.get("session") or ""))
+            session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 raise AssistantError("the target session is no longer live")
             message = await self.prompt_queue.enqueue(
@@ -1028,13 +1109,13 @@ class AssistantService:
             session = await self.spawn_op(body)
             return {"spawned": True, "session": session.record.name}
         if kind == "interrupt_session":
-            session, _candidates = self.resolve_session(str(arguments.get("session") or ""))
+            session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 raise AssistantError("the target session is no longer live")
             await self.interrupt_op(session)
             return {"interrupted": True, "session": session.record.name}
         if kind == "end_session":
-            session, _candidates = self.resolve_session(str(arguments.get("session") or ""))
+            session, _candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 raise AssistantError("the target session is no longer live")
             await self.end_op(session, "assistant")
@@ -1051,13 +1132,15 @@ class AssistantService:
 
     async def _execute_read(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if kind == "session_detail":
-            session, candidates = self.resolve_session(str(arguments.get("session") or ""))
+            session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 return {"error": "session did not resolve", "candidates": candidates}
             record = session.record
             now = time.time()
+            display = await self._display_names([session])
             detail: dict[str, Any] = {
-                "name": record.name,
+                "name": display.get(record.id, record.name),
+                "spawn_name": record.name,
                 "project": self._project_name(record.project_id),
                 "backend": record.backend,
                 "state": record.state,
@@ -1083,21 +1166,24 @@ class AssistantService:
                 detail["last_reply"] = reply[:4_000]
             return detail
         if kind == "read_transcript":
-            session, candidates = self.resolve_session(str(arguments.get("session") or ""))
+            session, candidates = await self.resolve_session(str(arguments.get("session") or ""))
             if session is None:
                 return {"error": "session did not resolve", "candidates": candidates}
             if not session.transcript_path or not session.transcript_path.exists():
                 return {"error": "the session has no readable transcript"}
             count = max(1, min(int(arguments.get("messages") or 10), 30))
+            # Bound to a narrowed local: `session` is reassigned in later
+            # branches, which widens the closure capture back to Optional.
+            target = session
             page = await asyncio.to_thread(
                 lambda: transcript_message_page(
-                    session.transcript_path,
-                    session.record.backend,
+                    target.transcript_path,
+                    target.record.backend,
                     direction="tail",
                     anchor=None,
                     max_bytes=512 * 1024,
                     max_messages=count,
-                    native_id=session.record.native_session_id,
+                    native_id=target.record.native_session_id,
                 )
             )
             messages = [
@@ -1126,16 +1212,76 @@ class AssistantService:
                 for item in page.get("items", [])
             ]
             return {"items": items}
+        if kind == "list_project_notes":
+            project, candidates = self.resolve_project(str(arguments.get("project") or ""))
+            if project is None:
+                return {"error": "project did not resolve", "candidates": candidates}
+            if self.note_list is None:
+                return {"error": "note listing is not wired on this daemon"}
+            items = await self.note_list(project.id)
+            return {
+                "notes": [
+                    {
+                        "title": item.get("title"),
+                        "bytes": item.get("bytes"),
+                        "updated_at": item.get("updated_at"),
+                    }
+                    for item in items
+                ]
+            }
         if kind == "read_project_note":
             project, candidates = self.resolve_project(str(arguments.get("project") or ""))
             if project is None:
                 return {"error": "project did not resolve", "candidates": candidates}
             if self.note_read is None:
                 return {"error": "note reading is not wired on this daemon"}
-            note = await self.note_read(project.id)
+            note = await self.note_read(project.id, str(arguments.get("note") or "") or None)
+            if note.get("error"):
+                return {"error": str(note["error"]), "candidates": note.get("candidates") or []}
             return {
                 "title": note.get("title"),
                 "markdown": str(note.get("markdown") or "")[:8_000],
+            }
+        if kind == "list_queue":
+            reference = str(arguments.get("session") or "").strip()
+            if reference:
+                session, candidates = await self.resolve_session(reference)
+                if session is None:
+                    return {"error": "session did not resolve", "candidates": candidates}
+                view = await self.prompt_queue.target_view(session.record.id)
+                return {
+                    "messages": [
+                        {
+                            "state": item.get("state"),
+                            "armed": item.get("armed"),
+                            "sender": item.get("sender_label") or item.get("sender_kind"),
+                            "body": str(item.get("body") or "")[:300],
+                            "created_at": item.get("created_at"),
+                        }
+                        for item in view.get("messages", [])[:20]
+                    ],
+                    "pending": view.get("pending"),
+                }
+            rows = await self.prompt_queue.summary()
+            live = {session.record.id for session in self._live_sessions()}
+            display = await self._display_names(self._live_sessions())
+            return {
+                "targets": [
+                    {
+                        "session": display.get(
+                            str(row.get("target_session_id")), row.get("label")
+                        ),
+                        "project": self._project_name(str(row.get("project_id") or "")),
+                        "pending": row.get("pending"),
+                        "blocked": row.get("blocked"),
+                        "stranded": row.get("stranded"),
+                        "live": str(row.get("target_session_id")) in live,
+                    }
+                    for row in rows
+                    if int(row.get("pending") or 0)
+                    or int(row.get("blocked") or 0)
+                    or int(row.get("stranded") or 0)
+                ][:30]
             }
         raise AssistantError(f"unknown read tool {kind}")
 
@@ -1301,7 +1447,7 @@ class AssistantService:
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PRIMER},
-            {"role": "system", "content": self._context_message(client_context)},
+            {"role": "system", "content": await self._context_message(client_context)},
         ]
         for item in history:
             if item["turn_id"] == turn_id and item["role"] == "user":
@@ -1355,7 +1501,8 @@ class AssistantService:
                 )
                 known = {
                     "session_detail", "read_transcript", "search_history",
-                    "read_project_note", "append_project_note", "send_to_session",
+                    "read_project_note", "list_project_notes", "list_queue",
+                    "append_project_note", "send_to_session",
                     "spawn_session", "interrupt_session", "end_session", "run_ui_command",
                 }
                 if name in known:
