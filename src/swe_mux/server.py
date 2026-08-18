@@ -6483,6 +6483,51 @@ async def _spawn_branch_sibling(
     )
 
 
+# A branch ordinal already carried by a name, so branching a branch does not stack
+# prefixes into `B1-B2-B1-…`. The subject is what the operator recognises; the ordinal
+# is bookkeeping and only the newest one is worth the width.
+_BRANCH_NAME_ORDINAL = re.compile(r"^B\d+-")
+
+
+async def _branch_pane_name(app: web.Application, record: Any) -> str:
+    """What to call the new pane: the source conversation's own subject, marked.
+
+    Deliberately the source's **display** name rather than `record.name`. Those differ
+    for exactly the sessions worth branching: a session nobody renamed shows its
+    generated title while `record.name` is still the spawn default, so naming the
+    branch after the raw field produced `claude-6vried branch` for a conversation the
+    operator knows as "Update ABC". The two-name rule is `session_titles.py`'s, and
+    asking it is what keeps this in step with every other surface.
+
+    The ordinal counts the branches already cut from this conversation, so a second
+    branch of one source is `B2-` rather than a duplicate of the first. It is a label,
+    not an identity: branches at different depths of one tree can share a number, and
+    the daemon never reads it back.
+
+    The name is passed to `spawn`, which treats an explicit name as a rename
+    (`auto_named=False`), so the titler cannot take it back the moment the branch says
+    its first word.
+    """
+    store = app.get("automation_store")
+    run_id = session_titles.record_run_id(record)
+    titles = await session_titles.generated_titles(store, {run_id})
+    display = session_titles.record_display_name(record, titles)
+    subject = _BRANCH_NAME_ORDINAL.sub("", display).strip()
+    ordinal = 1
+    if store is not None:
+        try:
+            edges = await store.lineage(run_id)
+        except Exception as exc:  # noqa: BLE001 - a name must not be able to fail a branch
+            log.warning("branch could not count prior branches of %s: %s", run_id, exc)
+            edges = []
+        ordinal += sum(
+            1
+            for edge in edges
+            if edge.get("relation") == "branch" and edge.get("parent_run_id") == run_id
+        )
+    return f"B{ordinal}-{subject}" if subject else f"B{ordinal}-branch"
+
+
 def _branch_point_payload(
     point: CutPoint, previous: CutPoint | None, text: str
 ) -> dict[str, Any]:
@@ -6861,11 +6906,9 @@ async def branch_session(request: web.Request) -> web.Response:
         fork, seed_text = outcome
         resume_id = fork["conversation_id"]
         attempts_allowed = 1
-        suffix = "branch"
     else:
         resume_id = conversation
         attempts_allowed = BRANCH_SIBLING_ATTEMPTS
-        suffix = "branch"
         log.info(
             "branch started session=%s backend=%s conversation=%s cwd=%s strategy=%s",
             record.id,
@@ -6879,7 +6922,7 @@ async def branch_session(request: web.Request) -> web.Response:
         record.id,
         attempts_allowed,
         backend=record.backend,
-        name=body.get("name") or f"{record.name} {suffix}",
+        name=body.get("name") or await _branch_pane_name(request.app, record),
         cwd=branch_cwd,
         project_id=record.project_id,
         resume_native_id=resume_id,

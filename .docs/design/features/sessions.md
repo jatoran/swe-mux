@@ -236,6 +236,17 @@ and reattachable browser viewports.
   (`branchSeed.ts`), never submitted: re-sending the prompt unedited would repeat the request the
   branch existed to change. Deliberately not the spawn's own `seed_text`, which appends the
   prompt to the CLI's argv and therefore runs it.
+- **A branch is called `B<n>-<the conversation it came from>`** (`_branch_pane_name`). The subject
+  is the source's *display* name, resolved through `session_titles.py` rather than read off
+  `record.name`: those differ for exactly the sessions worth branching, because a session nobody
+  renamed shows its generated title while `record.name` is still the spawn default, and reading
+  the raw field named the branch `claude-6vried branch` for a conversation the operator knows as
+  "Update ABC". A rename outranks a generated title here as everywhere. The ordinal counts the
+  branches already cut from that conversation, and an ordinal the subject already carries is
+  replaced rather than stacked, so a tree three deep is not called `B1-B2-B1-…`. It is a label,
+  not an identity: branches at different depths of one tree can share a number, and nothing reads
+  it back. Passing a name makes the pane `auto_named=False`, which is what stops the titler taking
+  the name back the moment the branch says its first word.
 - The sibling is spawned and then **watched**, and one that exits inside the settle window is
   discarded rather than attached. Whether to retry differs by strategy: a `transcript_fork`
   sibling opens a conversation nothing has ever held, so a refusal will repeat and is reported at

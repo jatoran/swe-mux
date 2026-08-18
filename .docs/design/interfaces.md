@@ -574,7 +574,8 @@ which cuts can be *named*: a fork always carries the conversation from its first
 `POST /sessions/{id}/branch` forks the conversation and returns
 `201 {session, source, strategy, fork, seed_text}` with the new pane already attached to the
 Project layout. `from_message_id`/`mode` are accepted only by a `transcript_fork` harness and
-default to the newest point; `fork` reports `{conversation_id, from_message_id, mode, cut_offset,
+default to the newest point; `name` overrides the derived `B<n>-<source subject>`
+(`sessions.md`); `fork` reports `{conversation_id, from_message_id, mode, cut_offset,
 records_written, records_dropped, attachments_copied, bytes_written}`; `seed_text` is the prompt a
 `before` cut excluded, for the client to place in the new pane's composer. It emits
 `session_branched` carrying `original`, `branch_id`, `sibling_id`, `strategy`, `from_message_id`,

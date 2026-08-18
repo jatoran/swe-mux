@@ -34,21 +34,52 @@ class FakeBus:
         self.emitted.append((event_type, payload))
 
 
-class FakeLineageStore:
-    def __init__(self) -> None:
+class FakeAutomationStore:
+    """The two things a branch asks the store: prior branches, and the run's title.
+
+    Rows carry the real column names (`parent_run_id`, `agent_run_id`) rather than
+    convenient short ones, because reading the wrong key is exactly the failure this
+    stands in for: the naming rule silently degrades to "no title, no prior branches"
+    if it does, and nothing else would notice.
+    """
+
+    def __init__(self, titles: dict[str, str] | None = None) -> None:
         self.edges: list[dict[str, Any]] = []
+        self.titles = titles or {}
 
     async def add_lineage(
         self, parent: str, child: str, relation: str, metadata: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         edge = {
-            "parent": parent,
-            "child": child,
+            "parent_run_id": parent,
+            "child_run_id": child,
             "relation": relation,
             "metadata": metadata or {},
         }
         self.edges.append(edge)
         return edge
+
+    async def lineage(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        return [
+            edge
+            for edge in self.edges
+            if not run_id or run_id in {edge["parent_run_id"], edge["child_run_id"]}
+        ]
+
+    async def annotations(
+        self,
+        *,
+        agent_run_ids: Any = None,
+        tag: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        del limit
+        wanted = set(agent_run_ids or [])
+        return [
+            {"agent_run_id": run_id, "content": title, "tags": [tag or "title"]}
+            for run_id, title in self.titles.items()
+            if not wanted or run_id in wanted
+        ]
 
 
 def _request(record: Any) -> Any:
@@ -115,7 +146,13 @@ async def test_branch_rejects_codex_before_native_id_is_known() -> None:
 class BranchHarness:
     """A Claude pane over a real transcript on disk, with a stub session manager."""
 
-    def __init__(self, tmp_path: Path, *, body: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        body: dict[str, Any] | None = None,
+        titles: dict[str, str] | None = None,
+    ) -> None:
         self.adapter = ClaudeAdapter("claude.exe")
         self.cwd = tmp_path / "project"
         self.cwd.mkdir(parents=True, exist_ok=True)
@@ -127,7 +164,7 @@ class BranchHarness:
         # One entry per spawn attempt: the state its record reports while settling.
         self.spawn_states: list[str] = ["idle"]
         self.bus = FakeBus()
-        self.lineage = FakeLineageStore()
+        self.store = FakeAutomationStore(titles)
 
         self.record = SimpleNamespace(
             id="pane-1", backend="claude", native_session_id=self.original,
@@ -152,7 +189,7 @@ class BranchHarness:
             app={
                 "sessions": self.manager,
                 "events": self.bus,
-                "automation_store": self.lineage,
+                "automation_store": self.store,
                 "projects": SimpleNamespace(
                     projects={
                         "default": SimpleNamespace(
@@ -373,13 +410,68 @@ async def test_a_branch_records_where_it_was_cut(tmp_path: Path) -> None:
 
     await harness.run()
 
-    assert len(harness.lineage.edges) == 1
-    edge = harness.lineage.edges[0]
-    assert edge["parent"] == "run-original"
+    assert len(harness.store.edges) == 1
+    edge = harness.store.edges[0]
+    assert edge["parent_run_id"] == "run-original"
     assert edge["relation"] == "branch"
     assert edge["metadata"]["from_message_id"] == chosen["message_id"]
     assert edge["metadata"]["mode"] == "after"
     assert edge["metadata"]["source_conversation_id"] == harness.original
+
+
+async def test_a_branch_is_named_after_the_conversation_it_came_from(tmp_path: Path) -> None:
+    """The source's **display** name, not its `name` field.
+
+    Those differ for exactly the sessions worth branching: a session nobody renamed
+    shows its generated title while `name` is still the spawn default, so reading the
+    raw field called the branch `claude-6vried branch` for a conversation the operator
+    knows as "Update ABC".
+    """
+    harness = BranchHarness(tmp_path, body={}, titles={"run-original": "Update ABC"})
+
+    response = await harness.run()
+
+    assert response.status == 201
+    assert harness.spawned[0]["name"] == "B1-Update ABC"
+
+
+async def test_a_renamed_conversation_keeps_the_name_its_owner_chose(tmp_path: Path) -> None:
+    """A rename outranks a generated title, and the branch inherits the rename."""
+    harness = BranchHarness(tmp_path, body={}, titles={"run-original": "Update ABC"})
+    harness.record.auto_named = False
+    harness.record.name = "device ownership"
+
+    await harness.run()
+
+    assert harness.spawned[0]["name"] == "B1-device ownership"
+
+
+async def test_each_branch_of_one_conversation_gets_its_own_number(tmp_path: Path) -> None:
+    harness = BranchHarness(tmp_path, body={}, titles={"run-original": "Update ABC"})
+    await harness.run()
+    await harness.run()
+    assert [item["name"] for item in harness.spawned] == ["B1-Update ABC", "B2-Update ABC"]
+
+
+async def test_branching_a_branch_replaces_the_number_rather_than_stacking_it(
+    tmp_path: Path,
+) -> None:
+    """Otherwise a tree three deep is called `B1-B2-B1-Update ABC`.
+
+    The subject is what the operator recognises; only the newest ordinal is worth the
+    width, and the daemon never reads the name back.
+    """
+    harness = BranchHarness(tmp_path, body={}, titles={"run-original": "B2-Update ABC"})
+    await harness.run()
+    assert harness.spawned[0]["name"] == "B1-Update ABC"
+
+
+async def test_an_explicit_name_still_wins(tmp_path: Path) -> None:
+    harness = BranchHarness(
+        tmp_path, body={"name": "spike"}, titles={"run-original": "Update ABC"}
+    )
+    await harness.run()
+    assert harness.spawned[0]["name"] == "spike"
 
 
 async def test_a_sibling_that_never_comes_up_is_removed_and_named(tmp_path: Path) -> None:
@@ -396,7 +488,7 @@ async def test_a_sibling_that_never_comes_up_is_removed_and_named(tmp_path: Path
     # release to race and no attempt for a retry to be further from.
     assert body["attempts"] == 1
     assert harness.stopped == ["pane-2"]
-    assert harness.lineage.edges == []
+    assert harness.store.edges == []
 
 
 async def test_the_branch_event_says_where_the_cut_landed(tmp_path: Path) -> None:
