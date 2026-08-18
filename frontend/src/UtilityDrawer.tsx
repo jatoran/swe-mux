@@ -386,14 +386,15 @@ export function UtilityDrawer(props: Props) {
           scope={props.scheduleScope}
           onScope={props.onScheduleScope}
           onOpenSession={props.onOpenSession}
-          onOpenProjectSettings={props.onOpenProjectSettings}
-          // `onDone` on purpose: revealing the session a schedule started, or
-          // opening the Project's opt-in, is acting on something other than the
-          // terminal underneath, so on mobile the drawer gets out of the way.
+          // A blocked schedule's way out is a `SettingLink`, which routes itself and closes
+          // this drawer on mobile like every other settings navigation.
+          // `onDone` on purpose: revealing the session a schedule started is acting on
+          // something other than the terminal underneath, so on mobile the drawer gets out
+          // of the way.
           onDone={onDone}
         />
       case 'notifications':
-        return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
+        return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} project={project} />
     }
   }
   const scopeContext = (tab: DrawerTabId) => {

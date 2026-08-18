@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { revealSetting } from './settingReveal'
 import { api } from './api'
 import {
   buildSpendRows, callHealth, exactMoney, formatCount, formatDuration, formatMoney, formatPercent,
@@ -56,7 +57,15 @@ function actionSummary(rule:Rule):string{
   return action.kind
 }
 
-export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose:()=>void;onConfigure:()=>void;onOpenSession:(id:string)=>void}){
+export function AutomationDashboard({onClose,onConfigure,onOpenSession,initialSetting,revealToken}:{
+  onClose:()=>void;onConfigure:()=>void;onOpenSession:(id:string)=>void
+  /** `data-setting` id of a global control to scroll to and flash (`settingTargets.ts`). The
+   *  two install-wide automation switches live here rather than in Settings, so a gated
+   *  surface deep-links to this dashboard for them. */
+  initialSetting?:string
+  /** Changes per deep-link request, so the same link twice reveals twice. */
+  revealToken?:number
+}){
   const [data,setData]=useState<AutomationData|null>(null)
   const [inbox,setInbox]=useState<InboxItem[]>([])
   const [telemetry,setTelemetry]=useState<Telemetry|null>(null)
@@ -97,6 +106,17 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
   }
   useEffect(()=>{void load()},[])
 
+  // A deep link to a global control also has to put the view that renders it on screen: the
+  // dashboard is tabbed, and every other tab is unmounted. The reveal then waits for the row,
+  // which only exists once the dashboard's own fetch lands.
+  useEffect(()=>{
+    if(!initialSetting)return
+    setView('automations')
+    const root=panel.current
+    if(!root)return
+    return revealSetting(root,initialSetting)
+  },[initialSetting,revealToken,data!==null])
+
   const runDry=async()=>{try{setDryRun(null);setMessage('Evaluating selected historical event with side effects disabled…');const result=await api('POST','/api/automation/dry-run',{event_seq:Number(eventSeq)});setDryRun(result);setMessage('Dry-run complete. No actions or model calls were executed.')}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
   const markRead=async(item:InboxItem)=>{await api('PATCH',`/api/automation/notifications/${item.id}`,{read:!item.read_at});await load()}
   const updateRule=async(rule:Rule,change:Partial<Pick<Rule,'enabled'|'shadow'>>)=>{try{setMessage(`Updating ${rule.name}…`);await api('PATCH',`/api/automation/rules/${encodeURIComponent(rule.id)}`,change);await load()}catch(cause){setError(cause instanceof Error?cause.message:String(cause))}}
@@ -131,7 +151,7 @@ export function AutomationDashboard({onClose,onConfigure,onOpenSession}:{onClose
               figure nor a count of anything the reader asked for. Today's calls come from the
               same ledger as today's cost, so the three spend tiles agree with each other. */}
           <div class="usage-summary"><article><span>automation</span><strong>{data?.engine.enabled?'on':'off'}</strong></article><article><span>system observers</span><strong>{enabledBuiltins}/{data?.engine.built_in_rules?.length||0}</strong></article><article><span>custom rules</span><strong>{data?.engine.rules.length||0}</strong></article><article><span>calls today</span><strong>{formatCount(spendTotals?.today_calls||0)}</strong></article><article><span>tokens today</span><strong title={integer.format(data?.spend_today.tokens||0)}>{formatCount(data?.spend_today.tokens||0)}</strong></article><article><span>cost today</span><strong title={exactMoney(data?.spend_today.cost_usd||0)}>{formatMoney(data?.spend_today.cost_usd||0)}</strong></article></div>
-          <section class="usage-table automation-controls"><h3>Global controls</h3><p>Enable and disable automation here. Provider, model, budget, and execution configuration remains in Settings.</p><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('automation_enabled',!data?.controls.automation_enabled)}>{data?.controls.automation_enabled?'disable':'enable'}</button></div></article><article class="automation-row automation-rule-row"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('scan_timeline_enabled',!data?.controls.scan_timeline_enabled)}>{data?.controls.scan_timeline_enabled?'disable':'enable'}</button></div></article></section>
+          <section class="usage-table automation-controls"><h3>Global controls</h3><p>Enable and disable automation here. Provider, model, budget, and execution configuration remains in Settings.</p><article class="automation-row automation-rule-row" data-setting="automation_enabled"><span class={`state-dot ${data?.controls.automation_enabled?'idle':'running'}`}/><div><strong>Automation engine</strong><span>Runs enabled system observers and custom rules.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('automation_enabled',!data?.controls.automation_enabled)}>{data?.controls.automation_enabled?'disable':'enable'}</button></div></article><article class="automation-row automation-rule-row" data-setting="scan_timeline_enabled"><span class={`state-dot ${data?.controls.scan_timeline_enabled?'idle':'running'}`}/><div><strong>Scan timeline</strong><span>Global permission for Project and per-run timeline controls.</span></div><div class="automation-row-actions"><button disabled={!data} onClick={()=>void updateControl('scan_timeline_enabled',!data?.controls.scan_timeline_enabled)}>{data?.controls.scan_timeline_enabled?'disable':'enable'}</button></div></article></section>
           <section class="usage-table"><h3>System observers</h3><p>Built-in, read-only rules. The three attention observers share one setting, so enabling or disabling one changes the whole attention group.</p>{data?.engine.built_in_rules?.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">system</span></div><span>{rule.description}</span><small>when::{rule.trigger} · reads::{rule.input}</small><em><ModelName model={rule.model}/> → {rule.result} · setting::{rule.setting_label}</em></div><div class="automation-row-actions"><button onClick={()=>void updateBuiltin(rule)}>{rule.enabled?'disable':'enable'}{rule.setting_key==='phase7_observers_enabled'?' group':''}</button></div></article>)}</section>
           <section class="usage-table"><h3>Custom rules</h3><p>Canonical rules saved in the daemon rules file. Configure edits the full TOML definition.</p>{data?.engine.rules.length?data.engine.rules.map(rule=><article class="automation-row automation-rule-row"><span class={`state-dot ${rule.enabled?'idle':'running'}`}/><div><div class="automation-rule-heading"><strong>{rule.name}</strong><span class="automation-pill">custom</span></div><small>{rule.id} · when::{rule.trigger} · {rule.shadow?'shadow only':'live'}</small><em>{actionSummary(rule)} · revision::{rule.revision}</em></div><div class="automation-row-actions"><button onClick={()=>void updateRule(rule,{enabled:!rule.enabled})}>{rule.enabled?'disable':'enable'}</button><button onClick={()=>void updateRule(rule,{shadow:!rule.shadow})}>{rule.shadow?'make live':'shadow'}</button></div></article>):<div class="automation-empty"><strong>No custom rules</strong><span>Only the system observers listed here are currently configured.</span><button onClick={onConfigure}>edit custom rules</button></div>}</section>
         </div>}

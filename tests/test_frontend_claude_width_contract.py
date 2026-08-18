@@ -92,5 +92,9 @@ def test_the_setting_is_reachable_from_the_terminals_tab() -> None:
     assert "CLAUDE_MAX_COLUMN_STEPS.map" in settings
     for word in ("width", "columns", "No limit"):
         assert word in settings, f"the Claude width control has no {word!r} to search for"
-    assert "onConfigureWidth" in pane
-    assert "onConfigureWidth={()=>openSettings('Terminals')}" in app
+    # The pane's notice links to the control itself, not to the Terminals tab: a setting
+    # link scrolls to it and flashes it on arrival (`design/features/setting-links.md`).
+    assert 'target="terminals.claudeWidth"' in pane
+    assert "'terminals.claudeWidth':" in (SRC / "settingTargets.ts").read_text(encoding="utf-8")
+    assert 'data-setting="claude_max_columns"' in settings
+    assert "onConfigureWidth" not in app

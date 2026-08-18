@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { requestSetting } from './settingTargets'
 import { buildVoiceMatcher, conversationCapability, DEFAULT_COMMANDS, DEFAULT_WAKE_WORDS, isPlaybackControl, PersistentVoiceCapture } from './conversation'
 import type { CaptureDetector, ParsedMuxVoice } from './conversation'
 import { appendUtterance, clearDraft, editDraft, EMPTY_DRAFT, undoUtterance } from './conversationDraft'
@@ -629,11 +630,9 @@ function MicIcon({slashed}:{slashed:boolean}){
 export function ConversationToggle({
   conversation,
   configured,
-  onOpenSettings,
 }:{
   conversation:Conversation
   configured:boolean
-  onOpenSettings:()=>void
 }){
   const active=conversation.phase!=='off'
   const label=!configured
@@ -648,7 +647,9 @@ export function ConversationToggle({
     title={!configured
       ? 'Microphone conversation is disabled - open Voice settings'
       : `${label}${conversation.target?` - target: ${conversation.target.label}`:' - focus an agent or text surface to choose a target'}`}
-    onClick={configured?()=>conversation.toggle():onOpenSettings}
+    // Unconfigured, the toggle's job is to reach the microphone switch itself rather than
+    // the Voice tab it sits several sections down in.
+    onClick={configured?()=>conversation.toggle():()=>requestSetting('voice.stt')}
   ><MicIcon slashed={!active}/></button>
 }
 

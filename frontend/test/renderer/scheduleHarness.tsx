@@ -124,7 +124,6 @@ render(
     scope=""
     onScope={() => {}}
     onOpenSession={() => {}}
-    onOpenProjectSettings={() => {}}
     onDone={() => {}}
   />,
   column,
