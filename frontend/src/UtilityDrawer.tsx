@@ -20,7 +20,7 @@ import {
 import { drawerTabVisible, visibleDrawerTabs } from './drawerVisibility'
 import { ProcessesTab } from './ProcessesTab'
 import { ScheduleTab } from './ScheduleTab'
-import type { WatchScope, WatchSnapshot } from './processWatch'
+import type { Preview, ProjectScope } from './processFleet'
 import { parseNoteResourceId } from './layout'
 import type { NotePlacement } from './NotesTab'
 import { DRAWER_TAB_ICONS } from './railIcons'
@@ -99,21 +99,20 @@ type Props = {
   onNotesAllProjects: (value: boolean) => void
   onOpenNote: (projectId: string, noteId: string, title: string, place: NotePlacement) => void
   onOpenScratchpad: (place: NotePlacement) => void
-  /** Processes: the fleet sample `App` already polls. Passed in rather than fetched here so an
-   *  open panel adds no process enumeration to the daemon's loop — see `ProcessesTab`. */
-  processSnapshot: WatchSnapshot
+  /** Processes: its Project scope, owned by the caller so it survives a tab switch and a
+   *  Project change. The tab subscribes to the shared full-snapshot feed itself — trees and
+   *  evidence are not in the reduced sample the sidebar rail polls. */
   projects: Project[]
-  processScope: WatchScope
-  onProcessScope: (scope: WatchScope) => void
-  onRefreshProcesses: () => void
+  processScope: ProjectScope
+  onProcessScope: (scope: ProjectScope) => void
   /** Schedule: its own Project/all-Projects scope, owned by the caller like the
    *  Processes one so it survives a tab switch and a Project change. */
   scheduleScope: string
   onScheduleScope: (scope: string) => void
   /** Schedule: the launch profiles the editor offers, where a model flag lives. */
   profiles: LaunchProfile[]
-  /** Register a detected loopback server as a preview tab beside its session. */
-  onOpenPreview: (sessionId: string, url: string) => void
+  /** A loopback server the Processes tab registered as a preview tab beside its session. */
+  onPreviewAttached: (preview: Preview, project: Project) => void
   /** Escape hatch to the modal inspector, prefiltered to the tab's current scope. */
   onOpenInspector: (projectId: string | null) => void
   /** Scan timeline's Project permission, context, and auto-arm all live there. */
@@ -368,7 +367,6 @@ export function UtilityDrawer(props: Props) {
         return <GitTab project={project} sessions={props.sessions} onOpenFile={props.onOpenFile} onOpenWorktreeFile={props.onOpenWorktreeFile} onSendToAgent={props.onSendToAgent} onProjectUpdated={props.onProjectUpdated} onOpenSession={sessionId=>{props.onOpenSession(sessionId);onDone()}} onOpenHistory={props.onOpenHistoryEntry} />
       case 'processes':
         return <ProcessesTab
-          snapshot={props.processSnapshot}
           sessions={props.sessions}
           projects={props.projects}
           projectId={project?.id || ''}
@@ -376,9 +374,8 @@ export function UtilityDrawer(props: Props) {
           scope={props.processScope}
           onScope={props.onProcessScope}
           onSelectSession={props.onOpenSession}
-          onOpenPreview={props.onOpenPreview}
+          onAttached={props.onPreviewAttached}
           onOpenInspector={props.onOpenInspector}
-          onRefresh={props.onRefreshProcesses}
           onDone={onDone}
         />
       case 'schedule':

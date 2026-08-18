@@ -456,12 +456,15 @@ responsive controls.
 
   A group is a contiguous *run* of the array, not a declared membership list, so a tab that
   drifts away from its group produces a repeated heading rather than a silently miscategorised
-  tab. The desktop sidebar draws a heading wherever the group changes; the mobile rail renders
-  the same order flat with the headings suppressed, because a phone cannot spare the width and
-  the flat order already agrees with the grouped one. The group wrapper is `display:contents`
-  and `role="presentation"`: a real box breaks the desktop column and the mobile rail alike,
-  and a `tablist` admits only tabs, so the heading is a visual affordance and a screen reader
-  gets the same flat list the phone does.
+  tab. **Both layouts draw the same grouped column**, headings and all — narrow, it slides in
+  as a drawer rather than docking beside the content (below). The phone used to get the same
+  order flat, in one horizontally scrolling rail with the headings suppressed, on the grounds
+  that it could not spare the width; what that actually cost was the categories, which are the
+  only thing making seventeen entries navigable, plus a permanent strip of vertical space. A
+  drawer spends width it is not using anyway and costs no height at all. The group wrapper is
+  `display:contents` and `role="presentation"`: a real box breaks the column, and a `tablist`
+  admits only tabs, so the heading is a visual affordance and a screen reader gets the flat
+  list underneath it.
   A heading must read as chrome rather than as one more entry, and typography cannot carry
   that distinction: `.settings-layer *` pins font family, size, weight, and line height with
   `!important` so the whole panel scales as one unit, and `.app-shell *` pins tracking. The
@@ -473,6 +476,27 @@ responsive controls.
   than the panel's heading green because green on a green-tinted band measures 2.4:1 on the
   low-chroma light themes, under where the `--green` headings already sit, while `--text`
   holds 5:1 at worst across the catalogue.
+- **Narrow, the section list is a drawer and the header names where you are.** Below the
+  workspace's own breakpoint (760px) the panel fills the screen, and the two pieces of chrome
+  it used to spend height on both move:
+  - The search box sits **inline in the header**, between the title and the close button,
+    instead of wrapping onto a row of its own.
+  - The section list becomes a **left slide-in drawer** over the content, opened by a hamburger
+    at the header's left edge *and* by the header title itself — the title is where the eye
+    already is, so on a phone it is the tap most people make. It is `visibility:hidden` when
+    closed rather than `aria-hidden`, which takes its buttons out of the focus order and the
+    accessibility tree without hiding elements that are still focusable, and still animates
+    because the transform is what moves. Picking a section closes it, by every route into a
+    tab: the list, a search result, a deep link.
+  - The header therefore reads `SETTINGS` over the **current tab's name** rather than
+    `CONFIG::V6` over `Settings`. What the panel is, is the one thing already obvious when it
+    owns the whole screen; where you are in it is not.
+  - It behaves as the workspace's own left sidebar does, deliberately: it is a dismiss level
+    (`settings-nav`), so system back and the back swipe close it before they close Settings;
+    its scrim closes it; and whichever gesture slot is bound to `sidebar.toggle` opens it,
+    with either horizontal direction closing it again while it is open (touch gestures, below).
+  Widening past the breakpoint turns it back into the docked column and closes the level, so a
+  column that is permanently on screen never leaves a dismiss target standing.
 - Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
   - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
     provider credentials. Everything model-backed depends on that one key, so filing it inside
@@ -524,12 +548,14 @@ responsive controls.
   hold the late sections of a short tab are unpickable, because scrolling to one lands at the
   bottom and the bottom rule immediately re-selects the last section.
   On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
-  rather than growing into the content.
+  rather than growing into the content. It stays a rail on both layouts — it is per-tab and
+  short, unlike the seventeen-entry section list that became a drawer beside it.
 - Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
-  header, tab rail, footer — renders immediately with a placeholder content area; tabs are
-  selectable before data lands. `config` is required; other parts degrade to null with the
+  header, section list, footer — renders immediately with a placeholder content area; tabs are
+  selectable before data lands. The placeholder shell and the loaded one render that chrome
+  from the same expressions, so the two cannot drift into different headers. `config` is required; other parts degrade to null with the
   reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
   form because Save writes them back unconditionally. Remote, voice, and firewall status stay
   separate non-blocking fetches.
@@ -594,8 +620,8 @@ responsive controls.
   cycle). It also kept Cancel/Save in a horizontally scrolling footer on phones.
   Per-section resets that genuinely are scoped, such as gesture defaults and shortcut defaults, stay with their own section.
 - Action layout is not a Settings section.
-  **Configure Actions** opens as a standalone modal from the main menu, command palette, Action rail gear, or the Quick actions section in the Actions drawer.
-  This surface owns the shared catalog, custom action creation, and all four Desktop/Mobile Rail/Drawer placements.
+  **Configure Actions** opens as a standalone modal from the main menu, command palette, the in-place rail editor's "All options…", or the Quick actions section in the Actions drawer.
+  This surface owns the shared catalog, custom action creation, and all four Desktop/Mobile Rail/Drawer placements; the rail gear itself opens the lighter in-place editor.
 - Keyboard shortcuts distinguish browser-reserved chords from desktop-only chords. WebView2
   releases the latter to the app, while an ordinary browser keeps its own tab/window behavior;
   Settings exposes both categories and accepts `Ctrl+Tab` / `Ctrl+Shift+Tab` as mappable desktop
@@ -911,8 +937,8 @@ responsive controls.
   surface. Terminal visibility does not depend on convergence with a separate global active ID.
 - Agent headers omit cwd on every device. A spawn path marked `last-known::` is stale metadata,
   not an actionable session control, and consumed the header's central space. Shell headers keep
-  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so status and tools remain
-  on one row.
+  cwd on desktop; touch hides the shell cwd via `.pane-bar>.pane-path` so the name, voice group,
+  and tools remain on one row.
 - Touch gestures are configurable command slots: single-finger horizontal swipes, two-finger
   horizontal *and vertical* swipes, and a two-finger tap. Only the **single**-finger vertical
   channel is reserved (terminal scrollback / application wheel); two-finger vertical is a real
@@ -963,6 +989,13 @@ responsive controls.
   Overlays remain immune to gesture *hijacking* by a stronger rule than the old one: whenever the dismiss stack is non-empty, `resolveGestureCommand` resolves the back slots to `nav.back` and **every other slot to nothing**, so no binding can run behind a modal.
   Turning off the hot-reloadable `mobile_gesture_overlay_back` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour of an overlay swallowing every gesture, rather than letting the old bindings back through.
   The platform back gesture is unaffected by that switch.
+- **An overlay that owns a left drawer of its own borrows the workspace sidebar's gesture for it.**
+  Settings on a narrow layout is the only one today.
+  `resolveGestureCommand` takes that drawer as an `OverlayLeftPanel` and applies the two rules the workspace sidebar already has, one level up: whichever slot is bound to `sidebar.toggle`/`open`/`close` opens it, and while it is open either horizontal direction closes it.
+  The opening slot is *derived from the binding* rather than hard-coded, which is what makes it a mirror — rebinding the workspace sidebar moves both drawers together.
+  Every other slot still falls through to the back rule, so backing out of the overlay never stops working: with the defaults, the two-finger rightward swipe opens the drawer and the single-finger one is still `nav.back`.
+  The panel is supplied to the resolver only while Settings is the level back would act on (`dismissStack.topLabel()`), so a picker opened above it keeps the swipe for itself instead of quietly working the drawer underneath.
+  Turning `mobile_gesture_overlay_back` off suppresses this along with the back swipe: "a dialog ignored every swipe" is the behaviour that switch restores, and a drawer inside the dialog is not an exemption from it.
 - `nav.back` is a registered command like any other, so it is bindable to a key, assignable to any gesture slot, and reachable from the palette.
   It is unconditionally available rather than gated on stack depth: availability is a render-time snapshot, and a drill-down level owned by its own component opens without re-rendering the composition root, so a depth gate would refuse the command at exactly the moment the user swiped back.
   `pop()` is already inert on an empty stack, which reaches the same outcome without the stale claim.
@@ -1156,11 +1189,23 @@ responsive controls.
   that delivers, rather than in the fleet-queue overlay, because a brake reachable only by
   opening something is not reachable when it is wanted; `autodelivery.pause` reaches the same
   operation with nothing open (`features/auto-delivery.md`).
-- The pane header is `[status] [cwd] [voice] [tools]` and **must stay one row**.
+- The pane header is `[name] [cwd] [voice] [tools]` and **must stay one row**.
   It uses `grid-auto-flow:column`, so an item beyond the declared column count cannot auto-place into a second row.
   The pane-local voice group contains read-aloud only; workspace talk is in the app-level Conversation layer.
   Overflow is absorbed by `.pane-voice`, which scrolls horizontally with a trailing fade and never grows the bar.
-  Phones drop the cwd column and cap the status width so the group keeps room.
+  Phones drop the cwd column, and every device caps the name track so the group keeps room.
+- The header's first field is the session's display name (`sessionNames.ts`), not its status.
+  State is already carried by the tab, the sidebar row, and the terminal being read, while the name is the field those surfaces crop: a tab is only as wide as its strip allows.
+  The name track is `fit-content()` rather than `auto`, because an `auto` track takes its max-content size before the flexible track expands - a sentence-length generated title would take the cwd's space and squeeze the voice chips to their floor.
+  The rendered name ellipsizes; the whole of it leads the `title` tooltip, followed by the status line, any faults, and delivery readiness.
+  Faults keep a visible marker beside the name (`.pane-fault`) because they have no other pane-level surface - an agent header draws no path chip, which is where a non-local boundary is otherwise reported - and because a stale observation is the one fault that looks like a healthy session.
+  Routine state never re-enters the bar: that is what the tab and the row are for.
+- **A fault is a condition, never the diagnostic text describing one**, and `sessionFaults` in `sessionStatus.ts` is the single predicate every surface asks.
+  Exactly three qualify: a non-local `runtime_boundary`, `observation_stale_since`, and `parser_status === 'degraded'`.
+  The paired strings - `observation_diagnostic` and `parser_diagnostic` - supply the wording for those, and are never triggers.
+  The daemon writes `parser_diagnostic` on every observed session as routine detail (`tailing <id>.jsonl`, `schema v2: 801/801 recognized`), so reading its presence as a fault marked 17 of 17 live sessions when it shipped - an alarm that is always on reports nothing.
+  A predicate for a visible marker therefore belongs in a unit-tested module and not inline in the surface: `sessionStatus.test.ts` pins that a healthy session carrying both strings has no faults.
+  Faults deliberately do not touch the dot, the tab, or the status line, because a session can be perfectly `idle` while reporting on a conversation it no longer owns - which is precisely what a state axis cannot say.
 - **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
   The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.
@@ -1204,25 +1249,29 @@ responsive controls.
   chip group: `.pane-voice` is a fixed-chip scroller in a bar that cannot wrap, so a readout
   placed there can only ever show a truncated tail.
 - Every terminal has an in-flow **Action rail** at the bottom of its pane on desktop and mobile, below the terminal rather than over it.
-  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+  It carries a keyboard toggle plus terminal-key buttons (Esc, Enter, Tab, Shift+Tab, Ctrl-C, and the four arrows), Copy reply, Paste, and the clipboard-history picker (`Clip`).
+  Shift+Tab sends back-tab (`ESC[Z`), which both agent TUIs read as the permission-mode cycle (`(shift+tab to cycle)`) and shells read as reverse focus/completion.
   Its built-in **Actions** item opens the Actions drawer as a transient Project-scoped override: the Project's last explicitly selected drawer tab is not written, completing an action or closing the drawer clears the override, and explicit drawer-tab navigation promotes that selected tab through the ordinary persistent path.
   Immediately after Up/Down, four editing helpers insert a blank-line-surrounded divider, start a blank-line-prefixed fenced code block, send Ctrl+U, and send Ctrl+Y in that order.
   The multiline helpers are agent-only raw key sequences: every logical newline is `ESC+CR`, matching the built-in newline command, so neither Claude nor Codex interprets one as submission.
   Attach is the final scrolling item on agent rails.
-  A status readout and the Configure Actions gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into the editor.
+  A status readout and the customize gear ride the **last** rail row, so they stay put as rows are added and a rail configured down to nothing still has a way back into configuration.
+  The gear flips the rail area into the in-place editor rather than opening the modal; the modal stays one click behind its "All options…" control.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
   It keeps its 44px tap height and its accessible name; only the width fell.
-  The four arrows are non-focusing pointer controls: press sends once, then a 350 ms hold repeats every 75 ms until release or cancellation.
-  Preventing pointer focus keeps an open mobile keyboard open; keyboard and assistive activation remain one-shot.
-  A touch beginning on an arrow steers the terminal rather than horizontally scrolling the rail.
+  The four arrows are non-focusing keys with two verbs: a clean tap sends once, and a press held in place starts repeating after 350 ms and then every 75 ms until release or cancellation.
+  The tap is delivered by the button's own click, exactly as every other rail item is, which is what makes an arrow a legal place to begin a swipe: a touch the rail turns into a horizontal pan has its click suppressed, so a flick that merely started on an arrow scrolls the rail and sends nothing.
+  This is the whole reason the arrows do not send on pointer-down; sending there is a decision the pan can no longer take back, and it made the arrows the one part of the rail a finger could not push off of.
+  A press stops being a candidate for repetition once it has travelled as far as the pan needs to start scrolling, and a hold that *has* committed claims the pointer so the strip cannot scroll out from under the key being spammed.
+  Focus is refused on mouse-down rather than pointer-down — the same guard the rest of the rail uses — because the click now carries the tap; this keeps an open mobile keyboard open, and keyboard and assistive activation remain one-shot.
   The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only.
   Shell and desktop Enter behavior is unchanged.
 - On touch, an overflowing Action rail owns horizontal pointer movement directly instead of depending on native overflow-scroll arbitration inside the keyboard-translated terminal surface.
   The first drag therefore moves the rail even while the soft keyboard is open.
   A modest drag gain compensates for the lost native fling without making nearby actions hard to target.
   The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the resulting click.
-  Repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps priority when a gesture starts on an arrow.
+  Every button on the rail is a legal place to begin that drag, the repeating arrow keys included; the suppressed click is what settles what a swipe did or did not activate.
 - Activating an Action rail item preserves the mobile soft keyboard state it found.
   Keys, Send, Paste, prompt templates, skills, slash commands, and literal text execute with the keyboard down when it was down, while an already-open keyboard remains open.
   Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.
@@ -1251,6 +1300,8 @@ responsive controls.
   The old list is resolved once for each device/surface combination and each result becomes a row, so an upgrade renders identically on both devices and only then diverges by hand.
   Legacy semantics are preserved through that resolution: `enabled: false` on an entry that predates `placement` meant "not on the strip", so it keeps rendering in the panel, while `enabled: false` alongside an explicit placement was a genuine hide and lands in no row.
   Saves predating the editing-helper cluster still receive the four helpers after Down and Attach at the end once.
+  Project scopes are detected the same way: a legacy array or an `{items, layouts}` object is a fork honoured exactly as saved, while `mode: 'delta'` is the additive overlay — so a project forked under the old fork-on-first-edit editor keeps behaving as it did, and only deliberately created deltas track the live global layout.
+  A delta item whose id collides with the base catalog is dropped (the base wins), which is what keeps a stale delta from shadowing a built-in.
 - Action items come in six kinds: terminal `key`, built-in `action`, literal `text`, `slash` command, `skill`, and `prompt`.
   A `prompt` item is a *pointer* at a prompt-library template (`prompt-library.md`).
   It stores the `scope:id` key, never the body, so the button always injects the template's current text and cannot drift into a stale copy.
@@ -1265,17 +1316,31 @@ responsive controls.
   Only items placed on the current device's Rail or Drawer layout participate, and duplicate placements collapse to one spoken command.
   The adapter emits the same `sendKey`, `insertText`, copy, or text-paste request the visible controls emit, while `terminalActions.ts` adds a request id and waits for the owning pane's success or error acknowledgement.
   Text-paste deliberately bypasses the visible Paste control's clipboard-image attachment branch.
-- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) places custom action creation directly after the active global or Project scope controls, followed by the two device layouts and the complete Action catalog.
-  It opens from the main menu, command palette, Action rail gear, and the Configure control in Quick actions rather than living inside Settings.
-  Wide viewports show both columns; below 1040px it keeps one column and a Desktop/Mobile switch, because two columns of chips on a phone are two columns of nothing.
-  Each column holds its two surfaces, each surface its rows, each row its draggable chips.
-- Four affordances are what keep two independent layouts manageable, and none of them is a shared row.
-  Adding a custom action places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone.
-  The catalog's four placement badges, Desktop Rail, Desktop Drawer, Mobile Rail, and Mobile Drawer, are the index.
-  They say at a glance that an action is on desktop and was never put on mobile, and clicking one places or unplaces it.
+- A project relates to the shared Action config in one of three strengths, and the middle one is the default a project accumulates (`railScope.ts`, `commandRail.ts`).
+  Plain **inheritance** is no override at all.
+  A **delta** overlays project-owned actions and project-owned rows *on the live global layout*: global edits keep flowing into the project, and only the additions are project state.
+  A **fork** is a detached full copy that stops tracking global edits; it is created only by the explicit Detach control, because the old fork-on-first-edit behavior deviated a project from every later global improvement the moment it added one button.
+  Edits route by ownership rather than by a write-target switch: an edit to a shared row lands in the global scope (all projects, said in place by the scope note and per-row origin tags), while project rows and project actions stay project state.
+  Reverting is symmetric — "Remove project additions" drops a delta, "Use global layout" drops a fork — and unpinning the last project addition returns the project to plain inheritance with no stray delta behind it.
+- A project-owned action may only occupy project rows.
+  A shared row is written to the global scope, where the project item's id does not exist, so a drop, a keyboard move, or a placement toggle that would put one there is refused (the drag previews it as "off every row") or routed into a project row created on demand.
+  The inverse is legal: a global item placed in a project row is a project-local placement of a shared action.
+  Surface copy ("Copy from *other device*") is hidden in delta scope for the same reason — the fresh-id copy would flatten project rows into global state.
+- **In-place rail editing** (`RailInlineEditor.tsx`) is the primary customization path: the rail gear flips the rail area into an editor showing the same rows as wrapping chips — real device, real backend, real scope — with drag to reorder, × to remove, and a per-row `+` opening a searchable picker over the catalog.
+  Most rail edits are one reorder or one removal, and those should never cost a modal that also explains scopes and catalogs.
+  Items another backend would hide render dimmed rather than hidden, because this is the one surface meant to answer "why is this button not on my shell rail".
+  The picker excludes project-owned actions for shared rows (the ownership rule), and "New action…" plus "All options…" hand off to the full modal.
+- The standalone **Configure Actions** modal (`ActionEditorModal.tsx` and `RailEditor.tsx`) opens from the main menu, command palette, the in-place editor's "All options…", and the Configure control in Quick actions rather than living inside Settings.
+  It discloses progressively: one device's Rail and Drawer layouts first (defaulting to the device this browser is, with a Desktop/Mobile switch at every width), custom-action creation collapsed below them, and the complete catalog collapsed at the bottom behind a filterable "All actions" disclosure.
+  The former permanent two-column device view is gone: it doubled the visual load for the rare cross-device drag that the catalog's placement checkboxes already cover.
+  A dismissible first-open callout carries the three-line orientation (Rail vs Drawer, per-device layouts, the catalog) instead of a standing paragraph.
+  A "Preview as" backend selector dims what a session of that type would not show, making the backend filter visible before a session surprises anyone.
+- Four affordances are what keep two independent device layouts manageable, and none of them is a shared row.
+  Adding a custom action places it into **both** device layouts, because a button you must remember to add twice is a button that never reaches the phone; in a project scope the add form offers "this project only" (the default there) or "all projects".
+  The catalog's placement controls are four **labelled checkboxes** — Desktop rail, Desktop drawer, Mobile rail, Mobile drawer — inside an expandable per-action panel, with a plain-words summary ("Desktop rail + drawer · Mobile drawer") on the collapsed row; they replaced the abbreviated `Dr/Dp/Mr/Mp` badge code, which was a legend the user had to learn before the surface said anything.
   A per-surface "Copy from *other device*" seeds one layout from the other as a one-shot; it deliberately does not keep tracking.
   Dragging a catalog row into a layout places it exactly.
-- Chips drag within a row, between rows, between surfaces, and between device columns, on mouse and on touch.
+- Chips drag within a row, between rows, and between surfaces, on mouse and on touch, through the shared controller (`railDrag.ts`) both editors mount.
   Activation reuses the workspace contract (`dragReorder.ts`, `pointerDragClaim.ts`): a 5px movement threshold for pointers and a 325 ms hold with 8px slop for touch, so a finger that moves first scrolls the modal instead of dragging.
   The live preview is the config a drop would commit, recomputed from the committed config on every move rather than from the previous preview, so a long drag cannot accumulate drift.
   Pointer capture is taken on the editor root, not on the chip: the preview reparents the chip between rows, and a captured element that leaves the document loses the pointer mid-drag.
@@ -1283,9 +1348,8 @@ responsive controls.
   That exclusion is what makes it a fixed point: re-measuring after the preview moves the chip gives the same answer, so a chip hovering over its own new home does not oscillate.
   The hit test is two-dimensional because the editor wraps a row's chips over several visual lines; a horizontal-only comparison would put every drop on the second line into the middle of the first.
 - Keyboard placement is the equivalent path and the only one available without a pointer: arrows move a focused chip along its row and between rows, Delete unplaces it, and focus follows the chip so a run of presses keeps moving the same one.
-- Catalog rows are a name-first grid: the action name owns the elastic column and wraps rather than truncating, with type/payload preview beneath it and the toggles auto-sized on the right.
-  Placement badges are blue ("placed here") and the backend filter chips green ("this backend is allowed to see it"), because one accent across the whole set read as a single toggle set.
-  Phones keep two grid rows per action: name + delete, then badges and filters.
+- The expanded catalog panel also holds the per-action backend checkboxes under their harness display names ("Shown in these sessions"), custom-action editing (label, payload, submit-on-insert), and delete.
+  The catalog head stays a name-first grid: the action name owns the elastic column and wraps rather than truncating, with the type/payload preview beneath it and the placement summary on the right; phones drop the summary under the name.
 - The **Actions** tab is session-scoped and contains three independently collapsible sections that start expanded: **Quick actions**, **Skills**, and **Prompt templates**.
   Disclosure state is device-local and persists independently from the Action layout.
   Quick actions renders the `panel` surface of *this device's* layout, so its grouping and order are independent of the other device class.
@@ -1295,6 +1359,9 @@ responsive controls.
   A transient visit opened from the Action rail closes after an action completes on desktop as well as mobile; a prompt with unresolved fields remains open until those fields are completed, and an ordinary visit retains the existing repeated-action behavior.
   The Manage control in the Prompt templates header opens the full prompt-template editor.
   Prompt rows include a bounded body excerpt so similar titles can be distinguished in the drawer.
+  Skill and template rows both carry a **Pin** toggle: one tap creates a placed Quick-actions button on both devices (`pinSkill` / `pinPrompt` in `railScope.ts`) instead of routing the most common creation — "give this thing a button" — through the editor's typed-name form.
+  A pin follows its source's scope (a project skill or project template pins to the project's delta; anything else pins globally; a forked project pins into its fork), restricts a pinned skill to the harness it was discovered for (the same name is not guaranteed to exist for any other CLI), and stores a template pin as the usual key pointer.
+  Pinned state is matched by payload rather than by id, so a hand-authored button counts, a built-in slash command reads as already pinned rather than growing a twin, and unpinning removes the catalog item wherever it lives.
   Actions renders outside the terminal pane, so it activates items over the same `mux:terminal-action` bus (`sendKey`, `insertText`, `copyReply`, `copyResume`, `branch`, `relaunch`, `endSession`).
   The pane stays the single owner of terminal writes, so broadcast, replay, and read/select mode keep applying.
   With no terminal focused, Quick actions and Skills explain what target is missing while Prompt templates remain browsable.
@@ -1429,7 +1496,7 @@ responsive controls.
   Like the drawer's note editor, it renders inside the drawer, and unlike it never opens a pane and never writes.
   Git closes the Project-scoped block without joining the navigators: it reads the repository behind the Project and opens nothing into a pane.
   See `git.md` for the branches, worktrees, dirty/upstream state, and allowed mutations it shows.
-  **Processes** continues that block for the same reason: it is Project-scoped and reports rather than opens.
+  **Processes** continues that block for the same reason: it is Project-scoped and acts on sessions rather than opening panes.
   **Schedule** closes it, immediately after Processes, because the two answer the same question at different times: Processes is what this Project's sessions are running now, Schedule is what it will start later (`scheduled-runs.md`).
   It is a tab rather than a modal because the decisions it offers - pause this, run it now, is last night's session still open - are judgements about live sessions, which are legible in the workspace behind the drawer.
   Like Processes it carries its own Project/all-Projects scope instead of a companion modal, since "what fires tonight" spans Projects even though every schedule belongs to exactly one.
@@ -1477,7 +1544,7 @@ responsive controls.
 - The **fleet queue** is an application-scoped provenance and delivery-state view over queued messages from every Project and session, and is a **modal**, not a tab.
   It filters by explicit authorship, Project, and target session, and opens a target's Queue without pretending the global list is session-scoped.
   It is modal for the reason Queue is not: the argument for docking Queue is that the decision to interrupt is read off the terminal, and the fleet queue makes no such decision — it has no send button, so it needs nothing on screen beside it.
-  This is the same watch-here/act-there split **Processes** has with the process inspector, and it also stops the rail from carrying two queue-shaped tabs that read as duplicates.
+  It also stops the rail from carrying two queue-shaped tabs that read as duplicates.
 - **Transcript** is an *inert* session surface: the focused session's conversation
   as prose you can scroll and copy, without touching the live terminal or scrolling it back.
   A capability-gated `transcript` chip beside `queue[:N]` in each terminal header focuses that
@@ -1656,33 +1723,44 @@ responsive controls.
   directions, normalized diff confirmation, and revision-guarded restore points. Global
   instructions and learned memory are never write targets; nothing watches or synchronizes in
   the background.
-- **Processes** is the *watch* half of process inspection; the modal inspector keeps the *act*
-  half. The split is what makes a column viable at all. Watching is "which of my sessions are
-  running something, is that dev server up" — a handful of numbers and a link, and a question you
-  ask with a terminal in front of you, which is the same argument that put Queue here. Acting is
-  the full tree with parent lineage, evidence state and confidence, and the
-  interrupt/terminate/terminate-tree row; those need width to read and a visible confirm step to
-  be safe, and a 300 px column with a confirm-on-second-click destructive button is how someone
-  kills the wrong tree. **Nothing in the tab terminates anything.** `Full inspector` in the footer
-  opens the modal, prefiltered to whatever the tab is scoped to.
-- Rows are per session, not per process: a session's tree is mostly bookkeeping (`cmd`, `conhost`,
-  the agent CLI), so a per-process column would be a wall of noise around the one row that
-  matters.
-  Each row is a rollup (process count, CPU, working set) plus its raw loopback listeners.
-  A listener is not asserted to be an application server; `preview` explicitly lists one beside its session, and `copy` takes the URL.
+- **Processes** is the process inspector, docked. It renders the same component as the modal
+  `Process fleet` (`ProcessFleetView`), so it has the same process trees, the same parent
+  lineage, evidence state and confidence behind each row's expander, the same listener and
+  Preview rows, the same ended toggle, and the same guarded
+  interrupt/terminate/terminate-tree. `Open full width` in the footer reopens that view as the
+  dialog, at whatever the tab is scoped to.
+- It shipped first as a *watch* surface that could terminate nothing, on the argument that a
+  column narrow enough to sit beside a terminal is too narrow to hold a destructive
+  confirm-on-second-click. That was an argument about **layout**, and layout answers it:
+  `.process-fleet-view` is a CSS container, so the column gets the same rendering the modal
+  already used on a phone — one wrapped line per process, arguments dropped before numbers,
+  details stacked — and the confirm is the same two-press confirm. What the split actually cost
+  was that the surface docked beside a terminal could not say what was running under it: the tab
+  answered "is something up", every follow-up needed the modal, and the two surfaces drifted.
+- Rows are per process, not per session — the tree is the point. A session's tree does carry
+  bookkeeping (`cmd`, `conhost`, the agent CLI), which is why a collapsed row is one line and the
+  six lines of evidence live behind its expander rather than being dropped.
+  A listener is not asserted to be an application server; `preview` explicitly lists one beside
+  its session, and `copy` takes the URL. Listener rows are deduped by port, so a server bound to
+  both loopback stacks is one row.
   Independently, the daemon lists browser-facing HTML endpoints automatically while leaving debugger and tool listeners raw.
-  Ended processes are dropped rather than greyed:
-  they support no action here and are already excluded from every total in the app.
-- Scoped to the active Project by default, with **the focused session's row pinned first and
-  marked**. That combination is deliberate. Session-scoped would read empty most of the time (most
-  sessions are an agent CLI and a conhost) and would churn its whole body on every focus change,
-  the same objection that sank a focus-following Notes tab; Project-scoped answers the question
-  people actually have, and the pin answers "what is *this* session running" without a scope
-  change. `All projects` is one click away and the choice survives a tab switch.
-- **It starts no poll of its own**, reading the fleet sample `App` already refreshes for the
-  sidebar's resource summary. The reconcile walk behind that data
-  holds the GIL on Windows (`processes-and-previews.md` § Sampling cost), so a panel left open
-  all day must cost the daemon nothing extra. Any future addition here inherits that rule.
+  Ended processes are hidden unless the `ended` toggle asks for them: they support no action and
+  are already excluded from every total in the app.
+- Scoped to the active Project by default, with **the focused session pinned first inside its
+  Project and marked `focused`**. That combination is deliberate. Session-scoped would read empty
+  most of the time and would churn its whole body on every focus change, the same objection that
+  sank a focus-following Notes tab; Project-scoped answers the question people actually have, and
+  the pin answers "what is *this* session running" without a scope change. Clicking a session
+  heading narrows the tab to that session alone, and clicking it again widens back.
+  `All projects` is one click away and the choice survives a tab switch. A Project scope also
+  drops the daemon/infrastructure group, on both surfaces: the runtime belongs to no Project.
+- **A closed tab polls nothing, and open tabs share one poll.** Trees and evidence are absent
+  from the reduced sample the sidebar's resource summary polls, so this tab subscribes to the
+  full snapshot the way the modal does — through a refcounted shared feed, so the tab open in
+  both drawer stacks with the modal over it is still one request per tick. The reconcile walk
+  behind that data holds the GIL on Windows (`processes-and-previews.md` § Sampling cost); what
+  that rule protects is the *always-mounted* poll, and that one still reads the reduced
+  projection and is unchanged. Any future addition here inherits both halves.
 - The pane header lost its `proc` chip when this shipped. It was the only pane tool carrying no
   state of its own — `note` reports empty/written/open, `queue` its pending count — so it was pure
   navigation, and on a phone it cost 40 px of a bar that also has to fit the session name and

@@ -127,6 +127,47 @@ export function activityBadges(session: Session): ActivityBadge[] {
   return badges
 }
 
+/**
+ * The faults a surface should mark on a session, as reader-facing sentences. Empty for a
+ * healthy session, which is the whole point: this drives a *visible* marker, so anything
+ * that is true of an ordinary session must not appear here.
+ *
+ * The distinction this function exists to hold is between a fault and the diagnostic text
+ * that describes one. `parser_diagnostic` is set on **every** observed session as routine
+ * detail (`observation.py`: `tailing <file>.jsonl`, `schema v2: 801/801 recognized (0%
+ * unknown)`) - measured 2026-08-18, 17/17 live sessions carried one - so its presence says
+ * nothing. `parser_status === 'degraded'` is the fault; the diagnostic is only its wording.
+ * `observation_diagnostic` is the same shape: the daemon sets it beside
+ * `observation_stale_since` at every site, so staleness is the fault and it is the wording.
+ * Reading either string as a trigger marks every healthy session, which is an alarm that
+ * has stopped meaning anything.
+ *
+ * Faults are deliberately not states. They do not touch the dot, the tab, or `sessionStatus`
+ * - a session can be perfectly `idle` and still be reporting on a conversation it no longer
+ * owns, and that is exactly the case a state axis cannot express.
+ */
+export function sessionFaults(session: Session): string[] {
+  const faults: string[] = []
+  if (session.runtime_boundary === 'remote' || session.runtime_boundary === 'unknown') {
+    faults.push(
+      'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, ' +
+        'and agent promotion are unavailable',
+    )
+  }
+  if (session.observation_stale_since) {
+    faults.push(
+      session.observation_diagnostic ||
+        'observation stale: the followed transcript may no longer be this session’s conversation',
+    )
+  }
+  // The degraded wording already names the schema and the unrecognized share; the fallback
+  // covers a degrade recorded before any diagnostic was written.
+  if (session.parser_status === 'degraded') {
+    faults.push(session.parser_diagnostic || 'transcript parser degraded: measurements are stale')
+  }
+  return faults
+}
+
 /** Status line text shown next to a session; total over SessionState. */
 export function sessionStatus(session: Session): string {
   if (session.runtime_boundary === 'unknown') return 'terminal boundary unknown'

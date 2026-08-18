@@ -36,10 +36,12 @@ import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
-import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
+import { isRepeatableRailKey } from './railKeyRepeat'
+import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
+import { RailInlineEditor } from './RailInlineEditor'
 import { MOBILE_QUERY, currentProfile, loadRailConfig } from './deviceSettings'
 import { APP_TAIL_KEY, VIEWPORT_MEASURE_RETRY_FRAMES, VIEWPORT_SETTLE_MS, appOffTailByDistance, appOwnsTail, attachRegistersViewport, createSurfaceRepairScheduler, createViewportScheduler, effectiveViewportCost, redrawVisibleTerminal, reflowVisibleTerminalRenderer, restoreTerminalScrollAnchor, scrollTerminalToTail, terminalHostIsVisible, terminalRowsAboveTail, terminalSurface, terminalSurfaceChanged, terminalWidthPolicyFontSize, trackAppTailDistance, claudeHostMaxWidth, claudeWidthCap, claudeWidthCapClamping, type SurfaceRepairScheduler, type TerminalSurface } from './terminalViewport'
 import { createWheelPacer, isWheelReportBurst } from './terminalWheelPacing'
@@ -446,6 +448,10 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
   // Bumped when another surface edits the shared rail config so this pane re-reads it.
   const [,bumpRailRev]=useState(0)
   useEffect(()=>{const on=()=>bumpRailRev(value=>value+1);window.addEventListener('mux:settings-changed',on);return()=>window.removeEventListener('mux:settings-changed',on)},[])
+  // The gear flips the rail area into the in-place editor (RailInlineEditor):
+  // reorder, remove, and add happen where the rail is used, on the real device
+  // and backend. The full Configure Actions modal stays behind "All options…".
+  const [railEditOpen,setRailEditOpen]=useState(false)
   // Ending a session is a two-click confirm, and App owns both the armed id and the
   // window that disarms it (`requestKill`). The rail button mirrors that broadcast
   // rather than running a second timer of its own, so its label can never disagree
@@ -3208,27 +3214,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(sequence===APP_TAIL_KEY)clearAppTail('rail_tail_key')
     if(!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }
-  const railKeySendRef=useRef(sendKey)
-  railKeySendRef.current=sendKey
-  const railKeyRepeaterRef=useRef<ReturnType<typeof createRailKeyRepeater>|null>(null)
-  if(!railKeyRepeaterRef.current){
-    railKeyRepeaterRef.current=createRailKeyRepeater(
-      sequence=>railKeySendRef.current(sequence),
-      (callback,delayMs)=>window.setTimeout(callback,delayMs),
-      timer=>window.clearTimeout(timer),
-    )
-  }
-  const railKeyRepeater=railKeyRepeaterRef.current
-  useEffect(()=>{
-    const cancel=()=>railKeyRepeater.cancel()
-    window.addEventListener('blur',cancel)
-    document.addEventListener('visibilitychange',cancel)
-    return()=>{
-      window.removeEventListener('blur',cancel)
-      document.removeEventListener('visibilitychange',cancel)
-      cancel()
-    }
-  },[session.id])
+  const railKeyRepeat=useRailKeyRepeat(sendKey,session.id)
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
   // the terminal alone is what left this dead on a phone in a Claude session while the rail's
   // `^End` — which happens to send the same key on its way past — kept working.
@@ -3437,12 +3423,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     if(item.type==='key'){
       const sequence=item.bytes||''
-      if(isRepeatableRailKey(item.id))return <button key={key} class={`${item.className||'term-key'} rail-key-repeat`} title={`${item.title||item.label} (hold to repeat)`} onPointerDown={event=>{
-        if(!event.isPrimary||event.button!==0)return
-        event.preventDefault()
-        event.currentTarget.setPointerCapture?.(event.pointerId)
-        railKeyRepeater.press(event.pointerId,sequence)
-      }} onPointerUp={event=>railKeyRepeater.release(event.pointerId)} onPointerCancel={event=>railKeyRepeater.release(event.pointerId)} onLostPointerCapture={event=>railKeyRepeater.release(event.pointerId)} onContextMenu={event=>event.preventDefault()} onClick={event=>{if(event.detail===0)sendKey(sequence)}}>{item.label}</button>
+      if(isRepeatableRailKey(item.id))return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={sequence} label={item.label} title={item.title||item.label} className={item.className||'term-key'}/>
       return <button key={key} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
     }
     if(item.type==='action')return null
@@ -3489,7 +3470,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     '--peek-offset':`${peekOffset}px`,
     '--terminal-keyboard-reserve':`${keyboardReserved?reservePxRef.current:0}px`,
   } as Record<string,string>
-    return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}<div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailScroller key={row.id}>{row.nodes}{index===renderedRailRows.length-1&&<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>}{index===renderedRailRows.length-1&&onConfigureRail&&<button class="rail-config" title="Configure Actions (Rail, Drawer, shortcuts, skills, and templates)" aria-label="Configure Actions" onClick={onConfigureRail}>⚙</button>}</RailScroller>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
+    return <div class={`terminal-surface${peekOffset>0?' keyboard-peek':''}${peekAnimated?' keyboard-peek-animated':''}${keyboardReserved?' keyboard-reserved':''}`} style={surfaceStyle}><div class={`terminal-host${letterboxActive?' letterboxed':''}`} style={claudeHostStyle} ref={host} /><input ref={attachmentInputRef} type="file" hidden multiple aria-label="Choose files to attach" onChange={event=>{const files=Array.from(event.currentTarget.files||[]);event.currentTarget.value='';void attachFilesRef.current(files)}}/><textarea ref={mobileLiveInputRef} class="mobile-terminal-live-input" rows={1} aria-label="Live mobile terminal input" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellcheck={false} inputMode="text" enterkeyhint="enter"/>{mobileDraftOpen&&<MobileTerminalDraft sessionName={sessionDisplayName(session)||session.id} text={mobileDraftText} busy={mobileDraftInserting} error={mobileDraftError} onInput={setMobileDraftText} onInsert={()=>void insertMobileDraft()} onClear={()=>setMobileDraftText('')} onClose={closeMobileDraft}/>}{railEditOpen?<div class="terminal-action-rail rail-editing"><RailInlineEditor projectId={session.project_id} backend={session.backend} onOpenFull={onConfigureRail?()=>{setRailEditOpen(false);onConfigureRail()}:undefined} onClose={()=>setRailEditOpen(false)}/></div>:<div class={`terminal-action-rail${mobilePinnedSend?' mobile-pinned-send':''}`} role="toolbar" aria-label="Terminal keys and clipboard actions" onClick={event=>pulseRail(event.currentTarget,event.target)}><div class="terminal-action-rows">{renderedRailRows.map((row,index)=><RailScroller key={row.id}>{row.nodes}{index===renderedRailRows.length-1&&<span aria-live="polite">{clipboardStatus||(selectionText?`${selectionText.length.toLocaleString()} selected${mobileInput.autoCopySelection?' · auto-copy on':''}`:'')}</span>}{index===renderedRailRows.length-1&&<button class="rail-config" title="Customize this rail in place — drag, remove, add (All options… opens the full editor)" aria-label="Customize actions" onClick={()=>setRailEditOpen(true)}>⚙</button>}</RailScroller>)}</div>{mobilePinnedSend&&<button class="terminal-mobile-send" title="Send composed input; the keyboard Enter key inserts a newline" aria-label="Send composed input" onClick={()=>sendKey('\r')}><SendIcon/></button>}</div>}{peekToggleVisible(effectiveKeyboardInset,peekOffset>0,offTail,appOffTail)&&<button class={`terminal-peek-top${peekOffset>0?' active':''}`} aria-pressed={peekOffset>0} title={peekOffset>0?"Back to the composer":"Look at the top of the screen, the keyboard is covering it"} aria-label={peekOffset>0?"Back to the composer":"Show the top of the terminal"} onMouseDown={holdSoftKeyboard} onClick={()=>applyPeekRef.current('toggle')}>{peekOffset>0?'↓':'↑'}</button>}{(offTail||appOffTail)&&<button class="terminal-jump-latest" title="Scroll to the newest output" aria-label="Jump to latest output" onMouseDown={holdSoftKeyboard} onClick={jumpToLatest}>↓</button>}{fileDropActive&&<div class="terminal-image-drop" role="status">Drop files to attach to {session.backend}</div>}{findOpen && <div class="terminal-find" role="search">
     <input value={findQuery} onInput={event => { setFindQuery(event.currentTarget.value); setFindResult('') }} onKeyDown={event => {
       // Stopped here so the keypress is one pop, on this bar's own level.
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissStack.pop() }

@@ -265,6 +265,24 @@ async def test_subgraph_bounded(tmp_path: Path) -> None:
     store.close()
 
 
+async def test_subgraph_marks_a_seed_the_index_has_never_seen(tmp_path: Path) -> None:
+    """A file that exists only on a branch has no node in the canonical graph.
+
+    It is still drawn — it is the file the reader is most likely thinking about —
+    but its empty neighbourhood means "not indexed here", not "nothing depends on
+    it", and only the flag can tell those apart.
+    """
+    store, pid = await _seed(tmp_path)
+    sub = await store.subgraph(pid, ["pkg/helper.py", "pkg/brandnew.py"], hops=1)
+    by_path = {n["path"]: n for n in sub["nodes"]}
+    assert "indexed" not in by_path["pkg/helper.py"]
+    assert by_path["pkg/brandnew.py"]["indexed"] is False
+    assert by_path["pkg/brandnew.py"]["role"] == "seed"
+    assert await store.known_files(pid, ["pkg/helper.py", "pkg/brandnew.py"]) == {"pkg/helper.py"}
+    assert await store.known_files(pid, []) == set()
+    store.close()
+
+
 def test_is_indexable_path_excludes_worktrees_and_generated() -> None:
     from swe_mux.code_graph import is_indexable_path
 

@@ -84,7 +84,7 @@ import {
 import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
-import type { WatchScope } from './processWatch'
+import { resolveProjectScope, type ProjectScope } from './processFleet'
 import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
@@ -150,6 +150,7 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
@@ -177,7 +178,7 @@ import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStat
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
-import { activityBadges, sessionStatus } from './sessionStatus'
+import { activityBadges, sessionFaults, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape, StandingRender } from './sessionRowConfig'
@@ -410,7 +411,10 @@ export function App() {
   // watching. Project-scoped by default, like every other Project-scoped tab — a session-scoped
   // processes view would churn its whole body on each focus change and read empty most of the
   // time, since most sessions are just their agent CLI and a conhost.
-  const [processWatchScope,setProcessWatchScope]=useState<WatchScope>('')
+  // `null` is "the tab has not been scoped", which resolves to the Project the drawer is
+  // sitting beside; `''` is the user having asked for every Project. Collapsing the two made
+  // `All projects` unselectable — it snapped straight back to the active Project.
+  const [processProjectScope,setProcessProjectScope]=useState<ProjectScope|null>(null)
   // The Schedule tab's scope, kept here for the same reason: '' is every Project's
   // schedules ("what fires tonight"), anything else is one Project's.
   const [scheduleScope,setScheduleScope]=useState<string>('')
@@ -546,6 +550,10 @@ export function App() {
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Settings' own section drawer, the narrow-layout twin of the docked column. It lives
+  // here rather than inside Settings because the gesture recognizer below is the shell's,
+  // and it has to be able to work that drawer the way it works the workspace sidebar.
+  const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
   const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
@@ -2282,8 +2290,12 @@ export function App() {
   }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
+  // Opening always lands on the content, never on the narrow layout's section drawer: a
+  // caller that named a section has already navigated, and one that did not is returning
+  // to the tab it left off on.
   const openSettings = (section?:string,setting?:string) => {
     setSettingsSection(section); setSettingsSetting(setting); setRevealToken(token=>token+1)
+    setSettingsNavOpen(false)
     setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null)
   }
   const openActionEditor = () => { setActionEditorOpen(true); setMainMenuOpen(false); setProjectMenu(null); setContextMenu(null) }
@@ -4302,6 +4314,11 @@ export function App() {
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
+    // Settings' section drawer, which only exists in the narrow layout. Real commands
+    // rather than a special case inside the recognizer, because that is the only channel
+    // a resolved gesture has — and it makes the drawer reachable from the palette too.
+    { id: SETTINGS_NAV_TOGGLE, label: 'Toggle Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(value => !value) },
+    { id: SETTINGS_NAV_CLOSE, label: 'Close Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(false) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'queue.fleet',label:'Open fleet queue (every session’s queued messages)',category:'input',available:true,run:()=>openFleetQueue() },
@@ -4792,6 +4809,11 @@ export function App() {
   // touch listeners (and can't drop a gesture already in flight).
   const overlayPanels = useRef({ sidebarOpen: false, drawerOpen: false })
   overlayPanels.current = { sidebarOpen, drawerOpen: clipboardOpen }
+  // Settings' section drawer, for the same reason and by the same route. Only supplied
+  // to the resolver while Settings is the level back would act on: the palette or the
+  // theme picker opened over it is what a swipe then means, not the drawer underneath.
+  const settingsNav = useRef({ open: false })
+  settingsNav.current = { open: settingsNavOpen }
   useEffect(() => {
     if (!mobileWorkspace) return
     let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; claims:ReturnType<typeof markPointerDragClaims> } | null = null
@@ -4874,7 +4896,15 @@ export function App() {
       state = null
       if (!slot) return
       const panels = overlayPanels.current
-      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, { depth: gestureOverlayDepth(dismissStack.depth(), panels), enabled: overlayBack })
+      // `topLabel()` rather than a `settingsOpen` flag: what matters is whether Settings
+      // (or its own drawer) is the level on top, so a picker opened above it keeps the
+      // swipe for itself instead of quietly working the drawer behind it.
+      const settingsOnTop = dismissStack.topLabel() === 'settings' || dismissStack.topLabel() === 'settings-nav'
+      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, {
+        depth: gestureOverlayDepth(dismissStack.depth(), panels),
+        enabled: overlayBack,
+        panel: settingsOnTop ? { open: settingsNav.current.open, toggle: SETTINGS_NAV_TOGGLE, close: SETTINGS_NAV_CLOSE } : undefined,
+      })
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }
@@ -5176,7 +5206,7 @@ export function App() {
     const id = session.id
     const agentSession=isAgent(session)
     if(session.pending)return <section class={`terminal-pane pending-terminal-pane ${activeId===id?'focused':''}`} onPointerDown={()=>{setActiveId(id);setFocusedViewId(id)}}>
-      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">{session.pending_label||'starting terminal…'}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
+      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div class="pane-identity"><span class="pane-title" title={sessionName(session)||id}>{sessionName(session)||id}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
       <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>{session.pending_label||'Starting terminal'}</strong><small>{session.pending_detail||'Resolving the project and opening the shell…'}</small></div>
     </section>
     const remoteBoundary=session.runtime_boundary==='remote'
@@ -5225,16 +5255,38 @@ export function App() {
     const voiceOverlayNode=voiceStripNode||conversationSurface
       ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
       :null
+    // The header names the session and nothing else. Its state is on the tab, on the sidebar
+    // row, and in the terminal the reader is already looking at, whereas the *name* is the one
+    // thing those surfaces crop: a tab is only as wide as the strip allows. The name therefore
+    // takes the column the status line used to hold, bounded by `fit-content()` in the
+    // stylesheet so a long generated title cannot squeeze the path, voice chips, or tools.
+    const paneTitle=sessionName(session)||id
+    // Faults are not state, and they have no other pane-level surface — an agent header draws
+    // no path chip, which is where the boundary warning otherwise lives — so they keep a marker
+    // beside the name rather than disappearing with the status line. A stale transcript is the
+    // one fault that looks like a healthy session: the pane may be reading a conversation this
+    // PTY is no longer running (an unfollowable /clear or /new), so it is marked visibly and
+    // not only in the tooltip. What counts as a fault is `sessionFaults`, deliberately not this
+    // file: a marker drawn from "a diagnostic string exists" fires on every healthy session.
+    const paneFaults=sessionFaults(session)
+    // The full name leads the tooltip because the rendered one is truncated. The status line
+    // follows it, unrendered: it costs no width on hover, and it keeps one reading of the state
+    // within reach of the pane without competing with the name for the bar. The routine parser
+    // line and delivery readiness ride along as detail — every observed session reports both,
+    // which is exactly why neither may raise the marker.
+    const paneTitleHint=[
+      paneTitle,
+      sessionStatus(session),
+      ...paneFaults,
+      session.parser_status!=='degraded'&&session.parser_diagnostic,
+      session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`,
+    ].filter(Boolean).join('\n')
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
     const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
-        {/* A stale transcript is the one fault that looks like a healthy session: the state
-            below is being read off a conversation this PTY may no longer be running (an
-            unfollowable /clear or /new). Marked visibly, not just in the tooltip, because the
-            whole failure mode is that nothing looks wrong. */}
-        <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[nonLocalBoundary&&'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable',session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
+        <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
         {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
         <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
@@ -5313,14 +5365,20 @@ export function App() {
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{preview.port}</strong></span>
     </button>
   }
+  /** Land a registered Preview in the app: the item itself, the Project layout it was
+   *  attached into, and — when the caller was asking to see it — focus. */
+  const attachPreview=(preview:Preview,project:Project,focus=false)=>{
+    setPreviews(current=>({...current,[preview.id]:preview}))
+    setProjects(items=>items.map(item=>item.id===project.id?project:item))
+    setLayoutMap(current=>({...current,[project.id]:parseLayout(project.layout)}))
+    if(!focus)return
+    setProjectId(project.id)
+    setFocusedViewId(preview.id)
+  }
   const openDetectedServer=async(server:{url:string},session:Session)=>{
     try{
       const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:server.url,attach:true})
-      setPreviews(current=>({...current,[result.preview.id]:result.preview}))
-      setProjects(items=>items.map(item=>item.id===result.project.id?result.project:item))
-      setLayoutMap(current=>({...current,[result.project.id]:parseLayout(result.project.layout)}))
-      setProjectId(session.project_id)
-      setFocusedViewId(result.preview.id)
+      attachPreview(result.preview,result.project,true)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   /** `placement` is whether this row's session sits in the Project's pane tree. An unpaned one
@@ -5744,23 +5802,20 @@ export function App() {
         queueOpenToken={queueOpenToken || undefined}
         onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
         onChangeMapOpenAsTab={sessionId=>void openChangeMapTab(sessionId)}
-        processSnapshot={processFleet}
         projects={projects}
         // '' (all Projects) is the stored default; an unscoped tab means the Project the
         // drawer is sitting beside, so it resolves to the active one at render time and
         // follows a Project switch instead of pinning whichever was active when it opened.
-        processScope={processWatchScope&&projects.some(project=>project.id===processWatchScope)?processWatchScope:(projectId||'')}
-        onProcessScope={setProcessWatchScope}
-        onRefreshProcesses={()=>void loadProcesses()}
+        processScope={resolveProjectScope(processProjectScope,projectId||'',projects)}
+        onProcessScope={setProcessProjectScope}
         // Same resolution as the process scope: an unscoped tab follows the Project the
         // drawer is sitting beside rather than pinning whichever was active on open.
         scheduleScope={scheduleScope&&projects.some(project=>project.id===scheduleScope)?scheduleScope:(projectId||'')}
         onScheduleScope={setScheduleScope}
         profiles={profiles}
-        onOpenPreview={(sessionId,url)=>{
-          const owner=sessions.find(item=>item.id===sessionId)
-          if(owner)void openDetectedServer({url},owner)
-        }}
+        // The Processes tab registers the preview itself, so this only lands the result:
+        // focused, because attaching a preview from the drawer is a request to look at it.
+        onPreviewAttached={(preview,project)=>attachPreview(preview,project,true)}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
         onOpenAutomationDashboard={()=>setAutomationOpen(true)}
@@ -6210,7 +6265,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
@@ -6228,11 +6283,7 @@ export function App() {
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard initialSetting={settingsSetting} revealToken={revealToken} onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
-    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {
-      setPreviews(current => ({...current, [preview.id]: preview}))
-      setProjects(items => items.map(item => item.id === project.id ? project : item))
-      setLayoutMap(current => ({...current, [project.id]: parseLayout(project.layout)}))
-    }} />}
+    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={attachPreview} />}
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 

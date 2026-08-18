@@ -47,6 +47,13 @@ export type PromptsTabProps = {
   /** A command-rail prompt button that needs placeholders filled hands the template
    *  off here. Wrapped in an object so re-firing the same button re-expands it. */
   preselect?: { key: string }
+  /** One-tap pinning: turn a template into a placed Actions button (and back).
+   *  Provided by the Actions tab, which owns the rail config access; absent
+   *  hosts simply show no pin control. */
+  pin?: {
+    isPinned: (template: PromptTemplate) => boolean
+    toggle: (template: PromptTemplate) => void
+  }
 }
 
 type Library = { items: PromptTemplate[] }
@@ -57,7 +64,7 @@ type PendingSend = { key: string; target: SendToAgentTarget }
 
 const LONG_PRESS_MS = 550
 
-export function PromptsTab({ project, backend, onInsert, onDone, onManage, showManage = true, sessions, onSend, preselect }: PromptsTabProps) {
+export function PromptsTab({ project, backend, onInsert, onDone, onManage, showManage = true, sessions, onSend, preselect, pin }: PromptsTabProps) {
   const rowConfig = useSessionRowConfig()
   const [items, setItems] = useState<PromptTemplate[] | null>(null)
   const [query, setQuery] = useState('')
@@ -250,7 +257,7 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
       <input value={query} onInput={event => setQuery(event.currentTarget.value)} placeholder="Filter templates…" aria-label="Filter prompt templates" />
     </div>
     <div class="clipboard-entries" role="group" aria-label="Prompt templates">
-      {filtered.map(item => <div key={item.key} class={`clipboard-entry ${selected === item.key ? 'active' : ''}`}>
+      {filtered.map(item => <div key={item.key} class={`clipboard-entry ${selected === item.key ? 'active' : ''}${pin ? ' has-pin' : ''}`}>
         <button
           class="clipboard-entry-body"
           title={`${item.variables.length ? 'Fill placeholders, then insert' : 'Insert into the focused session'} · right-click or long-press to send to a session`}
@@ -273,6 +280,14 @@ export function PromptsTab({ project, backend, onInsert, onDone, onManage, showM
           <small>{item.scope}{item.tags.length ? ` · ${item.tags.join(', ')}` : ''}{item.variables.length ? ` · ${item.variables.length} field${item.variables.length === 1 ? '' : 's'}` : ''}</small>
           <small class="prompt-template-excerpt">{promptTemplateExcerpt(item.body)}</small>
         </button>
+        {pin && <button
+          class={`skill-pin${pin.isPinned(item) ? ' on' : ''}`}
+          aria-pressed={pin.isPinned(item)}
+          title={pin.isPinned(item)
+            ? 'Remove this template’s button from your Actions'
+            : `Add a button for this template to Quick actions on both devices${item.scope === 'project' ? ' — this project only' : ''}`}
+          onClick={() => pin.toggle(item)}
+        >{pin.isPinned(item) ? 'Pinned' : 'Pin'}</button>}
       </div>)}
       {active && active.variables.length > 0 && <div class="drawer-fields">
         {active.variables.map(name => <label key={name}>{name}

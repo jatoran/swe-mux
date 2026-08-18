@@ -521,3 +521,59 @@ async def test_path_and_worktree_validation_is_exact(repository: Path) -> None:
         git_review.validate_relative_path("control\nname.txt")
     with pytest.raises(git_review.GitReviewError):
         await git_review.validate_commit(str(repository), "HEAD")
+
+
+@pytest.mark.asyncio
+async def test_branch_changed_paths_covers_committed_uncommitted_and_untracked(
+    repository: Path, tmp_path: Path
+) -> None:
+    """The three states a branch's work can be in, from one base.
+
+    Diffing the working tree against the **merge base** is what collapses them:
+    `git status` forgets a change the moment it is committed, and `diff ref...HEAD`
+    forgets everything not yet committed. Untracked files are read separately
+    because no diff can see them.
+    """
+    worktree = tmp_path / "feature"
+    git(repository, "worktree", "add", "-b", "feature", str(worktree))
+    (worktree / "committed.txt").write_text("landed\n", encoding="utf-8")
+    git(worktree, "add", "committed.txt")
+    git(worktree, "commit", "-m", "on the branch")
+    (worktree / "tracked.txt").write_text("second\n", encoding="utf-8")
+    (worktree / "untracked.txt").write_text("brand new\n", encoding="utf-8")
+
+    result = await git_review.branch_changed_paths(str(worktree), "main")
+    assert result is not None
+    assert result["ref"] == "main"
+    assert result["base"]
+    assert set(result["paths"]) == {"committed.txt", "tracked.txt", "untracked.txt"}
+    assert result["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_branch_changed_paths_reports_no_base_rather_than_no_changes(
+    tmp_path: Path,
+) -> None:
+    """An empty list would claim a branch identical to its base.
+
+    That is the one answer a reader would act on, so a checkout with nothing to
+    compare against says so by returning nothing at all.
+    """
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    assert await git_review.branch_changed_paths(str(outside), None) is None
+
+
+@pytest.mark.asyncio
+async def test_branch_changed_paths_stops_at_its_limit(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(git_review, "GIT_BRANCH_PATH_LIMIT", 1)
+    git(repository, "checkout", "-b", "wide")
+    for index in range(3):
+        (repository / f"file{index}.txt").write_text("x\n", encoding="utf-8")
+    result = await git_review.branch_changed_paths(str(repository), "main")
+    assert result is not None
+    # Silently returning one path would read as a one-file branch.
+    assert len(result["paths"]) == 1
+    assert result["truncated"] is True

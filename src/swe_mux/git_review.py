@@ -1354,3 +1354,85 @@ async def patch_snapshot(
         truncated=patch_result.too_large,
     )
     return result
+
+
+class GitBranchPaths(TypedDict):
+    """Every repository-relative path a checkout has changed against its base.
+
+    Deliberately not a ``GitChangeSummary``: that truncates at
+    ``GIT_CHANGE_FILE_LIMIT`` because it feeds a file list a human reads, while
+    this feeds a graph query that must either cover the branch or say it did not.
+    """
+
+    ref: str | None
+    base: str | None
+    paths: list[str]
+    truncated: bool
+
+
+#: Paths one branch may contribute to a change map. Far above any branch a person
+#: reviews, and a hard stop before a mass rename ships tens of thousands of seeds
+#: into a bounded subgraph query.
+GIT_BRANCH_PATH_LIMIT = 2000
+
+
+async def branch_changed_paths(
+    worktree_root: str, compare_override: str | None
+) -> GitBranchPaths | None:
+    """What this checkout has changed since it diverged from its comparison base.
+
+    The answer a worktree-per-branch fleet actually wants, and the one neither
+    Tier 0 facts nor ``git status`` can give: facts expire on a time window and on
+    a conversation rollover, and ``status`` forgets a change the moment it is
+    committed. Diffing the working tree against the **merge base** covers
+    committed, staged, and unstaged work in one read, and stays correct when the
+    base advances underneath the branch — diffing against the ref itself would
+    report inbound commits as this branch's deletions.
+
+    Untracked files are read separately because a diff cannot see them, and a file
+    a branch has only just created is exactly the one worth drawing.
+
+    Returns None when no comparison base resolves, never an empty list: "this
+    branch changed nothing" and "we could not tell" are different answers and only
+    one of them should render as a blank map.
+    """
+    resolved = await resolve_comparison_ref(worktree_root, compare_override)
+    ref = resolved["ref"]
+    if not ref:
+        return None
+    ref_result, head_result = await asyncio.gather(
+        _run_git_bytes(worktree_root, "rev-parse", "--verify", f"{ref}^{{commit}}"),
+        _run_git_bytes(worktree_root, "rev-parse", "--verify", "HEAD^{commit}"),
+    )
+    if ref_result.code or head_result.code:
+        return None
+    ref_oid = ref_result.stdout.decode("ascii", "replace").strip()
+    head = head_result.stdout.decode("ascii", "replace").strip()
+    base_result = await _run_git_bytes(worktree_root, "merge-base", ref_oid, head)
+    base = base_result.stdout.decode("ascii", "replace").strip()
+    if base_result.code or not base:
+        log.debug("git_review branch_paths no_merge_base root=%s ref=%s", worktree_root, ref)
+        return None
+    tracked, untracked = await asyncio.gather(
+        _run_git_bytes(
+            worktree_root, "diff", "--no-ext-diff", "--name-only", "-z", "--find-renames", base
+        ),
+        _run_git_bytes(worktree_root, "ls-files", "--others", "--exclude-standard", "-z"),
+    )
+    if tracked.code:
+        return None
+    paths: list[str] = []
+    seen: set[str] = set()
+    truncated = False
+    sources = (tracked.stdout, b"" if untracked.code else untracked.stdout)
+    for chunk in sources:
+        for raw in chunk.decode("utf-8", "replace").split("\0"):
+            value = raw.strip()
+            if not value or value in seen:
+                continue
+            if len(paths) >= GIT_BRANCH_PATH_LIMIT:
+                truncated = True
+                break
+            seen.add(value)
+            paths.append(value)
+    return {"ref": ref, "base": base, "paths": paths, "truncated": truncated}

@@ -1086,6 +1086,35 @@ class CodeGraphStore:
             )
         )
 
+    async def known_files(self, project_id: str, paths: Iterable[str]) -> set[str]:
+        """Which of these paths the graph has actually parsed.
+
+        A seed the graph has never seen is not an error and not a reason to hide
+        it: a file created on a branch exists only in that worktree, and the
+        canonical index is built from the primary checkout. It simply has no
+        structure yet, which is a different statement from "nothing depends on
+        it" and has to be drawn as one.
+        """
+        wanted = [p for p in dict.fromkeys(paths) if p]
+        if not wanted:
+            return set()
+
+        def op() -> set[str]:
+            found: set[str] = set()
+            # Chunked against SQLite's variable limit: a branch-scoped map can seed
+            # far more paths than a single run's writes ever would.
+            for start in range(0, len(wanted), 400):
+                block = wanted[start : start + 400]
+                rows = self._db.execute(
+                    "SELECT path FROM code_graph_files WHERE project_id=? "
+                    f"AND path IN ({','.join('?' * len(block))})",
+                    (project_id, *block),
+                ).fetchall()
+                found.update(str(row["path"]) for row in rows)
+            return found
+
+        return await self._run(op)
+
     async def subgraph(
         self, project_id: str, seed_paths: Iterable[str], *, hops: int = 1
     ) -> dict[str, Any]:
@@ -1098,9 +1127,17 @@ class CodeGraphStore:
         what the cap dropped so the reader is never silently shown a partial map."""
         seeds = [s for s in dict.fromkeys(seed_paths) if s]
 
+        # Seeds are drawn whether or not the graph knows them, and are told apart:
+        # a branch's brand-new file has no node here because the canonical index is
+        # built from the primary checkout, and reading its empty neighbourhood as
+        # "nothing depends on this" would be wrong.
+        indexed = await self.known_files(project_id, seeds)
         nodes: dict[str, dict[str, Any]] = {}
         for seed in seeds:
-            nodes.setdefault(seed, {"path": seed, "role": "seed"})
+            entry: dict[str, Any] = {"path": seed, "role": "seed"}
+            if seed not in indexed:
+                entry["indexed"] = False
+            nodes.setdefault(seed, entry)
 
         # Blast radius: the nearest hop each dependent sits at (a file reached from
         # two seeds keeps the smaller hop), collected fully so the totals are honest

@@ -35,13 +35,26 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .session-copy { display:flex;flex-direction:column;gap:4px;min-width:0 }.session-copy strong { font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.session-copy small { font:9px 'JetBrains Mono';color:#697381;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.row-actions { display:none;position:absolute;right:7px;bottom:6px }.session-row:hover .row-actions { display:block }.row-actions button { border:0;background:#262d35;border-radius:4px;color:#aeb5bf;cursor:pointer }.row-actions button:hover { color:var(--red) }
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
-.main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:auto minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-/* A shell header is [state] [cwd] [voice] [tools]; an agent header omits cwd and gives that
+.main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
+/* A shell header is [name] [cwd] [voice] [tools]; an agent header omits cwd and gives that
    space to voice controls. `grid-auto-flow:column` keeps both variants on one row. Without it
    an item beyond the declared column count auto-places into a second row, which is how the
-   variable-length voice set would silently wrap the pane tools under the status line. */
-.pane-bar { grid-auto-flow:column;grid-template-columns:auto minmax(50px,1fr) auto auto }
-.pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }
+   variable-length voice set would silently wrap the pane tools under the name.
+   The name track is `fit-content(35%)`, NOT `auto`: it sizes to the name while one fits, but a
+   long generated title is clamped at just over a third of the bar. An `auto` track takes its
+   max-content size before the flexible track is expanded, so a wordy title would have eaten the
+   cwd and squeezed the voice chips down to their 50px floor — the controls are what the header
+   is for, and a name is still readable truncated (the whole of it is in the title attribute). */
+.pane-bar { grid-auto-flow:column;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto auto }
+.pane-bar.agent-pane-bar { grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }
+/* The session's name, which is what the tab strip crops first and this header is wide enough to
+   show. `overflow:hidden` is load-bearing twice: it draws the ellipsis, and it is what lets the
+   name's grid track collapse under pressure instead of the tracks holding controls. */
+.pane-identity { min-width:0 }
+.pane-title { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:10px;font-weight:600 }
+/* Shown only for a fault with no other pane-level surface — a stale observation, a non-local
+   boundary, a parser or observation diagnostic. Routine state is deliberately not here. */
+.pane-fault { flex:0 0 auto;color:var(--amber);font-size:10px;cursor:help }
 /* The trailing fade is the group's overflow affordance. It costs nothing when the chips fit
    (it lands on empty track) and turns the chip the scroller cuts in half into a visible
    "there is more, scroll me" instead of something that reads as a clipping bug. */
@@ -97,7 +110,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .messages article pre{margin:0}
 .messages .history-transcript-content{display:grid;gap:8px;overflow-wrap:anywhere}
 .messages .history-transcript-content.clamped{max-height:280px;overflow:hidden;mask-image:linear-gradient(180deg,#000 70%,transparent)}
-@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:calc(45px*var(--ui-scale));grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:auto minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:calc(32px*var(--ui-scale));border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
+@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:calc(45px*var(--ui-scale));grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:fit-content(45%) minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:calc(32px*var(--ui-scale));border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
 
 /* Terminal chrome: visual only. Interaction and layout behavior stay unchanged. */
 :root {
@@ -128,7 +141,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .project-tree { padding:5px 3px }.project-group { margin:0 0 2px;border-radius:0;border-color:transparent }.project-group.active { background:#0c130e;border-color:#263b2b }.project-row { height:calc(31px*var(--ui-scale));border-radius:0;color:#809087 }.project-row:hover { background:#101812;color:#bfd1c3 }.project-group.active>.project-row { color:#aee7b7 }.project-chevron { color:#4f7558 }.project-row strong { font-size:10px;font-weight:500 }.project-row small { color:#52715a }.project-row button { border-radius:0;color:#52715a }.project-row button:hover { background:#18231a;color:#9beaa7 }
 .project-group .session-list { padding:0 3px 4px 13px }.project-group .session-row { height:calc(44px*var(--ui-scale)) }.session-row { margin:0;padding:6px;border-radius:0 }.session-row:hover { background:#101712 }.session-row.active { background:#122018;border-color:#34543b;box-shadow:inset 2px 0 #77d887 }.session-row.active:before { content:'>';position:absolute;left:4px;color:#8ee69a }.session-row.awaiting { background:#211d0c;animation:none }.session-copy { gap:2px }.session-copy strong { color:#c6d4ca;font-size:10px;font-weight:500 }.session-copy small { color:#566b5c;font:8px 'Cascadia Mono',Consolas,monospace }.state-dot { width:6px;height:6px;border-radius:0 }.row-actions button { border:1px solid #304135;border-radius:0;background:#0a0f0b;color:#819087 }.row-actions button:hover { border-color:#7f3e45;color:#ff8991 }
 .project-empty { border-radius:0;color:#57725e }.sidebar-footer { height:calc(41px*var(--ui-scale));padding:5px;border-color:#26372b;background:#080c09 }.sidebar-footer button { border-color:#283a2d;border-radius:1px;background:#0b110d;color:#829187;font-size:9px }.sidebar-footer button:hover { border-color:#507359;background:#111a13;color:#b7d9bd }
-.main-stage,.terminal-pane { background:#070a08 }.pane-grid { gap:1px;background:#34503b }.pane-bar { height:calc(34px*var(--ui-scale));padding:0 6px 0 10px;border-color:#233329;background:#0a0f0b;font-size:9px }.pane-bar>div:first-child:before { content:'$';color:#70cc80;margin-right:1px }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #406449 }.terminal-pane.focused>.pane-bar { background:#0e1710 }.pane-path { color:#4f6856;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools { color:#53675a;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools button { height:calc(21px*var(--ui-scale));border-radius:0;color:#63776a }.pane-tools button:hover { background:#19231b;color:#b9cbbd }.terminal-host { padding:5px 4px 2px 7px }
+.main-stage,.terminal-pane { background:#070a08 }.pane-grid { gap:1px;background:#34503b }.pane-bar { height:calc(34px*var(--ui-scale));padding:0 6px 0 10px;border-color:#233329;background:#0a0f0b;font-size:9px }.pane-bar>div:first-child:before { content:'$';color:#70cc80;margin-right:1px }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #406449 }.terminal-pane.focused>.pane-bar { background:#0e1710 }.pane-title { font:600 9px 'Cascadia Mono',Consolas,monospace }.pane-path { color:#4f6856;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools { color:#53675a;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools button { height:calc(21px*var(--ui-scale));border-radius:0;color:#63776a }.pane-tools button:hover { background:#19231b;color:#b9cbbd }.terminal-host { padding:5px 4px 2px 7px }
 .pane-path.last-known { opacity:.52 }.pane-path.last-known span { margin-right:4px;color:#788078 }.pane-path.remote,.pane-path.boundary-unknown { color:#d2a84f }
 .empty-stage { background-color:#070a08;background-image:linear-gradient(#17241b 1px,transparent 1px),linear-gradient(90deg,#101b14 1px,transparent 1px);background-size:24px 24px }.hero-terminal { width:auto;height:auto;margin-bottom:17px;padding:7px 10px;border:0;border-radius:0;background:transparent;box-shadow:none;color:#76dd87;font:18px 'Cascadia Mono',Consolas,monospace }.empty-stage h1 { margin-bottom:7px;color:#c3d2c7;font:600 17px 'Cascadia Mono',Consolas,monospace;letter-spacing:0 }.empty-stage h1:before { content:'// ' ;color:#4f7757 }.empty-stage p { color:#667a6c;font:10px/1.6 'Cascadia Mono',Consolas,monospace }.empty-stage button,.modal-footer button { height:calc(30px*var(--ui-scale));border-color:#304435;border-radius:1px;background:#0b120d;color:#92a799;font-size:9px }.primary { background:#17331d!important;border-color:#4f8c5a!important;color:#aaf2b5!important;text-shadow:0 0 7px #65d27844 }.primary:hover { background:#204527!important }
 .broadcast-banner { height:calc(30px*var(--ui-scale));border-color:#6f5c23;background:#211c0c;color:#e0c56f;font-size:9px }.broadcast-banner span { color:#96854f }
@@ -944,9 +957,9 @@ body {
 
 /* Phase 4 owned-process inspection and preview leaves. */
 .process-layer{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:72;display:grid;place-items:center;padding:12px;background:#030407cc}
-.process-panel{width:min(1100px,100%);height:min(780px,100%);min-height:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px #0009}
+.process-panel{width:min(1100px,100%);height:min(780px,100%);min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px #0009}
 .process-panel>header{min-height:50px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line)}
-.process-panel>header>div{min-width:0;display:grid;gap:4px}.process-panel>header span{color:var(--green);text-transform:uppercase}.process-panel>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.process-panel button{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}.process-panel button:disabled{opacity:.4;cursor:not-allowed}.process-panel button.confirming{color:var(--red);border-color:var(--red)}.process-panel>header>button{border:0;background:transparent}
+.process-panel>header>div{min-width:0;display:grid;gap:4px}.process-panel>header span{color:var(--green);text-transform:uppercase}.process-panel>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.process-panel button,.process-fleet-view button{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 7px;background:var(--panel2);color:var(--text);font:inherit;cursor:pointer}.process-panel button:disabled,.process-fleet-view button:disabled{opacity:.4;cursor:not-allowed}.process-panel button.confirming,.process-fleet-view button.confirming{color:var(--red);border-color:var(--red)}.process-panel>header>button{border:0;background:transparent}
 .process-panel .process-back{width:max-content;min-height:20px;padding:0;border:0;background:transparent;color:var(--muted)}
 .process-toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px;padding:8px;border-bottom:1px solid var(--line)}.process-toolbar input{min-width:0;border:1px solid var(--line);border-radius:0;padding:0 8px;background:var(--bg);color:var(--text);font:inherit}
 .process-fleet-summary{min-height:38px;display:flex;align-items:center;gap:14px;padding:4px 9px;border-bottom:1px solid var(--line);color:var(--muted);white-space:nowrap;overflow-x:auto}.process-fleet-summary button{margin-left:auto}
@@ -955,6 +968,14 @@ body {
 .process-ended-toggle.active{color:var(--text)}
 .process-scope-select{min-width:0;max-width:180px;height:calc(24px*var(--ui-scale));border:1px solid var(--line);background:var(--bg);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace}
 .process-fleet-list{min-width:0;min-height:0;overflow:auto}.process-session-group{border-bottom:1px solid var(--line)}
+/* The focused terminal's session is pinned to the top of its Project by the row model; the bar
+   and the badge are what say why it is there, since "first" alone reads as arbitrary. */
+.process-session-group.focused{border-left:2px solid var(--accent)}
+.process-session-bar{display:flex;align-items:stretch;border-bottom:1px solid var(--line)}
+.process-session-bar>.process-session-heading{flex:1 1 auto;min-width:0;border-bottom:0!important}
+.process-session-reveal{flex:none;min-height:0!important;padding:0 9px!important;border:0!important;border-left:1px solid var(--line)!important;background:transparent!important;color:var(--muted)!important}
+.process-session-reveal:hover{background:var(--panel2)!important;color:var(--text)!important}
+.process-session-focused{flex:none;padding:0 4px;border:1px solid var(--accent);border-radius:8px;color:var(--accent);font-style:normal;font-size:.72rem;text-transform:uppercase}
 .process-project-group>h2{position:sticky;top:0;z-index:1;margin:0;padding:4px 9px;border-bottom:1px solid var(--line);background:var(--bg);color:var(--green);font:inherit;text-transform:uppercase}
 .process-session-heading{width:100%;min-height:28px!important;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 9px!important;border:0!important;border-bottom:1px solid var(--line)!important;background:var(--panel)!important;text-align:left}.process-session-heading>span{min-width:0;display:flex;align-items:center;gap:7px}.process-session-heading strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.process-session-heading small{color:var(--muted);white-space:nowrap}.process-session-heading:hover{background:var(--panel2)!important}
 .process-error,.process-empty{margin:0;padding:10px;color:var(--red)}.process-empty{color:var(--muted)}
@@ -972,13 +993,26 @@ body {
 .process-fleet-list .process-list{overflow:visible}
 .process-evidence{display:inline-block;margin-left:5px;padding:1px 5px;border:1px solid var(--line);color:var(--muted);font-size:.72rem;font-weight:500;text-transform:uppercase}.process-evidence.active{border-color:var(--green);color:var(--green)}.process-evidence.escaped,.process-evidence.inaccessible{border-color:var(--amber);color:var(--amber)}.process-evidence.suspected_orphan{border-color:#b36cff;color:#c58aff;background:#6c2aa622}.process-evidence.stale,.process-evidence.exited{color:var(--muted)}.process-tree li.evidence-suspected_orphan>.process-row{background:#6c2aa610!important}
 .preview-pane{width:100%;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:calc(34px*var(--ui-scale)) minmax(0,1fr) calc(24px*var(--ui-scale));overflow:hidden;background:var(--panel)}.preview-pane>header{width:100%;min-width:0;max-width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 6px;border-bottom:1px solid var(--line)}.preview-pane>header>div{min-width:0;display:flex;align-items:center;gap:7px}.preview-pane>header span{color:var(--green)}.preview-pane>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preview-pane>header small{color:var(--muted)}.preview-pane nav{min-width:0;max-width:100%;display:flex;align-items:center;gap:3px}.preview-pane button{height:calc(26px*var(--ui-scale));border:0;padding:0 5px;background:transparent;color:var(--muted);font:inherit;cursor:pointer}.preview-pane button:hover{color:var(--text);background:var(--panel2)}.preview-frame{width:100%;min-width:0;max-width:100%;min-height:0;display:flex;justify-content:center;overflow:auto;background:#111}.preview-frame iframe{display:block;max-width:100%;width:100%;height:100%;border:0;background:white}.viewport-mobile .preview-frame iframe{width:min(390px,100%)}.viewport-tablet .preview-frame iframe{width:min(820px,100%)}.preview-pane>footer{width:100%;min-width:0;max-width:100%;display:flex;align-items:center;padding:0 6px;border-top:1px solid var(--line);color:var(--muted)}
-@media(max-width:760px){.process-layer{padding:0}.process-panel{width:100%;height:100%;border:0;box-shadow:none}.process-toolbar{grid-template-columns:minmax(0,1fr) auto}.process-toolbar button:last-child{display:none}.process-session-heading{align-items:flex-start;flex-direction:column}.process-session-heading small{white-space:normal}.process-tree ul{margin-left:5px;padding-left:11px}.process-tree li>ul>li:before{left:-11px;width:7px;top:11px}.process-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.process-panel button{min-height:44px}
+/* Process inspection is one surface inside two shells — the modal dialog and the drawer's
+   Processes tab — so its density follows the surface's own width, not the viewport's. A 300 px
+   drawer column inside a 1920 px window needs exactly the layout the modal already used on a
+   phone, which is what makes the two genuinely the same view rather than two codebases. */
+.process-fleet-view{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);container-type:inline-size}
+@container (max-width:620px){
 /* At column width the row wraps to a second line rather than truncating the numbers: the
    arguments are the first thing that stops fitting and the last thing worth the space. */
 .process-row{min-height:38px!important;flex-wrap:wrap;row-gap:1px}.process-args{display:none}.process-metrics{flex:1 1 100%;margin-left:15px}.process-detail{padding-left:9px}.process-detail dl{grid-template-columns:minmax(0,1fr);gap:0}.process-detail dt{margin-top:6px}
+.process-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.process-tree ul{margin-left:5px;padding-left:11px}.process-tree li>ul>li:before{left:-11px;width:7px;top:11px}
+.process-session-heading{align-items:flex-start;flex-direction:column;gap:2px}.process-session-heading small{white-space:normal}
+/* Wraps rather than scrolls sideways: a summary you have to drag to read is not a summary. */
+.process-fleet-summary{flex-wrap:wrap;gap:3px 11px;white-space:normal;overflow:visible}.process-fleet-summary .process-scope-select{flex:1 1 100%;max-width:none}.process-fleet-summary .process-refresh{margin-left:0}
+.process-toolbar{grid-template-columns:minmax(0,1fr) auto}
 /* The owning process is named by the tree directly below, so at column width the URL and its
    two actions keep the line to themselves. */
-.process-link-row{padding:4px 9px}.process-link-row>strong{flex:1 1 auto}.process-link-row>span{display:none}.process-link-row button{min-height:32px!important;padding:0 10px!important}.preview-pane{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:50;grid-template-rows:auto minmax(0,1fr) calc(28px*var(--ui-scale))}.preview-pane>header{min-height:54px;align-items:flex-start;padding:5px;flex-direction:column}.preview-pane nav{width:100%;overflow-x:auto}.preview-pane button{min-height:44px}.preview-pane>header small{display:none}}
+.process-link-row{padding:4px 9px}.process-link-row>strong{flex:1 1 auto}.process-link-row>span{display:none}.process-link-row button{min-height:32px!important;padding:0 10px!important}
+}
+@media(max-width:760px){.process-layer{padding:0}.process-panel{width:100%;height:100%;border:0;box-shadow:none}.process-panel button,.process-fleet-view button{min-height:44px}.preview-pane{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:50;grid-template-rows:auto minmax(0,1fr) calc(28px*var(--ui-scale))}.preview-pane>header{min-height:54px;align-items:flex-start;padding:5px;flex-direction:column}.preview-pane nav{width:100%;overflow-x:auto}.preview-pane button{min-height:44px}.preview-pane>header small{display:none}}
 .notifications-layer{position:fixed;inset:calc(42px*var(--ui-scale)) 0 0;z-index:74;display:grid;place-items:center;padding:12px;background:#030407cc}
 .notifications-panel{width:min(760px,100%);height:min(620px,100%);min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);border:1px solid var(--line);background:var(--panel);box-shadow:8px 10px #0009}
 .notifications-panel>header{min-height:50px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--line)}
@@ -1221,8 +1255,8 @@ body {
    host, so it must be a positioned box with real geometry - Sigma appends absolutely
    positioned canvases into it and reads its client size for the viewport. A flex child
    with `min-height:0` is what keeps it from collapsing inside the drawer column. */
-.change-map-pane{height:100%;min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden;color:var(--text);font:10px/1.45 'Cascadia Mono',Consolas,monospace}.change-map-header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;border-bottom:1px solid var(--line);background:var(--panel2)}.change-map-header>div{min-width:0;display:flex;flex-direction:column}.change-map-header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}.change-map-popout{flex:none;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}.change-map-controls{flex:none;display:flex;align-items:center;gap:12px;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted)}.change-map-unify,.change-map-hops{display:flex;align-items:center;gap:5px;cursor:pointer}.change-map-hops select{min-height:22px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}.change-map-legend{flex:none;display:flex;flex-wrap:wrap;gap:4px 10px;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px}.change-map-legend-item{display:flex;align-items:center;gap:5px}.change-map-legend-item>b{width:7px;height:7px;border-radius:50%;background:var(--muted)}.change-map-legend-item.role-seed>b,.change-map-group.role-seed h3>b{background:var(--red)}.change-map-legend-item.role-blast>b,.change-map-group.role-blast h3>b{background:var(--amber)}.change-map-legend-item.role-context>b,.change-map-group.role-context h3>b{background:var(--blue)}.change-map-canvas{position:relative;flex:1;min-height:0;background:var(--bg)}.change-map-note,.change-map-off{margin:0;padding:12px;color:var(--muted)}.change-map-off{flex:1;min-height:0;display:flex;flex-direction:column;align-items:flex-start;gap:9px;overflow:auto}.change-map-off p{margin:0;color:var(--text)}.change-map-off .change-map-off-hint{color:var(--muted)}.change-map-list{flex:1;min-height:0;overflow:auto}.change-map-group{border-bottom:1px solid var(--line)}.change-map-group h3{display:flex;align-items:center;gap:6px;margin:0;padding:7px 8px;background:var(--panel2);color:var(--text);font:inherit;font-weight:400;text-transform:uppercase}.change-map-group h3>b{width:7px;height:7px;border-radius:50%}.change-map-group h3>span{margin-left:auto;padding:0 4px;border:1px solid var(--line);color:var(--muted)}.change-map-group>p{margin:0;padding:5px 8px;color:var(--muted);font-size:8px}.change-map-group ul{margin:0;padding:0;list-style:none}.change-map-group li+li{border-top:1px solid var(--line)}.change-map-group li button{display:flex;align-items:center;gap:8px;width:100%;min-height:26px;padding:4px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.change-map-group li button.active{background:color-mix(in srgb,var(--accent) 12%,var(--panel))}.change-map-group li code{flex:1;min-width:0;overflow-wrap:anywhere;font:inherit}.change-map-group li span{flex:none;color:var(--muted)}.change-map-detail{flex:none;display:flex;flex-direction:column;gap:5px;padding:8px;border-top:1px solid var(--line);background:var(--panel2)}.change-map-detail code{overflow-wrap:anywhere;color:var(--text);font:inherit}.change-map-detail>div{display:flex;flex-wrap:wrap;gap:4px 10px;color:var(--muted);font-size:8px}.change-map-detail small{color:var(--muted);font-size:8px}.change-map-detail button{align-self:flex-start;min-height:22px;padding:0 7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}.change-map-detail-actions{font-size:inherit}.change-map-detail .change-map-detail-actions button{align-self:auto}.change-map-detail .change-map-open:disabled{opacity:.5;cursor:not-allowed}.change-map-neighbors{margin:0;padding:0;list-style:none;max-height:34vh;overflow:auto;border:1px solid var(--line);background:var(--panel)}.change-map-neighbors li+li{border-top:1px solid var(--line)}.change-map-detail .change-map-neighbors button{display:flex;align-items:center;gap:7px;width:100%;align-self:stretch;min-height:30px;padding:4px 7px;border:0;background:transparent;text-align:left}.change-map-neighbors b{flex:none;width:7px;height:7px;border-radius:50%;background:currentColor}.change-map-neighbors code{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--text);font:inherit}.change-map-role.role-seed{color:var(--red)}.change-map-role.role-blast{color:var(--amber)}.change-map-role.role-context{color:var(--blue)}.change-map-footer{flex:none;display:flex;flex-direction:column;gap:3px;padding:6px 8px;border-top:1px solid var(--line);color:var(--muted);font-size:8px}.change-map-stage{position:relative;flex:1;min-height:0;display:flex}.change-map-stage .change-map-canvas{flex:1}.change-map-busy{position:absolute;top:8px;left:8px;display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:3px;background:color-mix(in srgb,var(--panel2) 90%,transparent);color:var(--muted);font-size:8px;pointer-events:none}.change-map-spinner{width:9px;height:9px;border:1.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:change-map-spin .7s linear infinite}@keyframes change-map-spin{to{transform:rotate(360deg)}}.change-map-status{flex:none;display:flex;flex-direction:column}.change-map-status:empty{display:none}.change-map-truncated,.change-map-note-inline{padding:4px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px}.change-map-truncated{color:var(--amber)}
-@media(max-width:760px){.change-map-pane{font-size:11px}.change-map-popout,.change-map-hops select,.change-map-detail button{min-height:38px}.change-map-group li button{min-height:38px}.change-map-detail .change-map-neighbors button{min-height:38px}}
+.change-map-pane{height:100%;min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden;color:var(--text);font:10px/1.45 'Cascadia Mono',Consolas,monospace}.change-map-header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;border-bottom:1px solid var(--line);background:var(--panel2)}.change-map-header>div{min-width:0;display:flex;flex-direction:column}.change-map-header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}.change-map-popout{flex:none;min-height:22px;padding:0 6px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}.change-map-controls{flex:none;display:flex;align-items:center;gap:12px;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted)}.change-map-scope,.change-map-hops{display:flex;align-items:center;gap:5px;cursor:pointer}.change-map-scope select,.change-map-hops select{min-height:22px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit}.change-map-scope select{max-width:15ch}.change-map-unindexed{color:var(--amber)!important}.change-map-legend{flex:none;display:flex;flex-wrap:wrap;gap:4px 10px;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px}.change-map-legend-item{display:flex;align-items:center;gap:5px}.change-map-legend-item>b{width:7px;height:7px;border-radius:50%;background:var(--muted)}.change-map-legend-item.role-seed>b,.change-map-group.role-seed h3>b{background:var(--red)}.change-map-legend-item.role-blast>b,.change-map-group.role-blast h3>b{background:var(--amber)}.change-map-legend-item.role-context>b,.change-map-group.role-context h3>b{background:var(--blue)}.change-map-canvas{position:relative;flex:1;min-height:0;background:var(--bg)}.change-map-note,.change-map-off{margin:0;padding:12px;color:var(--muted)}.change-map-off{flex:1;min-height:0;display:flex;flex-direction:column;align-items:flex-start;gap:9px;overflow:auto}.change-map-off p{margin:0;color:var(--text)}.change-map-off .change-map-off-hint{color:var(--muted)}.change-map-list{flex:1;min-height:0;overflow:auto}.change-map-group{border-bottom:1px solid var(--line)}.change-map-group h3{display:flex;align-items:center;gap:6px;margin:0;padding:7px 8px;background:var(--panel2);color:var(--text);font:inherit;font-weight:400;text-transform:uppercase}.change-map-group h3>b{width:7px;height:7px;border-radius:50%}.change-map-group h3>span{margin-left:auto;padding:0 4px;border:1px solid var(--line);color:var(--muted)}.change-map-group>p{margin:0;padding:5px 8px;color:var(--muted);font-size:8px}.change-map-group ul{margin:0;padding:0;list-style:none}.change-map-group li+li{border-top:1px solid var(--line)}.change-map-group li button{display:flex;align-items:center;gap:8px;width:100%;min-height:26px;padding:4px 8px;border:0;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}.change-map-group li button.active{background:color-mix(in srgb,var(--accent) 12%,var(--panel))}.change-map-group li code{flex:1;min-width:0;overflow-wrap:anywhere;font:inherit}.change-map-group li span{flex:none;color:var(--muted)}.change-map-detail{flex:none;display:flex;flex-direction:column;gap:5px;padding:8px;border-top:1px solid var(--line);background:var(--panel2)}.change-map-detail code{overflow-wrap:anywhere;color:var(--text);font:inherit}.change-map-detail>div{display:flex;flex-wrap:wrap;gap:4px 10px;color:var(--muted);font-size:8px}.change-map-detail small{color:var(--muted);font-size:8px}.change-map-detail button{align-self:flex-start;min-height:22px;padding:0 7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;cursor:pointer}.change-map-detail-actions{font-size:inherit}.change-map-detail .change-map-detail-actions button{align-self:auto}.change-map-detail .change-map-open:disabled{opacity:.5;cursor:not-allowed}.change-map-neighbors{margin:0;padding:0;list-style:none;max-height:34vh;overflow:auto;border:1px solid var(--line);background:var(--panel)}.change-map-neighbors li+li{border-top:1px solid var(--line)}.change-map-detail .change-map-neighbors button{display:flex;align-items:center;gap:7px;width:100%;align-self:stretch;min-height:30px;padding:4px 7px;border:0;background:transparent;text-align:left}.change-map-neighbors b{flex:none;width:7px;height:7px;border-radius:50%;background:currentColor}.change-map-neighbors code{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--text);font:inherit}.change-map-role.role-seed{color:var(--red)}.change-map-role.role-blast{color:var(--amber)}.change-map-role.role-context{color:var(--blue)}.change-map-footer{flex:none;display:flex;flex-direction:column;gap:3px;padding:6px 8px;border-top:1px solid var(--line);color:var(--muted);font-size:8px}.change-map-stage{position:relative;flex:1;min-height:0;display:flex}.change-map-stage .change-map-canvas{flex:1}.change-map-busy{position:absolute;top:8px;left:8px;display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--line);border-radius:3px;background:color-mix(in srgb,var(--panel2) 90%,transparent);color:var(--muted);font-size:8px;pointer-events:none}.change-map-spinner{width:9px;height:9px;border:1.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:change-map-spin .7s linear infinite}@keyframes change-map-spin{to{transform:rotate(360deg)}}.change-map-status{flex:none;display:flex;flex-direction:column}.change-map-status:empty{display:none}.change-map-truncated,.change-map-note-inline{padding:4px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:8px}.change-map-truncated{color:var(--amber)}
+@media(max-width:760px){.change-map-pane{font-size:11px}.change-map-popout,.change-map-scope select,.change-map-hops select,.change-map-detail button{min-height:38px}.change-map-group li button{min-height:38px}.change-map-detail .change-map-neighbors button{min-height:38px}}
 .workspace{grid-row:auto;flex:1 1 0;min-height:0}
 .sidebar-heading{height:calc(34px*var(--ui-scale));padding:0 9px 0 11px}
 .sidebar-heading strong{color:var(--text);text-transform:lowercase}
@@ -1379,6 +1413,11 @@ body {
 .settings-content .drawer-tab-visibility label{display:flex;align-items:center;gap:8px;padding:4px 0;color:var(--text)}
 .settings-content .drawer-tab-visibility label>input{grid-column:auto;margin:0}
 .settings-content .drawer-tab-visibility label:has(>input:disabled){color:var(--muted)}
+/* The count and the reset are about the whole set, so they span it rather than
+   sitting in the first column beside a tab. */
+.drawer-tab-visibility>strong,.drawer-tab-visibility>.theme-actions{grid-column:1/-1}
+.drawer-tab-visibility>strong{margin-bottom:3px;color:var(--text)}
+.drawer-tab-visibility>.theme-actions{margin-top:9px}
 .settings-errors{border-bottom:1px solid var(--red)!important;background:color-mix(in srgb,var(--red) 8%,var(--panel))!important}.settings-errors h3,.settings-errors p{color:var(--red)}
 .settings-loading{display:grid;place-content:center;min-height:180px;color:var(--muted)}
 .profile-browser{min-height:390px;display:grid;grid-template-columns:260px minmax(0,1fr);margin-top:12px;border:1px solid var(--line);background:var(--bg)}
@@ -1420,7 +1459,32 @@ body {
 .note-chord-list small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .note-chord-list select{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 6px;background:var(--panel);color:var(--text);font:inherit}
 .note-chord kbd{font:inherit;color:var(--accent)}.note-chord em{margin-left:6px;font-style:normal;color:var(--muted)}
-@media(max-width:760px){.settings-panel>header{flex-wrap:wrap;gap:8px}.note-chord-list article{grid-template-columns:minmax(0,1fr) 150px;grid-template-areas:"chord control" "command control";gap:2px 9px}.note-chord-list .note-chord{grid-area:chord}.note-chord-list small{grid-area:command}.note-chord-list select{grid-area:control}.note-chord em{display:block;margin-left:0}.settings-panel>header>div.settings-search{flex:1 0 100%;order:3;max-width:none;margin-left:0}.settings-panel>header .settings-search>input{min-height:38px}.settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}.settings-panel>header .settings-search-results>button{min-height:46px}.settings-body{grid-template-columns:1fr!important;grid-template-rows:auto minmax(0,1fr)}.settings-tabs{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:4px}.settings-tabs button{flex:none;min-height:38px;padding-left:8px;border-left:0!important;border-bottom:2px solid transparent!important}.settings-tabs button.active{border-left:0!important;border-bottom-color:var(--green)!important}.settings-tab-group>span{display:none}.settings-section-rail{flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:5px 11px}.settings-section-rail button{flex:none;min-height:34px;white-space:nowrap}.settings-content label:not(.check),.settings-content label.check,.theme-field{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}.profile-browser{grid-template-columns:1fr;min-height:0}.profile-index{border-right:0;border-bottom:1px solid var(--line)}.profile-editor{padding:8px}.settings-content>section{padding:11px}.keybinding-heading{display:block}.keybinding-heading button{margin-top:7px}.keybinding-group article{grid-template-columns:minmax(0,1fr) 112px 36px}.keybinding-command small{display:none}.keybinding-capture{grid-template-columns:1fr auto}.keybinding-capture>span{grid-column:1/-1}}
+@media(max-width:760px){.settings-panel>header{flex-wrap:nowrap;gap:8px}.note-chord-list article{grid-template-columns:minmax(0,1fr) 150px;grid-template-areas:"chord control" "command control";gap:2px 9px}.note-chord-list .note-chord{grid-area:chord}.note-chord-list small{grid-area:command}.note-chord-list select{grid-area:control}.note-chord em{display:block;margin-left:0}.settings-panel>header>div.settings-search{flex:1 1 84px;min-width:0;max-width:none;margin-left:auto}.settings-panel>header .settings-search>input{min-height:36px;padding:5px 7px}.settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}.settings-panel>header .settings-search-results>button{min-height:46px}.settings-body{position:relative;z-index:1;grid-template-columns:minmax(0,1fr)!important;grid-template-rows:minmax(0,1fr)}.settings-tabs button{min-height:40px}.settings-section-rail{flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:5px 11px}.settings-section-rail button{flex:none;min-height:34px;white-space:nowrap}.settings-content label:not(.check),.settings-content label.check,.theme-field{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}.profile-browser{grid-template-columns:1fr;min-height:0}.profile-index{border-right:0;border-bottom:1px solid var(--line)}.profile-editor{padding:8px}.settings-content>section{padding:11px}.keybinding-heading{display:block}.keybinding-heading button{margin-top:7px}.keybinding-group article{grid-template-columns:minmax(0,1fr) 112px 36px}.keybinding-command small{display:none}.keybinding-capture{grid-template-columns:1fr auto}.keybinding-capture>span{grid-column:1/-1}}
+/* Settings' section list on a narrow layout.
+   It is the desktop column, moved rather than redrawn: same order, same groups, same
+   active mark. What changes is that it slides in over the content instead of standing
+   beside it, mirroring the workspace's own left sidebar — the hamburger and the header
+   title open it, the scrim and a swipe close it, and back closes it before it closes
+   Settings (`settings-nav` in the dismiss stack).
+   Closed it is `visibility:hidden`, not `aria-hidden`: that takes its buttons out of the
+   focus order and the accessibility tree without hiding elements that are still
+   focusable, and it still animates because the transform is what moves. */
+@media(max-width:760px){
+  .settings-tabs-drawer{position:absolute;left:0;top:0;bottom:0;z-index:6;width:min(258px,78%);padding:6px 6px 14px;border-right:1px solid var(--line);background:var(--bg);box-shadow:8px 0 0 #0008;transform:translateX(-101%);visibility:hidden;transition:transform .15s ease,visibility 0s linear .15s}
+  .settings-tabs-drawer.open{transform:translateX(0);visibility:visible;transition:transform .15s ease,visibility 0s}
+  .settings-nav-scrim{position:absolute;inset:0;z-index:5;border:0!important;background:#020403aa;cursor:pointer}
+  /* Both openers. The hamburger is the affordance; the title is where the eye already
+     is, and on a phone that is the tap most people make. */
+  .settings-panel>header>.settings-nav-trigger{flex:none;width:auto;min-height:34px;display:grid;place-items:center;padding:0 4px;margin-left:-4px;color:var(--text)}
+  .settings-panel>header>.settings-nav-trigger[aria-expanded=true]{color:var(--accent)}
+  .settings-panel>header .settings-heading{min-width:0;flex:0 1 auto}
+  .settings-panel>header .settings-heading h2{min-width:0}
+  .settings-panel>header .settings-heading-trigger{max-width:100%;min-height:0;display:flex;align-items:center;gap:5px;padding:0;color:var(--text);text-align:left}
+  .settings-panel>header .settings-heading-trigger>i{flex:none;font-style:normal;color:var(--muted)}
+  .settings-panel>header .settings-heading-trigger[aria-expanded=true]>i{transform:rotate(180deg);color:var(--accent)}
+  .settings-panel>header>.settings-close{flex:none;min-height:34px;padding:0 4px;margin-right:-4px}
+}
+@media(prefers-reduced-motion:reduce){.settings-tabs-drawer{transition:none}}
 
 /* Usage views derive overview, time-series, and model aggregates from daily cache rows. */
 .usage-view-tabs{display:flex;gap:3px;margin-bottom:7px;border-bottom:1px solid var(--line)}.usage-view-tabs button{border:0;border-bottom:2px solid transparent;background:transparent}.usage-view-tabs button.active{border-bottom-color:var(--accent);color:var(--text)}.usage-view-tabs button.active:before{content:'> ';color:var(--accent)}
@@ -1561,6 +1625,15 @@ body {
 /* Keep a preview inside its mobile tab instead of floating fixed over the rails. */
 .mobile-unified-active>.preview-pane{position:static;inset:auto;z-index:auto}
 .transcript-lineage{flex:none;max-height:150px;overflow:auto;border-bottom:1px solid var(--line);padding:7px 16px;display:flex;align-items:center;gap:8px}.transcript-lineage h4{flex:none;margin:0;color:var(--muted);font:inherit}.transcript-lineage article{min-width:220px;display:grid;gap:2px;padding:7px 9px;border-left:2px solid var(--accent);background:var(--panel2)}.transcript-lineage article span,.transcript-lineage article small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+/* A lineage row names the other conversation and, for a branch, where it was cut.
+   The name is a button because the browser can open it (`viewById`); a row whose
+   other end has been deleted keeps the edge but loses the affordance, since a dead
+   link reads as broken lineage rather than as a removed row. */
+.transcript-lineage article.lineage-missing{border-left-color:var(--muted);opacity:.75}
+.transcript-lineage .lineage-open{justify-self:start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}
+.transcript-lineage .lineage-open:hover{color:var(--accent)}
+.transcript-lineage .lineage-live{color:var(--accent);text-decoration:none}
+.transcript-lineage .lineage-cut{font-style:italic}
 .control-plane-modal-layer{z-index:90}.control-plane-modal{width:min(820px,calc(100vw - 24px));max-height:calc(100dvh - 24px);display:grid;grid-template-rows:auto minmax(0,1fr) auto}.control-plane-modal-body{min-height:0;overflow:auto;padding:14px 18px;display:grid;gap:12px}.control-plane-modal-body p{margin:0;color:var(--muted)}.control-plane-modal-body label{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);align-items:start;gap:12px;color:var(--muted)}.control-plane-modal-body select,.control-plane-modal-body textarea{width:100%;border:1px solid var(--line);border-radius:0;background:var(--bg);color:var(--text);font:inherit;padding:7px;resize:vertical}.control-plane-modal-body textarea{min-height:72px}.control-plane-modal-body .review-prompt,.control-plane-modal-body .handoff-export{min-height:260px;white-space:pre-wrap}.control-plane-modal-body .handoff-export{min-height:440px}.modal-warning{color:var(--red)!important}
 .batch-run-picker{max-height:300px;overflow:auto;margin:8px;border:1px solid var(--line);background:var(--bg)}.automation-panel .batch-run-picker label{grid-template-columns:22px minmax(0,1fr);align-items:center;border-bottom:1px solid var(--line);cursor:pointer}.batch-run-picker label:last-child{border-bottom:0}.batch-run-picker label:hover{background:var(--panel2)}.batch-run-picker label>span{display:grid;gap:2px;color:var(--text)}.batch-run-picker label small{color:var(--muted)}
 @media(max-width:700px){.control-plane-modal-body label{grid-template-columns:1fr}.control-plane-modal-body .review-prompt,.control-plane-modal-body .handoff-export{min-height:220px}}
@@ -1699,21 +1772,31 @@ body {
 .mobile-terminal-draft>footer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace}
 .mobile-terminal-draft>footer button{min-width:68px;height:34px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:10px 'Cascadia Mono',Consolas,monospace;cursor:pointer}.mobile-terminal-draft>footer button:disabled{opacity:.4;cursor:not-allowed}
 .terminal-action-rail .rail-config{margin-left:auto;min-width:30px!important;padding:0 6px;font-size:12px}
-.commandrail-settings .rail-intro{margin:0 0 8px}
-.commandrail-settings .rail-intro b{color:var(--text);font-weight:600}
+/* Dismissible first-open orientation. Persistent copy lives in tooltips and the
+   scope note instead of a standing paragraph. */
+.commandrail-settings .rail-intro-callout{margin:0 0 10px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--blue) 45%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--panel2))}
+.commandrail-settings .rail-intro-callout strong{display:block;margin-bottom:4px;color:var(--text);font-size:10px}
+.commandrail-settings .rail-intro-callout ul{margin:0 0 6px;padding-left:16px;color:var(--muted);font-size:9px;line-height:1.5}
+.commandrail-settings .rail-intro-callout b{color:var(--text);font-weight:600}
+.commandrail-settings .rail-intro-callout button{height:calc(22px*var(--ui-scale));padding:0 10px;border:1px solid var(--line);background:transparent;color:var(--text);font-size:9px;cursor:pointer}
 .commandrail-settings .rail-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:6px 0}
-.commandrail-settings .rail-scope{display:flex;align-items:center;gap:8px;margin:0;padding:0;grid-template-columns:none}
-.commandrail-settings .rail-scope select{flex:0 0 auto;min-width:200px}
+.commandrail-settings .rail-toolbar>button{height:calc(24px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;white-space:nowrap;cursor:pointer}
+.commandrail-settings .rail-toolbar>button:disabled{opacity:.4;cursor:not-allowed}
+.commandrail-settings .rail-toolbar-gap{flex:1 1 auto}
+.commandrail-settings .rail-scope,.commandrail-settings .rail-preview-as{display:flex;align-items:center;gap:6px;margin:0;padding:0;grid-template-columns:none}
+.commandrail-settings .rail-scope select{flex:0 0 auto;min-width:170px}
+.commandrail-settings .rail-preview-as{color:var(--muted);font-size:9px}
 .commandrail-settings .rail-scope-note{margin:2px 0 0;color:var(--muted);font-size:9px}
+/* Origin tags: which scope owns a row or an action, shown only in project scope.
+   Green marks project-owned; shared stays neutral. */
+.commandrail-settings .rail-origin,.rail-inline-editor .rail-origin{flex:none;padding:1px 5px;border:1px solid var(--line);color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;font-style:normal;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.commandrail-settings .rail-origin.project,.rail-inline-editor .rail-origin.project{border-color:color-mix(in srgb,var(--green) 55%,var(--line));color:var(--green)}
 /* --- layout editor -------------------------------------------------------
-   Two device columns side by side where there is room, one plus a switch where
-   there is not. Each column holds the two surfaces (strip, panel), each surface
-   holds its rows, and each row holds draggable chips. */
-.commandrail-settings .rail-devices{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:8px 0}
-.commandrail-settings .rail-devices.two-up{grid-template-columns:repeat(2,minmax(0,1fr))}
-.commandrail-settings .rail-device{min-width:0;display:flex;flex-direction:column;gap:8px}
-.commandrail-settings .rail-device-name{margin:0;color:var(--text);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
-.commandrail-settings .rail-device-switch{display:flex;gap:3px;margin-left:auto}
+   One device at a time (the toolbar switch picks it; it defaults to the device
+   this browser is). The device holds the two surfaces (Rail, Drawer), each
+   surface its rows, and each row its draggable chips. */
+.commandrail-settings .rail-device{min-width:0;display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.commandrail-settings .rail-device-switch{display:flex;gap:3px}
 .commandrail-settings .rail-device-switch button{min-width:64px;height:calc(24px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
 .commandrail-settings .rail-device-switch button.on{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
 .commandrail-settings .rail-surface{min-width:0;display:flex;flex-direction:column;gap:4px;padding:6px 7px;border:1px solid var(--line);background:var(--panel2)}
@@ -1729,41 +1812,51 @@ body {
 .commandrail-settings .rail-row-head button:disabled{opacity:.35;cursor:not-allowed}
 /* The drop target. It keeps a floor height so an emptied row stays aimable, and
    `touch-action:pan-y` lets a finger scroll the settings pane off a chip while a
-   held press still becomes a drag (see the hold activation in RailEditor). */
+   held press still becomes a drag (see the hold activation in railDrag.ts).
+   Chip rules are shared with the in-place rail editor, which renders the same
+   chips inside a terminal pane. */
 .commandrail-settings .rail-chips{min-height:calc(30px*var(--ui-scale));display:flex;flex-wrap:wrap;align-content:flex-start;gap:3px;padding:3px;background:var(--panel)}
-.commandrail-settings .rail-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:0 2px 0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;line-height:calc(24px*var(--ui-scale));cursor:grab;user-select:none;touch-action:pan-y}
-.commandrail-settings .rail-chip:focus-visible{outline:1px solid var(--blue);outline-offset:-2px}
-.commandrail-settings .rail-chip.dragging{opacity:.32}
-.commandrail-settings .rail-chip.missing{border-style:dashed;color:var(--muted)}
-.commandrail-settings .rail-chip-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.commandrail-settings .rail-chip-remove{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:11px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
-@media(hover:hover){.commandrail-settings .rail-chip-remove:hover{color:var(--red,#f07178)}}
-.commandrail-settings .rail-chips-empty{align-self:center;padding:0 6px;color:var(--muted);font-size:9px;pointer-events:none}
+.commandrail-settings .rail-chip,.rail-inline-editor .rail-chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;padding:0 2px 0 7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;line-height:calc(24px*var(--ui-scale));cursor:grab;user-select:none;touch-action:pan-y}
+.commandrail-settings .rail-chip:focus-visible,.rail-inline-editor .rail-chip:focus-visible{outline:1px solid var(--blue);outline-offset:-2px}
+.commandrail-settings .rail-chip.dragging,.rail-inline-editor .rail-chip.dragging{opacity:.32}
+.commandrail-settings .rail-chip.missing,.rail-inline-editor .rail-chip.missing{border-style:dashed;color:var(--muted)}
+/* Dimmed by the backend: still configurable here, just not shown to that session type. */
+.commandrail-settings .rail-chip.filtered,.rail-inline-editor .rail-chip.filtered{opacity:.42}
+.commandrail-settings .rail-chip-label,.rail-inline-editor .rail-chip-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commandrail-settings .rail-chip-remove,.rail-inline-editor .rail-chip-remove{min-width:calc(18px*var(--ui-scale));height:calc(18px*var(--ui-scale));padding:0;border:0;background:transparent;color:var(--muted);font:11px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+@media(hover:hover){.commandrail-settings .rail-chip-remove:hover,.rail-inline-editor .rail-chip-remove:hover{color:var(--red,#f07178)}}
+.commandrail-settings .rail-chips-empty,.rail-inline-editor .rail-chips-empty{align-self:center;padding:0 6px;color:var(--muted);font-size:9px;pointer-events:none}
 /* --- catalog -------------------------------------------------------------
-   Name and metadata first, then the four placement badges (desktop/mobile x
-   rail/panel), then the backend filters. The badges are the index that keeps two
-   independent layouts manageable: they say where a command actually is. */
+   The collapsed index of everything placeable: name, what it injects, and a
+   plain-words placement summary. Expanding a row exposes the actual controls -
+   labelled placement checkboxes and one named checkbox per harness - instead of
+   the abbreviated badge code they replaced. */
 .commandrail-settings .rail-catalog{margin-top:12px;padding-top:8px;border-top:1px solid var(--line)}
-.commandrail-settings .rail-catalog h4{margin:0;color:var(--text);font-size:10px}
+.commandrail-settings .rail-catalog>summary,.commandrail-settings .rail-add>summary{cursor:pointer;color:var(--text)}
+.commandrail-settings .rail-catalog>summary small,.commandrail-settings .rail-add>summary small{margin-left:8px;color:var(--muted);font-size:9px;font-weight:400}
+.commandrail-settings .rail-catalog-tools{margin:8px 0 0}
+.commandrail-settings .rail-catalog-tools input{width:min(260px,100%)}
 .commandrail-settings .rail-catalog-list{display:flex;flex-direction:column;gap:3px;margin:8px 0}
-.commandrail-settings .rail-catalog-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:4px 10px;padding:4px 8px;border:1px solid var(--line);background:var(--panel2);cursor:grab;user-select:none;touch-action:pan-y}
-.commandrail-settings .rail-catalog-row.off{opacity:.55}
+.commandrail-settings .rail-catalog-row{border:1px solid var(--line);background:var(--panel2)}
+.commandrail-settings .rail-catalog-row.off .rail-catalog-head{opacity:.62}
 .commandrail-settings .rail-catalog-row.dragging{opacity:.32}
+.commandrail-settings .rail-catalog-head{display:grid;grid-template-columns:minmax(0,1fr) auto 14px;align-items:center;gap:2px 10px;padding:4px 8px;cursor:grab;user-select:none;touch-action:pan-y}
+.commandrail-settings .rail-catalog-head:focus-visible{outline:1px solid var(--blue);outline-offset:-2px}
 .commandrail-settings .rail-id{min-width:0;display:flex;flex-direction:column;gap:1px}
-.commandrail-settings .rail-name{color:var(--text);overflow-wrap:anywhere}
+.commandrail-settings .rail-name{display:flex;align-items:center;gap:6px;color:var(--text);overflow-wrap:anywhere}
 .commandrail-settings .rail-meta{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}
-.commandrail-settings .rail-where,.commandrail-settings .rail-tags{display:flex;align-items:center;gap:3px}
-.commandrail-settings .rail-where button,.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{min-width:28px;height:calc(22px*var(--ui-scale));padding:0 5px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:9px;cursor:pointer}
-/* Two accents, two meanings: blue says "placed here", green says "this backend is
-   allowed to see it". Sharing one colour made the row read as one long toggle set. */
-.commandrail-settings .rail-where button.on{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
-.commandrail-settings .rail-where button sup{margin-left:1px;font-size:7px}
-.commandrail-settings .rail-tags button.on{border-color:var(--green);color:var(--green)}
-.commandrail-settings .rail-tags button:disabled,.commandrail-settings .rail-order button:disabled{opacity:.35;cursor:not-allowed}
-.commandrail-settings .rail-order{display:flex;gap:3px}
+.commandrail-settings .rail-placement-summary{color:var(--blue);font-size:9px;text-align:right;white-space:nowrap}
+.commandrail-settings .rail-placement-summary.off{color:var(--muted)}
+.commandrail-settings .rail-expand{color:var(--muted);font-size:9px;text-align:center}
+.commandrail-settings .rail-catalog-detail{display:flex;flex-wrap:wrap;gap:8px 20px;padding:6px 8px 8px;border-top:1px solid color-mix(in srgb,var(--line) 65%,transparent)}
+.commandrail-settings .rail-detail-group{min-width:0;margin:0;padding:0;border:0;display:flex;flex-direction:column;gap:3px}
+.commandrail-settings .rail-detail-group legend{margin:0 0 2px;padding:0;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.05em}
+.commandrail-settings .rail-detail-group label.check{display:flex;flex-direction:row;align-items:center;gap:6px;margin:0;padding:0;color:var(--text);font-size:9px;grid-template-columns:none}
+.commandrail-settings .rail-detail-edit label{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;font-size:9px;grid-template-columns:none}
+.commandrail-settings .rail-detail-edit input:not([type="checkbox"]){min-width:calc(120px*var(--ui-scale))}
+.commandrail-settings .rail-detail-edit button.rail-del{align-self:flex-start;margin-top:2px;height:calc(22px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;font-size:9px;cursor:pointer}
 .commandrail-settings .rail-del{color:var(--red,#f07178)}
 .commandrail-settings .rail-add{margin:10px 0 12px;padding:8px 0 10px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-.commandrail-settings .rail-add>summary{cursor:pointer;color:var(--text)}
 .commandrail-settings .rail-add-form{display:flex;flex-wrap:wrap;align-items:end;gap:8px;margin-top:8px}
 /* The settings-form label grid (165px label column) is wrong for this inline row: each field
    stacks its own caption over its control and sizes to content. */
@@ -1773,29 +1866,56 @@ body {
 .commandrail-settings .rail-add-form input:not([type="checkbox"]),.commandrail-settings .rail-add-form select{min-width:calc(130px*var(--ui-scale))}
 .commandrail-settings .rail-add-note{margin:8px 0 0;color:var(--muted);font-size:9px}
 .commandrail-settings .rail-add-note b{color:var(--text);font-weight:600}
-/* Phone: one device column at a time (the switch in the toolbar picks it), and
-   every drag/tap target grows to a real touch size. The catalog keeps two rows
-   per command - name and delete on the first, badges and filters on the second -
-   with each cell placed explicitly. Spanning cells across `1/-1` and letting the
-   rest auto-place is what once produced four full-width rows per item: grid
-   auto-placement never backtracks, so a full-width item in row 1 pushed the
-   remaining controls onto rows of their own. */
+/* Phone: every drag/tap target grows to a real touch size. The catalog row keeps
+   its one-line head; the placement summary drops under the name instead of
+   competing with it for width. */
 @media(max-width:760px){
-  .commandrail-settings .rail-devices{gap:8px}
-  .commandrail-settings .rail-catalog-row{grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px;row-gap:4px;padding:5px 8px}
+  .commandrail-settings .rail-catalog-head{grid-template-columns:minmax(0,1fr) 14px;column-gap:8px;row-gap:2px;padding:6px 8px}
   .commandrail-settings .rail-id{grid-area:1/1}
-  .commandrail-settings .rail-order{grid-area:1/2}
-  /* nowrap, not wrap: four placement badges plus the backend filters fit the width,
-     and wrapping is what would silently reintroduce a third row. */
-  .commandrail-settings .rail-where{grid-area:2/1;flex-wrap:nowrap}
-  .commandrail-settings .rail-tags{grid-area:2/2;flex-wrap:nowrap;justify-content:flex-end}
-  .commandrail-settings .rail-where button,.commandrail-settings .rail-tags button,.commandrail-settings .rail-order button{height:calc(30px*var(--ui-scale));min-width:30px}
-  .commandrail-settings .rail-chip{line-height:calc(32px*var(--ui-scale))}
-  .commandrail-settings .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
-  .commandrail-settings .rail-row-head button,.commandrail-settings .rail-surface-head button{height:calc(30px*var(--ui-scale))}
+  .commandrail-settings .rail-expand{grid-area:1/2}
+  .commandrail-settings .rail-placement-summary{grid-area:2/1/2/3;text-align:left;white-space:normal}
+  .commandrail-settings .rail-chip,.rail-inline-editor .rail-chip{line-height:calc(32px*var(--ui-scale))}
+  .commandrail-settings .rail-chip-remove,.rail-inline-editor .rail-chip-remove{min-width:calc(26px*var(--ui-scale));height:calc(26px*var(--ui-scale))}
+  .commandrail-settings .rail-row-head button,.commandrail-settings .rail-surface-head button,.commandrail-settings .rail-toolbar>button{height:calc(30px*var(--ui-scale))}
   .commandrail-settings .rail-add-form input:not([type="checkbox"]),.commandrail-settings .rail-add-form select{min-width:0;width:100%}
   .commandrail-settings .rail-add-form label{flex:1 1 140px}
+  .commandrail-settings .rail-detail-group label.check{min-height:calc(30px*var(--ui-scale))}
 }
+/* --- in-place rail editor (RailInlineEditor, inside a terminal pane) --------
+   The gear flips the rail area into this block. It owns its own vertical scroll
+   with a hard ceiling so a tall picker shrinks the terminal only so far, and
+   its rows wrap instead of scrolling: edit mode is for seeing everything. */
+.terminal-action-rail.rail-editing{display:block}
+.rail-inline-editor{display:flex;flex-direction:column;gap:5px;max-height:min(46dvh,340px);overflow-y:auto;padding:6px 8px;background:var(--panel)}
+.rail-inline-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.rail-inline-head strong{color:var(--text);font-size:10px}
+.rail-inline-head .rail-scope-note{flex:1 1 auto;min-width:0;margin:0;color:var(--muted);font-size:9px}
+.terminal-action-rail .rail-inline-head button{min-width:0;height:calc(24px*var(--ui-scale));padding:0 10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-size:9px;cursor:pointer}
+.terminal-action-rail .rail-inline-head button.primary{border-color:var(--green);color:var(--green)}
+.rail-inline-row{display:flex;align-items:stretch;gap:4px}
+.rail-inline-row>.rail-origin{align-self:center}
+.rail-inline-row .rail-chips{flex:1 1 auto;min-width:0;min-height:calc(32px*var(--ui-scale));display:flex;flex-wrap:wrap;align-content:flex-start;gap:3px;padding:3px;background:var(--panel2);border:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.terminal-action-rail button.rail-inline-add{flex:none;min-width:30px;height:auto;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:12px;cursor:pointer}
+.terminal-action-rail button.rail-inline-add:hover{border-color:var(--accent);color:var(--text)}
+.rail-inline-picker{border:1px solid var(--line);background:var(--panel2)}
+.rail-inline-picker-head{display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid var(--line)}
+.rail-inline-picker-head input{flex:1 1 auto;min-width:0;min-height:calc(24px*var(--ui-scale));padding:0 6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace}
+.terminal-action-rail .rail-inline-picker-head button{min-width:0;height:calc(24px*var(--ui-scale));padding:0 8px;border:1px solid var(--line);background:transparent;color:var(--text);font-size:9px;cursor:pointer}
+.rail-inline-picker-list{max-height:190px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:3px;padding:5px 6px}
+.terminal-action-rail .rail-inline-picker-list button{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0;height:auto;padding:4px 6px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:9px;text-align:left;cursor:pointer}
+.terminal-action-rail .rail-inline-picker-list button:hover{border-color:var(--accent)}
+.terminal-action-rail .rail-inline-picker-list button.filtered{opacity:.5}
+.rail-inline-picker-list button small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:8px}
+.rail-inline-picker-list .rail-add-note{grid-column:1/-1;margin:0;padding:4px;color:var(--muted);font-size:9px}
+.rail-inline-hint{margin:0;color:var(--muted);font-size:8px}
+/* --- pin toggles (Skills and Prompt templates in the Actions tab) ----------- */
+.actions-tab button.skill-pin{flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:calc(24px*var(--ui-scale));padding:2px 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:8px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
+.actions-tab button.skill-pin.on{border-color:var(--green);color:var(--green)}
+@media(hover:hover){.actions-tab button.skill-pin:hover{border-color:var(--accent);color:var(--text)}}
+.drawer-skill-row{display:flex;align-items:stretch;gap:4px}
+.drawer-skill-row>button:first-child{flex:1 1 auto;min-width:0}
+.clipboard-entry.has-pin{display:flex;align-items:stretch;gap:4px;padding-right:6px}
+.clipboard-entry.has-pin>.clipboard-entry-body{flex:1 1 auto;min-width:0}
 .terminal-action-rail button{min-width:calc(74px*var(--ui-scale));height:calc(27px*var(--ui-scale));border:1px solid var(--line);background:var(--panel2);color:var(--text);font:9px 'Cascadia Mono',Consolas,monospace;cursor:pointer}
 /* Hover styling is gated to real pointers: touch browsers keep :hover on the last
    tapped element until something else is tapped, which made a rail button look
@@ -1974,17 +2094,18 @@ body {
      definite remaining height after the in-flow session/voice headers. */
   .mobile-unified-active{height:100%;min-height:0;overflow:hidden}
   .mobile-unified-active>.terminal-pane{display:flex!important;flex-direction:column;height:100%;min-height:0;overflow:hidden}
-  /* The session header is one row on a phone: status at the left, the voice group in the
-     middle, note/proc/⋯ at the right. The cwd column is dropped here — it is the pane's
-     least useful field on a narrow screen, and as an extra item it was silently wrapping
+  /* The session header is one row on a phone: the session name at the left, the voice group in
+     the middle, queue/transcript/⋯ at the right. The cwd column is dropped here — it is the
+     pane's least useful field on a narrow screen, and as an extra item it was silently wrapping
      the tools onto a second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy
      `.pane-path{display:none}` mobile rule (0,1,0), which is why the path showed at all,
      so hide it from the bar itself. The voice group takes the flexible column and scrolls
-     inside itself; status is capped so it cannot squeeze the group out of the bar. */
+     inside itself; the name track is capped so it cannot squeeze the group out of the bar. */
   .pane-bar>.pane-path{display:none}
-  .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:auto minmax(0,1fr) auto;padding:5px 6px 1px 10px}
+  .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:fit-content(45%) minmax(0,1fr) auto;padding:5px 6px 1px 10px}
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
-  .mobile-unified-active>.terminal-pane>.pane-bar .pane-state{max-width:min(28vw,120px)}
+  .mobile-unified-active>.terminal-pane>.pane-bar .pane-state,
+  .mobile-unified-active>.terminal-pane>.pane-bar .pane-title{max-width:min(45vw,180px)}
   .mobile-unified-active>.terminal-pane>.voice-overlay-anchor{flex:0 0 auto}
   /* Touch metrics for the draft row. 16px text is deliberate: anything smaller makes
      mobile Safari/Chrome zoom the viewport when the textarea takes focus, which on this
@@ -2413,40 +2534,16 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 /* A note is open in exactly one place, so the tab it left keeps its slot and says where it
    went rather than quietly rendering a second, conflicting editor. */
 .workspace-leaf-placeholder.note-in-drawer span{max-width:44ch}
-/* Processes tab: the watch half of process inspection. Rollups per session plus the loopback
-   servers they are running; trees, evidence, and terminate stay in the modal inspector, which
-   the footer links to. Reads the sample App already polls, so an open panel costs nothing. */
+/* Processes tab: the drawer shell around the shared process-inspection surface. The surface
+   itself is `.process-fleet-view` and is styled with the modal's rules — the tab is the same
+   view at a different width, not a reduced one — so what is left here is the column frame and
+   the escape hatch to the full-width dialog. */
 .processes-tab{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.processes-filters{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:6px 9px;border-bottom:1px solid var(--line)}
-.processes-filters select{min-width:0;height:calc(30px*var(--ui-scale));padding:0 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
-.processes-filters select:focus{outline:0;border-color:var(--green)}
-.processes-filters button{min-height:calc(30px*var(--ui-scale));padding:0 9px;border:1px solid var(--line);background:var(--panel2);color:var(--muted);font:inherit;cursor:pointer}
-.processes-filters button:hover{color:var(--text)}
-.processes-totals{flex:none;margin:0;padding:5px 9px;border-bottom:1px solid var(--line);background:var(--panel2);color:var(--muted);font-size:8px}
-.processes-body{flex:1 1 auto;min-height:0;overflow:auto}
-.processes-empty{padding:14px 10px;color:var(--muted);font-size:9px;text-align:center}
-.process-watch-row{border-bottom:1px solid var(--line)}
-/* The focused terminal's row is pinned first by the model; the bar is what says why it is
-   there, since "first" alone reads as arbitrary once the list is more than a few rows. */
-.process-watch-row.focused{border-left:2px solid var(--accent)}
-.process-watch-heading{width:100%;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;border:0;background:transparent;color:var(--text);padding:7px 9px;text-align:left;cursor:pointer}
-.process-watch-heading:hover,.process-watch-heading:focus-visible{background:var(--panel2)}
-.process-watch-heading>span{min-width:0;display:flex;align-items:center;gap:6px;max-width:100%}
-.process-watch-heading strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:500}
-.process-watch-heading small{color:var(--muted);font-size:8px}
-.process-watch-project{font-style:normal;margin-right:6px;padding:0 4px;border:1px solid var(--line);border-radius:8px}
-.process-watch-server{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:6px;padding:0 9px 6px 9px}
-.process-watch-server>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--green);font-size:9px}
-.process-watch-server button{min-height:24px;padding:0 7px;border:1px solid var(--line);background:transparent;color:var(--muted);font:inherit;font-size:8px;cursor:pointer}
-.process-watch-server button:hover{background:var(--panel2);color:var(--text)}
-.processes-footnote{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;padding:6px 9px;border-top:1px solid var(--line);color:var(--muted);font-size:8px;line-height:1.4}
+.processes-tab>.process-fleet-view{flex:1 1 auto;min-height:0}
+.processes-footnote{flex:none;display:grid;padding:6px 9px;border-top:1px solid var(--line)}
 .processes-footnote button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font:inherit;font-size:9px;white-space:nowrap;cursor:pointer}
-@media(max-width:760px){
-  .processes-filters select,.processes-filters button{height:calc(38px*var(--ui-scale));min-height:calc(38px*var(--ui-scale))}
-  .process-watch-heading{min-height:48px}
-  .process-watch-server button{min-height:38px;font-size:9px}
-  .processes-footnote button{min-height:38px}
-}
+.processes-footnote button:hover{background:var(--panel)}
+@media(max-width:760px){.processes-footnote button{min-height:38px}}
 /* Schedule tab: the same column shape as Processes, because it answers the same question
    one step later. Rows are collapsed to label + cadence + countdown; the prompt and the run
    history open on demand, since a column this narrow cannot show five schedules at once with
