@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 import { insertEditorTab } from '../src/editorText.ts'
 import { createNoteRailIcon, type NoteRailIcon } from '../src/noteRailIcons.ts'
@@ -365,4 +367,29 @@ test('a failed save leaves its text recoverable through pendingText', async () =
   deferreds[0].reject(new Error('the daemon did not respond in time.'))
   await tick()
   assert.equal(queue.pendingText(key), 'offline edit')
+})
+
+// Continuity's first render measures inline-code affordances against `offsetParent`, which is
+// null inside a `display:none` subtree, so an editor started hidden throws out of its async
+// start and rejects `ready` instead of ever becoming usable. Two host guarantees keep that
+// from reaching the user: the element is not created until its slot has a layout box, and a
+// start that fails anyway is reported as itself rather than as a bare DOM message through the
+// app's global unhandled-rejection backstop. `hidden-note-editor.spec.ts` covers the same two
+// in a real browser, against the real engine.
+test('the note editor defers its element until its slot has a layout box', () => {
+  const editor = readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectNoteEditor.tsx'), 'utf8')
+
+  assert.match(editor, /whenLayoutBox\(slot/)
+  assert.match(editor, /class="note-editor-slot"/)
+  assert.ok(editor.includes('if (!engineSlotReady) return'), 'the gate must precede the element')
+})
+
+test('a note editor that cannot start reports itself instead of a raw DOM message', () => {
+  const editor = readFileSync(join(import.meta.dirname, '..', 'src', 'ProjectNoteEditor.tsx'), 'utf8')
+
+  assert.match(editor, /element\.ready\.catch/)
+  assert.match(editor, /The note editor failed to start/)
+  // Teardown before the engine starts is ordinary lifecycle, not a failure worth a toast.
+  assert.match(editor, /abandonedEditors\.add/)
+  assert.match(editor, /if \(abandonedEditors\.has\(element\)\) return/)
 })

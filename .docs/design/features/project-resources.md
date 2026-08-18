@@ -184,6 +184,20 @@ The file tree and notes collection are utility-drawer tabs.
   cautionary case: the part is a transparent 44px touch target whose visible stem and knob are
   `::before`/`::after` fills of `--continuity-accent`, so giving the part a background paints a
   solid block across the hit area instead of the handle graphic.
+- **The engine is never created inside a subtree that has no layout box, and once created it is
+  never destroyed for being hidden again.** Continuity positions the copy control for every
+  inline-code span off `span.offsetParent`, which is null for every node under `display:none`, so
+  an editor whose first render lands hidden throws out of its asynchronous start: `ready` rejects,
+  `continuity-ready` never fires, and the scroll and undo-history restore that hang off it never
+  run. The rejection reached the app's global unhandled-rejection backstop, which showed the raw
+  `Cannot read properties of null (reading 'offsetLeft')` as an error toast. Hiding a mounted
+  editor is routine here - the drawer keeps its note host mounted-but-hidden across tab switches,
+  mobile hides every unfocused pane, desktop zoom hides every pane but one - so
+  `ProjectNoteEditor` renders a placeholder in the editor's own grid cell and swaps the element in
+  when `layoutBox.whenLayoutBox` reports the slot has boxes. The gate is one-way, because only the
+  first render needs a box and the mounted-but-hidden host depends on the element surviving.
+  A start that fails for any other reason is reported as a note-editor failure rather than as a
+  bare DOM message.
 - The editor is remounted whenever a different document loads so a new engine cannot leak text
   between documents. Ordinary edits do not remount it, so cursor and undo history survive. A
   host replacement is an echo of pushed text and is never committed back.

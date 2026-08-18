@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type {
   ContinuityChangeDetail,
   ContinuityEditorElement,
@@ -8,6 +8,7 @@ import type {
   ScrollState,
 } from '@continuity-editor/editor'
 import { ContinuityEditor } from '@continuity-editor/editor/react'
+import { whenLayoutBox } from './layoutBox'
 import { noteQueueKey, noteSaveQueue } from './noteSaveQueue'
 import { claimEditorInsertTarget, forgetEditorFocus, noteEditorFocus } from './insertTarget'
 import type { TextSurfaceIdentity } from './insertTarget'
@@ -71,6 +72,32 @@ function restoreHistory(key: string, element: ContinuityEditorElement): void {
   } catch {
     historyStates.delete(key)
   }
+}
+
+/**
+ * Editors whose host let go of them before the engine finished starting. Continuity rejects
+ * `ready` on teardown ("destroyed before becoming ready"), which is ordinary lifecycle - a
+ * drawer opened and closed again, a tab switched during WASM initialization - and not
+ * something to report.
+ */
+const abandonedEditors = new WeakSet<ContinuityEditorElement>()
+
+/**
+ * Observe the engine's start so a failure to start is reported as itself.
+ *
+ * `ready` rejects when the first render throws, and nothing else in this host or in the
+ * React adapter attaches a handler to it: the rejection reached `App`'s global
+ * `unhandledrejection` backstop instead, which toasted the raw DOM message ("Cannot read
+ * properties of null (reading 'offsetLeft')") at the user with no hint of what had failed.
+ * The mount gate below removes the known cause; this makes any remaining one legible.
+ */
+function watchEditorStart(element: ContinuityEditorElement): void {
+  void element.ready.catch((cause: unknown) => {
+    if (abandonedEditors.has(element)) return
+    const message = cause instanceof Error ? cause.message : String(cause)
+    console.error('[note-editor] Continuity failed to start', cause)
+    window.dispatchEvent(new CustomEvent('mux:error', { detail: `The note editor failed to start: ${message}` }))
+  })
 }
 
 type Props = {
@@ -248,6 +275,7 @@ export function ContinuityMarkdownEditor({
   // the textarea scroll offsets are still live here (they read 0 once detached).
   const attachRef = useCallback((element: ContinuityEditorElement | null) => {
     if (!element && elementRef.current) {
+      abandonedEditors.add(elementRef.current)
       selectionActionsObserver.current?.disconnect()
       selectionActionsObserver.current = null
       elementRef.current.removeAttribute('data-selection-actions-open')
@@ -262,7 +290,10 @@ export function ContinuityMarkdownEditor({
     if (hostRefTarget.current) hostRefTarget.current.current = element
     // Focus inside the editor makes it the target for inserted text (clipboard
     // history, terminal selections) even after an overlay takes DOM focus.
-    if (element) element.addEventListener('focusin', () => noteEditorFocus(element, textSurfaceRef.current))
+    if (element) {
+      element.addEventListener('focusin', () => noteEditorFocus(element, textSurfaceRef.current))
+      watchEditorStart(element)
+    }
   }, [])
   useEffect(() => {
     const element = elementRef.current
@@ -272,6 +303,41 @@ export function ContinuityMarkdownEditor({
     const element = elementRef.current
     claimEditorInsertTarget(element,textSurface,claimInsertTargetToken,onInsertTargetClaimed)
   },[claimInsertTargetToken,textSurface?.id,textSurface?.kind,textSurface?.label,onInsertTargetClaimed])
+  /**
+   * The engine is not created while its slot has no layout box.
+   *
+   * Continuity's first render positions the copy control for every inline-code span off
+   * `span.offsetParent`, which is null for every node inside a `display:none` subtree. Started
+   * hidden, the editor therefore threw a TypeError out of its async start: `ready` rejected
+   * (surfacing as an app-wide "Cannot read properties of null (reading 'offsetLeft')" toast),
+   * `continuity-ready` never fired, and the scroll and undo-history restore that hang off it
+   * never ran. The utility drawer hits this every time it opens on a tab other than Notes,
+   * because it keeps its note host mounted-but-`hidden` so an in-progress note survives a tab
+   * switch; a note pane hidden by mobile's focused-pane rule or by desktop zoom is the same
+   * shape.
+   *
+   * Only the *first* render needs a box, so this gate is one-way: once the element exists it
+   * stays mounted through any later hiding, which is exactly the invariant the drawer's
+   * mounted-but-hidden host depends on.
+   */
+  const slotRef = useRef<HTMLDivElement>(null)
+  const [engineSlotReady, setEngineSlotReady] = useState(false)
+  useLayoutEffect(() => {
+    if (engineSlotReady) return
+    const slot = slotRef.current
+    if (!slot) return
+    return whenLayoutBox(slot, () => setEngineSlotReady(true))
+  }, [engineSlotReady])
+  // A layout effect, and a placeholder that occupies the editor's own grid cell, so a slot
+  // that is visible on first paint swaps to the editor within that same frame.
+  if (!engineSlotReady) return <div ref={slotRef} class="note-editor-slot" aria-hidden="true" style={{
+    display: 'block',
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    minWidth: 0,
+    minHeight: 0,
+  }} />
   return (
     <ContinuityEditor
       ref={attachRef}

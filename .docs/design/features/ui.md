@@ -1588,6 +1588,10 @@ responsive controls.
   paste *into the note* would route the paste to a terminal instead — silently, into an agent's
   prompt. Keeping the body
   mounted is what makes hosting an editor safe. No other tab needs it, so no other tab gets it.
+  Hidden is not the same as started hidden: the editor element itself is created only once its
+  slot has a layout box, because Continuity's first render throws under `display:none`
+  (`project-resources.md`). A drawer opened on any other tab used to start exactly such an editor,
+  which is what put a raw `Cannot read properties of null (reading 'offsetLeft')` toast on screen.
   Moving a note between hosts is still an unmount and a remount, which is lossless because the
   save queue outlives both: the arriving editor adopts any text the daemon has not acknowledged
   (`pendingText`) instead of the copy it was just served.

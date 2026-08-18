@@ -38,7 +38,17 @@ export default defineConfig({
   // by the entry scan — and vite answers a newly discovered dependency with a full
   // page reload. That reload lands mid-test, wiping the page state a spec has already
   // set up, and reads as a random failure with no relation to the change under test.
-  optimizeDeps: { include: ['sigma', 'graphology', 'graphology-layout-forceatlas2'] },
+  // The Continuity editor is excluded for the mirror-image reason: pre-bundling rewrites its
+  // module URL into `node_modules/.vite/deps`, where the sibling `continuity_wasm_bg.wasm`
+  // its loader resolves relative to `import.meta.url` does not exist. Dev then answers that
+  // request with the SPA fallback HTML, and the engine dies with a bogus
+  // "serve the .wasm as application/wasm" error - every note editor blank under `npm run dev`,
+  // and no way to exercise one from the renderer suite. Served unbundled, the relative URL
+  // resolves to the real file. Production builds emit the asset properly and are unaffected.
+  optimizeDeps: {
+    include: ['sigma', 'graphology', 'graphology-layout-forceatlas2'],
+    exclude: ['@continuity-editor/editor'],
+  },
   server: { proxy: { '/api': 'http://127.0.0.1:8765', '/pty': { target: 'ws://127.0.0.1:8765', ws: true }, '/events': { target: 'ws://127.0.0.1:8765', ws: true } } },
   build: { outDir: '../src/swe_mux/static', emptyOutDir: true },
 })

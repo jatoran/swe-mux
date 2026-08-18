@@ -851,6 +851,9 @@ body {
   pointer-events:none;background:var(--bg)
 }
 .project-resource>continuity-editor.note-editor { grid-row:resource-editor;grid-column:1 }
+/* The editor's stand-in while its slot has no layout box (see ProjectNoteEditor's mount gate).
+   It holds the same cell so revealing the host does not reflow when the element swaps in. */
+.project-resource>.note-editor-slot { grid-row:resource-editor;grid-column:1;background:var(--bg) }
 /* Code files: the CodeMirror host fills the editor grid row exactly like the note editor and the
    textarea it replaces. Token colours are defined once as `--cm-*` mapped onto the core palette,
    so every theme (and light/dark) is covered without a per-theme rule; codeTheme.ts reads them. */
