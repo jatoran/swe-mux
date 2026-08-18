@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { SettingLink } from './SettingLink'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import {
   BLOCKED_LABELS, OUTCOME_LABELS, absoluteLabel, cadenceLabel, draftFromSchedule, draftToBody,
@@ -37,8 +38,6 @@ type Props = {
   scope: string
   onScope: (scope: string) => void
   onOpenSession: (sessionId: string) => void
-  /** Where the `scheduled_runs` opt-in lives, for a blocked row's one-click fix. */
-  onOpenProjectSettings: (projectId: string) => void
   onDone: () => void
 }
 
@@ -47,7 +46,7 @@ type ListResponse = { schedules: Schedule[]; status: ScheduleStatus }
 const REFRESH_MS = 30_000
 
 export function ScheduleTab({
-  project, projects, profiles, scope, onScope, onOpenSession, onOpenProjectSettings, onDone,
+  project, projects, profiles, scope, onScope, onOpenSession, onDone,
 }: Props) {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [status, setStatus] = useState<ScheduleStatus | null>(null)
@@ -160,6 +159,13 @@ export function ScheduleTab({
         : 'Reading schedules…'}
       {attention.length ? ` · ${attention.length} need${attention.length === 1 ? 's' : ''} attention` : ''}
     </p>
+    {/* The install stop is not a row-level condition — it silences every schedule in every
+        Project at once — so it is stated once above the list rather than repeated on each
+        row that happens to be loaded. */}
+    {status && !status.enabled && <div class="setting-gate">
+      <p><strong>Scheduled runs are switched off for this install.</strong> Nothing below can fire, whatever any Project opted into.</p>
+      <SettingLink target="schedules.install">Let schedules start sessions</SettingLink>
+    </div>}
     <div class="schedule-body">
       {loading && !ordered.length && <p class="schedule-empty">Reading schedules…</p>}
       {error && <p class="schedule-error" role="alert">{error}</p>}
@@ -187,12 +193,18 @@ export function ScheduleTab({
             {schedule.enabled ? untilLabel(schedule.next_fire_at) : 'paused'}
           </small>
         </button>
+        {/* Both blocked reasons are switches, and each row offers the one that is holding
+            it: the Project's own opt-in, or the install-wide stop that overrides every
+            Project. The install case previously stated the reason and left the reader to
+            find the switch. */}
         {schedule.blocked && <p class="schedule-blocked">
           {BLOCKED_LABELS[schedule.blocked] || schedule.blocked}
-          {schedule.blocked === 'automation_disabled' && <button
-            class="link"
-            onClick={() => { onOpenProjectSettings(schedule.project_id); onDone() }}
-          >Turn it on</button>}
+          {schedule.blocked === 'automation_disabled' && <SettingLink
+            variant="link" target="project.scheduledRuns" projectId={schedule.project_id}
+          >Turn it on</SettingLink>}
+          {schedule.blocked === 'install_disabled' && <SettingLink
+            variant="link" target="schedules.install"
+          >Turn it on</SettingLink>}
         </p>}
         <div class="schedule-meta">
           <span title={schedule.last_reason || undefined}>

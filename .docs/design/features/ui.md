@@ -483,6 +483,10 @@ responsive controls.
   A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.
   Only an unqualified open restores the remembered tab, and a pending search jump always beats a
   remembered section because that caller named an exact control rather than a region.
+  A caller may also name **the control itself** rather than a section: a surface that is inert
+  because a switch is off links to that switch, and Settings scrolls to it and flashes it on
+  arrival (`setting-links.md`). Those links reach the Projects registry and the Automation
+  dashboard the same way, since each owns switches Settings does not.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.

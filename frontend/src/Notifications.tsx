@@ -14,9 +14,12 @@
 // them is worth your attention and when. Keeping both on one surface is
 // deliberate: the ranked view is the one you read, and the raw list is how you
 // check what it decided against.
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
 import { AttentionInbox } from './AttentionInbox'
+import { SettingLink } from './SettingLink'
+import { alertPreferences } from './alertPrefs'
+import type { Project } from './types'
 
 export type UiNotification = {
   ts:number;channel:string;delivery_id:string;session_id?:string
@@ -32,10 +35,20 @@ export type Delivery = {
 export type AutomationNotification={id:string;session_id?:string;kind:string;title:string;message:string;severity:string;created_at:number;read_at?:number}
 export type NotificationData = {notifications:UiNotification[];deliveries:Delivery[];automation?:AutomationNotification[]}
 
-export function NotificationsTab({data,onOpenSession,onChanged}:{
+export function NotificationsTab({data,onOpenSession,onChanged,project}:{
   data:NotificationData;onOpenSession:(sessionId:string)=>void;onChanged:()=>void
+  /** The active Project, for the ranked inbox's opt-in notice. */
+  project?:Project
 }) {
   const [showRead,setShowRead]=useState(false)
+  const [alertsMuted,setAlertsMuted]=useState(()=>!alertPreferences().enabled)
+  // The bell in the sidebar footer and the Alerts settings write the same store, so this
+  // follows the one event that store emits rather than polling or re-reading on render.
+  useEffect(()=>{
+    const sync=()=>setAlertsMuted(!alertPreferences().enabled)
+    window.addEventListener('mux:settings-changed',sync)
+    return()=>window.removeEventListener('mux:settings-changed',sync)
+  },[])
   const [busy,setBusy]=useState(false)
   const [error,setError]=useState('')
   const deliveries = new Map(data.deliveries.map(delivery=>[delivery.id,delivery]))
@@ -56,7 +69,15 @@ export function NotificationsTab({data,onOpenSession,onChanged}:{
   const dismissAll=()=>void write(()=>api('PATCH','/api/automation/notifications',{read:true}))
 
   return <>
-    <AttentionInbox onOpenSession={onOpenSession} />
+    {/* Records keep arriving while alerts are muted — this panel is the history, not a
+        delivery channel — so the mute is stated here rather than silently explaining why
+        nothing made a sound. The bell in the sidebar footer is the same switch; this link
+        is for the device-class settings behind it. */}
+    {alertsMuted&&<div class="setting-gate">
+      <p><strong>Alerts are muted on this device.</strong> Everything below is still recorded; sounds and push notifications are not delivered.</p>
+      <SettingLink target="alerts.master">Open alert settings</SettingLink>
+    </div>}
+    <AttentionInbox onOpenSession={onOpenSession} project={project} />
     <h4 class="attention-raw-heading">Every record</h4>
     <p class="drawer-status">{error||`${open.length} open · ${records.length-open.length} dismissed · ${items.length} delivered`}</p>
     <div class="notification-list">

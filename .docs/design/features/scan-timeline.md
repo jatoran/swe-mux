@@ -11,8 +11,12 @@ It is the Tier 1 substrate for dead-end memory and later cross-session semantic 
 Three independent gates must all be open before a scan can call OpenRouter:
 
 1. The global `scan_timeline_enabled` master switch is on.
+   It is on the **Automation dashboard**, under Global controls, not in Settings.
 2. The Project enables `scan_timeline` and its `raw_store` and `tier0` dependencies.
 3. The current `agent_run_id` is enabled from that session's Timeline drawer tab.
+
+The Timeline tab's off state names whichever of the first two gates is closed and links to that
+exact switch (`setting-links.md`), rather than describing where it lives.
 
 The Timeline drawer exposes the Project permission directly.
 Turning it on also enables the required dependencies and creates a blank `.swe-mux/project-context.md` if needed.
