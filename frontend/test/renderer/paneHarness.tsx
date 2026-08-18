@@ -17,6 +17,9 @@ const parameters = new URLSearchParams(location.search)
 const overlay = parameters.get('overlay') !== '0'
 const mobile = parameters.get('mobile') === '1'
 const draft = parameters.get('draft') === '1'
+// A faulted pane is the rare rendering, so it is opt-in here: the marker must survive beside
+// a name too long for the bar, which is the case where a fixed-size glyph is easiest to lose.
+const fault = parameters.get('fault') === '1'
 
 const session = { id: 'pane-harness', name: 'harness', backend: 'claude', state: 'running', cwd: 'D:\\PROJECTS\\swe-mux' } as Session
 // `commands` is the configured capture-action list (`{action,phrases}[]`), the shape the
@@ -60,7 +63,7 @@ const pane = <section class="terminal-pane focused">
   <div class="pane-bar agent-pane-bar">
     {/* Deliberately longer than any pane is wide: the header's contract is that a generated
         title ellipsizes rather than taking width from the voice chips or the pane tools. */}
-    <div class="pane-identity"><span class="pane-title">claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay</span></div>
+    <div class="pane-identity"><span class="pane-title">claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay</span>{fault && <span class="pane-fault" role="img" aria-label="Session fault: observation stale">⚠</span>}</div>
     <div class="pane-voice">
       <button class="voice-chip auto">tts:auto</button>
     </div>

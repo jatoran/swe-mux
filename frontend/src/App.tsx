@@ -178,7 +178,7 @@ import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStat
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
-import { activityBadges, sessionStatus } from './sessionStatus'
+import { activityBadges, sessionFaults, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape, StandingRender } from './sessionRowConfig'
@@ -5220,21 +5220,19 @@ export function App() {
     // beside the name rather than disappearing with the status line. A stale transcript is the
     // one fault that looks like a healthy session: the pane may be reading a conversation this
     // PTY is no longer running (an unfollowable /clear or /new), so it is marked visibly and
-    // not only in the tooltip.
-    const paneFaults=[
-      nonLocalBoundary&&'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable',
-      session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',
-      session.observation_diagnostic,
-      session.parser_diagnostic,
-    ].filter((entry):entry is string=>!!entry)
+    // not only in the tooltip. What counts as a fault is `sessionFaults`, deliberately not this
+    // file: a marker drawn from "a diagnostic string exists" fires on every healthy session.
+    const paneFaults=sessionFaults(session)
     // The full name leads the tooltip because the rendered one is truncated. The status line
     // follows it, unrendered: it costs no width on hover, and it keeps one reading of the state
-    // within reach of the pane without competing with the name for the bar. Delivery readiness
-    // rides along as detail rather than triggering the marker: every session reports one.
+    // within reach of the pane without competing with the name for the bar. The routine parser
+    // line and delivery readiness ride along as detail — every observed session reports both,
+    // which is exactly why neither may raise the marker.
     const paneTitleHint=[
       paneTitle,
       sessionStatus(session),
       ...paneFaults,
+      session.parser_status!=='degraded'&&session.parser_diagnostic,
       session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`,
     ].filter(Boolean).join('\n')
     // `key` matters here in a way it does not for a single-child stack: a stack now
@@ -5242,7 +5240,7 @@ export function App() {
     // reorder would rebuild terminals rather than move them.
     const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
-        <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`Session diagnostics: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
+        <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
         {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
         <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and

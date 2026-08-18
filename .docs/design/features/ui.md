@@ -1185,6 +1185,12 @@ responsive controls.
   The rendered name ellipsizes; the whole of it leads the `title` tooltip, followed by the status line, any faults, and delivery readiness.
   Faults keep a visible marker beside the name (`.pane-fault`) because they have no other pane-level surface - an agent header draws no path chip, which is where a non-local boundary is otherwise reported - and because a stale observation is the one fault that looks like a healthy session.
   Routine state never re-enters the bar: that is what the tab and the row are for.
+- **A fault is a condition, never the diagnostic text describing one**, and `sessionFaults` in `sessionStatus.ts` is the single predicate every surface asks.
+  Exactly three qualify: a non-local `runtime_boundary`, `observation_stale_since`, and `parser_status === 'degraded'`.
+  The paired strings - `observation_diagnostic` and `parser_diagnostic` - supply the wording for those, and are never triggers.
+  The daemon writes `parser_diagnostic` on every observed session as routine detail (`tailing <id>.jsonl`, `schema v2: 801/801 recognized`), so reading its presence as a fault marked 17 of 17 live sessions when it shipped - an alarm that is always on reports nothing.
+  A predicate for a visible marker therefore belongs in a unit-tested module and not inline in the surface: `sessionStatus.test.ts` pins that a healthy session carrying both strings has no faults.
+  Faults deliberately do not touch the dot, the tab, or the status line, because a session can be perfectly `idle` while reporting on a conversation it no longer owns - which is precisely what a state axis cannot say.
 - **A pane has two rows: header and terminal surface.** Nothing a feature toggles may add a third row.
   The pane's remaining height is the PTY's row count, so an in-flow strip that appears with a toggle resizes the terminal under a live agent and makes its TUI reflow and repaint.
   The read-aloud player strip floats from the zero-height `.voice-overlay-anchor` that shares the surface's track, so it costs no rows in the desktop grid or mobile flex column.

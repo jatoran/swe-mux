@@ -76,8 +76,11 @@ def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
     # No status text in the bar; the reading it replaced survives only in the tooltip.
     assert "pane-state" not in source
     assert "sessionStatus(session)," in source
-    # Faults keep a marker, because an agent header draws no path chip to report them.
+    # Faults keep a marker, because an agent header draws no path chip to report them - but
+    # the predicate lives in `sessionStatus.ts`, where it is unit-tested against a healthy
+    # session. Deciding it inline here is what made the marker fire on all 17 live sessions.
     assert 'class="pane-fault"' in source
+    assert "const paneFaults=sessionFaults(session)" in source
     assert "grid-template-columns:fit-content(35%) minmax(50px,1fr) auto auto" in css
     assert ".pane-title { min-width:0;overflow:hidden;text-overflow:ellipsis" in css
 
