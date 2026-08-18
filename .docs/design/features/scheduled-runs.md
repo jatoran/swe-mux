@@ -36,6 +36,10 @@ The **opt-in** is portable and is inert on its own: a clone inherits permission 
 - `cron`: five fields (`minute hour day-of-month month day-of-week`), with `*`, `a`, `a-b`, `*/n`, `a-b/n`, comma lists, and three-letter month/weekday names.
   Day-of-month and day-of-week follow the Vixie rule: when both are restricted, the day matches if either does.
   There is deliberately no seconds field and no `@daily` macro: a second axis buys a surface where a typo costs an unattended agent run every second.
+  The editor puts a preset dropdown beside the field rather than instead of it: choosing one writes the expression into the input, so the next edit is to a working expression instead of to a blank box, and the field stays the source of truth.
+  The presets are matched back from the expression rather than remembered from the click, so an edited one reads as `Custom` and an edit that lands back on a preset is recognised again.
+  Between them they demonstrate every part of the grammar (fixed values, weekday names, ranges, lists, steps, and the day-of-month field), and the hint under the row is that preset's one-line explanation of the piece it uses.
+  One of them exists to say what cron *cannot* do: there is no "every other Wednesday", because cron counts days and months and never weeks, so the fortnightly ask is answered by the 1st-and-15th preset or by an interval trigger rather than by an expression that quietly fires weekly.
 - `interval`: every N seconds, from 5 minutes to 90 days, anchored on the previous fire.
   A new interval schedule waits a full interval rather than firing on save, because pressing Save is not a request to start an agent this second.
 - `once`: one absolute instant, within a one-year horizon. It disables itself after firing.

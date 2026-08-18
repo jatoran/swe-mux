@@ -53,7 +53,33 @@ def test_agent_pane_headers_omit_the_working_directory() -> None:
     assert "const remoteBoundary=session.runtime_boundary==='remote'" in source
     assert "const boundaryUnknown=session.runtime_boundary==='unknown'" in source
     assert "pane-bar ${agentSession?'agent-pane-bar':''}" in source
-    assert ".pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }" in css
+    assert (
+        ".pane-bar.agent-pane-bar { grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }"
+        in css
+    )
+
+
+def test_pane_headers_name_the_session_instead_of_restating_its_state() -> None:
+    """The header's first field is the session name, bounded so it cannot crowd the controls.
+
+    State is already on the tab, the sidebar row, and the terminal being read; the name is the
+    field those surfaces crop. The track is `fit-content()` rather than `auto` because an `auto`
+    track takes its max-content size before the flexible track expands, so a sentence-length
+    generated title would take the cwd's space and squeeze the voice chips to their floor.
+    """
+    root = Path(__file__).parents[1]
+    source = (root / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (root / "frontend" / "src" / "style.css").read_text(encoding="utf-8")
+
+    assert "const paneTitle=sessionName(session)||id" in source
+    assert '<span class="pane-title" title={paneTitleHint}>{paneTitle}</span>' in source
+    # No status text in the bar; the reading it replaced survives only in the tooltip.
+    assert "pane-state" not in source
+    assert "sessionStatus(session)," in source
+    # Faults keep a marker, because an agent header draws no path chip to report them.
+    assert 'class="pane-fault"' in source
+    assert "grid-template-columns:fit-content(35%) minmax(50px,1fr) auto auto" in css
+    assert ".pane-title { min-width:0;overflow:hidden;text-overflow:ellipsis" in css
 
 
 def test_desktop_drawer_note_search_precedes_the_agent_action() -> None:

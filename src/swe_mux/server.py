@@ -38,7 +38,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
-from . import git_review, session_titles
+from . import git_init, git_review, session_titles
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -997,6 +997,7 @@ def create_app(
             web.get("/api/git/provenance", git_provenance),
             web.get("/api/git/commits/{oid}/changes", git_commit_changes),
             web.get("/api/git/diff", git_diff),
+            web.post("/api/git/init", init_repository),
             web.post("/api/git/worktrees", create_worktree),
             web.post("/api/git/worktrees/session", spawn_worktree_session),
             web.delete("/api/git/worktrees", remove_worktree),
@@ -1179,6 +1180,25 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         attach_replay_bytes=config.attach_replay_bytes,
         status_timeline=status_timeline,
         recovery=session_recovery,
+    )
+    # The observer decides an approval; this is the only way it can deliver one.
+    # Installed as a factory rather than called from `observation.py` directly
+    # because `_record_operator_input` owns the evidence accounting every human
+    # input path owes delivery readiness, and that lives here with the event bus.
+    # Per-session bindings are attached by the manager as sessions are created,
+    # adopted, and cold-restored (`_attach_operator_input`).
+    def _operator_input_sink(session: Session) -> Callable[[str, str], None]:
+        def write(data: str, source: str) -> None:
+            _record_operator_input(events, session, data, source=source)
+
+        return write
+
+    sessions.operator_input_sink_factory = _operator_input_sink
+    # Bounds the observer reads off the session rather than importing config,
+    # matching how the approval stabilization window is already published.
+    sessions.session_defaults.update(
+        approval_keystroke_delivery=config.approval_keystroke_delivery,
+        approval_keystroke_window_seconds=config.approval_keystroke_window_seconds,
     )
     if supervisor_client is not None:
         try:
@@ -3086,9 +3106,62 @@ async def patch_automation_notifications(request: web.Request) -> web.Response:
 
 
 async def list_lineage(request: web.Request) -> web.Response:
-    return json_response(
-        {"items": await request.app["automation_store"].lineage(request.query.get("run_id"))}
+    """Lineage edges, with both ends named the way every other surface names them.
+
+    Decorated here rather than in the browser because only the daemon can answer it:
+    an edge names two *runs*, and a run's display name is the live session's when one
+    is still open, the History row's when it is not, and neither when the row has been
+    deleted. A client holding one page of History results has none of those for the
+    other end of an edge, which is how the lineage section came to print raw ids.
+    """
+    edges = await request.app["automation_store"].lineage(request.query.get("run_id"))
+    await _decorate_lineage_endpoints(request.app, edges)
+    return json_response({"items": edges})
+
+
+async def _decorate_lineage_endpoints(
+    app: web.Application, edges: list[dict[str, Any]]
+) -> None:
+    """Attach `{name, live, known}` for each edge's parent and child run.
+
+    ``known: false`` is a deliberate third state rather than an empty name. An edge
+    whose other end has been deleted from History still records that the fork
+    happened, and dropping it would silently reshape the lineage; saying the
+    conversation is gone is the true answer.
+    """
+    if not edges:
+        return
+    manager: SessionManager = app["sessions"]
+    endpoints = {
+        str(edge.get(field) or "")
+        for edge in edges
+        for field in ("parent_run_id", "child_run_id")
+    }
+    endpoints.discard("")
+    rows = await app["history"].history_naming_rows(sorted(endpoints))
+    live_by_run = {
+        session_titles.record_run_id(session.record): session
+        for session in manager.sessions.values()
+    }
+    titles = await session_titles.generated_titles(
+        app["automation_store"],
+        set(live_by_run) | {session_titles.row_run_id(row) for row in rows.values()},
     )
+
+    def endpoint(run_id: str) -> dict[str, Any]:
+        live = live_by_run.get(run_id)
+        if live is not None:
+            name = session_titles.record_display_name(live.record, titles)
+            return {"name": name, "live": True, "known": True, "session_id": live.record.id}
+        row = rows.get(run_id)
+        if row is not None:
+            name = session_titles.row_display_name(row, titles)
+            return {"name": name, "live": False, "known": True}
+        return {"name": "", "live": False, "known": False}
+
+    for edge in edges:
+        edge["parent"] = endpoint(str(edge.get("parent_run_id") or ""))
+        edge["child"] = endpoint(str(edge.get("child_run_id") or ""))
 
 
 async def create_lineage(request: web.Request) -> web.Response:
@@ -6430,6 +6503,18 @@ BRANCH_POINTS_TIMEOUT_SECONDS = 20.0
 # Writing the fork copies the prefix and its sidecar files. Generous, because the cost
 # is the conversation's size and a long one is the case worth being patient for.
 BRANCH_WRITE_TIMEOUT_SECONDS = 60.0
+# How much of the cut message is kept on the branch's lineage edge. Enough to
+# recognise which turn it was, and short enough that a lineage row never becomes a
+# second copy of a conversation in a table that is not a transcript store.
+BRANCH_CUT_EXCERPT_CHARS = 200
+
+
+def _branch_cut_excerpt(text: str) -> str:
+    """One bounded line naming the message a branch was cut at."""
+    flattened = " ".join(text.split())
+    if len(flattened) <= BRANCH_CUT_EXCERPT_CHARS:
+        return flattened
+    return flattened[: BRANCH_CUT_EXCERPT_CHARS - 1] + "…"
 
 
 def _branch_block_reason(session: Any) -> tuple[str, str] | None:
@@ -6828,6 +6913,13 @@ async def _branch_by_transcript_fork(
         "path": str(written.path),
         "cut_offset": cut,
         "from_message_id": message_id,
+        "from_message_role": detail.role,
+        # Kept with the branch rather than resolved from `cut_offset` on demand. The
+        # only reader is a human asking "where did this come from", weeks later, by
+        # which time the parent transcript may have been compacted, relocated by a cwd
+        # change, or deleted outright - and re-reading a whole conversation to render
+        # one line is the wrong shape even when it is still there.
+        "from_message_text": _branch_cut_excerpt(text_by_id.get(message_id, "")),
         "mode": mode,
         "records_written": written.records_written,
         "records_dropped": written.records_dropped,
@@ -7030,6 +7122,8 @@ async def _record_branch_lineage(
                 "source_conversation_id": conversation,
                 "branch_conversation_id": branched.record.native_session_id,
                 "from_message_id": (fork or {}).get("from_message_id"),
+                "from_message_role": (fork or {}).get("from_message_role"),
+                "from_message_text": (fork or {}).get("from_message_text"),
                 "mode": (fork or {}).get("mode"),
                 "cut_offset": (fork or {}).get("cut_offset"),
             },
@@ -11847,6 +11941,60 @@ def _ensure_worktree_parent(config: Config, target: Path) -> None:
         "worktree_parent_created path=%s configured_root=%s",
         parent,
         configured_root,
+    )
+
+
+async def init_repository(request: web.Request) -> web.Response:
+    """Create a Git repository for a Project whose folder does not have one yet."""
+
+    operation_id = uuid4().hex
+    body = await request.json()
+    project = request.app["projects"].projects.get(str(body.get("project_id", "")))
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    if not Path(project.root).is_dir():
+        raise git_review.GitReviewError(
+            "root_unavailable", "the Project's folder no longer exists", 404
+        )
+    # Re-checked here rather than trusted from whatever the caller last read: `git init`
+    # on a folder Git already tracks reinitializes it, which is not what any caller of
+    # this endpoint is asking for.
+    try:
+        await git_review.repository_identity(project.root)
+    except git_review.GitReviewError as exc:
+        if exc.code != "not_git_repository":
+            raise
+    else:
+        raise git_review.GitReviewError(
+            "already_initialized", "this Project is already inside a Git repository", 409
+        )
+    log.info(
+        "repository_init_started operation_id=%s project_id=%s root=%s",
+        operation_id,
+        project.id,
+        project.root,
+    )
+    try:
+        result = await git_init.initialize_repository(project.root, operation_id=operation_id)
+    except git_init.RepositoryInitError as exc:
+        log.warning(
+            "repository_init_failed operation_id=%s project_id=%s root=%s",
+            operation_id,
+            project.id,
+            project.root,
+        )
+        return json_response(
+            {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
+        )
+    await request.app["events"].emit("git_changed", project_id=project.id)
+    return json_response(
+        {
+            "ok": True,
+            "root": result.root,
+            "branch": result.branch,
+            "gitignore": result.gitignore,
+            "operation_id": operation_id,
+        }
     )
 
 

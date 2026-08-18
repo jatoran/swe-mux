@@ -50,15 +50,30 @@ test('command rail owns the first touch drag without dropping the soft keyboard'
   const commandRail = railSource.slice(railSource.indexOf('export function RailScroller'))
 
   assert.match(commandRail, /touchDrag touchDragGain=\{1\.75\} preserveSoftKeyboard/)
-  assert.match(railSource, /event\.target instanceof Element \? event\.target\.closest\('\.rail-key-repeat'\)/)
   assert.match(styles, /\.terminal-action-scroller\.overflow-rail-touch-drag\{touch-action:none\}/)
+})
+
+test('a swipe may begin on a repeating arrow key, which sends on click like its neighbours', () => {
+  const railSource = readFileSync(new URL('../src/RailScroller.tsx', import.meta.url), 'utf8')
+  const button = readFileSync(new URL('../src/RailRepeatKey.tsx', import.meta.url), 'utf8')
+  const pointerDown = button.slice(button.indexOf('onPointerDown='), button.indexOf('onContextMenu='))
+
+  // The pan refusing a touch that landed on an arrow is what made the arrows the one part
+  // of the rail you could not push off of: the flick fired the key instead of scrolling.
+  assert.doesNotMatch(railSource, /closest\('\.rail-key-repeat'\)/)
+  // Both halves of the fix have to hold together. A press that sent on its own would be
+  // unrecoverable however permissive the pan is, and a `preventDefault` on the pointer
+  // would leave the tap-carrying click to each browser's compatibility rules.
+  assert.doesNotMatch(pointerDown, /preventDefault|repeat\.send/)
+  assert.match(button, /onClick=\{\(\)=>\{if\(!repeat\.repeater\.consumeHeldClick\(\)\)repeat\.send\(sequence\)\}\}/)
+  assert.match(button, /onMouseDown=\{event=>event\.preventDefault\(\)\}/)
 })
 
 test('command rail terminal writes preserve rather than request mobile keyboard focus', () => {
   const source = readFileSync(new URL('../src/TerminalPane.tsx', import.meta.url), 'utf8')
   const pasteHelper = source.slice(source.indexOf('async function pasteBrowserClipboard'), source.indexOf('function TerminalPaneImpl'))
   const paste = source.slice(source.indexOf('const paste = async'), source.indexOf('const copyLastReply'))
-  const sendKey = source.slice(source.indexOf('const sendKey='), source.indexOf('const railKeySendRef='))
+  const sendKey = source.slice(source.indexOf('const sendKey='), source.indexOf('const railKeyRepeat='))
   const injectText = source.slice(source.indexOf('const injectText='), source.indexOf('const insertMobileDraft='))
 
   assert.doesNotMatch(pasteHelper, /term\.focus\(\)/)

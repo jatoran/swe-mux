@@ -210,3 +210,55 @@ test('with nothing layered the existing resolution is untouched', () => {
   // Callers that predate the overlay argument keep their behaviour.
   assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true), 'mobileTab.previous')
 })
+test('an overlay with a left panel borrows the workspace sidebar’s gesture to open it', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const panel = { open: false, toggle: 'settingsNav.toggle', close: 'settingsNav.close' }
+  const layered = { depth: 1, enabled: true, panel }
+  // Whichever slot works the workspace sidebar works this one. With the defaults that is
+  // the two-finger rightward swipe.
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, closed, true, layered), 'settingsNav.toggle')
+  // ...and the back swipe is untouched, so backing out of the overlay still works.
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true, layered), BACK_COMMAND)
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, closed, true, layered), '')
+  assert.equal(resolveGestureCommand('two_finger_tap', defaultMobileGestureSettings, closed, true, layered), '')
+})
+
+test('rebinding the workspace sidebar moves the overlay panel with it', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const panel = { open: false, toggle: 'settingsNav.toggle', close: 'settingsNav.close' }
+  const layered = { depth: 1, enabled: true, panel }
+  const rebound = { ...defaultMobileGestureSettings, two_finger_swipe_right: 'palette.open', two_finger_swipe_up: 'sidebar.open' }
+  assert.equal(resolveGestureCommand('two_finger_swipe_up', rebound, closed, true, layered), 'settingsNav.toggle')
+  // The slot that used to open it no longer does, and falls back to the back swipe rule.
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', rebound, closed, true, layered), BACK_COMMAND)
+})
+
+test('an open overlay panel is closed by either horizontal direction', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const panel = { open: true, toggle: 'settingsNav.toggle', close: 'settingsNav.close' }
+  const layered = { depth: 2, enabled: true, panel }
+  for (const slot of ['swipe_left', 'swipe_right', 'two_finger_swipe_left', 'two_finger_swipe_right'] as const) {
+    assert.equal(resolveGestureCommand(slot, defaultMobileGestureSettings, closed, true, layered), 'settingsNav.close')
+  }
+  // Vertical slots stay inert over an overlay, open panel or not.
+  assert.equal(resolveGestureCommand('two_finger_swipe_up', defaultMobileGestureSettings, closed, true, layered), '')
+})
+
+test('with swipe-away off, only the sidebar slot closes the overlay panel and back still pops it', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const panel = { open: true, toggle: 'settingsNav.toggle', close: 'settingsNav.close' }
+  const layered = { depth: 2, enabled: true, panel }
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, closed, false, layered), 'settingsNav.close')
+  // The panel is the top dismiss level, so back closes it too - same outcome, other route.
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, false, layered), BACK_COMMAND)
+  assert.equal(resolveGestureCommand('swipe_left', defaultMobileGestureSettings, closed, false, layered), '')
+})
+
+test('turning overlay back off keeps the overlay panel out of reach as well', () => {
+  const closed = { sidebarOpen: false, drawerOpen: false }
+  const layered = { depth: 1, enabled: false, panel: { open: false, toggle: 'settingsNav.toggle', close: 'settingsNav.close' } }
+  // "A dialog ignored every swipe" is the behaviour this switch restores, and a panel
+  // inside the dialog is not an exemption from it.
+  assert.equal(resolveGestureCommand('two_finger_swipe_right', defaultMobileGestureSettings, closed, true, layered), '')
+  assert.equal(resolveGestureCommand('swipe_right', defaultMobileGestureSettings, closed, true, layered), '')
+})

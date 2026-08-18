@@ -276,8 +276,10 @@
   `branch`. A `branch` edge is the only record that a fork happened: the branch is a separate
   conversation in its own file, so without the edge it is indistinguishable from an unrelated
   conversation that happens to share a prefix. Its metadata carries the strategy, both
-  conversation ids, and the message and cut the fork was made at, so the fork point outlives the
-  request. The edge is written after the branch's pane is proved up, and a failure to write it is
+  conversation ids, the message and cut the fork was made at, and a bounded excerpt of that
+  message's text, so the fork point outlives the request *and* the transcript it was cut from.
+  The excerpt is denormalised deliberately: its only reader renders one line weeks later, when
+  the parent conversation may have been compacted, relocated by a cwd change, or deleted. The edge is written after the branch's pane is proved up, and a failure to write it is
   logged rather than raised — losing the edge degrades the lineage view, not the conversation.
 - Automation, notification, lineage, experience, batch, and voice tables retain their
   feature-specific contracts. `AutomationStore` has an additive migration path; the

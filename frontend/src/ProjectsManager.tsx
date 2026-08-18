@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { api } from './api'
 import { ProjectContextEditor } from './ProjectContextEditor'
+import { revealSetting } from './settingReveal'
+import { automationSetting } from './settingTargets'
 import { normalizeIgnorePatterns, parseIgnorePatternDraft, sameDraftValue } from './settingsDraft'
 import type { Project, ProjectBackend, ProjectGroup, PromptLibraryScope, Session, LaunchProfile } from './types'
 import { allBackendNames, harnessDisplayName } from './harnessRegistry'
@@ -119,7 +121,7 @@ function AutomationOptIns({ project, busy, onError }: {
     const on = state.requested[item.id] === true
     const missing = state.blocked[item.id] || []
     const disabled = busy || saving || !item.implemented
-    return <li key={item.id} class={item.implemented ? '' : 'unavailable'}>
+    return <li key={item.id} class={item.implemented ? '' : 'unavailable'} data-setting={automationSetting(item.id)}>
       <label class="check">
         <span class="project-setting-name">{item.label}
           <em class="project-setting-chip">{item.kind}</em>
@@ -142,7 +144,7 @@ function AutomationOptIns({ project, busy, onError }: {
   const scanOn = state.requested.scan_timeline === true
   const scanBlocked = state.blocked.scan_timeline || []
   return <div class="project-automations">
-    <h4>Control-plane automations<em class="project-setting-chip">repo</em></h4>
+    <h4 data-setting="automations">Control-plane automations<em class="project-setting-chip">repo</em></h4>
     <p>Per-project opt-in. Substrate records facts and never acts. Nothing here runs on a project that did not opt in. Spending limits are global, in Settings → Automation.</p>
     <ul class="project-automation-list">{substrate.map(row)}</ul>
     <ul class="project-automation-list">{consumers.map(row)}</ul>
@@ -150,7 +152,7 @@ function AutomationOptIns({ project, busy, onError }: {
     <h4>Scan timeline<em class="project-setting-chip">repo</em></h4>
     <p>A readable behavioural history of each conversation in this Project. Permitting it here also enables the substrate it reads from. The Timeline drawer tab shows the result; everything that applies to the whole Project is set here.</p>
     <ul class="project-automation-list">
-      <li>
+      <li data-setting={automationSetting('scan_timeline')}>
         <label class="check">
           <span class="project-setting-name">Permitted for this Project</span>
           <input type="checkbox" disabled={busy || saving} checked={scanOn}
@@ -160,7 +162,7 @@ function AutomationOptIns({ project, busy, onError }: {
           needs {scanBlocked.join(' · ')} — enabled with it
         </p>}
       </li>
-      <li class={scanOn ? '' : 'unavailable'}>
+      <li class={scanOn ? '' : 'unavailable'} data-setting="scan_timeline_auto_enable">
         <label class="check">
           <span class="project-setting-name">Arm every new conversation</span>
           <input type="checkbox" disabled={busy || saving || !scanOn}
@@ -201,6 +203,10 @@ type Props = {
   sessions:Session[]
   profiles:LaunchProfile[]
   initialProjectId?:string
+  /** `data-setting` id of one control to scroll to and flash on arrival (`settingTargets.ts`). */
+  initialSetting?:string
+  /** Changes per deep-link request, so the same link twice reveals twice. */
+  revealToken?:number
   onClose:()=>void
   onAdd:()=>void
   onAddGroup:()=>void
@@ -211,10 +217,11 @@ type Props = {
 
 const SCOPE_LABELS:Record<PromptLibraryScope,string>={off:'Off',global:'Global only',project:'Project only',both:'Global + Project'}
 
-export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,onClose,onAdd,onAddGroup,onOpen,onPatch,onRemove}:Props){
+export function ProjectsManager({projects,groups,sessions,profiles,initialProjectId,initialSetting,revealToken,onClose,onAdd,onAddGroup,onOpen,onPatch,onRemove}:Props){
   const isVisible=(project:Project)=>project.sidebar_visible!==false
   const ordered=useMemo(()=>[...projects].sort((a,b)=>a.position-b.position||a.name.localeCompare(b.name)),[projects])
   const [selectedId,setSelectedId]=useState(initialProjectId||ordered[0]?.id||'')
+  const panel=useRef<HTMLElement>(null)
   // List and detail sit side by side rather than drilling in, so the registry is one
   // level: back closes it, and there is no inner step to unwind first.
   useDismissLevel(onClose,true,'projects-manager')
@@ -245,6 +252,19 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
     setOverrides({default_backend:selected?.default_backend,default_profile_id:selected?.default_profile_id,default_agent_profiles:{...(selected?.default_agent_profiles||{})}})
     setConfirmRemove(false);setError('')
   },[selected?.id,selected?.name,selected?.group_id,selected?.default_backend,selected?.default_profile_id,JSON.stringify(selected?.default_agent_profiles||{})])
+
+  // Reveal a control a gated surface deep-linked to. The opt-in list this usually points at
+  // is two fetches deep (the registry, then that Project's automation state), and switching
+  // Projects re-runs the second one, so the reveal waits for its control instead of firing
+  // once into a panel that is still loading. Re-armed on `revealToken` so a second click on
+  // the same link flashes again, and on `selected?.id` because a Project switch replaces the
+  // very rows it points at.
+  useEffect(()=>{
+    if(!initialSetting)return
+    const root=panel.current
+    if(!root)return
+    return revealSetting(root,initialSetting)
+  },[initialSetting,revealToken,selected?.id])
 
   // The portable layer lives in the checkout, so it is read per Project rather than
   // taken from the registry payload — its revision is what guards the write.
@@ -377,7 +397,7 @@ export function ProjectsManager({projects,groups,sessions,profiles,initialProjec
   </div>
 
   return <div class="modal-layer projects-manager-layer" onMouseDown={event=>event.target===event.currentTarget&&onClose()}>
-    <section class="projects-manager" role="dialog" aria-modal="true" aria-label="Manage projects">
+    <section class="projects-manager" role="dialog" aria-modal="true" aria-label="Manage projects" ref={panel}>
       <header><div><span>PROJECTS::REGISTRY</span><h2>Projects</h2><small>Configured Projects keep their notes, files, settings, and history even when hidden from the sidebar.</small></div><div class="projects-manager-header-actions"><button onClick={onAddGroup}>New group</button><button data-tutorial="add-project" class="primary" onClick={onAdd}>+ Add project</button><button class="icon" aria-label="Close Projects" onClick={onClose}>×</button></div></header>
       <div class="projects-manager-body">
         <aside><div class="projects-manager-filter"><input aria-label="Search projects" placeholder="Search projects…" value={query} onInput={event=>setQuery(event.currentTarget.value)}/><select aria-label="Filter projects" value={filter} onChange={event=>setFilter(event.currentTarget.value as typeof filter)}><option value="all">All</option><option value="visible">In sidebar</option><option value="hidden">Hidden</option></select></div>

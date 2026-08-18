@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { memo } from 'preact/compat'
+import { SettingLink } from './SettingLink'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -35,7 +36,8 @@ import { noteTerminalFocus } from './insertTarget'
 import { captureCopy } from './clipboardHistory'
 import { resumeCommand } from './resumeCommand'
 import { railPayload, resolveRailRows, type RailBackend, type RailEntry, type RailItem } from './commandRail'
-import { createRailKeyRepeater, isRepeatableRailKey } from './railKeyRepeat'
+import { isRepeatableRailKey } from './railKeyRepeat'
+import { RailRepeatKey, useRailKeyRepeat } from './RailRepeatKey'
 import { activatePromptRailItem } from './promptRail'
 import { AttachIcon, BranchIcon, CopyIcon, PasteIcon, SendIcon } from './railIcons'
 import { RailScroller } from './RailScroller'
@@ -227,8 +229,6 @@ interface Props {
   claudeMaxColumns: number
   /** Open Configure Actions from the rail's trailing gear. */
   onConfigureRail?: () => void
-  /** Open the terminal settings, where the Claude width envelope lives. */
-  onConfigureWidth?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
   onBranch?: () => void
 }
@@ -326,7 +326,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onConfigureWidth, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
   // terminal's construction effect, which must not re-run just because a font moved.
@@ -3209,27 +3209,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     if(sequence===APP_TAIL_KEY)clearAppTail('rail_tail_key')
     if(!keyboardOffRef.current&&!mobileDraftOpenRef.current)focusAfterTerminalActionRef.current()
   }
-  const railKeySendRef=useRef(sendKey)
-  railKeySendRef.current=sendKey
-  const railKeyRepeaterRef=useRef<ReturnType<typeof createRailKeyRepeater>|null>(null)
-  if(!railKeyRepeaterRef.current){
-    railKeyRepeaterRef.current=createRailKeyRepeater(
-      sequence=>railKeySendRef.current(sequence),
-      (callback,delayMs)=>window.setTimeout(callback,delayMs),
-      timer=>window.clearTimeout(timer),
-    )
-  }
-  const railKeyRepeater=railKeyRepeaterRef.current
-  useEffect(()=>{
-    const cancel=()=>railKeyRepeater.cancel()
-    window.addEventListener('blur',cancel)
-    document.addEventListener('visibilitychange',cancel)
-    return()=>{
-      window.removeEventListener('blur',cancel)
-      document.removeEventListener('visibilitychange',cancel)
-      cancel()
-    }
-  },[session.id])
+  const railKeyRepeat=useRailKeyRepeat(sendKey,session.id)
   // Jump-to-latest, for both viewports rather than only xterm's (see `appOwnsTail`). Scrolling
   // the terminal alone is what left this dead on a phone in a Claude session while the rail's
   // `^End` — which happens to send the same key on its way past — kept working.
@@ -3438,12 +3418,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
     }
     if(item.type==='key'){
       const sequence=item.bytes||''
-      if(isRepeatableRailKey(item.id))return <button key={key} class={`${item.className||'term-key'} rail-key-repeat`} title={`${item.title||item.label} (hold to repeat)`} onPointerDown={event=>{
-        if(!event.isPrimary||event.button!==0)return
-        event.preventDefault()
-        event.currentTarget.setPointerCapture?.(event.pointerId)
-        railKeyRepeater.press(event.pointerId,sequence)
-      }} onPointerUp={event=>railKeyRepeater.release(event.pointerId)} onPointerCancel={event=>railKeyRepeater.release(event.pointerId)} onLostPointerCapture={event=>railKeyRepeater.release(event.pointerId)} onContextMenu={event=>event.preventDefault()} onClick={event=>{if(event.detail===0)sendKey(sequence)}}>{item.label}</button>
+      if(isRepeatableRailKey(item.id))return <RailRepeatKey key={key} repeat={railKeyRepeat} sequence={sequence} label={item.label} title={item.title||item.label} className={item.className||'term-key'}/>
       return <button key={key} class={item.className||'term-key'} title={item.title||item.label} onClick={()=>sendKey(sequence)}>{item.label}</button>
     }
     if(item.type==='action')return null
@@ -3513,7 +3488,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
        grid the user can widen from Settings. A pane that is both letterboxed and
        capped is showing another device's size, and naming this device's envelope
        would be describing something that is not on screen. */}
-  {!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span>{onConfigureWidth&&<button title="Change or remove the Claude width limit in Settings → Terminals" onClick={onConfigureWidth}>Change…</button>}</div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  {!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span><SettingLink variant="link" target="terminals.claudeWidth" title="Change or remove the Claude width limit">Change…</SettingLink></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}
