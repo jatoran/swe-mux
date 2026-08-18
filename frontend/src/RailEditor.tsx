@@ -136,8 +136,10 @@ export function RailEditor() {
     setNote('')
     dragCancelRef.current = beginRailDrag(event, dragHost, source, label)
   }
-  /** True right after a drag, so the click that ends it does not also expand a row. */
-  const justDragged = () => performance.now() - dragEndedAt.current < 250
+  /** True right after a drag, so the click that ends it does not also expand a
+   *  row. Guarded on a drag having happened at all: the ref starts at 0, and
+   *  `performance.now()` is still under the window shortly after page load. */
+  const justDragged = () => dragEndedAt.current > 0 && performance.now() - dragEndedAt.current < 250
 
   const shown = drag.config || resolved.config
   const kind = scope ? resolved.kind : 'global'
