@@ -134,16 +134,16 @@ matrix (`tests/test_harness_adapter_matrix.py`, which fails when a harness is ad
 the registry with no adapter/spawn coverage) — the `not live_*` filter does not deselect
 them. `.github/workflows/ci.yml` mirrors this gate on `windows-latest` and adds the
 production frontend build and the full Playwright renderer suite
-(`npm run test:renderer`, in `frontend/`).
+(`npm run test:renderer`, in `frontend/`). `frontend/tsconfig.json` includes only
+`src`, so the plain `npx tsc --noEmit` does NOT typecheck `frontend/test/`; the
+renderer harnesses are typechecked separately by `npm run check:renderer`
+(`tsconfig.test.json`, `src` + `test/renderer`), which `.worktree-verify` now runs so a
+harness prop that drifts from the component it mounts fails at typecheck instead of only
+at Playwright runtime (the way `pane-layout.spec.ts` once rotted).
 
 **The renderer suite binds a port and is therefore not parallel-safe by default.** It
 drives a Vite dev server on 4174 with `reuseExistingServer`, so a second checkout that
 finds 4174 already taken runs its entire suite against *the other checkout's code* — the
 failure reads as harness pages that "do not exist", or, worse, as a green run that proved
 nothing. From a worktree, give it a port of its own:
-`RENDERER_PORT=4176 npm run test:renderer`. CI leaves the variable unset and keeps 4174. `frontend/tsconfig.json` includes only
-`src`, so the plain `npx tsc --noEmit` does NOT typecheck `frontend/test/`; the
-renderer harnesses are typechecked separately by `npm run check:renderer`
-(`tsconfig.test.json`, `src` + `test/renderer`), which `.worktree-verify` now runs so a
-harness prop that drifts from the component it mounts fails at typecheck instead of only
-at Playwright runtime (the way `pane-layout.spec.ts` once rotted).
+`RENDERER_PORT=4176 npm run test:renderer`. CI leaves the variable unset and keeps 4174.
