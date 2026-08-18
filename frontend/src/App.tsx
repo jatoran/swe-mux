@@ -148,6 +148,7 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
@@ -544,6 +545,10 @@ export function App() {
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Settings' own section drawer, the narrow-layout twin of the docked column. It lives
+  // here rather than inside Settings because the gesture recognizer below is the shell's,
+  // and it has to be able to work that drawer the way it works the workspace sidebar.
+  const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
   const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
@@ -2256,7 +2261,10 @@ export function App() {
   }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
-  const openSettings = (section?:string) => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
+  // Opening always lands on the content, never on the section drawer: a caller that
+  // named a section has already navigated, and one that did not is returning to the tab
+  // it left off on.
+  const openSettings = (section?:string) => { setSettingsSection(section); setSettingsNavOpen(false); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
   const openActionEditor = () => { setActionEditorOpen(true); setMainMenuOpen(false); setProjectMenu(null); setContextMenu(null) }
   const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
     ? target.worktree?worktreeFileResourceId(target.worktree,target.resourceId):''
@@ -4203,6 +4211,11 @@ export function App() {
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
+    // Settings' section drawer, which only exists in the narrow layout. Real commands
+    // rather than a special case inside the recognizer, because that is the only channel
+    // a resolved gesture has — and it makes the drawer reachable from the palette too.
+    { id: SETTINGS_NAV_TOGGLE, label: 'Toggle Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(value => !value) },
+    { id: SETTINGS_NAV_CLOSE, label: 'Close Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(false) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'queue.fleet',label:'Open fleet queue (every session’s queued messages)',category:'input',available:true,run:()=>openFleetQueue() },
@@ -4691,6 +4704,11 @@ export function App() {
   // touch listeners (and can't drop a gesture already in flight).
   const overlayPanels = useRef({ sidebarOpen: false, drawerOpen: false })
   overlayPanels.current = { sidebarOpen, drawerOpen: clipboardOpen }
+  // Settings' section drawer, for the same reason and by the same route. Only supplied
+  // to the resolver while Settings is the level back would act on: the palette or the
+  // theme picker opened over it is what a swipe then means, not the drawer underneath.
+  const settingsNav = useRef({ open: false })
+  settingsNav.current = { open: settingsNavOpen }
   useEffect(() => {
     if (!mobileWorkspace) return
     let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; claims:ReturnType<typeof markPointerDragClaims> } | null = null
@@ -4773,7 +4791,15 @@ export function App() {
       state = null
       if (!slot) return
       const panels = overlayPanels.current
-      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, { depth: gestureOverlayDepth(dismissStack.depth(), panels), enabled: overlayBack })
+      // `topLabel()` rather than a `settingsOpen` flag: what matters is whether Settings
+      // (or its own drawer) is the level on top, so a picker opened above it keeps the
+      // swipe for itself instead of quietly working the drawer behind it.
+      const settingsOnTop = dismissStack.topLabel() === 'settings' || dismissStack.topLabel() === 'settings-nav'
+      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, {
+        depth: gestureOverlayDepth(dismissStack.depth(), panels),
+        enabled: overlayBack,
+        panel: settingsOnTop ? { open: settingsNav.current.open, toggle: SETTINGS_NAV_TOGGLE, close: SETTINGS_NAV_CLOSE } : undefined,
+      })
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }
@@ -6074,7 +6100,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 

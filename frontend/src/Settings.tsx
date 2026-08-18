@@ -28,6 +28,8 @@ import {
 } from './voiceCommandReference'
 import type { LatencyReportPayload } from './voiceLatency'
 import { GESTURE_SLOTS, GESTURE_LABELS, defaultMobileGestureSettings } from './mobileGestures'
+import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
+import { canHideDrawerTab } from './drawerVisibility'
 import { allBackendNames, allHarnessesIncludingDisabled, appliesWidthEnvelope, harnessDescriptor, harnessDisplayName, harnesses } from './harnessRegistry'
 import { domVNode, harvestSettings, kindSelector, matchIndex, searchSettings, tabEntry, type SettingsSearchEntry } from './settingsSearch'
 import {
@@ -169,6 +171,11 @@ type SettingsBundle = {
  *  not noticeably ignored. */
 const SCROLL_CLAIM_MS = 800
 
+/** Below this the section list is a slide-in drawer rather than a docked column. The
+ *  same breakpoint the workspace uses, because it is the width at which the panel stops
+ *  being a dialog on a desktop and becomes the whole screen. */
+const SETTINGS_NARROW_QUERY = '(max-width:760px)'
+
 // Search entries harvested from a tab's real DOM while it was on screen. Module
 // scope, not component state: a tab visited in one Settings session stays fully
 // searchable in the next one, for as long as the page lives.
@@ -195,7 +202,20 @@ const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordS
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
 
-export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
+export function Settings({
+  activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation,
+  onStartTutorial, initialSection, voiceCommands=[], navOpen=false, onNavOpenChange,
+  drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs,
+}: {
+  activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void
+  onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void
+  initialSection?:string;voiceCommands?:Command[]
+  /** The mobile section drawer's open state. Owned by the composition root so the
+   *  shell's gesture recognizer can work it the way it works the workspace sidebar. */
+  navOpen?:boolean;onNavOpenChange?:(open:boolean)=>void
+  drawerHiddenTabs?:DrawerTabId[];onDrawerTabHidden?:(tab:DrawerTabId,hidden:boolean)=>void
+  onShowAllDrawerTabs?:()=>void
+}) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -247,6 +267,10 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [errors, setErrors] = useState<Record<string,string>>({})
   const [scanJob, setScanJob] = useState<HistoryScanJob|null>(null)
   const [activeTab,setActiveTab] = useState<SettingsTab>(()=>initialSection?tabForSection(initialSection):rememberedTab())
+  // The same breakpoint the workspace switches on, watched live rather than sampled
+  // once: the panel fills the viewport at this width, so a rotation or a desktop window
+  // dragged narrow has to move the section list between column and drawer with it.
+  const [narrow,setNarrow] = useState(()=>window.matchMedia(SETTINGS_NARROW_QUERY).matches)
   const [railSections,setRailSections] = useState<SettingsRailSection[]>([])
   const [activeSection,setActiveSection] = useState('')
   const [selectedProfileId,setSelectedProfileId] = useState<string|null>(null)
@@ -257,6 +281,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const [jump,setJump] = useState<{entry:SettingsSearchEntry}|null>(null)
   const [themePickerOpen,setThemePickerOpen] = useState(false)
   const panel = useRef<HTMLElement>(null)
+  const tabNavRef = useRef<HTMLElement>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const searchIndex = useRef<{source:Config|null;entries:SettingsSearchEntry[]}|null>(null)
   const wasSearching = useRef(false)
@@ -437,6 +462,28 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
 
   useEffect(()=>setThemePickerOpen(false),[activeTab])
 
+  useEffect(()=>{
+    const query=window.matchMedia(SETTINGS_NARROW_QUERY)
+    const changed=()=>setNarrow(query.matches)
+    changed();query.addEventListener('change',changed)
+    return()=>query.removeEventListener('change',changed)
+  },[])
+
+  const setNavOpen=useCallback((open:boolean)=>onNavOpenChange?.(open),[onNavOpenChange])
+  // Widening past the breakpoint turns the drawer back into a docked column, and a
+  // column that is permanently on screen must not leave a dismiss level standing —
+  // back would then swallow a press doing nothing visible.
+  useEffect(()=>{if(!narrow&&navOpen)setNavOpen(false)},[narrow,navOpen,setNavOpen])
+  /** Every route to a different tab, so none of them leaves the drawer standing open
+   *  over the tab it just switched to: the rail, a search result, a deep link. */
+  const selectTab=useCallback((tab:SettingsTab)=>{setActiveTab(tab);setNavOpen(false)},[setNavOpen])
+  // Opening the drawer moves focus onto the tab you are on, so the list is navigable by
+  // keyboard from where it starts rather than from wherever the trigger left the cursor.
+  useEffect(()=>{
+    if(!narrow||!navOpen)return
+    tabNavRef.current?.querySelector<HTMLElement>('button.active')?.focus()
+  },[narrow,navOpen])
+
   const dirty = useMemo(() => Boolean(config&&draft&&(
     !sameDraftValue(config,draft)
     ||Object.entries(config.harness_args).some(([name,args])=>harnessArgs[name]!==formatCommandLine(args))
@@ -469,6 +516,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   // Every level stands down while a shortcut is being recorded, because Escape then means
   // "cancel the recording" and belongs to the capture handler.
   useDismissLevel(()=>requestClose(),!capturingCommand,'settings')
+  // The section drawer is a level exactly as the workspace sidebar is one, and for the
+  // same reason: back has to close the navigation before it closes what you navigated to.
+  useDismissLevel(()=>setNavOpen(false),narrow&&navOpen&&!capturingCommand,'settings-nav')
   useDismissLevel(()=>setQuery(''),!!query&&!capturingCommand,'settings-search')
   useDismissLevel(()=>setThemePickerOpen(false),themePickerOpen&&!capturingCommand,'settings-theme-picker')
   useDismissLevel(()=>setCloseIntent(null),!!closeIntent&&!capturingCommand,'settings-close-confirm')
@@ -941,27 +991,52 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
       ||saved.cwd_strategy!==profile.cwd_strategy||saved.cwd_integration!==profile.cwd_integration
       ||formatCommandLine(saved.args)!==formatCommandLine(profile.args)
   }
-  // Before the bundle lands the panel renders its full chrome — header, tab
-  // rail, footer — with a placeholder in the content area, so opening Settings
+  // The panel's chrome, shared by the loading shell and the loaded one so the two
+  // cannot drift apart — the placeholder is the same header, the same section list,
+  // and the same footer, with only the content area standing in.
+  const activeTabLabel = settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'
+  const toggleNav = () => setNavOpen(!navOpen)
+  // Narrow, the header names where you are rather than what the panel is: the panel
+  // fills the screen, so "Settings" is the one thing already obvious, and the tab is
+  // the thing the docked column would otherwise have been showing. Both it and the
+  // hamburger open the section drawer, because the title is where the eye already is.
+  const heading = <div class="settings-heading">
+    <span>{narrow?'SETTINGS':'CONFIG::V6'}</span>
+    {narrow
+      ? <h2><button type="button" class="settings-heading-trigger" aria-expanded={navOpen} aria-controls="settings-tab-nav" onClick={toggleNav}>{activeTabLabel}<i aria-hidden="true">▾</i></button></h2>
+      : <h2>Settings</h2>}
+  </div>
+  const navTrigger = narrow
+    ? <button type="button" class="settings-nav-trigger" aria-label="Settings sections" aria-expanded={navOpen} aria-controls="settings-tab-nav" onClick={toggleNav}>
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="2.5" y1="4" x2="13.5" y2="4"/><line x1="2.5" y1="8" x2="13.5" y2="8"/><line x1="2.5" y1="12" x2="13.5" y2="12"/></svg>
+      </button>
+    : null
+  // Grouped from one array in both layouts. The wrapper is `display:contents` so its
+  // buttons stay direct flex children of the nav, and `role=presentation` because a
+  // tablist admits only tabs — the heading is a visual affordance.
+  // Narrow, the same list slides in over the content instead of docking beside it;
+  // closed it is `visibility:hidden` rather than `aria-hidden`, which is what keeps its
+  // buttons out of the focus order without hiding elements that are still focusable.
+  const tabNav = <Fragment>
+    <nav ref={tabNavRef} id="settings-tab-nav" class={`settings-tabs${narrow?' settings-tabs-drawer':''}${narrow&&navOpen?' open':''}`} role="tablist" aria-label="Settings sections">
+      {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
+        <span aria-hidden="true">{group.group}</span>
+        {group.tabs.map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>selectTab(tab.id)}>{tab.label}</button>)}
+      </div>)}
+    </nav>
+    {narrow&&navOpen&&<button type="button" class="settings-nav-scrim" aria-label="Close settings sections" onClick={()=>setNavOpen(false)} />}
+  </Fragment>
+  // Before the bundle lands the panel renders its full chrome — header, section
+  // list, footer — with a placeholder in the content area, so opening Settings
   // paints immediately and the chosen tab can be selected while data loads.
   if (!draft) return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal="true" aria-label="Settings">
-    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div>
+    <header>{navTrigger}{heading}
       {/* Disabled twin of the real search box: the index needs the config, and a
           control that appears late would shift the header out from under a tap. */}
       <div class="settings-search"><input type="search" disabled placeholder="Search settings…" aria-label="Search settings (loading)" /></div>
-      <button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
+      <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     <main class="settings-body">
-      {/* Grouped for the desktop sidebar, flat for the mobile rail, from one array.
-          The wrapper is `display:contents` so its buttons stay direct flex children
-          of the nav in both layouts, and `role=presentation` because a tablist
-          admits only tabs — the heading is a visual affordance, and a reader gets
-          the same flat list the phone does. */}
-      <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-        {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
-          <span aria-hidden="true">{group.group}</span>
-          {group.tabs.map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
-        </div>)}
-      </nav>
+      {tabNav}
       <div class="settings-content"><section class="settings-loading" role="status" aria-live="polite">{status}</section></div>
     </main>
     <footer><span aria-live="polite">{status}</span><button onClick={()=>requestClose()}>Cancel</button></footer>
@@ -1549,6 +1624,24 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Drawer tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <label>Right rail<select value={draft.utility_rail_display} onChange={e=>change('utility_rail_display',e.currentTarget.value as Config['utility_rail_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <p>The drawer's tab strips and the always-visible desktop rail keep independent icon or title modes.</p>
+          {/* The rail's own context menu is the primary way in and out of this — the way
+              back is where the way out was. This mirror exists for the phone, which has
+              no right-click, and for search, which cannot reach a context menu. The set
+              is global and device-local, so it is not part of the draft and takes effect
+              at once rather than on Save. */}
+          <div class="drawer-tab-visibility">
+            <strong>Visible panels · {DRAWER_TABS.length-drawerHiddenTabs.length} of {DRAWER_TABS.length}</strong>
+            {DRAWER_TABS.map(tab=>{
+              const shown=!drawerHiddenTabs.includes(tab.id)
+              // Hiding the last one is refused rather than allowed and recovered from.
+              const locked=shown&&!canHideDrawerTab(drawerHiddenTabs,tab.id)
+              return <label class="check" key={tab.id} title={locked?'At least one panel stays visible':undefined}>
+                <span>{tab.label}</span>
+                <input type="checkbox" checked={shown} disabled={locked||!onDrawerTabHidden} onChange={()=>onDrawerTabHidden?.(tab.id,shown)} />
+              </label>
+            })}
+            <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
+          </div>
           <h3>Interface scale</h3>
           <label>Desktop interface scale<select value={String(draft.ui_scale_desktop)} onChange={e=>changeUiScale('ui_scale_desktop',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
           <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
@@ -1589,7 +1682,7 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
   const searchResults=searching?searchSettings(searchIndex.current?.entries||[],query):[]
   const activeResult=Math.min(highlight,Math.max(0,searchResults.length-1))
   const openResult=(entry:SettingsSearchEntry)=>{
-    setActiveTab(entry.tab as SettingsTab)
+    selectTab(entry.tab as SettingsTab)
     setJump({entry})
     setQuery('')
     setHighlight(0)
@@ -1601,27 +1694,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
     else if(event.key==='Enter'){event.preventDefault();openResult(searchResults[activeResult])}
   }
   return <div class="settings-layer" onMouseDown={event=>event.target===event.currentTarget&&requestClose()}><section class="settings-panel" ref={panel} role="dialog" aria-modal={!closeIntent} aria-hidden={Boolean(closeIntent)} aria-label="Settings">
-    <header><div><span>CONFIG::V6</span><h2>Settings</h2></div>
+    <header>{navTrigger}{heading}
       <div class="settings-search">
         <input ref={searchInput} type="search" value={query} placeholder="Search settings…" aria-label="Search settings" role="combobox" aria-expanded={searchResults.length>0} aria-controls="settings-search-results" autocomplete="off" spellcheck={false} onInput={event=>{setQuery(event.currentTarget.value);setHighlight(0)}} onKeyDown={onSearchKey} />
         {!!query.trim()&&<div id="settings-search-results" class="settings-search-results" role="listbox" aria-label="Search results">
           {searchResults.length?searchResults.map((entry,index)=><button type="button" role="option" aria-selected={index===activeResult} class={index===activeResult?'active':''} key={`${entry.tab}:${entry.kind}:${entry.key}:${entry.occurrence}`} onPointerDown={event=>event.preventDefault()} onClick={()=>openResult(entry)}><strong>{entry.label}</strong><small>{entry.tabLabel}{entry.section?` · ${entry.section}`:''}</small></button>):<p>No setting matches “{query.trim()}”.</p>}
         </div>}
       </div>
-      <button aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
+      <button class="settings-close" aria-label="Close Settings" onClick={()=>requestClose()}>×</button></header>
     {!!query.trim()&&<div class="settings-search-scrim" onPointerDown={()=>setQuery('')} />}
     <main class="settings-body">
-      {/* Grouped for the desktop sidebar, flat for the mobile rail, from one array.
-          The wrapper is `display:contents` so its buttons stay direct flex children
-          of the nav in both layouts, and `role=presentation` because a tablist
-          admits only tabs — the heading is a visual affordance, and a reader gets
-          the same flat list the phone does. */}
-      <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-        {settingsTabGroups.map(group=><div class="settings-tab-group" role="presentation" key={group.group}>
-          <span aria-hidden="true">{group.group}</span>
-          {group.tabs.map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} class={activeTab===tab.id?'active':''} onClick={()=>setActiveTab(tab.id)}>{tab.label}</button>)}
-        </div>)}
-      </nav>
+      {tabNav}
       <div class="settings-content">
         {railSections.length>=SECTION_RAIL_MIN&&<nav class="settings-section-rail" aria-label={`${settingsTabs.find(tab=>tab.id===activeTab)?.label||'Settings'} sections`}>
           {railSections.map(section=><button type="button" key={section.id} class={activeSection===section.id?'active':''} aria-current={activeSection===section.id?'true':undefined} onClick={()=>scrollToSection(section.id)}>{section.label}</button>)}

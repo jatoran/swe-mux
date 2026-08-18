@@ -445,7 +445,10 @@ def test_hidden_drawer_tabs_stay_a_render_filter_with_a_way_back() -> None:
 
     # The way back is on the strip the tab was hidden from, not only in Settings.
     assert 'id="drawer-visible-tabs"' in app
-    assert "label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length} of ${DRAWER_TABS.length}`}" in app
+    assert (
+        "label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length} of ${DRAWER_TABS.length}`}"
+        in app
+    )
     assert ">Show all</button>" in app
     assert 'class="drawer-tab-visibility"' in settings
 
