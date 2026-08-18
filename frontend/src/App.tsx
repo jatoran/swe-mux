@@ -84,7 +84,7 @@ import {
 import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
-import type { ProjectScope } from './processFleet'
+import { resolveProjectScope, type ProjectScope } from './processFleet'
 import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
@@ -411,7 +411,10 @@ export function App() {
   // watching. Project-scoped by default, like every other Project-scoped tab — a session-scoped
   // processes view would churn its whole body on each focus change and read empty most of the
   // time, since most sessions are just their agent CLI and a conhost.
-  const [processProjectScope,setProcessProjectScope]=useState<ProjectScope>('')
+  // `null` is "the tab has not been scoped", which resolves to the Project the drawer is
+  // sitting beside; `''` is the user having asked for every Project. Collapsing the two made
+  // `All projects` unselectable — it snapped straight back to the active Project.
+  const [processProjectScope,setProcessProjectScope]=useState<ProjectScope|null>(null)
   // The Schedule tab's scope, kept here for the same reason: '' is every Project's
   // schedules ("what fires tonight"), anything else is one Project's.
   const [scheduleScope,setScheduleScope]=useState<string>('')
@@ -5723,7 +5726,7 @@ export function App() {
         // '' (all Projects) is the stored default; an unscoped tab means the Project the
         // drawer is sitting beside, so it resolves to the active one at render time and
         // follows a Project switch instead of pinning whichever was active when it opened.
-        processScope={processProjectScope&&projects.some(project=>project.id===processProjectScope)?processProjectScope:(projectId||'')}
+        processScope={resolveProjectScope(processProjectScope,projectId||'',projects)}
         onProcessScope={setProcessProjectScope}
         // Same resolution as the process scope: an unscoped tab follows the Project the
         // drawer is sitting beside rather than pinning whichever was active on open.

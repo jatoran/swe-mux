@@ -70,6 +70,28 @@ export type Preview = {
 /** '' means every Project; anything else scopes a surface to that Project. */
 export type ProjectScope = string
 
+/**
+ * The Project scope a docked surface should draw, given what the user last chose.
+ *
+ * `null` and `''` are deliberately not the same thing. `null` is "never scoped", which means
+ * the Project the drawer is sitting beside — so the tab follows a Project switch instead of
+ * pinning whichever Project was active when it first opened. `''` is the user having asked for
+ * every Project, and it has to survive, because collapsing the two made `All projects`
+ * unselectable: choosing it stored a falsy value that read as "never scoped" and snapped
+ * straight back to the active Project.
+ *
+ * A stored id whose Project has since been deleted falls back the same way `null` does.
+ */
+export function resolveProjectScope(
+  stored: ProjectScope | null,
+  activeProjectId: string,
+  projects: Array<{ id: string }>,
+): ProjectScope {
+  if (stored === null) return activeProjectId
+  if (stored === '') return ''
+  return projects.some(project => project.id === stored) ? stored : activeProjectId
+}
+
 /** Structural, so both a `Session` and a test fixture satisfy it. */
 type ScopeSession = { id: string; project_id: string }
 

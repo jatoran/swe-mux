@@ -136,6 +136,11 @@
   reconciles with the sidebar's resource summary.
 - Loopback listener rows are deduped by port, preferring the IPv4 form, so a server bound to
   both stacks is one previewable row rather than two rows for one endpoint.
+- The drawer tab's stored scope distinguishes **unset** (`null`) from **every Project** (`''`),
+  through `resolveProjectScope`. Unset resolves to the Project the drawer is sitting beside, so
+  the tab follows a Project switch instead of pinning whichever was active when it opened.
+  Collapsing the two made `All projects` unselectable: choosing it stored a falsy value that
+  read as unset and snapped straight back to the active Project.
 - **The inspector draws one line per process, and expands for the rest.** The line carries what
   you scan for — executable, PID, the command with its own executable stripped off the front,
   live CPU/RSS, and network counts only when there are any — plus anything abnormal.

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  combineSessionSnapshots, fleetViewTotals, normalizeSnapshot, scopedSessionGroups,
+  combineSessionSnapshots, fleetViewTotals, normalizeSnapshot, resolveProjectScope,
+  scopedSessionGroups,
   type FleetSnapshot, type ProcessItem, type SessionSnapshot,
 } from '../src/processFleet.ts'
 
@@ -136,4 +137,24 @@ test('no snapshot is a zeroed line rather than a throw', () => {
   assert.deepEqual(fleetViewTotals(null, [], false), {
     sessions: 0, processes: 0, cpu_pct: 0, memory_bytes: 0, listeners: 0, connections: 0,
   })
+})
+
+test('an unscoped surface follows the active Project rather than pinning one', () => {
+  const projects = [{ id: 'p1' }, { id: 'p2' }]
+  assert.equal(resolveProjectScope(null, 'p1', projects), 'p1')
+  assert.equal(resolveProjectScope(null, 'p2', projects), 'p2')
+  assert.equal(resolveProjectScope(null, '', projects), '')
+})
+
+test('"All projects" survives, because a falsy scope is not the same as an unset one', () => {
+  const projects = [{ id: 'p1' }, { id: 'p2' }]
+  // The regression: '' read as "unset" and snapped straight back to the active Project, so
+  // the option could be chosen and never took effect.
+  assert.equal(resolveProjectScope('', 'p1', projects), '')
+})
+
+test('a chosen Project sticks, and one that has since been deleted falls back to the active', () => {
+  const projects = [{ id: 'p1' }, { id: 'p2' }]
+  assert.equal(resolveProjectScope('p2', 'p1', projects), 'p2')
+  assert.equal(resolveProjectScope('gone', 'p1', projects), 'p1')
 })
