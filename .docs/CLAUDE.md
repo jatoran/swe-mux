@@ -46,7 +46,7 @@
 - Changing device presence (what counts as "in use", the heartbeat, the leading device):
   `design/features/device-presence.md`, `design/interfaces.md`,
   `design/features/notifications.md`, `design/features/terminal-input.md`
-- Changing the utility drawer (tabs, recursive desktop dock/launcher), Action rail placement, or where
+- Changing the utility drawer (tabs, which of them are drawn, recursive desktop dock/launcher), Action rail placement, or where
   inserted text lands: `design/features/ui.md`, `design/features/workspace-layout.md`,
   `technical/frontend/workspace-state.md`, `technical/frontend/packages.md`;
   completed custom drawer layout implementation record:
@@ -87,7 +87,7 @@
   `design/features/provider-accounts.md`, `design/features/backends.md`
 - Changing history, transcripts, or cross-vendor review: `design/features/history.md`,
   `design/interfaces.md`
-- Changing Git status, comparison, diff review, or worktree tooling:
+- Changing Git status, comparison, diff review, first-time repository initialization, or worktree tooling:
   `design/features/git.md`, `design/features/project-resources.md`, `design/interfaces.md`,
   `technical/backend/packages.md`, `technical/frontend/packages.md`,
   `technical/frontend/workspace-state.md`

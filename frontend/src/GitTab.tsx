@@ -39,7 +39,13 @@ import type { ReviewLocator } from './gitReview'
 //  * Provenance is the durable evidence ledger connecting commits to sessions and runs.
 //
 // The tab remains deliberately read-mostly. Its only mutations are the worktree add/remove
-// operations the Git feature already owns; it never stages, commits, merges, or checks out.
+// operations the Git feature already owns, and creating the repository itself for a Project
+// that has none; it never stages, commits, merges, or checks out.
+//
+// That fourth state — a Project folder Git knows nothing about — is why the tab is not
+// hidden on a Project without a repository. It used to answer with Git's own `fatal:`,
+// which is the one reading here nobody can act on. It now offers the action that reading
+// implies, and the daemon re-checks the folder before touching it (`git_init.py`).
 
 type GitView = 'map' | 'log' | 'provenance'
 const GRAPH_STEP = 80
@@ -120,6 +126,9 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
   const [addForm,setAddForm]=useState({path:'',branch:'',start:''})
   const [remove,setRemove]=useState<{path:string;force:boolean}|null>(null)
   const [compareOverride,setCompareOverride]=useState(project?.git_compare_ref||'')
+  // Set only from the daemon's own `not_git_repository`, never inferred from a message.
+  const [notRepository,setNotRepository]=useState(false)
+  const [initNote,setInitNote]=useState('')
   const generation=useRef(0)
   const graphGeneration=useRef(0)
   const provenanceGeneration=useRef(0)
@@ -133,8 +142,12 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
       if(mine!==generation.current)return
       const parsed=parseGitOverview(raw)
       if(!parsed)throw new Error('The daemon returned an invalid Git overview.')
-      setOverview(parsed);setError('');setPreview({})
-    }catch(cause){if(mine===generation.current){setOverview(null);setError(describeGitError(cause,'Reading the repository'))}}
+      setOverview(parsed);setError('');setPreview({});setNotRepository(false)
+    }catch(cause){if(mine===generation.current){
+      const missing=(cause as ApiError)?.detail?.code==='not_git_repository'
+      setOverview(null);setNotRepository(missing)
+      setError(missing?'':describeGitError(cause,'Reading the repository'))
+    }}
     finally{if(mine===generation.current)setBusy(false)}
   },[project?.id])
 
@@ -159,7 +172,7 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
   },[project?.id])
 
   useEffect(()=>{
-    setOverview(null);setGraph(null);setProvenance([]);setProvenanceError('');setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setCompareOverride(project?.git_compare_ref||'')
+    setOverview(null);setGraph(null);setProvenance([]);setProvenanceError('');setExpandedTree('');setExpandedCommit('');setCommitCache(new Map());setReview(null);setError('');setNotRepository(false);setInitNote('');setCompareOverride(project?.git_compare_ref||'')
     void refresh();void refreshProvenance()
     const changed=()=>{void refresh();void refreshProvenance()}
     window.addEventListener('mux:git-changed',changed);window.addEventListener('mux:events-connected',changed);window.addEventListener('mux:worktree-created',changed);window.addEventListener('mux:worktree-removed',changed)
@@ -273,12 +286,37 @@ export function GitTab({project,sessions,onOpenFile,onOpenWorktreeFile,onSendToA
     try{await api('POST','/api/git/worktrees',{cwd:project.root,path:addForm.path,branch:addForm.branch||undefined,start_point:addForm.start||undefined});setAdding(false);setAddForm({path:'',branch:'',start:''});await refresh()}
     catch(cause){setError(describeGitError(cause,'Creating the worktree',true))}finally{setBusy(false)}
   }
+  const initialize=async()=>{
+    setBusy(true);setError('');setInitNote('')
+    try{
+      const result=await api<{branch:string;gitignore:string}>('POST','/api/git/init',{project_id:project.id},{timeoutMs:60000})
+      setInitNote(result.gitignore==='created'
+        ?`Repository created on ${result.branch}, with a starter .gitignore. Nothing is staged yet.`
+        :`Repository created on ${result.branch}. The folder already had a .gitignore, which was left alone.`)
+      // Everything else in the tab reads through the same refresh path, and other clients
+      // learn about it from the daemon's `git_changed` event rather than from this one.
+      await refresh();void refreshProvenance()
+    }catch(cause){setError(describeGitError(cause,'Creating the repository',true))}
+    finally{setBusy(false)}
+  }
   const removeWorktree=async()=>{
     if(!remove)return
     setBusy(true)
     try{await api('DELETE','/api/git/worktrees',{cwd:project.root,path:remove.path,force:remove.force});setRemove(null);setExpandedTree('');await refresh()}
     catch(cause){const message=describeGitError(cause,'Removing the worktree',true);await refresh();setError(message)}finally{setBusy(false)}
   }
+
+  // Nothing here has a repository to read, so the three views, the compare control, and
+  // the worktree form are all absent rather than present-and-empty: the only decision
+  // available is whether to create one.
+  if(notRepository)return <div class="git-tab git-init">
+    <p class="git-state">This Project's folder is not a Git repository.</p>
+    <p class="drawer-empty"><code>{project.root}</code></p>
+    <p class="drawer-empty">Initializing creates a repository here and writes a starter <code>.gitignore</code> matched to what the folder already contains. Nothing is staged and no commit is made, so history starts empty and the files are exactly as they are now. An existing <code>.gitignore</code> is left alone.</p>
+    <div class="git-map-actions"><button disabled={busy} onClick={()=>void initialize()}>{busy?'Initializing…':'Initialize repository'}</button></div>
+    {initNote&&<p class="git-state" role="status">{initNote}</p>}
+    {error&&<p class="git-state error" role="alert">{error}</p>}
+  </div>
 
   return <div class="git-tab git-review-tab">
     <div class="git-toolbar">

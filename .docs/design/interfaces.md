@@ -1326,6 +1326,7 @@ GET    /git/worktrees
 GET    /git/graph
 GET    /git/commits/{oid}/changes
 GET    /git/diff
+POST   /git/init                     {project_id}
 POST   /git/worktrees
 POST   /git/worktrees/session
 DELETE /git/worktrees
@@ -1336,6 +1337,14 @@ POST   /previews                     {session_id, url, approved?, attach?, targe
 POST   /previews/{id}/capture         {viewport?, width?, height?, clip?}
 DELETE /previews/{id}
 ```
+
+`POST /git/init` creates a repository for a Project whose folder has none, writes a starter
+`.gitignore` when the folder has no such file, stages nothing and commits nothing, and returns
+`{ok, root, branch, gitignore: "created"|"existing", operation_id}` plus a `git_changed` event.
+It re-resolves the folder's repository state inside the request: `404 project_not_found`,
+`404 root_unavailable`, `409 already_initialized` for a folder Git already tracks, and
+`400 git_error` carrying Git's own message. The reading that leads a client here is the
+`404 not_git_repository` code from `GET /git/worktrees`. See `features/git.md`.
 
 `POST /previews/{id}/capture` headlessly screenshots the live loopback server and saves a PNG
 under the owning Project's `.swe-mux/preview-shots/` (data-dir fallback), returning
