@@ -2364,6 +2364,126 @@ def _persist_approval_candidate(
             log.debug("approval candidate meta sink failed", exc_info=True)
 
 
+#: How long a decided approval waits for its dialog to appear, and how often it
+#: looks. Defaults only; the server publishes the configured window per session.
+APPROVAL_KEYSTROKE_WINDOW_SECONDS = 30.0
+APPROVAL_KEYSTROKE_POLL_SECONDS = 0.5
+
+
+def _keystroke_delivery_key(session: Session) -> str | None:
+    """The key that would deliver this session's approval, or None to stay silent.
+
+    None for every reason not to type: the install switched it off, the harness
+    declares no measured accept key, or the session is under replay. A harness
+    whose CLI honours the hook decision also lands here in practice without any
+    special case, because its dialog never reaches the screen for the watcher to
+    answer.
+    """
+    if getattr(session, "observation_replay", False):
+        return None
+    if not getattr(session, "approval_keystroke_delivery", True):
+        return None
+    return descriptor(session.record.backend).approval_accept_key or None
+
+
+async def _deliver_decided_approval(
+    session: Session,
+    events: EventBus,
+    *,
+    accept_key: str,
+    request: str,
+    tool_use_id: str | None,
+) -> None:
+    """Type the accept key for an approval the policy has already granted.
+
+    The decision is *not* made here and cannot be: this runs only after
+    `auto_approval_decision` allowed a structured `PermissionRequest`, so the
+    tool and its arguments were known, the floor was applied, and the grant was
+    charged. All that is left is delivery, for a CLI that publishes the request
+    and ignores the answer.
+
+    Three gates stand between that decision and a keystroke, and each closes a
+    way this could type into the wrong thing:
+
+    - **A matching request must exist.** A trust dialog, a `/clear` confirmation,
+      a login, or a startup dialog raises no permission request, so no watcher is
+      ever armed for one and none of them is reachable from here. This is the
+      gate that separates the design from a blind Enter at the screen.
+    - **This session's own screen must be showing an approval**, re-read
+      immediately before the write rather than when the watcher started.
+    - **The dialog must still be the one that was decided**, by prompt
+      fingerprint, so a first dialog answered by the user and replaced by a
+      second cannot inherit the first one's grant.
+
+    The ordinary stabilization timer stays armed underneath. If any gate never
+    opens, the approval becomes visible attention on its usual 5 s boundary,
+    which is exactly the behaviour with this feature switched off.
+    """
+    window = float(
+        getattr(session, "approval_keystroke_window_seconds", APPROVAL_KEYSTROKE_WINDOW_SECONDS)
+    )
+    poll = max(0.05, float(
+        getattr(session, "approval_keystroke_poll_seconds", APPROVAL_KEYSTROKE_POLL_SECONDS)
+    ))
+    deadline = time.monotonic() + window
+    state = _observation_state(session)
+    # unsupervised-loop-ok: one watcher per decided approval, bounded by `window`
+    # and cancelled with the approval it belongs to.
+    while True:
+        if state.get("pending_auto_delivery") is not tool_use_id:
+            return
+        if session.record.state in {"exited", "crashed"}:
+            return
+        if session_pty_state(session) == "approval":
+            break
+        if time.monotonic() >= deadline:
+            _ledger_keystroke(session, "expired", request=request, tool_use_id=tool_use_id)
+            return
+        await asyncio.sleep(poll)
+
+    sink = getattr(session, "approval_input_sink", None)
+    if not callable(sink):
+        _ledger_keystroke(session, "no_input_sink", request=request, tool_use_id=tool_use_id)
+        return
+    try:
+        sink(accept_key, "approval-auto")
+    except Exception:
+        log.exception("approval keystroke delivery failed for session %s", session.record.id)
+        _ledger_keystroke(session, "write_failed", request=request, tool_use_id=tool_use_id)
+        return
+    state.pop("pending_auto_delivery", None)
+    # Retire the visible-approval timer only after the write landed. Cancelling
+    # first would leave a session with no pending approval and no answer if the
+    # write raised.
+    cancel_pending_approval(session, "approval_auto_delivered")
+    _ledger_keystroke(session, "delivered", request=request, tool_use_id=tool_use_id)
+    await events.emit(
+        "approval_auto_delivered",
+        session_id=session.record.id,
+        source="control-plane",
+        scope="root",
+        detail=request,
+    )
+    _publish_update(session)
+
+
+def _ledger_keystroke(
+    session: Session, outcome: str, *, request: str, tool_use_id: str | None
+) -> None:
+    transitions = getattr(session, "state_transitions", None)
+    if transitions is None:
+        return
+    transitions.append(
+        {
+            "ts": time.time(),
+            "kind": "approval_keystroke_delivery",
+            "outcome": outcome,
+            "request": request,
+            "tool_use_id": tool_use_id,
+        }
+    )
+
+
 def cancel_pending_approval(session: Session, reason: str) -> bool:
     """Cancel an approval candidate before it becomes user-visible attention."""
     state = _observation_state(session)
@@ -3733,12 +3853,6 @@ async def apply_hook_observation(
                     session, auto_outcome, mode=mode, request=request, tool_use_id=tool_use_id
                 )
                 if auto_outcome.allowed:
-                    # No stabilization timer, no `awaiting`, no sound, no push.
-                    # The request never becomes attention because it was never
-                    # left for the human — and mux knows the decision instant,
-                    # which is precisely the evidence the delegated-approval
-                    # heuristic has to infer from the screen when Codex's own
-                    # reviewer answers (see APPROVAL_AUTO_REVIEW_CEILING_SECONDS).
                     await events.emit(
                         "approval_auto_approved",
                         session_id=session.record.id,
@@ -3749,6 +3863,44 @@ async def apply_hook_observation(
                         rule=auto_outcome.matched_rule,
                     )
                     _publish_update(session)
+                    accept_key = _keystroke_delivery_key(session)
+                    if accept_key is None:
+                        # The CLI honours the decision, so the dialog never
+                        # reaches the screen: return it and raise nothing.
+                        return {
+                            "hookEventName": "PermissionRequest",
+                            "decision": "allow",
+                            "reason": f"swe-mux approval mode: {auto_outcome.reason}",
+                        }
+                    # Keystroke delivery is armed *underneath* the ordinary
+                    # stabilization timer rather than instead of it. If the
+                    # dialog never appears — because a CLI that honours the
+                    # decision consumed it — the watcher expires silently and
+                    # nothing was typed. If the write never lands, the approval
+                    # becomes visible attention on its usual 5 s boundary, which
+                    # is the behaviour with this switched off. The dangerous
+                    # arrangement is the other one: retiring the visible
+                    # approval on the strength of a keystroke that may not
+                    # arrive would leave a session parked at a dialog that
+                    # nothing is showing the operator.
+                    _observation_state(session)["pending_auto_delivery"] = tool_use_id
+                    await _request_stabilized_approval(
+                        session,
+                        events,
+                        detail=tool,
+                        source="hook",
+                        evidence=f"hook:{event_type}",
+                        tool_use_id=tool_use_id,
+                    )
+                    asyncio.ensure_future(
+                        _deliver_decided_approval(
+                            session,
+                            events,
+                            accept_key=accept_key,
+                            request=request,
+                            tool_use_id=tool_use_id,
+                        )
+                    )
                     return {
                         "hookEventName": "PermissionRequest",
                         "decision": "allow",

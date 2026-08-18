@@ -36,6 +36,11 @@ def _claude(mode: str = "wait", rules: list[str] | None = None) -> Any:
     # explicitly disabled under replay, so these tests exercise it as a live
     # session would.
     session.observation_replay = False
+    # This file is about the *hook decision* channel — what mux answers and what
+    # it refuses to answer. Keystroke delivery is the separate fallback for a CLI
+    # that ignores that answer, and arming it also arms the stabilization safety
+    # net underneath; `test_approval_keystroke.py` owns those interactions.
+    session.approval_keystroke_delivery = False
     if mode != "wait":
         session.record.approval_policy = ApprovalPolicy(
             mode=mode,

@@ -2157,6 +2157,15 @@ class Session:
         # hook secret, transcript path) into the supervisor so a future daemon
         # can rebuild this Session after a restart. None for in-process PTYs.
         self.meta_sink: Callable[[], None] | None = None
+        # Writes operator-class input to this PTY with the full evidence
+        # accounting (`input_revision`, `terminal_input`, composer and interrupt
+        # bookkeeping) that every human-input path owes delivery readiness.
+        # Set by the server, which owns those helpers; the observer calls it to
+        # deliver an approval it has already decided (`approvals.md`). None on a
+        # session the server never wired, and the observer then writes nothing —
+        # a silent no-op is the correct failure, because the ordinary visible
+        # approval is still armed behind it.
+        self.approval_input_sink: Callable[[str, str], None] | None = None
         # Reads the same metadata blob for the durable recovery registry, which
         # unlike the supervisor mirror survives the PTY owner's own death. Set
         # for every session, supervised or in-process, because the case it covers
@@ -2647,6 +2656,16 @@ class SessionManager:
         # Repairs discovered while adopting supervisor metadata are consumed by
         # the composition root to invalidate rebuildable provider telemetry.
         self.identity_repairs: list[tuple[str, str | None]] = []
+        # Builds the per-session operator write path (`Session.approval_input_sink`).
+        # Installed by the composition root, which owns the input accounting.
+        self.operator_input_sink_factory: Callable[[Session], Callable[[str, str], None]] | None = (
+            None
+        )
+        # Daemon-configured bounds stamped onto every session as it is wired, so
+        # the observer reads them off the session it already has instead of
+        # importing config — the same shape `approval_stabilization_seconds`
+        # already uses for its test overrides.
+        self.session_defaults: dict[str, Any] = {}
         # Collision groups the live identity sweep has already reported, so a
         # persistent (unhealable) conflict logs once rather than every pass.
         self._known_identity_collisions: set[tuple[str, str]] = set()
@@ -2932,6 +2951,7 @@ class SessionManager:
             session.scrollback.append(initial_output)
         self.sessions[sid] = session
         self._attach_ledger_sink(session)
+        self._attach_operator_input(session)
         self._attach_recovery(session)
         if isinstance(pty, RemotePtyHost):
             self._attach_meta_sink(session)
@@ -3107,6 +3127,22 @@ class SessionManager:
         store = getattr(self, "status_timeline", None)
         if store is not None:
             store.attach(session)
+
+    def _attach_operator_input(self, session: Session) -> None:
+        """Give this session the write path an approval delivery needs.
+
+        The factory is installed by the server, which owns the input-accounting
+        helpers (`input_revision`, `terminal_input`, composer and interrupt
+        bookkeeping) that a PTY write must not skip. Absent factory leaves the
+        sink `None` and the observer writes nothing, which is the correct
+        degradation: the ordinary visible approval is armed behind it either way.
+        getattr-guarded for the partial managers tests build via `__new__`.
+        """
+        factory = getattr(self, "operator_input_sink_factory", None)
+        if callable(factory):
+            session.approval_input_sink = factory(session)
+        for name, value in (getattr(self, "session_defaults", None) or {}).items():
+            setattr(session, name, value)
 
     @staticmethod
     def _session_meta(session: Session) -> dict[str, Any]:
@@ -3919,6 +3955,7 @@ class SessionManager:
                 session.agent_promoted_at = time.time()
             self.sessions[sid] = session
             self._attach_ledger_sink(session)
+            self._attach_operator_input(session)
             self._attach_meta_sink(session)
             # Adopted sessions rejoin the durable registry too, or a session that
             # survived one restart would silently stop being checkpointed and its
@@ -4048,6 +4085,7 @@ class SessionManager:
                 continue
             self.sessions[row.session_id] = session
             self._attach_ledger_sink(session)
+            self._attach_operator_input(session)
             restored += 1
             await self.events.emit(
                 "session_cold_restored",
