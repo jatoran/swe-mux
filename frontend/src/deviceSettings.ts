@@ -12,7 +12,7 @@
 // are synchronous against the cache so hot paths like handleSessionSound stay
 // sync; an unloaded cache simply yields defaults.
 import { api } from './api.ts'
-import { clearProjectRailBlob, railConfigFromBlob, railHasProjectOverride, railProjectScopeKind, writeRailConfigBlob, type RailBlob, type RailConfig, type RailScopeKind } from './commandRail.ts'
+import { clearProjectRailBlob, railConfigFromBlob, writeRailConfigBlob, type RailBlob, type RailConfig } from './commandRail.ts'
 import { resolveRail, type ResolvedRail } from './railScope.ts'
 
 export type SettingsProfile = 'desktop' | 'mobile'
@@ -97,15 +97,6 @@ export function loadRailConfig(projectId?: string): RailConfig {
 export async function saveRailConfig(config: RailConfig, projectId?: string): Promise<void> {
   const next = writeRailConfigBlob(railBlob(), config, projectId)
   await saveDomain(RAIL_PROFILE, 'commandRail', next as unknown as Record<string, unknown>)
-}
-
-export function projectRailIsCustom(projectId: string): boolean {
-  return railHasProjectOverride(railBlob(), projectId)
-}
-
-/** Whether a project inherits, overlays (delta), or forks the global config. */
-export function projectRailScope(projectId: string): RailScopeKind {
-  return railProjectScopeKind(railBlob(), projectId)
 }
 
 /** Drop a project's override so it inherits the global rail again. Reverts a

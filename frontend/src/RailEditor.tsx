@@ -3,6 +3,7 @@ import type { JSX } from 'preact'
 import { api } from './api'
 import {
   allRailBackends, defaultRailConfig, isBuiltinRailId, railItemVisible, railPayload,
+  railProjectScopeKind,
   RAIL_DEVICES, RAIL_SURFACES,
   type RailBackend, type RailBlob, type RailConfig, type RailDevice, type RailItem,
   type RailItemType, type RailRow, type RailSurface,
@@ -389,7 +390,10 @@ export function RailEditor() {
     <div class="rail-toolbar">
       <label class="rail-scope">Editing<select value={scope} onChange={event => { setScope(event.currentTarget.value); setExpandedItem(null); setNote('') }}>
         <option value="">Global (all projects)</option>
-        {projects.map(project => <option value={project.id}>{project.name}</option>)}
+        {projects.map(project => {
+          const projectKind = railProjectScopeKind(currentRailBlob(), project.id)
+          return <option value={project.id}>{project.name}{projectKind === 'fork' ? ' (detached)' : projectKind === 'delta' ? ' (has additions)' : ''}</option>
+        })}
       </select></label>
       <div class="rail-device-switch" role="group" aria-label="Device layout to edit">
         {RAIL_DEVICES.map(name => <button

@@ -23,8 +23,8 @@
 // never requires the full editor.
 
 import {
-  isProjectRailDelta, newRailRowId, railConfigFromBlob, railProjectScopeKind, resolveDeltaScope,
-  writeRailConfigBlob,
+  isProjectRailDelta, newRailRowId, railConfigFromBlob, railItemVisible, railProjectScopeKind,
+  resolveDeltaScope, writeRailConfigBlob,
   RAIL_BLOB_VERSION, RAIL_DEVICES, RAIL_SURFACES,
   type RailBlob, type RailConfig, type RailDevice, type RailItem, type RailProjectDelta,
   type RailRow, type RailScopeKind, type RailSurface,
@@ -178,7 +178,10 @@ export function addScopedRailItem(
   return writeDelta(blob, projectId, { ...current, items, layouts })
 }
 
-/** Remove a custom item — wherever it lives — and every button pointing at it. */
+/** Remove a custom item — wherever it lives — and every button pointing at it.
+ *  Project rows the removal empties are pruned, so pinning and unpinning a
+ *  project action leaves no stray delta behind and the project returns to plain
+ *  inheritance. */
 export function removeScopedRailItem(blob: RailBlob | undefined, projectId: string | undefined, itemId: string): RailBlob {
   const resolved = resolveRail(blob, projectId)
   if (projectId && resolved.projectItemIds.has(itemId)) {
@@ -191,8 +194,12 @@ export function removeScopedRailItem(blob: RailBlob | undefined, projectId: stri
       for (const surface of RAIL_SURFACES) {
         const rows = deviceRows[surface]
         if (!rows) continue
+        const kept = rows
+          .map(row => ({ ...row, items: row.items.filter(id => id !== itemId) }))
+          .filter((row, index) => row.items.length || rows[index].items.every(id => id !== itemId))
+        if (!kept.length) continue
         layouts[device] = layouts[device] || {}
-        layouts[device]![surface] = rows.map(row => ({ ...row, items: row.items.filter(id => id !== itemId) }))
+        layouts[device]![surface] = kept
       }
     }
     const delta: RailProjectDelta = {
@@ -260,11 +267,17 @@ export function toggleScopedPlacement(
 const bareName = (text: string | undefined): string => (text || '').trim().replace(/^[/$]/, '').toLowerCase()
 
 /** The catalog item a pinned skill (or slash command) resolves to, if any. The
- *  match is by payload, not by id, so a hand-authored button counts as pinned. */
-export function pinnedSkillItem(config: RailConfig, name: string): RailItem | null {
+ *  match is by payload, not by id, so a hand-authored button counts as pinned.
+ *  With a backend given, only items that backend can see count: a skill pinned
+ *  for Claude must read as unpinned in a Codex session, where pinning creates a
+ *  second, Codex-restricted button rather than stealing Claude's. */
+export function pinnedSkillItem(config: RailConfig, name: string, backend?: string): RailItem | null {
   const wanted = bareName(name)
   if (!wanted) return null
-  return config.items.find(item => (item.type === 'skill' || item.type === 'slash') && bareName(item.text) === wanted) || null
+  return config.items.find(item =>
+    (item.type === 'skill' || item.type === 'slash')
+    && bareName(item.text) === wanted
+    && (!backend || railItemVisible(item, backend))) || null
 }
 
 /** The catalog item a pinned prompt template resolves to, if any. */
@@ -296,7 +309,7 @@ export interface SkillPin {
  *  project when the skill itself is project-scoped (and the project not forked). */
 export function pinSkill(blob: RailBlob | undefined, projectId: string | undefined, pin: SkillPin): RailBlob {
   const effective = railConfigFromBlob(blob, projectId)
-  if (pinnedSkillItem(effective, pin.name)) return blob || {}
+  if (pinnedSkillItem(effective, pin.name, pin.backend)) return blob || {}
   const name = pin.name.trim().replace(/^[/$]/, '')
   if (!name) return blob || {}
   const type = pin.kind === 'command' ? 'slash' : 'skill'

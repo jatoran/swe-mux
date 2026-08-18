@@ -4,7 +4,7 @@ import {
   BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig, itemDefaultSurface,
   mergeRailCatalog, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
   railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
-  type LegacyRailItem, type RailConfig, type RailContext, type RailItem,
+  type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem,
 } from '../src/commandRail.ts'
 import { AGENT_NEWLINE } from '../src/terminalKeys.ts'
 
@@ -282,6 +282,27 @@ test('clearing a project override reverts it to the global config', () => {
   const cleared = clearProjectRailBlob(writeRailConfigBlob(undefined, custom, 'proj-a'), 'proj-a')
   assert.equal(railHasProjectOverride(cleared, 'proj-a'), false)
   assert.deepEqual(ids(railConfigFromBlob(cleared, 'proj-a'), 'strip'), ids(defaultRailConfig(), 'strip'))
+})
+
+test('a project delta overlays the global config on the render path', () => {
+  // The overlay semantics live in railScope.test.ts; this pins the storage
+  // shape: `mode: 'delta'` in a project slot resolves as global-plus-additions
+  // wherever `railConfigFromBlob` is the reader (panes, drawer, voice).
+  const blob: RailBlob = {
+    projects: {
+      'proj-a': {
+        mode: 'delta',
+        items: [{ id: 'proj:skill:ship', type: 'skill', label: 'ship', text: 'ship' }],
+        layouts: { desktop: { panel: [{ id: 'proj-row', label: 'Project', items: ['proj:skill:ship'] }] } },
+      },
+    },
+  }
+  const effective = railConfigFromBlob(blob, 'proj-a')
+  assert.deepEqual(ids(effective, 'panel'), [...ids(defaultRailConfig(), 'panel'), 'proj:skill:ship'])
+  assert.deepEqual(ids(effective, 'strip'), ids(defaultRailConfig(), 'strip'))
+  // Global and other projects never see the addition.
+  assert.equal(ids(railConfigFromBlob(blob), 'panel').includes('proj:skill:ship'), false)
+  assert.equal(ids(railConfigFromBlob(blob, 'proj-b'), 'panel').includes('proj:skill:ship'), false)
 })
 
 test('a pre-layout blob is migrated per scope, by shape rather than by version', () => {

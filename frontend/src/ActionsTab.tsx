@@ -327,7 +327,7 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
         {groups.map(group => <div key={group.scope} class="drawer-skill-group">
           <h5>{group.label}</h5>
           {group.skills.map(skill => {
-            const pinned = pinnedSkillItem(railResolved.config, skill.name)
+            const pinned = pinnedSkillItem(railResolved.config, skill.name, backend)
             return <div class="drawer-skill-row" key={skill.path}>
               <button
                 class={skill.shadowed_by ? 'shadowed' : undefined}
