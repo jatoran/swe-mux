@@ -59,6 +59,23 @@
   claims no existing entry - the opposite of a resume, which continues its conversation's row.
   The two are related by a `branch` lineage edge naming the message the fork was cut at
   (`sessions.md`), which is the only record that they share a prefix at all.
+- **The Work lineage section reads in the direction of the entry it sits on.** An edge names two
+  runs, but the reader is standing on one of them, so it renders as "Branched from X" or
+  "Branched into Y" rather than as `X -> Y`. The other end is named the way every other surface
+  names it and opens on click (`viewById`).
+- **Naming both ends is the daemon's job** (`_decorate_lineage_endpoints`). Each end is a *run* in
+  one of three states the browser cannot see: a live session names itself through the session
+  manager, an ended one through its History row, and a deleted one has neither. A client holding
+  one page of results has none of those for the far end of an edge, which is how the section came
+  to print raw ids. A deleted row is reported as `known: false` rather than dropped, because the
+  edge still records that the fork happened and removing it would silently reshape the lineage.
+- **A branch edge keeps a bounded excerpt of the message it was cut at**, written when the branch
+  is made rather than resolved from `cut_offset` on demand. The only reader is a human asking
+  where a conversation came from weeks later, by which time the parent transcript may have been
+  compacted, relocated by a cwd change, or deleted; re-reading a whole conversation to render one
+  line is the wrong shape even when it is still there. Branches made before the transcript-fork
+  rewrite carry no cut at all - the fork was the CLI's and mux never saw a message id - so they
+  render as the relation alone rather than an invented position.
 - **A conversation held by a process mux does not own is refused too**
   (`409 conversation_held`, naming the holder's kind, pid and job).
   A CLI opens a conversation once and answers a second opener by exiting, so such a resume
