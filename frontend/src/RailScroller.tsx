@@ -7,6 +7,7 @@ import {
   railFocusTarget,
   railOverflowState,
   railPageTarget,
+  RAIL_PAN_SLOP_PX,
   type RailOverflowState,
   type RailScrollDirection,
 } from './railOverflow'
@@ -180,8 +181,11 @@ export function OverflowRail({
     onMouseDown={preserveSoftKeyboard ? holdSoftKeyboard : undefined}
     onPointerDown={event => {
       if (!touchDrag || event.pointerType !== 'touch' || !event.isPrimary) return
-      const target = event.target instanceof Element ? event.target.closest('.rail-key-repeat') : null
-      if (target) return
+      // Every button on the rail is a legal place to begin a swipe, the repeating arrow
+      // keys included. They used to be excluded here so their hold-to-repeat kept
+      // priority, which made the arrows the one part of the rail you could not push off
+      // of: the flick meant to scroll the strip fired the key instead. The arrows now
+      // send on `click` like their neighbours, so the suppression below settles it.
       const strip = stripRef.current
       if (!strip || strip.scrollWidth <= strip.clientWidth + 1) return
       touchDragRef.current = {
@@ -207,7 +211,7 @@ export function OverflowRail({
       const dx = event.clientX - state.startX
       const dy = event.clientY - state.startY
       if (!state.dragging) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) return
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < RAIL_PAN_SLOP_PX) return
         if (Math.abs(dy) >= Math.abs(dx)) { state.cancelled = true; return }
         state.dragging = true
       }

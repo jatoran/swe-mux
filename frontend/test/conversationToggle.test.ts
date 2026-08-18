@@ -74,6 +74,8 @@ test('the Talk toggle is a mic glyph that carries its own state, with no label',
   // both read as "not listening", so the unconfigured one keeps a mark of its own.
   assert.match(css, /\n\s*\.conversation-talk-toggle\.setup\{--talk-edge-style:dashed\}/)
   assert.match(toggle, /\$\{configured\?'':' setup'\}/)
-  assert.match(toggle, /onClick=\{configured\?\(\)=>conversation\.toggle\(\):onOpenSettings\}/)
+  // Unconfigured, the toggle goes to the microphone switch itself rather than to the
+  // Voice tab, through the shared setting-link routing.
+  assert.match(toggle, /onClick=\{configured\?\(\)=>conversation\.toggle\(\):\(\)=>requestSetting\('voice\.stt'\)\}/)
   assert.match(toggle, /aria-pressed=\{configured\?active:undefined\}/)
 })

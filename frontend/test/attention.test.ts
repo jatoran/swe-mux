@@ -52,7 +52,9 @@ test('ranked attention leads the Alerts tab and reaches no device', () => {
   const notifications = source('Notifications.tsx')
   const attention = source('attention.ts')
   const inbox = source('AttentionInbox.tsx')
-  assert.ok(notifications.includes('<AttentionInbox onOpenSession={onOpenSession} />'))
+  // The inbox is fleet-wide; the Project rides along only so an empty inbox can say
+  // whether that Project permitted ranking at all.
+  assert.ok(notifications.includes('<AttentionInbox onOpenSession={onOpenSession} project={project} />'))
   assert.ok(notifications.indexOf('AttentionInbox onOpenSession') < notifications.indexOf('notification-list'))
   // The daemon states the boundary rather than leaving it implied, and nothing
   // on this surface subscribes a device or posts to the push routes.

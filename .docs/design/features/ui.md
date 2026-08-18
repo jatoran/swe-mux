@@ -441,12 +441,15 @@ responsive controls.
 
   A group is a contiguous *run* of the array, not a declared membership list, so a tab that
   drifts away from its group produces a repeated heading rather than a silently miscategorised
-  tab. The desktop sidebar draws a heading wherever the group changes; the mobile rail renders
-  the same order flat with the headings suppressed, because a phone cannot spare the width and
-  the flat order already agrees with the grouped one. The group wrapper is `display:contents`
-  and `role="presentation"`: a real box breaks the desktop column and the mobile rail alike,
-  and a `tablist` admits only tabs, so the heading is a visual affordance and a screen reader
-  gets the same flat list the phone does.
+  tab. **Both layouts draw the same grouped column**, headings and all — narrow, it slides in
+  as a drawer rather than docking beside the content (below). The phone used to get the same
+  order flat, in one horizontally scrolling rail with the headings suppressed, on the grounds
+  that it could not spare the width; what that actually cost was the categories, which are the
+  only thing making seventeen entries navigable, plus a permanent strip of vertical space. A
+  drawer spends width it is not using anyway and costs no height at all. The group wrapper is
+  `display:contents` and `role="presentation"`: a real box breaks the column, and a `tablist`
+  admits only tabs, so the heading is a visual affordance and a screen reader gets the flat
+  list underneath it.
   A heading must read as chrome rather than as one more entry, and typography cannot carry
   that distinction: `.settings-layer *` pins font family, size, weight, and line height with
   `!important` so the whole panel scales as one unit, and `.app-shell *` pins tracking. The
@@ -458,6 +461,27 @@ responsive controls.
   than the panel's heading green because green on a green-tinted band measures 2.4:1 on the
   low-chroma light themes, under where the `--green` headings already sit, while `--text`
   holds 5:1 at worst across the catalogue.
+- **Narrow, the section list is a drawer and the header names where you are.** Below the
+  workspace's own breakpoint (760px) the panel fills the screen, and the two pieces of chrome
+  it used to spend height on both move:
+  - The search box sits **inline in the header**, between the title and the close button,
+    instead of wrapping onto a row of its own.
+  - The section list becomes a **left slide-in drawer** over the content, opened by a hamburger
+    at the header's left edge *and* by the header title itself — the title is where the eye
+    already is, so on a phone it is the tap most people make. It is `visibility:hidden` when
+    closed rather than `aria-hidden`, which takes its buttons out of the focus order and the
+    accessibility tree without hiding elements that are still focusable, and still animates
+    because the transform is what moves. Picking a section closes it, by every route into a
+    tab: the list, a search result, a deep link.
+  - The header therefore reads `SETTINGS` over the **current tab's name** rather than
+    `CONFIG::V6` over `Settings`. What the panel is, is the one thing already obvious when it
+    owns the whole screen; where you are in it is not.
+  - It behaves as the workspace's own left sidebar does, deliberately: it is a dismiss level
+    (`settings-nav`), so system back and the back swipe close it before they close Settings;
+    its scrim closes it; and whichever gesture slot is bound to `sidebar.toggle` opens it,
+    with either horizontal direction closing it again while it is open (touch gestures, below).
+  Widening past the breakpoint turns it back into the docked column and closes the level, so a
+  column that is permanently on screen never leaves a dismiss target standing.
 - Where a setting lives follows the subsystem that owns it, not the feature that first needed it:
   - The **OpenRouter key and the model defaults it unlocks** are on Accounts, with the other
     provider credentials. Everything model-backed depends on that one key, so filing it inside
@@ -483,6 +507,10 @@ responsive controls.
   A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.
   Only an unqualified open restores the remembered tab, and a pending search jump always beats a
   remembered section because that caller named an exact control rather than a region.
+  A caller may also name **the control itself** rather than a section: a surface that is inert
+  because a switch is off links to that switch, and Settings scrolls to it and flashes it on
+  arrival (`setting-links.md`). Those links reach the Projects registry and the Automation
+  dashboard the same way, since each owns switches Settings does not.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.
@@ -505,12 +533,14 @@ responsive controls.
   hold the late sections of a short tab are unpickable, because scrolling to one lands at the
   bottom and the bottom rule immediately re-selects the last section.
   On mobile the rail is one non-wrapping row that scrolls sideways, so it costs a fixed strip
-  rather than growing into the content.
+  rather than growing into the content. It stays a rail on both layouts — it is per-tab and
+  short, unlike the seventeen-entry section list that became a drawer beside it.
 - Opening loads one `GET /api/settings/bundle` (config, rules, keybindings, profiles,
   projects, automation, provider, usage, project config) instead of nine per-section GETs,
   so a high-RTT client (phone over Tailscale) pays a single round trip. The panel chrome —
-  header, tab rail, footer — renders immediately with a placeholder content area; tabs are
-  selectable before data lands. `config` is required; other parts degrade to null with the
+  header, section list, footer — renders immediately with a placeholder content area; tabs are
+  selectable before data lands. The placeholder shell and the loaded one render that chrome
+  from the same expressions, so the two cannot drift into different headers. `config` is required; other parts degrade to null with the
   reason under `errors`, except `automation_rules`/`keybindings`, whose absence blocks the
   form because Save writes them back unconditionally. Remote, voice, and firewall status stay
   separate non-blocking fetches.
@@ -944,6 +974,13 @@ responsive controls.
   Overlays remain immune to gesture *hijacking* by a stronger rule than the old one: whenever the dismiss stack is non-empty, `resolveGestureCommand` resolves the back slots to `nav.back` and **every other slot to nothing**, so no binding can run behind a modal.
   Turning off the hot-reloadable `mobile_gesture_overlay_back` config bool (default on, checkbox in Settings → Input → touch gestures) restores the original behaviour of an overlay swallowing every gesture, rather than letting the old bindings back through.
   The platform back gesture is unaffected by that switch.
+- **An overlay that owns a left drawer of its own borrows the workspace sidebar's gesture for it.**
+  Settings on a narrow layout is the only one today.
+  `resolveGestureCommand` takes that drawer as an `OverlayLeftPanel` and applies the two rules the workspace sidebar already has, one level up: whichever slot is bound to `sidebar.toggle`/`open`/`close` opens it, and while it is open either horizontal direction closes it.
+  The opening slot is *derived from the binding* rather than hard-coded, which is what makes it a mirror — rebinding the workspace sidebar moves both drawers together.
+  Every other slot still falls through to the back rule, so backing out of the overlay never stops working: with the defaults, the two-finger rightward swipe opens the drawer and the single-finger one is still `nav.back`.
+  The panel is supplied to the resolver only while Settings is the level back would act on (`dismissStack.topLabel()`), so a picker opened above it keeps the swipe for itself instead of quietly working the drawer underneath.
+  Turning `mobile_gesture_overlay_back` off suppresses this along with the back swipe: "a dialog ignored every swipe" is the behaviour that switch restores, and a drawer inside the dialog is not an exemption from it.
 - `nav.back` is a registered command like any other, so it is bindable to a key, assignable to any gesture slot, and reachable from the palette.
   It is unconditionally available rather than gated on stack depth: availability is a render-time snapshot, and a drill-down level owned by its own component opens without re-rendering the composition root, so a depth gate would refuse the command at exactly the moment the user swiped back.
   `pop()` is already inert on an empty stack, which reaches the same outcome without the stale claim.
@@ -1200,16 +1237,18 @@ responsive controls.
   On narrow/coarse Claude and Codex panes, the configurable Enter item is removed from the scrolling strip and replaced by an always-visible **Send** end-cap in a separate grid column.
   The end-cap draws a right-arrow icon rather than the word: it is the one control on the rail with a fixed place, so it is recognised by shape, and the width the word cost goes back to the scrolling keys.
   It keeps its 44px tap height and its accessible name; only the width fell.
-  The four arrows are non-focusing pointer controls: press sends once, then a 350 ms hold repeats every 75 ms until release or cancellation.
-  Preventing pointer focus keeps an open mobile keyboard open; keyboard and assistive activation remain one-shot.
-  A touch beginning on an arrow steers the terminal rather than horizontally scrolling the rail.
+  The four arrows are non-focusing keys with two verbs: a clean tap sends once, and a press held in place starts repeating after 350 ms and then every 75 ms until release or cancellation.
+  The tap is delivered by the button's own click, exactly as every other rail item is, which is what makes an arrow a legal place to begin a swipe: a touch the rail turns into a horizontal pan has its click suppressed, so a flick that merely started on an arrow scrolls the rail and sends nothing.
+  This is the whole reason the arrows do not send on pointer-down; sending there is a decision the pan can no longer take back, and it made the arrows the one part of the rail a finger could not push off of.
+  A press stops being a candidate for repetition once it has travelled as far as the pan needs to start scrolling, and a hold that *has* committed claims the pointer so the strip cannot scroll out from under the key being spammed.
+  Focus is refused on mouse-down rather than pointer-down — the same guard the rest of the rail uses — because the click now carries the tap; this keeps an open mobile keyboard open, and keyboard and assistive activation remain one-shot.
   The inner strip alone owns horizontal overflow, so Send does not scroll, cannot be reordered/hidden, and remains reachable after soft-keyboard Enter becomes newline-only.
   Shell and desktop Enter behavior is unchanged.
 - On touch, an overflowing Action rail owns horizontal pointer movement directly instead of depending on native overflow-scroll arbitration inside the keyboard-translated terminal surface.
   The first drag therefore moves the rail even while the soft keyboard is open.
   A modest drag gain compensates for the lost native fling without making nearby actions hard to target.
   The gesture preserves the active IME field, restores it if Android drops focus, and suppresses the resulting click.
-  Repeatable arrow keys remain outside the drag recognizer so hold-to-repeat keeps priority when a gesture starts on an arrow.
+  Every button on the rail is a legal place to begin that drag, the repeating arrow keys included; the suppressed click is what settles what a swipe did or did not activate.
 - Activating an Action rail item preserves the mobile soft keyboard state it found.
   Keys, Send, Paste, prompt templates, skills, slash commands, and literal text execute with the keyboard down when it was down, while an already-open keyboard remains open.
   Synthetic terminal writes restore the dedicated IME bridge with `inputmode="none"` when needed, preserving physical-keyboard routing without turning DOM focus into typing intent.

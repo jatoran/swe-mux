@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { browserUuid } from './layout'
+import { SettingLink } from './SettingLink'
 import { StateIndicator } from './StateIndicator'
 import { useSessionRowConfig } from './sessionRowPrefs'
 import { agentTargetName, agentTargets } from './agentTargets'
@@ -609,10 +610,10 @@ export function QueuePane({
             </>
           )}
           {auto && !auto.master_enabled && (
-            <p class="queue-auto-note">
-              Auto-delivery is off for this install. Turn on “Allow auto-delivery for agent
-              conversations” under Settings → Agents → Prompt queue.
-            </p>
+            <div class="setting-gate">
+              <p><strong>Auto-delivery is off for this install.</strong> Armed messages stay in the queue until you send them by hand, on every session.</p>
+              <SettingLink target="queue.autoDelivery">Allow auto-delivery for agent conversations</SettingLink>
+            </div>
           )}
           {/* The two install-wide brakes. They are not per-session, and they are here
               rather than in the fleet overlay because a stop reachable only by opening
