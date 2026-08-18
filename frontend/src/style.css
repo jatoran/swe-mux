@@ -2595,6 +2595,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .project-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .project-collapsed-badge{flex:none;min-width:15px;height:15px;padding:0 4px;display:inline-grid;place-items:center;border-radius:8px;background:color-mix(in srgb,var(--green) 22%,transparent);color:var(--green);font:600 8px 'JetBrains Mono';letter-spacing:0}
 .context-note{padding:2px 8px 6px;color:#8a9382;font:400 9px 'JetBrains Mono';line-height:1.35}
+/* A count beside a context menu's title, pushed to the far end of its flex row. Inherits
+   the title's font so a theme override of .context-title carries to it. */
+.context-title>small{margin-left:auto;flex:none;color:#7c8794;font-size:9px}
+.context-title>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Utility-drawer tab bodies (clipboard rows, prompt rows, command grids).
    Inserting targets the pane that was focused before the panel opened, so the
    workspace has to stay visible behind it; desktop therefore gets no scrim (Escape,

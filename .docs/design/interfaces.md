@@ -122,6 +122,9 @@ PATCH  /project-groups/{group_id}   {name?, position?}
 DELETE /project-groups/{group_id}
 ```
 
+`DELETE /project-groups/{group_id}` ungroups the Group's Projects in the same transaction that removes the row, so nothing survives pointing at a Group that no longer exists.
+It and `PATCH /project-groups/{group_id}` answer an unknown id with `400 unknown group` rather than a server fault, because either request can come from a menu drawn before another device deleted the Group.
+
 Project payloads add `created_at` (registration), daemon-persisted `last_used_at` (explicit user use), derived `last_activity` (latest session activity from history), `history_count`, and `root_available`.
 Time fields use epoch seconds with `0` when unknown.
 `POST /projects/{project_id}/used` advances `last_used_at` monotonically and emits `project_used {project_id, last_used_at, reason}` so connected clients converge without sharing browser storage.

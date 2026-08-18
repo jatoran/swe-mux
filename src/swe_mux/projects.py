@@ -356,8 +356,21 @@ class ProjectManager:
             await self._apply_group_order(ordered_ids)
             return self.ordered_groups()
 
+    def _group(self, group_id: str) -> ProjectGroupRecord:
+        """Resolve a Group id, as a request error rather than a KeyError.
+
+        Both callers below are reachable from a sidebar menu that may have been drawn
+        before another device deleted the Group, so an unknown id is an ordinary stale
+        request. As a bare `KeyError` it surfaced as an opaque 500.
+        """
+
+        group = self.groups.get(group_id)
+        if group is None:
+            raise ValueError("unknown group")
+        return group
+
     async def update_group(self, group_id: str, **changes: object) -> ProjectGroupRecord:
-        group = self.groups[group_id]
+        group = self._group(group_id)
         if "name" in changes:
             label = str(changes["name"]).strip()
             if not label:
@@ -369,7 +382,16 @@ class ProjectManager:
         return group
 
     async def delete_group(self, group_id: str) -> None:
-        del self.groups[group_id]
+        """Dissolve a Group, returning its Projects to the ungrouped root.
+
+        A Group owns a name, an order, and membership, so this is the whole of it: the
+        Projects keep their folders, layouts, sessions, history, and positions, and only
+        stop pointing at a Group that no longer exists. `delete_project_group` clears the
+        column in the same transaction that removes the row, so the in-memory ungrouping
+        below cannot outlive a restart.
+        """
+
+        del self.groups[self._group(group_id).id]
         for project in self.projects.values():
             if project.group_id == group_id:
                 project.group_id = None

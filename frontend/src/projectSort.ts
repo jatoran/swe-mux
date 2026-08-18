@@ -1,14 +1,22 @@
-// Sidebar ordering: how Projects are sorted at the root and inside Groups, and how
-// the Groups themselves sit. Pure so the guard logic can be unit tested under the
-// node type-stripping runner; the caller supplies the records and the user-action recency map.
+// Sidebar ordering: how Projects are sorted at the root and inside Groups, and where
+// the Groups themselves sit among them. Pure so the guard logic can be unit tested under
+// the node type-stripping runner; the caller supplies the records and the user-action
+// recency map.
 //
-// Project sort is **one global mode** applied to the ungrouped root and every Group.
-// It used to be per section, on the theory that a hand-arranged
-// shortlist and an alphabetical pile should coexist; in practice that put a ⇅ on
-// every section header for a preference nobody varied, so the control moved to a
-// single PROJECTS header and the modes collapsed with it. Group order is a
-// separate mode because it sorts different things (see SectionSortMode), but it is
-// set from the same control.
+// Project sort is **one global mode** applied to the ungrouped root, every Group, and the
+// root ordering that mixes the two. It used to be per section, on the theory that a
+// hand-arranged shortlist and an alphabetical pile should coexist; in practice that put a ⇅
+// on every section header for a preference nobody varied, so the control moved to a single
+// PROJECTS header and the modes collapsed with it.
+//
+// Group placement then collapsed into that same mode. It was its own setting
+// (`sectionSort`) ordering Groups *among Groups* below the whole ungrouped pile, which made
+// "Recently used" unable to answer the only question it is asked: a Group whose Project was
+// used a minute ago still sat under every root Project, including ones never opened. Under
+// any non-manual mode a Group is now a peer of a root Project, keyed by the member that
+// leads it (see `bucketStamp`). Manual order keeps the two-tier tree, because hand-placed
+// Group positions are a separate order from hand-placed Project positions and interleaving
+// them would have no key to interleave by.
 import type { Project } from './types'
 
 export type ProjectSortMode =
@@ -48,32 +56,10 @@ export function projectSortLabel(mode: ProjectSortMode): string {
   return PROJECT_SORT_OPTIONS.find(option => option.id === mode)?.label || 'Manual order'
 }
 
-/** How Groups are ordered. No date modes: a Group record is not dated, and "newest
- *  Group first" does not earn a column on a table that holds a name and a position. */
-export type SectionSortMode = 'custom' | 'activity' | 'name' | 'name-desc'
-
-export const SECTION_SORT_OPTIONS: { id: SectionSortMode; label: string; hint: string }[] = [
-  { id: 'custom', label: 'Manual order', hint: 'The order you dragged the Groups into' },
-  { id: 'activity', label: 'Recently used', hint: 'Group holding the latest user action first' },
-  { id: 'name', label: 'Name (A→Z)', hint: 'Alphabetical Group names' },
-  { id: 'name-desc', label: 'Name (Z→A)', hint: 'Reverse alphabetical' },
-]
-
-const SECTION_MODES = new Set<string>(SECTION_SORT_OPTIONS.map(option => option.id))
-
-export function isSectionSortMode(value: unknown): value is SectionSortMode {
-  return typeof value === 'string' && SECTION_MODES.has(value)
-}
-
-export function sectionSortLabel(mode: SectionSortMode): string {
-  return SECTION_SORT_OPTIONS.find(option => option.id === mode)?.label || 'Manual order'
-}
-
 export interface SidebarOrderPrefs {
-  /** How Projects are ordered at the root and inside every Group. */
+  /** How Projects are ordered at the root, inside every Group, and how Groups are
+   *  placed among the root Projects. */
   projectSort: ProjectSortMode
-  /** How Groups are ordered. */
-  sectionSort: SectionSortMode
   /** Group ids folded shut. Presentation only: a collapsed Group's Projects
    *  keep their slot in the rail, the numbered shortcuts, and every order. */
   collapsed: string[]
@@ -81,7 +67,6 @@ export interface SidebarOrderPrefs {
 
 export const EMPTY_SIDEBAR_ORDER: SidebarOrderPrefs = {
   projectSort: 'custom',
-  sectionSort: 'custom',
   collapsed: [],
 }
 
@@ -97,6 +82,15 @@ function migrateBucketSort(value: unknown): ProjectSortMode | null {
   return null
 }
 
+/** Legacy Group-only sort mode → the single mode that replaced it. Its four modes were a
+ *  subset of the Project modes, so the value carries over as-is; only an explicit
+ *  Manual is dropped, since it stated nothing that a missing mode does not. Project-level
+ *  evidence outranks it below: a device that had both was ordering its Projects by the
+ *  Project setting, and that is the one now doing both jobs. */
+function migrateSectionSort(value: unknown): ProjectSortMode | null {
+  return isProjectSortMode(value) && value !== 'custom' ? value : null
+}
+
 export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
   if (!raw) return EMPTY_SIDEBAR_ORDER
   try {
@@ -109,8 +103,7 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
     return {
       projectSort: isProjectSortMode(record.projectSort)
         ? record.projectSort
-        : migrateBucketSort(record.sort) || 'custom',
-      sectionSort: isSectionSortMode(record.sectionSort) ? record.sectionSort : 'custom',
+        : migrateBucketSort(record.sort) || migrateSectionSort(record.sectionSort) || 'custom',
       collapsed: Array.isArray(record.collapsed)
         ? record.collapsed.filter((id): id is string =>
           typeof id === 'string' && id !== LEGACY_UNGROUPED_BUCKET_ID)
@@ -122,11 +115,10 @@ export function loadSidebarOrder(raw: string | null): SidebarOrderPrefs {
 }
 
 export function serializeSidebarOrder(prefs: SidebarOrderPrefs): string {
-  // The legacy `sort` map is deliberately not written back: once this has saved
-  // once, the migration above can never fire again for this device.
+  // Neither the legacy `sort` map nor the legacy `sectionSort` is written back: once this
+  // has saved once, the migrations above can never fire again for this device.
   return JSON.stringify({
     projectSort: prefs.projectSort,
-    sectionSort: prefs.sectionSort,
     collapsed: prefs.collapsed,
   })
 }
@@ -232,23 +224,103 @@ export function bucketRecency(bucket: SidebarBucket, recency: Map<string, number
   return bucket.items.reduce((latest, item) => Math.max(latest, recency.get(item.id) || 0), 0)
 }
 
-/** Sort the Groups. `buckets` must already be in manual Group position order,
- *  which is the stable tie-break and makes `custom` a pass-through - the same
- *  contract as `sortProjects`. */
-export function sortBuckets(
-  buckets: SidebarBucket[],
-  mode: SectionSortMode,
+/** The dated key a Group is placed by, borrowed from the member that leads it under the
+ *  active mode: the most recent use, the newest registration, or the oldest one. A Group
+ *  record itself is not dated — it holds a name and a position — so this is what makes a
+ *  Group comparable to a Project at all, and it is the honest key besides: a Group is on
+ *  screen for the Projects in it.
+ *
+ *  Undated members are skipped rather than counted as 0: `byStamp` reads 0 as "no evidence"
+ *  and parks it at the end of a date ordering, so letting one unregistered-date Project pull
+ *  the minimum to 0 would send a Group full of old Projects to the bottom of "Oldest first".
+ *  A Group with nothing measurable in it reads as 0 and lands last in either direction. */
+export function bucketStamp(
+  bucket: SidebarBucket,
+  mode: ProjectSortMode,
   recency: Map<string, number>,
-): SidebarBucket[] {
-  if (mode === 'custom') return buckets
-  const sorted = [...buckets]
-  const byBucketName = (a: SidebarBucket, b: SidebarBucket) =>
-    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }) ||
-    a.id.localeCompare(b.id)
-  if (mode === 'name') return sorted.sort(byBucketName)
-  if (mode === 'name-desc') return sorted.sort((a, b) => byBucketName(b, a))
-  return sorted.sort((a, b) =>
-    byStamp(bucketRecency(a, recency), bucketRecency(b, recency), true))
+): number {
+  if (mode === 'activity') return bucketRecency(bucket, recency)
+  const oldestFirst = mode === 'created'
+  return bucket.items.reduce((best, item) => {
+    const stamp = item.created_at || 0
+    if (!stamp) return best
+    if (!best) return stamp
+    return oldestFirst ? Math.min(best, stamp) : Math.max(best, stamp)
+  }, 0)
+}
+
+/** One row of the sidebar's root ordering: an ungrouped Project, or a whole Group. */
+export type SidebarRootEntry =
+  | { kind: 'project'; project: Project }
+  | { kind: 'group'; bucket: SidebarBucket }
+
+const entryId = (entry: SidebarRootEntry) =>
+  entry.kind === 'project' ? entry.project.id : entry.bucket.id
+const entryName = (entry: SidebarRootEntry) =>
+  entry.kind === 'project' ? entry.project.name : entry.bucket.name
+
+/** Interleave the ungrouped Projects and the Groups into one root ordering.
+ *
+ *  Both inputs must already be in manual (position) order: the sort is stable, so the
+ *  baseline below is every mode's tie-break, and `custom` is a pass-through that keeps the
+ *  two-tier tree — root Projects, then Groups.
+ *
+ *  Under every other mode a Group is a peer of a root Project, keyed by name or by
+ *  `bucketStamp`. Groups used to be a block below the entire ungrouped pile, ordered by
+ *  their own setting, which meant a Group could not rise for being used: under "Recently
+ *  used" a Group holding this minute's work still sat beneath root Projects that had never
+ *  been opened, and the fix is placement rather than a better Group key. */
+export function sortRootEntries(
+  ungrouped: Project[],
+  buckets: SidebarBucket[],
+  mode: ProjectSortMode,
+  recency: Map<string, number>,
+): SidebarRootEntry[] {
+  const entries: SidebarRootEntry[] = [
+    ...ungrouped.map((project): SidebarRootEntry => ({ kind: 'project', project })),
+    ...buckets.map((bucket): SidebarRootEntry => ({ kind: 'group', bucket })),
+  ]
+  if (mode === 'custom') return entries
+  const byEntryName = (a: SidebarRootEntry, b: SidebarRootEntry) =>
+    entryName(a).localeCompare(entryName(b), undefined, { numeric: true, sensitivity: 'base' }) ||
+    entryId(a).localeCompare(entryId(b))
+  if (mode === 'name') return entries.sort(byEntryName)
+  if (mode === 'name-desc') return entries.sort((a, b) => byEntryName(b, a))
+  const stamp = (entry: SidebarRootEntry) =>
+    entry.kind === 'group'
+      ? bucketStamp(entry.bucket, mode, recency)
+      : mode === 'activity'
+        ? recency.get(entry.project.id) || 0
+        : entry.project.created_at || 0
+  return entries.sort((a, b) => byStamp(stamp(a), stamp(b), mode !== 'created'))
+}
+
+/** One rendered child of the tree: a run of consecutive root Projects sharing one
+ *  `data-group-id=""` list, or a Group's own section. Interleaving splits the root into
+ *  runs, and each run has to be its own list element so a Project dragged between two
+ *  Groups resolves to the root rather than to whichever Group it landed nearest. */
+export type SidebarRootRow =
+  | { kind: 'root'; key: string; items: Project[] }
+  | { kind: 'group'; key: string; bucket: SidebarBucket }
+
+export function sidebarRootRows(entries: SidebarRootEntry[]): SidebarRootRow[] {
+  const rows: SidebarRootRow[] = []
+  for (const entry of entries) {
+    if (entry.kind === 'group') {
+      rows.push({ kind: 'group', key: `group:${entry.bucket.id}`, bucket: entry.bucket })
+      continue
+    }
+    const last = rows[rows.length - 1]
+    if (last && last.kind === 'root') last.items.push(entry.project)
+    else rows.push({ kind: 'root', key: `root:${entry.project.id}`, items: [entry.project] })
+  }
+  // Dragging a Project out of a Group needs somewhere to drop it, so a root list renders
+  // even with nothing in it — once, at the top, since with no root Projects there is
+  // nothing to interleave it with. Without this, grouping every Project would leave no way
+  // to ungroup one by hand.
+  if (rows.length && !rows.some(row => row.kind === 'root'))
+    rows.unshift({ kind: 'root', key: 'root:empty', items: [] })
+  return rows
 }
 
 /** Fold a permutation of the *rendered* subset back into the full list, leaving

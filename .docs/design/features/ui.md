@@ -39,9 +39,9 @@ responsive controls.
 - **Project rows carry no `Note` / `Files` chips.**
   Both surfaces live in the utility drawer and the Project context menu exposes `Notes…` and `Browse files…` for another Project.
 - The global `PROJECTS` header is navigation chrome rather than a Group.
-  Ungrouped Projects render as root rows immediately after it, followed by optional named Group sections.
+  Ungrouped Projects render as root rows, with optional named Group sections after them under Manual order and interleaved among them under every other mode.
   On desktop, a Group header reorders on press-and-move and folds on press-and-release; the drag swallows its ending click.
-  On mobile, a Group header only folds because Project rows are the sidebar's sole reorder target.
+  On mobile, a Group header folds on tap and opens the Group's context menu on a hold, because Project rows are the sidebar's sole reorder target and there is no right-click to give; the hold's trailing click is swallowed the same way a drag's is.
   The Group header's only button is `✎`, which renames the Group.
   It appears on hover over its own header, and on keyboard focus, so the resting sidebar is a list of names rather than a column of glyphs; a coarse pointer has no hover and always shows it.
 - **The `PROJECTS` header owns every control that acts on the tree as a whole**, because none of them may scroll away with the list.
@@ -52,12 +52,16 @@ responsive controls.
     "fold this one", and at this row's size its two states differ by one hairline stroke.
     Material's `unfold_less`/`unfold_more` is the obvious substitute and is also wrong here — two converging chevrons with round
     joins render as an `✕` at this size. Two *parallel* chevrons differ by direction alone, which survives any size.
-  - `⇅` sorts, covering both levels: flat items sort the Projects (Manual, Recently used, Name
-    A→Z / Z→A, Newest / Oldest first), and a `Sort Groups` group sorts only explicit Groups
-    (Manual, Recently used, Name A→Z / Z→A).
-    A `MenuGroup` keeps the common case from paying for the rarer one.
-    The button highlights while either level is sorted, and its tooltip carries both
-    modes, which otherwise have no always-visible cue.
+  - `⇅` sorts, one flat list of modes and no submenu: Manual, Recently used, Name A→Z / Z→A,
+    Newest / Oldest first.
+    The chosen mode orders root Projects, the Projects inside every Group, and — under
+    anything but Manual — the Groups themselves in among the root Projects.
+    It held a nested `Sort Groups` group for Group order, which could only place Groups below
+    the whole ungrouped list and so could not lift one for the work inside it; two modes also
+    meant a mismatched pair was possible and read as arbitrary.
+    A closing note in the menu states how Groups are placed and that dragging returns the
+    sidebar to Manual, because neither has an always-visible cue.
+    The button highlights while the tree is sorted, and its tooltip carries the mode.
   - A cogwheel opens the Projects registry — the single per-Project editor. It was a footer button and an app-menu row, both a
     screen away from the tree they edit.
   - `+` opens the registry **and** its Add-project dialog in one click, so the create dialog dismisses onto the registry rather than
@@ -69,14 +73,25 @@ responsive controls.
   title rather than a toolbar; a coarse pointer has no hover and always shows them. Opacity, never `display`, so the row does not
   reflow as they come and go. The guided tour spotlights the cogwheel and blocks clicks outside its ring, so the tour's presence
   overrides the reveal — a highlighted empty box is not something a first-run user knows to hover.
-- Project sort is one global mode, applied to root Projects and inside every Group. It was per section once, on the
+- Project sort is one global mode, applied to root Projects, the Projects inside every Group, and
+  the placement of the Groups themselves. It was per section once, on the
   theory that a Group might be a hand-arranged shortlist while another is a long alphabetical
-  pile; in practice it was set the same everywhere and cost a `⇅` on every header. Placing
-  anything by hand puts that level back on Manual, because a hand-placed row that the next render
-  re-sorts away reads as a broken drag.
-- The sidebar cannot delete a Group. The `×` that did sat one pixel from the fold toggle and
-  dissolved a Group on a stray click; a Group is emptied instead — reassign its Projects (drag,
-  the Projects registry, or a Project menu's Group select). Deleting one is an API-only operation.
+  pile; in practice it was set the same everywhere and cost a `⇅` on every header. Group
+  placement joined it later, because as its own setting it could only order Groups among Groups
+  below the whole ungrouped list — so a Group holding the last minute's work still sat under root
+  Projects that had never been opened. Placing anything by hand puts the sidebar back on Manual,
+  because a hand-placed row that the next render re-sorts away reads as a broken drag; Manual is
+  the two-tier tree, so from a sorted one that also re-splits the root, which the arrangement the
+  drag produced survives.
+- **A Group carries its own context menu**, on a right-click anywhere in its section other than a
+  Project or session row, and on a header hold on mobile. It holds `Rename group…`,
+  `Collapse group` / `Expand group`, and `Delete group…` — the first two mirroring the header's
+  `✎` and its fold click, so the menu is a second route rather than the only one.
+  No header button deletes a Group: the `×` that did sat one pixel from the fold toggle and
+  dissolved a Group on a stray click. Removing it left no delete path at all, since emptying a
+  Group by reassigning its Projects leaves the empty Group on screen, so delete came back here,
+  behind a two-click confirm that states what survives it — the Projects return to the root list,
+  and no folder, session, layout, or history is touched.
 - **Every Group renders, including one holding nothing.** An empty Group shows its header plus a
   `Drag a Project here` hint. It used to be filtered out of the tree, which made creating a Group
   look like it had failed and pointed the only way to fill it — dragging a Project in — at a

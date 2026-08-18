@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Project } from '../src/types.ts'
 import {
-  EMPTY_SIDEBAR_ORDER, bucketRecency, isBucketCollapsed,
+  EMPTY_SIDEBAR_ORDER, bucketRecency, bucketStamp, isBucketCollapsed,
   loadSidebarOrder, mergeVisibleOrder, projectRecency, projectSortLabel,
-  pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder, setAllBucketsCollapsed,
-  setProjectSortMode, sortBuckets, sortProjects, toggleBucketCollapsed,
+  pruneSidebarOrder, serializeSidebarOrder, setAllBucketsCollapsed,
+  setProjectSortMode, sidebarRootRows, sortProjects, sortRootEntries, toggleBucketCollapsed,
 } from '../src/projectSort.ts'
 
 const project = (id: string, name: string, extra: Partial<Project> = {}) =>
@@ -19,18 +19,31 @@ test('sidebar order load tolerates missing, malformed, and unknown modes', () =>
   assert.deepEqual(loadSidebarOrder('[1,2]'), EMPTY_SIDEBAR_ORDER)
   assert.deepEqual(loadSidebarOrder('{"projectSort":"name","ungroupedIndex":1}'), {
     projectSort: 'name',
-    sectionSort: 'custom',
     collapsed: [],
   })
   assert.equal(loadSidebarOrder('{"projectSort":"nonsense"}').projectSort, 'custom')
   // The old synthetic ungrouped section's slot and fold state are discarded.
   assert.equal('ungroupedIndex' in loadSidebarOrder('{"ungroupedIndex":1}'), false)
   assert.deepEqual(loadSidebarOrder('{"collapsed":["ungrouped","g1"]}').collapsed, ['g1'])
-  // Section modes are a narrower set than Project modes; a Project-only mode here
-  // would order the sections by a key they do not have.
-  assert.equal(loadSidebarOrder('{"sectionSort":"created-desc"}').sectionSort, 'custom')
-  assert.equal(loadSidebarOrder('{"sectionSort":"activity"}').sectionSort, 'activity')
+  // The separate Group sort mode is gone from the prefs entirely.
+  assert.equal('sectionSort' in loadSidebarOrder('{"sectionSort":"activity"}'), false)
   assert.deepEqual(loadSidebarOrder('{"collapsed":["g1",7,"g2"]}').collapsed, ['g1', 'g2'])
+})
+
+test('a legacy Group-only sort mode migrates into the single mode, behind Project evidence', () => {
+  // Group order used to be its own setting. Its modes were a subset of the Project modes,
+  // so the value carries over as the one mode that now places Groups too.
+  assert.equal(loadSidebarOrder('{"sectionSort":"activity"}').projectSort, 'activity')
+  assert.equal(loadSidebarOrder('{"sectionSort":"name-desc"}').projectSort, 'name-desc')
+  // An explicit Manual stated nothing a missing mode does not.
+  assert.equal(loadSidebarOrder('{"sectionSort":"custom"}').projectSort, 'custom')
+  assert.equal(loadSidebarOrder('{"sectionSort":"nonsense"}').projectSort, 'custom')
+  // Project-level evidence outranks it, whichever form that evidence took: a device with
+  // both was ordering its Projects by the Project setting, and that is the surviving one.
+  assert.equal(loadSidebarOrder('{"projectSort":"created","sectionSort":"activity"}').projectSort, 'created')
+  assert.equal(loadSidebarOrder('{"sort":{"g1":"name"},"sectionSort":"activity"}').projectSort, 'name')
+  // And it is not written back, so the migration fires exactly once.
+  assert.equal(serializeSidebarOrder(loadSidebarOrder('{"sectionSort":"activity"}')).includes('sectionSort'), false)
 })
 
 test('a legacy per-bucket sort map migrates to the single mode that replaced it', () => {
@@ -47,9 +60,7 @@ test('a legacy per-bucket sort map migrates to the single mode that replaced it'
 })
 
 test('sidebar order round-trips', () => {
-  const stored = prefs({
-    projectSort: 'name', sectionSort: 'activity', collapsed: ['g2'],
-  })
+  const stored = prefs({ projectSort: 'name', collapsed: ['g2'] })
   assert.deepEqual(loadSidebarOrder(serializeSidebarOrder(stored)), stored)
   // The former browser-local MRU is ignored and removed on the next write.
   assert.equal(serializeSidebarOrder(loadSidebarOrder('{"recentProjects":["p2","p1"]}')).includes('recentProjects'), false)
@@ -137,15 +148,43 @@ test('projectRecency uses shared daemon timestamps', () => {
   assert.equal(recency.get('p3'), 0)
 })
 
-const bucket = (id: string, name: string, items: string[]) =>
-  ({ id, name, items: items.map(item => project(item, item)) })
+const bucket = (id: string, name: string, items: (string | Project)[]) =>
+  ({ id, name, items: items.map(item => (typeof item === 'string' ? project(item, item) : item)) })
 
-test('Groups sort by name without a synthetic ungrouped section', () => {
-  const buckets = [bucket('g1', 'Tools', []), bucket('g2', 'Clients', [])]
-  assert.deepEqual(sortBuckets(buckets, 'name', new Map()).map(item => item.id), ['g2', 'g1'])
-  assert.deepEqual(sortBuckets(buckets, 'name-desc', new Map()).map(item => item.id), ['g1', 'g2'])
-  // Manual order is a pass-through, so the caller's arrangement is untouched.
-  assert.equal(sortBuckets(buckets, 'custom', new Map()), buckets)
+/** Root ordering as ids, with a Group written as `[g1 a b]` so placement and contents are
+ *  both legible in one assertion. */
+const shape = (entries: ReturnType<typeof sortRootEntries>) =>
+  entries.map(entry => entry.kind === 'project'
+    ? entry.project.id
+    : `[${[entry.bucket.id, ...entry.bucket.items.map(item => item.id)].join(' ')}]`)
+
+test('manual order keeps the two-tier tree: root Projects, then Groups', () => {
+  const roots = [project('p2', 'Beta'), project('p1', 'Alpha')]
+  const buckets = [bucket('g2', 'Tools', ['a']), bucket('g1', 'Clients', [])]
+  // A pass-through in both lists, so nothing the user arranged by hand is touched. Group
+  // positions are their own order, and interleaving them with Project positions would have
+  // no single key to interleave by.
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'custom', new Map())),
+    ['p2', 'p1', '[g2 a]', '[g1]'])
+})
+
+test('a sorted sidebar places Groups among the root Projects, not below all of them', () => {
+  // The reported bug: under Recently used, a Group holding this minute's work sat under
+  // every root Project, including one that had never been opened.
+  const roots = [project('cold', 'Cold'), project('warm', 'Warm')]
+  const buckets = [bucket('jar', 'JAR', ['busy'])]
+  const recency = new Map([['cold', 0], ['warm', 50], ['busy', 900]])
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'activity', recency)),
+    ['[jar busy]', 'warm', 'cold'])
+})
+
+test('name ordering compares a Group by its own name, a Project by its', () => {
+  const roots = [project('p1', 'Alpha'), project('p2', 'Zulu')]
+  const buckets = [bucket('g1', 'Mike', []), bucket('g2', 'Bravo', [])]
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'name', new Map())),
+    ['p1', '[g2]', '[g1]', 'p2'])
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'name-desc', new Map())),
+    ['p2', '[g1]', '[g2]', 'p1'])
 })
 
 test('a Group is as recent as the most recent Project in it; empty ones sort last', () => {
@@ -157,18 +196,65 @@ test('a Group is as recent as the most recent Project in it; empty ones sort las
   ]
   assert.equal(bucketRecency(buckets[2], recency), 900)
   assert.equal(bucketRecency(buckets[1], recency), 0)
-  assert.deepEqual(sortBuckets(buckets, 'activity', recency).map(item => item.id), ['busy', 'quiet', 'empty'])
+  assert.deepEqual(shape(sortRootEntries([], buckets, 'activity', recency)),
+    ['[busy b c]', '[quiet a]', '[empty]'])
 })
 
-test('Groups tie-break on the manual order they came in with', () => {
+test('date modes key a Group on the member that leads it, skipping undated ones', () => {
+  const dated = (id: string, created_at?: number) => project(id, id, { created_at })
+  const spread = bucket('spread', 'Spread', [dated('mid', 500), dated('new', 900), dated('old', 100)])
+  // Newest-first asks for the newest thing in there; oldest-first asks for the oldest.
+  assert.equal(bucketStamp(spread, 'created-desc', new Map()), 900)
+  assert.equal(bucketStamp(spread, 'created', new Map()), 100)
+  // An undated member must not pull the minimum to 0, which reads as "no evidence" and
+  // would send a Group full of old Projects to the bottom of Oldest first.
+  assert.equal(bucketStamp(bucket('mixed', 'Mixed', [dated('none'), dated('old', 100)]), 'created', new Map()), 100)
+  // Nothing measurable in it reads as unmeasured and lands last in either direction.
+  assert.equal(bucketStamp(bucket('empty', 'Empty', []), 'created', new Map()), 0)
+  assert.equal(bucketStamp(bucket('undated', 'Undated', [dated('none')]), 'created-desc', new Map()), 0)
+  const roots = [dated('root', 300)]
+  const buckets = [spread, bucket('void', 'Void', [])]
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'created-desc', new Map())),
+    ['[spread mid new old]', 'root', '[void]'])
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'created', new Map())),
+    ['[spread mid new old]', 'root', '[void]'])
+})
+
+test('root entries tie-break on the manual order they came in with, root Projects first', () => {
+  const roots = [project('p1', 'P1')]
   const buckets = [bucket('second', 'Second', []), bucket('first', 'First', [])]
-  // Both unmeasured, so neither may jump the arrangement underneath the sort.
-  assert.deepEqual(sortBuckets(buckets, 'activity', new Map()).map(item => item.id), ['second', 'first'])
+  // All three unmeasured, so none may jump the arrangement underneath the sort.
+  assert.deepEqual(shape(sortRootEntries(roots, buckets, 'activity', new Map())),
+    ['p1', '[second]', '[first]'])
 })
 
-test('every Group sort mode has a label; an unknown one reads as manual', () => {
-  assert.equal(sectionSortLabel('activity'), 'Recently used')
-  assert.equal(sectionSortLabel('custom'), 'Manual order')
+test('root Projects between Groups render as separate lists, each its own drop target', () => {
+  const rows = sidebarRootRows([
+    { kind: 'project', project: project('a', 'A') },
+    { kind: 'project', project: project('b', 'B') },
+    { kind: 'group', bucket: bucket('g1', 'G1', ['x']) },
+    { kind: 'project', project: project('c', 'C') },
+  ])
+  assert.deepEqual(rows.map(row => row.kind), ['root', 'group', 'root'])
+  assert.deepEqual(rows.flatMap(row => row.kind === 'root' ? [row.items.map(item => item.id)] : []),
+    [['a', 'b'], ['c']])
+  // Keys are derived from content, so they are stable across a re-sort of the same tree.
+  assert.deepEqual(rows.map(row => row.key), ['root:a', 'group:g1', 'root:c'])
+})
+
+test('a tree with every Project grouped still renders one empty root list to drop into', () => {
+  const rows = sidebarRootRows([{ kind: 'group', bucket: bucket('g1', 'G1', ['x']) }])
+  assert.deepEqual(rows.map(row => row.kind), ['root', 'group'])
+  assert.deepEqual(rows[0].kind === 'root' && rows[0].items, [])
+  // Exactly one, even with several Groups, and always first: with no root Projects there is
+  // nothing to interleave it with.
+  const many = sidebarRootRows([
+    { kind: 'group', bucket: bucket('g1', 'G1', []) },
+    { kind: 'group', bucket: bucket('g2', 'G2', []) },
+  ])
+  assert.deepEqual(many.map(row => row.kind), ['root', 'group', 'group'])
+  // An empty sidebar renders nothing at all, not a bare drop hint.
+  assert.deepEqual(sidebarRootRows([]), [])
 })
 
 test('mergeVisibleOrder permutes only the rendered subset, leaving hidden rows put', () => {

@@ -168,6 +168,21 @@ async def test_project_groups_only_organize_projects(tmp_path: Path) -> None:
     await projects.delete_group(group.id)
     assert projects.projects[project.id].group_id is None
     assert group.id not in projects.groups
+    # Durable, not just in memory: the sidebar's delete would otherwise re-group every
+    # Project on the next daemon start.
+    reloaded = ProjectManager(HistoryIndex(tmp_path / "mux.db"))
+    await reloaded.start()
+    assert reloaded.groups == {}
+    assert reloaded.projects[project.id].group_id is None
+    reloaded.history.close()
+
+    # A menu drawn before another device deleted the Group is an ordinary stale request,
+    # which the request layer turns into a 400 only because these raise ValueError; a bare
+    # KeyError surfaced as an opaque 500.
+    with pytest.raises(ValueError, match="unknown group"):
+        await projects.delete_group(group.id)
+    with pytest.raises(ValueError, match="unknown group"):
+        await projects.update_group(group.id, name="Gone")
     history.close()
 
 
