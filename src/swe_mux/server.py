@@ -1181,6 +1181,25 @@ async def runtime_context(app: web.Application):  # type: ignore[no-untyped-def]
         status_timeline=status_timeline,
         recovery=session_recovery,
     )
+    # The observer decides an approval; this is the only way it can deliver one.
+    # Installed as a factory rather than called from `observation.py` directly
+    # because `_record_operator_input` owns the evidence accounting every human
+    # input path owes delivery readiness, and that lives here with the event bus.
+    # Per-session bindings are attached by the manager as sessions are created,
+    # adopted, and cold-restored (`_attach_operator_input`).
+    def _operator_input_sink(session: Session) -> Callable[[str, str], None]:
+        def write(data: str, source: str) -> None:
+            _record_operator_input(events, session, data, source=source)
+
+        return write
+
+    sessions.operator_input_sink_factory = _operator_input_sink
+    # Bounds the observer reads off the session rather than importing config,
+    # matching how the approval stabilization window is already published.
+    sessions.session_defaults.update(
+        approval_keystroke_delivery=config.approval_keystroke_delivery,
+        approval_keystroke_window_seconds=config.approval_keystroke_window_seconds,
+    )
     if supervisor_client is not None:
         try:
             adopted = await sessions.adopt_supervisor_sessions()
