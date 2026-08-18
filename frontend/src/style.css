@@ -35,13 +35,26 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .session-copy { display:flex;flex-direction:column;gap:4px;min-width:0 }.session-copy strong { font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.session-copy small { font:9px 'JetBrains Mono';color:#697381;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }.row-actions { display:none;position:absolute;right:7px;bottom:6px }.session-row:hover .row-actions { display:block }.row-actions button { border:0;background:#262d35;border-radius:4px;color:#aeb5bf;cursor:pointer }.row-actions button:hover { color:var(--red) }
 .row-actions button.confirming,.pane-tools button.confirming,.context-menu button.confirming { width:auto;min-width:43px;padding:0 6px;background:#4b2025;color:#ff9da4 }
 .empty-list { text-align:center;padding:52px 20px;color:#737d8a;display:flex;flex-direction:column;gap:8px;font-size:11px;line-height:1.5 }.empty-list strong { color:#b5bcc6;font-size:12px }.empty-glyph { font:18px 'JetBrains Mono';color:#586357 }.sidebar-footer { flex:none;height:calc(46px*var(--ui-scale));padding:7px;border-top:1px solid var(--line);display:flex;gap:6px }.sidebar-footer button { border:1px solid #2a3038;background:#14181d;border-radius:6px;cursor:pointer;font-size:11px }.sidebar-footer button:first-child { flex:1;text-align:left;padding-left:9px }.sidebar-footer button:first-child span { color:var(--green);margin-right:6px }.sidebar-footer button:not(:first-child) { width:32px }.sidebar-footer button:hover,.sidebar-footer button.on { border-color:#526143;background:#1a2118 }
-.main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:auto minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
-/* A shell header is [state] [cwd] [voice] [tools]; an agent header omits cwd and gives that
+.main-stage { min-width:0;min-height:0;display:grid;grid-template-rows:calc(37px*var(--ui-scale)) minmax(0,1fr);background:#0a0c0f }.pane-bar { display:grid;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto;align-items:center;padding:0 8px 0 12px;border-bottom:1px solid #242931;background:#111419;font-size:11px }.pane-bar>div { display:flex;align-items:center;gap:7px }.pane-bar .state-dot { margin:0 }.pane-path { justify-content:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#636d7a;font:9px 'JetBrains Mono' }.pane-tools { color:#68727f;font:9px 'JetBrains Mono' }.pane-tools button { background:transparent;border:0;border-radius:4px;width:25px;height:calc(23px*var(--ui-scale));cursor:pointer;color:#7d8692 }.pane-tools button:hover { background:#252b32;color:var(--text) }.terminal-host { min-height:0;padding:7px 7px 3px 10px;overflow:hidden }.terminal-host .xterm { height:100% }
+/* A shell header is [name] [cwd] [voice] [tools]; an agent header omits cwd and gives that
    space to voice controls. `grid-auto-flow:column` keeps both variants on one row. Without it
    an item beyond the declared column count auto-places into a second row, which is how the
-   variable-length voice set would silently wrap the pane tools under the status line. */
-.pane-bar { grid-auto-flow:column;grid-template-columns:auto minmax(50px,1fr) auto auto }
-.pane-bar.agent-pane-bar { grid-template-columns:auto minmax(50px,1fr) auto }
+   variable-length voice set would silently wrap the pane tools under the name.
+   The name track is `fit-content(35%)`, NOT `auto`: it sizes to the name while one fits, but a
+   long generated title is clamped at just over a third of the bar. An `auto` track takes its
+   max-content size before the flexible track is expanded, so a wordy title would have eaten the
+   cwd and squeezed the voice chips down to their 50px floor — the controls are what the header
+   is for, and a name is still readable truncated (the whole of it is in the title attribute). */
+.pane-bar { grid-auto-flow:column;grid-template-columns:fit-content(35%) minmax(50px,1fr) auto auto }
+.pane-bar.agent-pane-bar { grid-template-columns:fit-content(35%) minmax(50px,1fr) auto }
+/* The session's name, which is what the tab strip crops first and this header is wide enough to
+   show. `overflow:hidden` is load-bearing twice: it draws the ellipsis, and it is what lets the
+   name's grid track collapse under pressure instead of the tracks holding controls. */
+.pane-identity { min-width:0 }
+.pane-title { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:10px;font-weight:600 }
+/* Shown only for a fault with no other pane-level surface — a stale observation, a non-local
+   boundary, a parser or observation diagnostic. Routine state is deliberately not here. */
+.pane-fault { flex:0 0 auto;color:var(--amber);font-size:10px;cursor:help }
 /* The trailing fade is the group's overflow affordance. It costs nothing when the chips fit
    (it lands on empty track) and turns the chip the scroller cuts in half into a visible
    "there is more, scroll me" instead of something that reads as a clipping bug. */
@@ -97,7 +110,7 @@ input[type=checkbox],input[type=radio] { flex:none;width:var(--check-size);heigh
 .messages article pre{margin:0}
 .messages .history-transcript-content{display:grid;gap:8px;overflow-wrap:anywhere}
 .messages .history-transcript-content.clamped{max-height:280px;overflow:hidden;mask-image:linear-gradient(180deg,#000 70%,transparent)}
-@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:calc(45px*var(--ui-scale));grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:auto minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:calc(32px*var(--ui-scale));border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
+@media(max-width:760px) { .topbar { grid-template-columns:auto 1fr }.top-context,.top-actions { display:none }.workspace { grid-template-columns:72px minmax(0,1fr) }.sidebar-heading { justify-content:center }.sidebar-heading span { display:none }.project-row { grid-template-columns:12px minmax(0,1fr) }.project-row small,.project-row button { display:none }.session-row { height:calc(45px*var(--ui-scale));grid-template-columns:8px 1fr;padding:6px }.session-copy small,.sidebar-footer button:first-child { display:none }.session-copy strong { font-size:9px }.sidebar-footer button:not(:first-child) { width:100% }.pane-path { display:none }.pane-bar { grid-template-columns:fit-content(45%) minmax(0,1fr) auto }.pane-grid.count-2,.pane-grid.count-3,.pane-grid.count-4 { grid-template-columns:1fr;grid-template-rows:1fr }.terminal-pane:not(.focused) { display:none }.mobile-paste { display:block;position:absolute;right:12px;bottom:12px;z-index:8;height:calc(32px*var(--ui-scale));border:1px solid #46513f;border-radius:6px;background:#192117;color:#b9d7ac;font-size:10px }.quick-launcher { left:78px;width:calc(100% - 90px) }.history-body { grid-template-columns:120px minmax(0,1fr) } }
 
 /* Terminal chrome: visual only. Interaction and layout behavior stay unchanged. */
 :root {
@@ -128,7 +141,7 @@ kbd { padding:1px 3px;margin-left:4px;border:1px solid #334a39;border-bottom-col
 .project-tree { padding:5px 3px }.project-group { margin:0 0 2px;border-radius:0;border-color:transparent }.project-group.active { background:#0c130e;border-color:#263b2b }.project-row { height:calc(31px*var(--ui-scale));border-radius:0;color:#809087 }.project-row:hover { background:#101812;color:#bfd1c3 }.project-group.active>.project-row { color:#aee7b7 }.project-chevron { color:#4f7558 }.project-row strong { font-size:10px;font-weight:500 }.project-row small { color:#52715a }.project-row button { border-radius:0;color:#52715a }.project-row button:hover { background:#18231a;color:#9beaa7 }
 .project-group .session-list { padding:0 3px 4px 13px }.project-group .session-row { height:calc(44px*var(--ui-scale)) }.session-row { margin:0;padding:6px;border-radius:0 }.session-row:hover { background:#101712 }.session-row.active { background:#122018;border-color:#34543b;box-shadow:inset 2px 0 #77d887 }.session-row.active:before { content:'>';position:absolute;left:4px;color:#8ee69a }.session-row.awaiting { background:#211d0c;animation:none }.session-copy { gap:2px }.session-copy strong { color:#c6d4ca;font-size:10px;font-weight:500 }.session-copy small { color:#566b5c;font:8px 'Cascadia Mono',Consolas,monospace }.state-dot { width:6px;height:6px;border-radius:0 }.row-actions button { border:1px solid #304135;border-radius:0;background:#0a0f0b;color:#819087 }.row-actions button:hover { border-color:#7f3e45;color:#ff8991 }
 .project-empty { border-radius:0;color:#57725e }.sidebar-footer { height:calc(41px*var(--ui-scale));padding:5px;border-color:#26372b;background:#080c09 }.sidebar-footer button { border-color:#283a2d;border-radius:1px;background:#0b110d;color:#829187;font-size:9px }.sidebar-footer button:hover { border-color:#507359;background:#111a13;color:#b7d9bd }
-.main-stage,.terminal-pane { background:#070a08 }.pane-grid { gap:1px;background:#34503b }.pane-bar { height:calc(34px*var(--ui-scale));padding:0 6px 0 10px;border-color:#233329;background:#0a0f0b;font-size:9px }.pane-bar>div:first-child:before { content:'$';color:#70cc80;margin-right:1px }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #406449 }.terminal-pane.focused>.pane-bar { background:#0e1710 }.pane-path { color:#4f6856;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools { color:#53675a;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools button { height:calc(21px*var(--ui-scale));border-radius:0;color:#63776a }.pane-tools button:hover { background:#19231b;color:#b9cbbd }.terminal-host { padding:5px 4px 2px 7px }
+.main-stage,.terminal-pane { background:#070a08 }.pane-grid { gap:1px;background:#34503b }.pane-bar { height:calc(34px*var(--ui-scale));padding:0 6px 0 10px;border-color:#233329;background:#0a0f0b;font-size:9px }.pane-bar>div:first-child:before { content:'$';color:#70cc80;margin-right:1px }.terminal-pane.focused { box-shadow:inset 0 0 0 1px #406449 }.terminal-pane.focused>.pane-bar { background:#0e1710 }.pane-title { font:600 9px 'Cascadia Mono',Consolas,monospace }.pane-path { color:#4f6856;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools { color:#53675a;font:8px 'Cascadia Mono',Consolas,monospace }.pane-tools button { height:calc(21px*var(--ui-scale));border-radius:0;color:#63776a }.pane-tools button:hover { background:#19231b;color:#b9cbbd }.terminal-host { padding:5px 4px 2px 7px }
 .pane-path.last-known { opacity:.52 }.pane-path.last-known span { margin-right:4px;color:#788078 }.pane-path.remote,.pane-path.boundary-unknown { color:#d2a84f }
 .empty-stage { background-color:#070a08;background-image:linear-gradient(#17241b 1px,transparent 1px),linear-gradient(90deg,#101b14 1px,transparent 1px);background-size:24px 24px }.hero-terminal { width:auto;height:auto;margin-bottom:17px;padding:7px 10px;border:0;border-radius:0;background:transparent;box-shadow:none;color:#76dd87;font:18px 'Cascadia Mono',Consolas,monospace }.empty-stage h1 { margin-bottom:7px;color:#c3d2c7;font:600 17px 'Cascadia Mono',Consolas,monospace;letter-spacing:0 }.empty-stage h1:before { content:'// ' ;color:#4f7757 }.empty-stage p { color:#667a6c;font:10px/1.6 'Cascadia Mono',Consolas,monospace }.empty-stage button,.modal-footer button { height:calc(30px*var(--ui-scale));border-color:#304435;border-radius:1px;background:#0b120d;color:#92a799;font-size:9px }.primary { background:#17331d!important;border-color:#4f8c5a!important;color:#aaf2b5!important;text-shadow:0 0 7px #65d27844 }.primary:hover { background:#204527!important }
 .broadcast-banner { height:calc(30px*var(--ui-scale));border-color:#6f5c23;background:#211c0c;color:#e0c56f;font-size:9px }.broadcast-banner span { color:#96854f }
@@ -1379,6 +1392,11 @@ body {
 .settings-content .drawer-tab-visibility label{display:flex;align-items:center;gap:8px;padding:4px 0;color:var(--text)}
 .settings-content .drawer-tab-visibility label>input{grid-column:auto;margin:0}
 .settings-content .drawer-tab-visibility label:has(>input:disabled){color:var(--muted)}
+/* The count and the reset are about the whole set, so they span it rather than
+   sitting in the first column beside a tab. */
+.drawer-tab-visibility>strong,.drawer-tab-visibility>.theme-actions{grid-column:1/-1}
+.drawer-tab-visibility>strong{margin-bottom:3px;color:var(--text)}
+.drawer-tab-visibility>.theme-actions{margin-top:9px}
 .settings-errors{border-bottom:1px solid var(--red)!important;background:color-mix(in srgb,var(--red) 8%,var(--panel))!important}.settings-errors h3,.settings-errors p{color:var(--red)}
 .settings-loading{display:grid;place-content:center;min-height:180px;color:var(--muted)}
 .profile-browser{min-height:390px;display:grid;grid-template-columns:260px minmax(0,1fr);margin-top:12px;border:1px solid var(--line);background:var(--bg)}
@@ -1420,7 +1438,32 @@ body {
 .note-chord-list small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
 .note-chord-list select{min-height:29px;border:1px solid var(--line);border-radius:0;padding:0 6px;background:var(--panel);color:var(--text);font:inherit}
 .note-chord kbd{font:inherit;color:var(--accent)}.note-chord em{margin-left:6px;font-style:normal;color:var(--muted)}
-@media(max-width:760px){.settings-panel>header{flex-wrap:wrap;gap:8px}.note-chord-list article{grid-template-columns:minmax(0,1fr) 150px;grid-template-areas:"chord control" "command control";gap:2px 9px}.note-chord-list .note-chord{grid-area:chord}.note-chord-list small{grid-area:command}.note-chord-list select{grid-area:control}.note-chord em{display:block;margin-left:0}.settings-panel>header>div.settings-search{flex:1 0 100%;order:3;max-width:none;margin-left:0}.settings-panel>header .settings-search>input{min-height:38px}.settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}.settings-panel>header .settings-search-results>button{min-height:46px}.settings-body{grid-template-columns:1fr!important;grid-template-rows:auto minmax(0,1fr)}.settings-tabs{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:4px}.settings-tabs button{flex:none;min-height:38px;padding-left:8px;border-left:0!important;border-bottom:2px solid transparent!important}.settings-tabs button.active{border-left:0!important;border-bottom-color:var(--green)!important}.settings-tab-group>span{display:none}.settings-section-rail{flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:5px 11px}.settings-section-rail button{flex:none;min-height:34px;white-space:nowrap}.settings-content label:not(.check),.settings-content label.check,.theme-field{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}.profile-browser{grid-template-columns:1fr;min-height:0}.profile-index{border-right:0;border-bottom:1px solid var(--line)}.profile-editor{padding:8px}.settings-content>section{padding:11px}.keybinding-heading{display:block}.keybinding-heading button{margin-top:7px}.keybinding-group article{grid-template-columns:minmax(0,1fr) 112px 36px}.keybinding-command small{display:none}.keybinding-capture{grid-template-columns:1fr auto}.keybinding-capture>span{grid-column:1/-1}}
+@media(max-width:760px){.settings-panel>header{flex-wrap:nowrap;gap:8px}.note-chord-list article{grid-template-columns:minmax(0,1fr) 150px;grid-template-areas:"chord control" "command control";gap:2px 9px}.note-chord-list .note-chord{grid-area:chord}.note-chord-list small{grid-area:command}.note-chord-list select{grid-area:control}.note-chord em{display:block;margin-left:0}.settings-panel>header>div.settings-search{flex:1 1 84px;min-width:0;max-width:none;margin-left:auto}.settings-panel>header .settings-search>input{min-height:36px;padding:5px 7px}.settings-panel>header .settings-search-results{max-height:min(52dvh,340px)}.settings-panel>header .settings-search-results>button{min-height:46px}.settings-body{position:relative;z-index:1;grid-template-columns:minmax(0,1fr)!important;grid-template-rows:minmax(0,1fr)}.settings-tabs button{min-height:40px}.settings-section-rail{flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:5px 11px}.settings-section-rail button{flex:none;min-height:34px;white-space:nowrap}.settings-content label:not(.check),.settings-content label.check,.theme-field{grid-template-columns:minmax(120px,38%) minmax(0,1fr)}.profile-browser{grid-template-columns:1fr;min-height:0}.profile-index{border-right:0;border-bottom:1px solid var(--line)}.profile-editor{padding:8px}.settings-content>section{padding:11px}.keybinding-heading{display:block}.keybinding-heading button{margin-top:7px}.keybinding-group article{grid-template-columns:minmax(0,1fr) 112px 36px}.keybinding-command small{display:none}.keybinding-capture{grid-template-columns:1fr auto}.keybinding-capture>span{grid-column:1/-1}}
+/* Settings' section list on a narrow layout.
+   It is the desktop column, moved rather than redrawn: same order, same groups, same
+   active mark. What changes is that it slides in over the content instead of standing
+   beside it, mirroring the workspace's own left sidebar — the hamburger and the header
+   title open it, the scrim and a swipe close it, and back closes it before it closes
+   Settings (`settings-nav` in the dismiss stack).
+   Closed it is `visibility:hidden`, not `aria-hidden`: that takes its buttons out of the
+   focus order and the accessibility tree without hiding elements that are still
+   focusable, and it still animates because the transform is what moves. */
+@media(max-width:760px){
+  .settings-tabs-drawer{position:absolute;left:0;top:0;bottom:0;z-index:6;width:min(258px,78%);padding:6px 6px 14px;border-right:1px solid var(--line);background:var(--bg);box-shadow:8px 0 0 #0008;transform:translateX(-101%);visibility:hidden;transition:transform .15s ease,visibility 0s linear .15s}
+  .settings-tabs-drawer.open{transform:translateX(0);visibility:visible;transition:transform .15s ease,visibility 0s}
+  .settings-nav-scrim{position:absolute;inset:0;z-index:5;border:0!important;background:#020403aa;cursor:pointer}
+  /* Both openers. The hamburger is the affordance; the title is where the eye already
+     is, and on a phone that is the tap most people make. */
+  .settings-panel>header>.settings-nav-trigger{flex:none;width:auto;min-height:34px;display:grid;place-items:center;padding:0 4px;margin-left:-4px;color:var(--text)}
+  .settings-panel>header>.settings-nav-trigger[aria-expanded=true]{color:var(--accent)}
+  .settings-panel>header .settings-heading{min-width:0;flex:0 1 auto}
+  .settings-panel>header .settings-heading h2{min-width:0}
+  .settings-panel>header .settings-heading-trigger{max-width:100%;min-height:0;display:flex;align-items:center;gap:5px;padding:0;color:var(--text);text-align:left}
+  .settings-panel>header .settings-heading-trigger>i{flex:none;font-style:normal;color:var(--muted)}
+  .settings-panel>header .settings-heading-trigger[aria-expanded=true]>i{transform:rotate(180deg);color:var(--accent)}
+  .settings-panel>header>.settings-close{flex:none;min-height:34px;padding:0 4px;margin-right:-4px}
+}
+@media(prefers-reduced-motion:reduce){.settings-tabs-drawer{transition:none}}
 
 /* Usage views derive overview, time-series, and model aggregates from daily cache rows. */
 .usage-view-tabs{display:flex;gap:3px;margin-bottom:7px;border-bottom:1px solid var(--line)}.usage-view-tabs button{border:0;border-bottom:2px solid transparent;background:transparent}.usage-view-tabs button.active{border-bottom-color:var(--accent);color:var(--text)}.usage-view-tabs button.active:before{content:'> ';color:var(--accent)}
@@ -2021,17 +2064,18 @@ body {
      definite remaining height after the in-flow session/voice headers. */
   .mobile-unified-active{height:100%;min-height:0;overflow:hidden}
   .mobile-unified-active>.terminal-pane{display:flex!important;flex-direction:column;height:100%;min-height:0;overflow:hidden}
-  /* The session header is one row on a phone: status at the left, the voice group in the
-     middle, note/proc/⋯ at the right. The cwd column is dropped here — it is the pane's
-     least useful field on a narrow screen, and as an extra item it was silently wrapping
+  /* The session header is one row on a phone: the session name at the left, the voice group in
+     the middle, queue/transcript/⋯ at the right. The cwd column is dropped here — it is the
+     pane's least useful field on a narrow screen, and as an extra item it was silently wrapping
      the tools onto a second row. `.pane-bar>div` (0,1,1) also out-specifies the legacy
      `.pane-path{display:none}` mobile rule (0,1,0), which is why the path showed at all,
      so hide it from the bar itself. The voice group takes the flexible column and scrolls
-     inside itself; status is capped so it cannot squeeze the group out of the bar. */
+     inside itself; the name track is capped so it cannot squeeze the group out of the bar. */
   .pane-bar>.pane-path{display:none}
-  .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:auto minmax(0,1fr) auto;padding:5px 6px 1px 10px}
+  .mobile-unified-active>.terminal-pane>.pane-bar{flex:0 0 auto;height:auto;min-height:40px;grid-template-columns:fit-content(45%) minmax(0,1fr) auto;padding:5px 6px 1px 10px}
   .mobile-unified-active>.terminal-pane>.pane-bar>div{min-width:0}
-  .mobile-unified-active>.terminal-pane>.pane-bar .pane-state{max-width:min(28vw,120px)}
+  .mobile-unified-active>.terminal-pane>.pane-bar .pane-state,
+  .mobile-unified-active>.terminal-pane>.pane-bar .pane-title{max-width:min(45vw,180px)}
   .mobile-unified-active>.terminal-pane>.voice-overlay-anchor{flex:0 0 auto}
   /* Touch metrics for the draft row. 16px text is deliberate: anything smaller makes
      mobile Safari/Chrome zoom the viewport when the textarea takes focus, which on this
@@ -2545,6 +2589,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .schedule-editor label em{font-style:normal;opacity:.8}
 .schedule-editor input,.schedule-editor select,.schedule-editor textarea{min-width:0;padding:5px 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:9px}
 .schedule-editor textarea{resize:vertical;line-height:1.5}
+/* The expression and its presets share one row. Both columns shrink (`minmax(0,…)`),
+   because a select sized to its longest option would otherwise push the input out of a
+   380px column. The expression gets the wider share: it is the field being edited. */
+.schedule-cron-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:5px}
 .schedule-editor input:focus,.schedule-editor select:focus,.schedule-editor textarea:focus{outline:0;border-color:var(--green)}
 /* Qualified by `.schedule-editor` on purpose: the column rule above is two classes deep,
    so a bare `.schedule-check` loses to it and the hint below the checkbox stops wrapping,

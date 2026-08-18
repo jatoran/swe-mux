@@ -51,7 +51,12 @@ def test_settings_use_tabs_compact_profile_selection_and_latest_ccusage() -> Non
     root = Path(__file__).parents[1] / "frontend" / "src"
     settings = (root / "Settings.tsx").read_text(encoding="utf-8")
     style = (root / "style.css").read_text(encoding="utf-8")
-    assert 'class="settings-tabs"' in settings
+    # The section list is one docked column wide and one slide-in drawer narrow, so its
+    # class is composed rather than a literal attribute; both halves have to be present,
+    # and the drawer needs the stylesheet rule that actually moves it off screen.
+    assert "settings-tabs" in settings
+    assert "settings-tabs-drawer" in settings
+    assert ".settings-tabs-drawer{" in style
     assert "activeTab==='terminals'" in settings
     assert "selectedProfileId" in settings
     assert "Select a profile to inspect or edit it" in settings
