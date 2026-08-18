@@ -278,6 +278,15 @@ Run the tiers deliberately with `SWEMUX_RUN_LIVE_AGENT_TESTS=1` (transcript and 
   changes nothing while the operator believes requests are being answered. Only a harness
   declaring it receives the explicit `timeout` on its decision hook, and only it can hold a
   non-`wait` approval mode (`approvals.md`).
+- **`approval_accept_key`** is the *delivery* half of that decision, for a CLI that publishes
+  the permission request and then ignores the answer — measured behaviour on Claude Code
+  2.1.234. It names the key that accepts the harness's dialog when its default option is
+  highlighted (`
+` for Claude, `None` for every other harness). `None` means mux stays silent:
+  guessing the key is how an intended deny becomes an approve. It never decides anything — a
+  keystroke is sent only for a request the structured `PermissionRequest` already authorized,
+  so a trust dialog or a `/clear` confirmation, which raise no such request, cannot be answered
+  through it (`approvals.md` § When the CLI publishes the request and ignores the answer).
 - Claude executes hook commands through Bash even on Windows. Generated commands use
   Bash-safe executable paths (for example `/d/.../python.exe` under Git Bash/MSYS), are
   written by atomic replacement, and must never use raw Windows `list2cmdline` output.

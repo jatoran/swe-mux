@@ -74,6 +74,10 @@ import {
 } from './sidebarResize'
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
 import {
+  DRAWER_HIDDEN_KEY, canHideDrawerTab, drawerTabVisible, parseHiddenDrawerTabs,
+  serializeHiddenDrawerTabs, withDrawerTabHidden,
+} from './drawerVisibility'
+import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
   pruneDrawerNotes, serializeDrawerNotes, type DrawerNoteMap,
 } from './drawerNotes'
@@ -493,7 +497,7 @@ export function App() {
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
-  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail'}|null>(null)
+  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail';tab?:DrawerTabId}|null>(null)
   const [zoomedId, setZoomedId] = useState<string | null>(null)
   const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
@@ -682,6 +686,11 @@ export function App() {
   const dragDrawerLayoutRef=useRef<DrawerLayout|null>(null)
   const dragDrawerTargetRef=useRef<{stackId:string;kind:'join'|'split';edge?:DrawerEdge}|null>(null)
   const [drawerAnnouncement,setDrawerAnnouncement]=useState('')
+  // Which tabs the user has put away. Global and device-local, exactly like the
+  // arrangement above it: visibility is arrangement, and the layout it filters is
+  // read synchronously at boot so no tab is drawn and then taken away again.
+  const [hiddenDrawerTabs,setHiddenDrawerTabs]=useState<DrawerTabId[]>(
+    ()=>parseHiddenDrawerTabs(localStorage.getItem(DRAWER_HIDDEN_KEY)))
   const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   // A momentary drawer belongs only to the Project that opened it. Clear the state
@@ -765,8 +774,26 @@ export function App() {
       desktop_expanded:open,
     }))
   }
+  const setDrawerTabHidden=(tab:DrawerTabId,hidden:boolean)=>{
+    setHiddenDrawerTabs(current=>{
+      const next=withDrawerTabHidden(current,tab,hidden)
+      storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs(next))
+      return next
+    })
+    setDrawerAnnouncement(`${drawerTab(tab).label} ${hidden?'hidden':'shown'}`)
+  }
+  const showAllDrawerTabs=()=>{
+    setHiddenDrawerTabs(()=>{
+      storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs([]))
+      return []
+    })
+    setDrawerAnnouncement('All side panels shown')
+  }
   const selectDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
-    setTransientDrawer(null)
+    // A hidden tab reached by name — the palette, a voice command, a menu row that says
+    // "Notes…" — is peeked for as long as it stays selected rather than unhidden. The
+    // request was to see it now, not to change what the rail carries from here on.
+    setTransientDrawer(hiddenDrawerTabs.includes(tab)?{projectId:targetProject,tab}:null)
     updateDrawerPresentation(targetProject,current=>activateDrawerTab(current,drawerLayoutRef.current,tab))
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
@@ -2294,9 +2321,9 @@ export function App() {
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
   }
-  const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail')=>{
+  const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail',tab?:DrawerTabId)=>{
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
-    setDrawerDisplayMenu({x,y,surface})
+    setDrawerDisplayMenu({x,y,surface,tab})
   }
   const groupIdFor=(project:Project)=>
     project.group_id&&projectGroups.some(group=>group.id===project.group_id)?project.group_id:null
@@ -5695,7 +5722,8 @@ export function App() {
         tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}
         onProjectionTabReorder={beginMobileDrawerTabDrag}
-        onTabDisplayMenu={(x,y)=>openDrawerDisplayMenu(x,y,'tabs')}
+        hiddenTabs={hiddenDrawerTabs}
+        onTabDisplayMenu={(x,y,tab)=>openDrawerDisplayMenu(x,y,'tabs',tab)}
         draggingTab={dragDrawerTab}
         announcement={drawerAnnouncement}
         promptPreselect={promptPreselect}
@@ -5727,7 +5755,9 @@ export function App() {
           them would only repeat the same icons and spend a column doing it. Mobile reaches the
           same tabs through the drawer's own tab strip after a two-finger swipe. */}
       {!mobileWorkspace&&!clipboardOpen&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
-        {drawerLauncherTabs.filter(tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{
+        {/* The same predicate the open drawer's strips use. No `peek`: this rail is only
+            rendered while the drawer is closed, and a peek exists only while one is open. */}
+        {drawerLauncherTabs.filter(tab=>drawerTabVisible(tab.id,{hidden:hiddenDrawerTabs,hasTranscript:hasHarnessTranscript(active?.backend)})).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
           // No selected state to draw: the rail is only rendered while the drawer is closed,
           // so no tab it lists is showing anywhere.
@@ -5740,7 +5770,7 @@ export function App() {
             onContextMenu={event=>{
               event.preventDefault()
               event.stopPropagation()
-              openDrawerDisplayMenu(event.clientX,event.clientY,'rail')
+              openDrawerDisplayMenu(event.clientX,event.clientY,'rail',tab.id)
             }}
             onClick={()=>showDrawerTab(tab.id)}
           >{utilityRailDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
@@ -5955,9 +5985,46 @@ export function App() {
       {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionName(session)}</button>)}
     </div>}
 
-    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-140))}}>
+    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-200))}}>
       <div class="context-title"><strong>{drawerDisplayMenu.surface==='tabs'?'DRAWER TABS':'RIGHT RAIL'}</strong></div>
       {(()=>{const display=drawerDisplayMenu.surface==='tabs'?drawerTabDisplay:utilityRailDisplay;return <button role="menuitemcheckbox" aria-checked={display==='title'} onClick={()=>void persistDrawerDisplay(drawerDisplayMenu.surface,display==='icon'?'title':'icon')}>{display==='title'?'✓ ':''}Text labels</button>})()}
+      <div class="context-rule" />
+      {/* Hiding the tab you right-clicked is the common action and stays flat; the full
+          checklist that undoes it is one row down, and its label carries the count so a
+          rail missing something says so without being opened. Refusing to hide the last
+          tab is what keeps this menu reachable at all — it lives on the tab strip. */}
+      {drawerDisplayMenu.tab&&(()=>{
+        const tab=drawerDisplayMenu.tab
+        const blocked=!canHideDrawerTab(hiddenDrawerTabs,tab)
+        return <button
+          role="menuitem"
+          disabled={blocked}
+          title={blocked?'The side panel must keep at least one tab.':undefined}
+          onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
+        >Hide {drawerTab(tab).label}</button>
+      })()}
+      <MenuGroup
+        id="drawer-visible-tabs"
+        label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length} of ${DRAWER_TABS.length}`}
+        openId={menuGroup}
+        onOpenChange={setMenuGroup}
+        hint="Choose which tabs the side panel carries"
+      >
+        {DRAWER_TABS.map(tab=>{
+          const shown=!hiddenDrawerTabs.includes(tab.id)
+          const blocked=shown&&!canHideDrawerTab(hiddenDrawerTabs,tab.id)
+          return <button
+            key={tab.id}
+            role="menuitemcheckbox"
+            aria-checked={shown}
+            disabled={blocked}
+            title={blocked?'The side panel must keep at least one tab.':tab.title}
+            onClick={()=>setDrawerTabHidden(tab.id,shown)}
+          >{shown?'✓ ':''}{tab.label}</button>
+        })}
+        <div class="context-rule" />
+        <button role="menuitem" disabled={!hiddenDrawerTabs.length} onClick={()=>{setDrawerDisplayMenu(null);showAllDrawerTabs()}}>Show all</button>
+      </MenuGroup>
       <div class="context-rule" />
       <button role="menuitem" disabled={!clipboardOpen} onClick={()=>{setDrawerDisplayMenu(null);setClipboardOpen(false)}}>Collapse utility drawer</button>
     </div>}
@@ -6067,7 +6134,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 

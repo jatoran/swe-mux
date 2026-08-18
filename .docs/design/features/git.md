@@ -180,6 +180,23 @@ uncommitted work together.
 - The Project-scoped Git tab has Map, Log, and Provenance readings of one repository.
 - The view switch keeps the leading edge of the toolbar; refresh and worktree creation sit together at the trailing edge, and refresh is its glyph alone with an explicit accessible name.
 
+### A Project with no repository
+
+- A Project folder Git knows nothing about is a fourth state of this tab, not an error in it.
+  The tab is never hidden for it: the drawer's tab visibility is a user choice, and a folder that is not a repository yet is exactly the case where the one available Git decision has to be reachable.
+- The daemon distinguishes that state from every other Git failure with its own `not_git_repository` code, raised by repository identity resolution when Git exits fatal, the folder exists, and it carries no `.git` of its own.
+  A missing Git binary, a timeout, and a corrupt or unreadable repository all keep the generic failure, because offering to initialize one of those would reinitialize a repository the user still has.
+- In that state the tab replaces Map, Log, Provenance, the comparison control, and the worktree form with the folder's path and a single **Initialize repository** action.
+  There is nothing to read, so nothing is rendered present-and-empty.
+- Initialization creates the repository and writes a starter `.gitignore` whose language sections are chosen from marker files already in the folder (Node, Python, Rust, Go), over a fixed base covering secrets, environment files, and operating-system noise.
+- **Nothing is staged and no commit is made.**
+  `git init` over existing work is reversible by deleting `.git`; a first commit that swept in a stray `.env` or a virtualenv is not, and an ignore file inferred from filename probes is not trustworthy enough to make that call for someone.
+- An existing `.gitignore` is never rewritten.
+  A folder can carry one long before it carries a repository, and it is the user's file either way.
+- The branch is named `main` unless the host sets `init.defaultBranch`, in which case Git's own configured answer stands.
+- The daemon re-resolves the folder's repository state inside the request rather than trusting what the client last read, and refuses an already-tracked folder with `already_initialized`.
+- Success emits `git_changed` for the Project, so every other client re-reads rather than holding the pre-init view.
+
 ### Reaching a session from the repository
 
 - Every place the tab names a session is a link to that session, in all three views: a worktree's live occupants, a commit's session links, and the provenance ledger.
@@ -284,7 +301,7 @@ uncommitted work together.
   A timed-out or disconnected browser cannot create an overlapping Git-process storm by refreshing again.
 - Map refreshes on Git and worktree events; an open Log refreshes its graph while retaining immutable commit caches.
 - Explicit Refresh covers Git changes created outside swe-mux event paths.
-- The Git surface mutates only through the existing worktree create and remove operations.
+- The Git surface mutates only through the worktree create and remove operations and the one-time repository initialization offered to a Project whose folder has no repository.
 - It does not stage, unstage, commit, reset, switch, fetch, merge, rebase, prune, or discard files.
 - Removal validates the exact current worktree root, refuses the main tree and live-session roots in the UI, and requires explicit force before Git may discard uncommitted files.
 - Worktree add, repair, and remove run as daemon-owned mutations with a 30-minute deadline rather than the four-second read-only Git deadline.
@@ -357,6 +374,7 @@ and provider-managed worktrees may live outside that root.
 - Monitor and git runner: `src/swe_mux/git_monitor.py`
 - Durable session-to-commit capture and explicit historical import: `src/swe_mux/git_provenance.py`, `src/swe_mux/git_provenance_backfill.py`, `src/swe_mux/history.py`
 - Project-scoped review domain and bounded patch runner: `src/swe_mux/git_review.py`
+- First-time repository creation and the starter ignore file: `src/swe_mux/git_init.py`
 - Routes: `src/swe_mux/server.py`
 - Bootstrap runner: `src/swe_mux/worktree_setup.py`
 - Display-name resolution shared by every surface that names a session: `src/swe_mux/session_titles.py`, `frontend/src/sessionNames.ts`

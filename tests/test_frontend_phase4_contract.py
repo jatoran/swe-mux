@@ -428,6 +428,37 @@ def test_drawer_tabs_support_icon_and_title_modes_from_one_registry() -> None:
     assert ".drawer-tabs button{min-height:44px;" in css
 
 
+def test_hidden_drawer_tabs_stay_a_render_filter_with_a_way_back() -> None:
+    """Putting a tab away must never edit the layout, and must never be a one-way door."""
+    app = source("App.tsx")
+    drawer = source("UtilityDrawer.tsx")
+    settings = source("Settings.tsx")
+    visibility = source("drawerVisibility.ts")
+
+    # Persistence is the hidden set alone. Nothing here may reach for the layout writers:
+    # normalization re-inserts a missing tab at its *canonical* position, so removing one
+    # from the tree would discard wherever the user dragged it.
+    assert "DRAWER_HIDDEN_KEY = 'mux.drawer.hidden.v1'" in visibility
+    assert "storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs(next))" in app
+    assert "moveDrawerTab" not in visibility
+    assert "serializeDrawerLayout" not in visibility
+
+    # The way back is on the strip the tab was hidden from, not only in Settings.
+    assert 'id="drawer-visible-tabs"' in app
+    assert (
+        "label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length}"
+        " of ${DRAWER_TABS.length}`}"
+    ) in app
+    assert ">Show all</button>" in app
+    assert 'class="drawer-tab-visibility"' in settings
+
+    # An empty pane is dropped rather than drawn under a fallback heading, and a drawer
+    # with nothing left carries its own control back.
+    assert "node.tabs.some(tabAvailable) ? renderStack(node) : null" in drawer
+    assert "renderEmptyDrawer()" in drawer
+    assert ">Choose panels…</button>" in drawer
+
+
 def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> None:
     """Pane rails edit one recursive local layout while the outer rail remains a mirror."""
     app = source("App.tsx")
@@ -439,11 +470,14 @@ def test_drawer_tabs_use_recursive_device_local_layout_and_pane_dragging() -> No
     # The recursive layout feeds pane rails. The depth-first projection feeds the launcher.
     assert "layout={drawerLayout}" in app
     assert "presentation={renderedDrawerPresentation}" in app
+    # One predicate answers "is this tab drawn" for the launcher rail and every pane
+    # strip alike, so a hidden tab cannot survive in one of them. `drawerVisibility.ts`
+    # owns the rule; neither surface may re-derive it.
     assert (
-        "drawerLauncherTabs.filter("
-        "tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{"
+        "drawerLauncherTabs.filter(tab=>drawerTabVisible(tab.id,"
+        "{hidden:hiddenDrawerTabs,hasTranscript:hasHarnessTranscript(active?.backend)}))"
     ) in app
-    assert "stack.tabs.filter(tabAvailable).map((id, index, visibleTabs) => {" in drawer
+    assert "visibleDrawerTabs(stack.tabs, visibility).map((id, index, visibleTabs) => {" in drawer
     assert "renderNode(layout.root)" in drawer
     assert "onTabDragStart={beginDrawerTabDrag}" in app
     assert "props.onTabDragStart(event, id)" in drawer
@@ -517,8 +551,8 @@ def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
     assert "aria-valuenow={Math.round(node.ratio * 100)}" in drawer
     assert "onDblClick={() => updateRatio(0.5)}" in drawer
     assert "onPointerDown={projection" in drawer
-    assert "beginTabLongPress(event); props.onProjectionTabReorder?.(event, id)" in drawer
-    assert "mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)" in drawer
+    assert "beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id)" in drawer
+    assert "? (mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root))" in drawer
     assert 'aria-live="polite"' in drawer
 
 
