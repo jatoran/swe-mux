@@ -559,6 +559,7 @@ def test_recursive_drawer_exposes_tab_and_separator_accessibility() -> None:
 def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
     """The app menu browses every Project; a Project row browses that Project."""
     app = source("App.tsx")
+    view = source("ProcessFleetView.tsx")
     panel = source("ProcessPanel.tsx")
 
     main_menu = app[app.index('aria-label="swe-mux menu"') : app.index('class="sidebar-scrim"')]
@@ -586,9 +587,12 @@ def test_menu_scope_follows_the_menu_that_opened_the_surface() -> None:
         assert f"runNamedCommand('{scoped}')" in project_menu
     assert "openNotesBrowser(target)" in project_menu
 
-    # Scope is a visible, clearable control rather than a hidden mode.
-    assert "process-scope-select" in panel
+    # Scope is a visible, clearable control rather than a hidden mode, on every shell that
+    # draws the surface — including the drawer tab, which opens scoped to the active Project.
+    assert "process-scope-select" in view
+    assert '<option value="">All projects</option>' in view
     assert "initialProjectId" in panel
+    assert 'projectScope={scope}' in source("ProcessesTab.tsx")
     # History is a global overlay (not a per-project pane), opened with an
     # optional scope that pre-filters its own clearable project picker.
     assert "const showHistory = (scope:Project|null=null)" in app
@@ -679,20 +683,30 @@ def test_run_menu_leads_with_the_action_title_and_stays_a_menu_on_a_phone() -> N
 
 
 def test_process_fleet_groups_sessions_and_daemon_infrastructure() -> None:
+    view = source("ProcessFleetView.tsx")
     panel = source("ProcessPanel.tsx")
+    fleet = source("processFleet.ts")
 
-    assert "projectProcessGroups" in panel
-    assert "session?.project_id" in panel
+    assert "projectProcessGroups" in view
+    # A session's Project comes from the live session first and the sample second, so a
+    # session moved between Projects re-files immediately instead of on the next sample.
+    assert (
+        "sessionById.get(group.session_id)?.project_id || group.project_id" in fleet
+    )
     assert "All projects, sessions, and swe-mux infrastructure" in panel
     assert "PROCESS FLEET" in panel
-    assert "buildProcessTree" in panel
-    assert "renderDaemonGroup" in panel
+    assert "buildProcessTree" in view
+    assert "renderDaemonGroup" in view
     # The runtime keeps its own group. Its heading dropped the `swe-mux::` prefix that the
     # session-group heading immediately below it already spelled out.
-    assert "daemon + infrastructure" in panel
-    assert "swe-mux runtime" in panel
-    assert "daemon-owned child not attributed to a terminal session" in panel
-    assert "combinedResourceTotals(snapshot)" in panel
+    assert "daemon + infrastructure" in view
+    assert "swe-mux runtime" in view
+    assert "daemon-owned child not attributed to a terminal session" in view
+    # ...and it is excluded by a Project scope, because it belongs to no Project.
+    assert "if (!daemon || selectedSessionId || projectScope) return null" in view
+    # Totals follow what is on screen: the daemon's own figures plus the runtime when
+    # unscoped, recounted from the visible rows when not.
+    assert "fleetViewTotals(snapshot, sessionGroups, scoped)" in view
 
 
 def test_accessibility_and_startup_instrumentation_remain_intact() -> None:
