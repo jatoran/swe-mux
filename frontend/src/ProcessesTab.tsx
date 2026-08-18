@@ -1,93 +1,71 @@
-import { useMemo } from 'preact/hooks'
-import { memoryLabel } from './processRows'
-import { buildWatchRows, watchTotals, type WatchScope, type WatchSnapshot } from './processWatch'
+import { useEffect, useState } from 'preact/hooks'
+import { ProcessFleetView } from './ProcessFleetView'
+import type { Preview, ProjectScope } from './processFleet'
 import type { Project, Session } from './types'
 
-// The drawer's Processes tab: what is running, and what it is serving.
+// The drawer's Processes tab.
 //
-// It reads the snapshot `App` already polls for the sidebar's resource summary and starts no
-// loop of its own. That matters more than it looks: the
-// reconcile walk behind that data holds the GIL on Windows, and the one rule this feature must
-// not break is that a panel left open all day costs the daemon nothing extra.
+// It draws `ProcessFleetView` — the same surface as the modal Process fleet inspector, with the
+// same trees, evidence, listeners, previews, and interrupt/terminate actions. It differs in two
+// ways, and only these two: it opens scoped to the active Project, and it marks and pins the
+// focused terminal's session so "what is *this* session running" is answered without a scroll.
 //
-// Nothing here terminates anything. The rollup answers "is it up", which is the question you
-// have while looking at a terminal; killing a tree is a decision that needs the evidence line,
-// the confidence, and a confirmation step, all of which need the modal's width. `Full inspector`
-// is the one-click way there, prefiltered to whatever this tab is scoped to.
+// This tab used to be a watch-only rollup, on the argument that a destructive confirm in a
+// 300 px column is how the wrong tree gets killed. That argument was about layout, and it is
+// answered by layout: the column renders the narrow layout the modal already used on a phone,
+// and the confirm is the same two-press confirm in both places. What it cost was that the
+// surface you have open beside a terminal could not answer the question you opened it with.
+//
+// It no longer reads the reduced `?summary=1` sample the sidebar rail polls — trees and evidence
+// are not in that projection — so it subscribes to the shared full-snapshot feed instead. That
+// feed is refcounted: a closed tab polls nothing, and a tab open in both drawer stacks with the
+// modal over it is still one request per tick.
 
 type Props = {
-  snapshot: WatchSnapshot
   sessions: Session[]
   projects: Project[]
   /** The active Project, which is what an unscoped open means. */
   projectId: string
-  /** Pinned first and marked, so "what is this session running" needs no scope change. */
+  /** Marked and pinned first within its Project. */
   focusedSessionId: string | null
-  scope: WatchScope
-  onScope: (scope: WatchScope) => void
+  scope: ProjectScope
+  onScope: (scope: ProjectScope) => void
   onSelectSession: (sessionId: string) => void
-  onOpenPreview: (sessionId: string, url: string) => void
+  onAttached: (preview: Preview, project: Project) => void
   onOpenInspector: (projectId: string | null) => void
-  onRefresh: () => void
   onDone: () => void
 }
 
 export function ProcessesTab({
-  snapshot, sessions, projects, projectId, focusedSessionId, scope, onScope,
-  onSelectSession, onOpenPreview, onOpenInspector, onRefresh, onDone,
+  sessions, projects, projectId, focusedSessionId, scope, onScope,
+  onSelectSession, onAttached, onOpenInspector, onDone,
 }: Props) {
-  const rows = useMemo(
-    () => buildWatchRows(snapshot, sessions, projects, scope, focusedSessionId),
-    [snapshot, sessions, projects, scope, focusedSessionId],
-  )
-  const totals = watchTotals(rows)
-  const activeProject = projects.find(project => project.id === projectId)
+  // Drill-down is the tab's own, not the caller's: it is a momentary "just this session" read,
+  // and carrying it across a Project change would scope the tab to a session that is no longer
+  // on screen.
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  useEffect(() => setSelectedSessionId(null), [projectId])
 
   return <div class="processes-tab">
-    <div class="processes-filters">
-      <select
-        aria-label="Filter processes by project"
-        value={scope}
-        onChange={event => onScope(event.currentTarget.value)}
-      >
-        <option value={projectId} disabled={!activeProject}>{activeProject ? activeProject.name : 'No project'}</option>
-        <option value="">All projects</option>
-      </select>
-      <button title="Re-read the latest sample" onClick={onRefresh}>refresh</button>
-    </div>
-    <p class="processes-totals">
-      {snapshot
-        ? `${totals.sessions} session${totals.sessions === 1 ? '' : 's'} · ${totals.processes} proc · CPU ${totals.cpu_pct.toFixed(1)}% · ${memoryLabel(totals.memory_bytes)}`
-        : 'Process data is unavailable from this daemon.'}
-    </p>
-    <div class="processes-body">
-      {snapshot && !rows.length && <p class="processes-empty">
-        {scope ? 'Nothing running in this Project.' : 'Nothing running.'}
-      </p>}
-      {rows.map(row => <section class={`process-watch-row ${row.focused ? 'focused' : ''}`} key={row.sessionId}>
-        <button
-          class="process-watch-heading"
-          title={row.focused ? 'The focused terminal · click to reveal it' : 'Reveal this terminal'}
-          onClick={() => { onSelectSession(row.sessionId); onDone() }}
-        >
-          <span><i class={`state-dot ${row.state}`} /><strong>{row.label}</strong></span>
-          <small>
-            {!scope && <em class="process-watch-project">{row.projectLabel}</em>}
-            {row.processes} proc · {row.cpu_pct.toFixed(1)}% · {memoryLabel(row.memory_bytes)}
-          </small>
-        </button>
-        {/* These are raw loopback listeners, not asserted application servers. Process
-            tooling offers explicit Preview promotion; general navigation does not. */}
-        {row.servers.map(server => <div class="process-watch-server" key={server.port}>
-          <span title={server.url}>:{server.port}</span>
-          <button title={`Open ${server.url} as a preview tab beside this session`} onClick={() => { onOpenPreview(row.sessionId, server.url); onDone() }}>preview</button>
-          <button title={`Copy ${server.url}`} onClick={() => void navigator.clipboard.writeText(server.url)}>copy</button>
-        </div>)}
-      </section>)}
-    </div>
+    <ProcessFleetView
+      sessions={sessions}
+      projects={projects}
+      variant="drawer"
+      projectScope={scope}
+      onProjectScope={onScope}
+      selectedSessionId={selectedSessionId}
+      onSelectedSessionId={setSelectedSessionId}
+      focusedSessionId={focusedSessionId}
+      onAttached={(preview, project) => { onAttached(preview, project); onDone() }}
+      // Revealing a terminal is acting on something other than the drawer, so on mobile the
+      // drawer gets out of the way and shows the pane it just selected.
+      onRevealSession={sessionId => { onSelectSession(sessionId); onDone() }}
+    />
     <div class="processes-footnote">
-      <span>Rollups only. Trees, evidence, and terminate live in the inspector.</span>
-      <button onClick={() => { onOpenInspector(scope || null); onDone() }}>Full inspector</button>
+      <button
+        title="Open the same view as a full-width dialog, at this tab's current scope"
+        onClick={() => { onOpenInspector(scope || null); onDone() }}
+      >Open full width</button>
     </div>
   </div>
 }
