@@ -579,7 +579,8 @@ default to the newest point; `name` overrides the derived `B<n>-<source subject>
 records_written, records_dropped, attachments_copied, bytes_written}`; `seed_text` is the prompt a
 `before` cut excluded, for the client to place in the new pane's composer. It emits
 `session_branched` carrying `original`, `branch_id`, `sibling_id`, `strategy`, `from_message_id`,
-`mode`, `records_written`, `attempts`, and `duration_ms`, and records a `branch` lineage edge. The
+`mode`, `records_written`, `attempts`, and `duration_ms`, and records a `branch` lineage edge
+carrying the cut and a bounded excerpt of the message it was made at. The
 refusals are all distinguishable, and none of them leaves a half-made pane behind:
 
 | Code | Status | Meaning |
@@ -599,6 +600,12 @@ refusals are all distinguishable, and none of them leaves a half-made pane behin
 | `empty_prefix` / `source_too_large` / `fork_id_taken` / `source_unreadable` | 409 | The writer refused the source (`transcript_fork.ForkRefused`) |
 | `fork_write_failed` | 500 | The fork could not be written |
 | `branch_sibling_failed` | 503 | The branch exists but its pane would not stay up; carries `conversation_id` so it can be reopened from History |
+
+`GET /lineage[?run_id=]` returns the edges touching a run, each decorated with its two
+endpoints: `{parent, child}` where an endpoint is `{name, live, known, session_id?}`. Naming is
+the daemon's because an endpoint is a *run* in one of three states a client cannot see - a live
+session, an ended History row, or a deleted one. `known: false` is reported rather than the edge
+being dropped, because the edge still records that the fork happened.
 
 `POST /sessions/{id}/title/regenerate` accepts no body and returns `202 {ok:true}` after emitting
 an asynchronous `title_regenerate_requested` event. It is limited to live auto-named Claude/Codex

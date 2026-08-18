@@ -152,6 +152,10 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
   { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter', voicePhrases: ['enter', 'press enter', 'enter key'] },
   { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab', voicePhrases: ['tab', 'press tab', 'tab key'] },
+  // Back-tab (ESC[Z). Both agent TUIs read it as "cycle permission mode" — the
+  // "(shift+tab to cycle)" footer — and shells treat it as reverse focus/completion,
+  // so it pairs with Tab on the strip rather than hiding in the panel.
+  { id: 'shiftTab', type: 'key', bytes: '\x1b[Z', label: '⇧Tab', className: 'term-key', title: 'Shift+Tab (cycle mode / back-tab)', voicePhrases: ['shift tab', 'press shift tab', 'cycle mode'] },
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)', voicePhrases: ['control c', 'press control c'] },
   { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
