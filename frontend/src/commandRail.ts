@@ -152,6 +152,10 @@ export const BUILTIN_RAIL: RailItem[] = [
   { id: 'esc', type: 'key', bytes: '\x1b', label: 'Esc', className: 'term-key', title: 'Escape', voicePhrases: ['escape', 'press escape', 'escape key'] },
   { id: 'enter', type: 'key', bytes: '\r', label: '⏎', className: 'term-key', title: 'Enter', voicePhrases: ['enter', 'press enter', 'enter key'] },
   { id: 'tab', type: 'key', bytes: '\t', label: 'Tab', className: 'term-key', title: 'Tab', voicePhrases: ['tab', 'press tab', 'tab key'] },
+  // Back-tab (ESC[Z). Both agent TUIs read it as "cycle permission mode" — the
+  // "(shift+tab to cycle)" footer — and shells treat it as reverse focus/completion,
+  // so it pairs with Tab on the strip rather than hiding in the panel.
+  { id: 'shiftTab', type: 'key', bytes: '\x1b[Z', label: '⇧Tab', className: 'term-key', title: 'Shift+Tab (cycle mode / back-tab)', voicePhrases: ['shift tab', 'press shift tab', 'cycle mode'] },
   { id: 'ctrlC', type: 'key', bytes: '\x03', label: '^C', className: 'term-key', title: 'Interrupt (Ctrl-C)', voicePhrases: ['control c', 'press control c'] },
   { id: 'up', type: 'key', bytes: '\x1b[A', label: '↑', className: 'term-key', title: 'Up / previous command', voicePhrases: ['up arrow', 'press up', 'previous terminal command'] },
   { id: 'down', type: 'key', bytes: '\x1b[B', label: '↓', className: 'term-key', title: 'Down / next command', voicePhrases: ['down arrow', 'press down', 'next terminal command'] },
@@ -475,28 +479,119 @@ export function resolveRailItems(config: RailConfig, surface: RailSurface, ctx: 
 // written apart, so no read can see a layout pointing at an item that is not
 // there yet.
 //
-// Scope shape is detected rather than versioned: an array is the pre-layout
-// format, an object with `layouts` is current. That way a global save does not
-// have to rewrite every project override to keep the file self-consistent.
+// A project override comes in two strengths, detected by shape rather than by a
+// version field (an array is the pre-layout format, `mode: 'delta'` is an
+// additive overlay, and an object with `layouts` is a detached copy):
+//
+//  * a **delta** adds project-owned actions and rows *on top of the live global
+//    layout*. Global edits keep flowing into the project; only the additions are
+//    project state. This is the default a project accumulates, because the usual
+//    need is "the shared rail plus this project's skills", not a divorce.
+//  * a **fork** replaces the global config wholesale. It is the escape hatch for
+//    a genuinely different layout, and the price is that global edits no longer
+//    reach the project. Forks are only ever created deliberately (Detach).
 
 export interface RailScopeBlob {
   items?: RailItem[]
   layouts?: RailLayouts
 }
 
+/** Additive project overlay: project-owned catalog items plus project-owned
+ *  rows appended after the global rows of each device/surface. */
+export interface RailProjectDelta {
+  mode: 'delta'
+  items?: RailItem[]
+  layouts?: Partial<Record<RailDevice, Partial<Record<RailSurface, RailRow[]>>>>
+}
+
+export type RailProjectScope = RailScopeBlob | LegacyRailItem[] | RailProjectDelta
+
 export interface RailBlob extends RailScopeBlob {
   version?: number
-  projects?: Record<string, RailScopeBlob | LegacyRailItem[]>
+  projects?: Record<string, RailProjectScope>
 }
 
 export const RAIL_BLOB_VERSION = 2
 
+export function isProjectRailDelta(scope: unknown): scope is RailProjectDelta {
+  return isRecord(scope) && scope.mode === 'delta'
+}
+
+/** How a project relates to the global config. `global` means it inherits with
+ *  no additions; `delta` means additions overlay the live global layout; `fork`
+ *  means a detached copy that no longer tracks global edits. */
+export type RailScopeKind = 'global' | 'delta' | 'fork'
+
+export function railProjectScopeKind(blob: RailBlob | undefined, projectId?: string): RailScopeKind {
+  const override = projectId ? blob?.projects?.[projectId] : undefined
+  if (override === undefined) return 'global'
+  return isProjectRailDelta(override) ? 'delta' : 'fork'
+}
+
+/** Sanitize a delta's catalog additions: custom injection types only, ids that
+ *  do not collide with the base catalog (the base wins, so a stale delta cannot
+ *  shadow a built-in or a global custom action). */
+function deltaItems(delta: RailProjectDelta, taken: Set<string>): RailItem[] {
+  const items: RailItem[] = []
+  for (const raw of Array.isArray(delta.items) ? delta.items : []) {
+    if (!isRecord(raw) || typeof raw.id !== 'string' || taken.has(raw.id)) continue
+    const entry = raw as unknown as RailItem
+    if (!CUSTOM_RAIL_TYPES.includes(entry.type)) continue
+    taken.add(entry.id)
+    items.push({ ...entry })
+  }
+  return items
+}
+
+export interface ResolvedDeltaScope {
+  config: RailConfig
+  /** Row ids owned by the project delta (unique per surface by construction). */
+  projectRowIds: Set<string>
+  /** Catalog item ids owned by the project delta. */
+  projectItemIds: Set<string>
+}
+
+/** Overlay a project delta on a resolved global config. Global rows come first
+ *  on every surface; delta rows follow, so the additions read as a trailing
+ *  "this project" section rather than interleaving with shared rows. */
+export function resolveDeltaScope(global: RailConfig, delta: RailProjectDelta): ResolvedDeltaScope {
+  const taken = new Set(global.items.map(item => item.id))
+  const added = deltaItems(delta, taken)
+  const items = [...global.items.map(item => ({ ...item })), ...added]
+  const known = new Set(items.map(item => item.id))
+  const projectRowIds = new Set<string>()
+  const layouts = {} as RailLayouts
+  for (const device of RAIL_DEVICES) {
+    const deviceRows = isRecord(delta.layouts) ? delta.layouts[device] : undefined
+    layouts[device] = {} as RailDeviceLayout
+    for (const surface of RAIL_SURFACES) {
+      const base = (global.layouts[device]?.[surface] || []).map(row => ({ ...row, items: [...row.items] }))
+      const seen = new Set(base.map(row => row.id))
+      const extra: RailRow[] = []
+      const rawRows: unknown = deviceRows?.[surface]
+      for (const raw of Array.isArray(rawRows) ? rawRows : []) {
+        const row = normalizeRow(raw, known)
+        if (!row || seen.has(row.id)) continue
+        seen.add(row.id)
+        projectRowIds.add(row.id)
+        extra.push(row)
+      }
+      layouts[device][surface] = [...base, ...extra]
+    }
+  }
+  return { config: { items, layouts }, projectRowIds, projectItemIds: new Set(added.map(item => item.id)) }
+}
+
 const scopeConfig = (scope: unknown): RailConfig => normalizeRailConfig(scope)
 
-/** Resolve the effective config for a project, falling back to the global one. */
+/** Resolve the effective config for a project, falling back to the global one.
+ *  A fork replaces the global config; a delta overlays it. */
 export function railConfigFromBlob(blob: RailBlob | undefined, projectId?: string): RailConfig {
   const override = projectId ? blob?.projects?.[projectId] : undefined
-  if (override !== undefined) return scopeConfig(override)
+  if (override !== undefined) {
+    if (isProjectRailDelta(override)) return resolveDeltaScope(railConfigFromBlob(blob), override).config
+    return scopeConfig(override)
+  }
   if (!blob) return defaultRailConfig()
   return scopeConfig({ items: blob.items, layouts: blob.layouts })
 }

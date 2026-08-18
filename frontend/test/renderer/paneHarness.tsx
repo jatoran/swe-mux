@@ -58,7 +58,9 @@ globalThis.fetch = async () => new Response(JSON.stringify({ items: [] }), { sta
 
 const pane = <section class="terminal-pane focused">
   <div class="pane-bar agent-pane-bar">
-    <div><span class="pane-state running">running</span></div>
+    {/* Deliberately longer than any pane is wide: the header's contract is that a generated
+        title ellipsizes rather than taking width from the voice chips or the pane tools. */}
+    <div class="pane-identity"><span class="pane-title">claude-1ee230 · refactor the scrollback ring so it keeps bracketed paste mode across replay</span></div>
     <div class="pane-voice">
       <button class="voice-chip auto">tts:auto</button>
     </div>

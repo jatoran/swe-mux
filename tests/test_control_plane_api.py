@@ -44,11 +44,25 @@ class EventsStub:
 
 
 class HistoryStub:
-    def __init__(self, row: dict[str, Any]) -> None:
-        self.row = row
+    def __init__(self, *rows: dict[str, Any]) -> None:
+        self.rows = list(rows)
+        self.row = self.rows[0]
 
     async def history_entry(self, identity: str) -> dict[str, Any] | None:
-        return self.row if identity == self.row["id"] else None
+        return next((row for row in self.rows if row["id"] == identity), None)
+
+    async def history_naming_rows(self, ids: Any) -> dict[str, dict[str, Any]]:
+        wanted = set(ids)
+        return {
+            row["id"]: {
+                "id": row["id"],
+                "note_id": row.get("note_id"),
+                "name": row.get("name", ""),
+                "auto_named": row.get("auto_named", 1),
+            }
+            for row in self.rows
+            if row["id"] in wanted
+        }
 
 
 class ProjectsStub:
