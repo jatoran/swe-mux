@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { SettingLink } from './SettingLink'
 import type { Session } from './types'
 
 type Coverage = {messages_seen:number;facts_seen:number;truncated:boolean;remaining?:number}
@@ -143,19 +144,24 @@ export function ScanTimelineTab({session,onOpenProjectSettings}:{
   const running=state.backfill.state==='running'
   const projectButton=<button class="scan-project-link" disabled={!projectId}
     onClick={()=>projectId&&onOpenProjectSettings(projectId)}>Project settings</button>
+  // Two switches gate this, in order, and the off state names the one that is actually
+  // stopping it — plus the control that flips it. The install switch is on the Automation
+  // dashboard; this panel used to send people to Settings → Automation, where it is not.
   if(!allowed)return <section class="scan-timeline-panel">
     <header>
       <div><strong>Behavior timeline</strong><small>{state.model}</small></div>
       {projectButton}
     </header>
-    <div class="scan-timeline-off">
-      <p>{state.global_enabled
+    <div class="scan-timeline-off setting-gate">
+      <p><strong>{state.global_enabled
         ? 'This Project has not permitted Scan timeline.'
-        : 'The global Scan timeline switch is off in Settings → Automation.'}</p>
-      <p class="scan-timeline-off-hint">{state.global_enabled
+        : 'Scan timeline is switched off for this install.'}</strong></p>
+      <p>{state.global_enabled
         ? 'Permission, the Project context sent with each scan, and the option to arm every new conversation automatically all live in the Project’s settings.'
-        : 'Turn the master switch on first, then permit this Project in its settings.'}</p>
-      {projectButton}
+        : 'Nothing is scanned anywhere while the install switch is off. Turn it on first, then permit this Project.'}</p>
+      {state.global_enabled
+        ? <SettingLink target="project.scanTimeline" projectId={projectId||undefined}>Permit Scan timeline for this Project</SettingLink>
+        : <SettingLink target="automation.scanTimeline">Turn on Scan timeline for this install</SettingLink>}
     </div>
   </section>
   const events=[

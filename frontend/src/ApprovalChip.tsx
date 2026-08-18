@@ -11,6 +11,7 @@ import {
   modeUnavailableReason,
 } from './approvals'
 import { isAgentBackend } from './harnessRegistry'
+import { SettingLink } from './SettingLink'
 import { useDismissLevel } from './modalFocus'
 import type { ApprovalMode, ApprovalStatus, Session } from './types'
 
@@ -213,6 +214,16 @@ export function ApprovalChip({ session }: Props) {
                 )
               })}
               <p class="approval-menu-note">{approvalSummary(status, now)}</p>
+              {/* The chip stays on an agent pane that cannot hold a mode, to say why rather
+                  than to disappear. When the why is an install switch, saying why is only
+                  half an answer — this is the other half. The Project ceiling case has no
+                  link on purpose: it is `approval_ceiling` in that repository's
+                  `.swe-mux/config.toml`, which has no control to scroll to. */}
+              {!status.enabled && (
+                <p class="approval-menu-note">
+                  <SettingLink variant="link" target="approvals.autoAnswer">Allow swe-mux to answer approvals</SettingLink>
+                </p>
+              )}
               {status.policy.mode === 'allowlisted' && (
                 <p class="approval-menu-note">
                   {status.policy.rules.length} rule

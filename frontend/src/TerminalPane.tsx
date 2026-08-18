@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { memo } from 'preact/compat'
+import { SettingLink } from './SettingLink'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
@@ -228,8 +229,6 @@ interface Props {
   claudeMaxColumns: number
   /** Open Configure Actions from the rail's trailing gear. */
   onConfigureRail?: () => void
-  /** Open the terminal settings, where the Claude width envelope lives. */
-  onConfigureWidth?: () => void
   /** Fork this agent conversation into a sibling pane (rail Branch button). */
   onBranch?: () => void
 }
@@ -327,7 +326,7 @@ async function pasteBrowserClipboard(term: Terminal, session: Session, attach: (
   return 'text'
 }
 
-function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onConfigureWidth, onBranch }: Props) {
+function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, broadcast, keybindings, scrollback, rendererPreference, windowsPty, mobileInput, uiScale, visible, claudeMaxColumns, onConfigureRail, onBranch }: Props) {
   const host = useRef<HTMLDivElement>(null)
   // Held in a ref rather than closed over: every reader below lives inside the
   // terminal's construction effect, which must not re-run just because a font moved.
@@ -3489,7 +3488,7 @@ function TerminalPaneImpl({ session, onState, onStartupTiming, startupOrigin, br
        grid the user can widen from Settings. A pane that is both letterboxed and
        capped is showing another device's size, and naming this device's envelope
        would be describing something that is not on screen. */}
-  {!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span>{onConfigureWidth&&<button title="Change or remove the Claude width limit in Settings → Terminals" onClick={onConfigureWidth}>Change…</button>}</div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
+  {!ownerNotice&&!letterboxActive&&widthCapNotice>0&&<div class="terminal-input-owner width-cap-notice" role="status"><span>Claude panes stop at {widthCapNotice} columns</span><SettingLink variant="link" target="terminals.claudeWidth" title="Change or remove the Claude width limit">Change…</SettingLink></div>}{connectionState!=='connected'&&<div class={`terminal-connection ${connectionState}`} role="status"><span>{connectionState==='ended'?'session ended':connectionState==='connecting'?'connecting…':'reconnecting…'}</span>{connectionState!=='ended'&&<button class="terminal-connection-retry" title="Reconnect now" onClick={()=>reconnectNowRef.current()}>retry</button>}</div>}{manualPaste&&<div class="manual-terminal-paste" role="dialog" aria-label="Paste into terminal"><span>Clipboard read was blocked. Focus here and use your device’s Paste.</span><textarea ref={manualPasteRef} aria-label="Paste terminal text here" onPaste={event=>{
     const data=event.clipboardData
     const image=data&&clipboardImage(Array.from(data.items))
     if(image){event.preventDefault();void attachFilesRef.current([image]).then(()=>setManualPaste(false));return}

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from './api'
+import { SettingLink } from './SettingLink'
+import { PROJECT_AUTOMATIONS_CHANGED, fetchProjectAutomations } from './projectAutomations'
 import type { Project, Session } from './types'
 
 // The human read of the deterministic consumers' findings (Phase 3.7): loop,
@@ -24,6 +26,8 @@ type Scope = 'session' | 'project'
 // Provenance edges are the one high-volume tag, so the default (no-tag) view hides
 // them; their count still shows on the chip, and their chip reveals them.
 const PROVENANCE_TAG = 'provenance'
+/** The opt-ins that write what this pane reads (`automation_registry.py`). */
+const DETECTOR_AUTOMATIONS = ['loop_detection', 'declared_vs_verified', 'doc_debt', 'provenance_graph']
 const stamp = (value: number) =>
   new Date(value * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const tagLabel = (tag: string) => tag.replace(/-/g, ' ')
@@ -36,6 +40,7 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
 }) {
   const [scope, setScope] = useState<Scope>('session')
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
+  const [detectors, setDetectors] = useState<string[] | null>(null)
   const [data, setData] = useState<FindingsResponse | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -60,6 +65,23 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
     }
   }
   useEffect(() => { void load() }, [scope, selectedTag, sid, projectId])
+
+  // The detectors that write findings are per-Project opt-ins, all four of them off until a
+  // human turns them on. Without this read the pane cannot tell a quiet Project from one
+  // whose detectors were never permitted, and it showed both as "No findings in scope" —
+  // the exact confusion its own "off vs quiet" rule exists to prevent.
+  useEffect(() => {
+    if (!projectId) { setDetectors(null); return }
+    let stale = false
+    const read = () => {
+      fetchProjectAutomations(projectId)
+        .then(state => { if (!stale) setDetectors(state.enabled) })
+        .catch(() => { if (!stale) setDetectors(null) })
+    }
+    read()
+    window.addEventListener(PROJECT_AUTOMATIONS_CHANGED, read)
+    return () => { stale = true; window.removeEventListener(PROJECT_AUTOMATIONS_CHANGED, read) }
+  }, [projectId])
   // Findings land on a turn boundary, the same event the timeline listens for.
   useEffect(() => {
     const refresh = () => void load()
@@ -83,6 +105,10 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
     ? 'Session scope shows only this session’s run findings. Doc-debt and cross-session provenance are anchored to the Project, not a run, so they are hidden here — switch to Project to see them.'
     : 'Project scope includes findings from every session in this Project, not only this one.'
 
+  // The four deterministic detectors this pane reads. A Project with none of them permitted
+  // produces nothing here, ever — which is a different statement from "nothing found yet".
+  const detectorsOff = detectors !== null && !DETECTOR_AUTOMATIONS.some(id => detectors.includes(id))
+
   return <section class="findings-pane">
     <header class="findings-header">
       <div class="findings-scope" role="tablist" aria-label="Findings scope">
@@ -93,6 +119,10 @@ export function FindingsPane({ session, project, onOpenAutomationDashboard }: {
       </div>
     </header>
     <p class="findings-exclusion">{exclusion}</p>
+    {detectorsOff && <div class="setting-gate">
+      <p><strong>This Project has not permitted any finding detectors.</strong> Loop detection, declared-vs-verified, the doc-debt ledger, and the provenance graph are per-Project opt-ins, so nothing will appear here until one is on.</p>
+      <SettingLink target="project.automations" projectId={projectId}>Choose detectors for this Project</SettingLink>
+    </div>}
     {tags.length > 0 && <div class="findings-chips" role="group" aria-label="Filter by finding type">
       <button class={selectedTag === null ? 'active' : ''} aria-pressed={selectedTag === null}
         onClick={() => setSelectedTag(null)}>All</button>
