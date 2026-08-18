@@ -3,8 +3,8 @@ import { api } from './api'
 import { SettingLink } from './SettingLink'
 import { promptDeliveryHarnesses } from './harnessRegistry'
 import {
-  BLOCKED_LABELS, OUTCOME_LABELS, absoluteLabel, cadenceLabel, draftFromSchedule, draftToBody,
-  emptyDraft, needsAttention, orderSchedules, untilLabel,
+  BLOCKED_LABELS, CRON_PRESETS, OUTCOME_LABELS, absoluteLabel, cadenceLabel, draftFromSchedule,
+  draftToBody, emptyDraft, needsAttention, orderSchedules, presetForCron, untilLabel,
   type Schedule, type ScheduleDraft, type ScheduleStatus,
 } from './schedules'
 import type { LaunchProfile, Project } from './types'
@@ -270,6 +270,9 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
   const [fires, setFires] = useState<number[]>([])
   const [previewError, setPreviewError] = useState('')
   const harnesses = promptDeliveryHarnesses()
+  // Matched from the expression rather than remembered from the click, so an edit that
+  // lands back on a preset is recognised and a hand-written one reads as Custom.
+  const preset = presetForCron(draft.cron)
   const change = <K extends keyof ScheduleDraft>(key: K, value: ScheduleDraft[K]) =>
     onDraft({ ...draft, [key]: value })
 
@@ -319,12 +322,28 @@ function ScheduleEditor({ draft, onDraft, profiles, busy, error, projectName, on
       <option value="interval">Every N minutes</option>
       <option value="once">Once, at a time</option>
     </select></label>
-    {draft.trigger_kind === 'cron' && <label>Cron<input
-      value={draft.cron}
-      spellcheck={false}
-      placeholder="0 3 * * *"
-      onInput={event => change('cron', event.currentTarget.value)}
-    /><small>minute hour day-of-month month day-of-week</small></label>}
+    {draft.trigger_kind === 'cron' && <label>Cron
+      {/* The preset beside the field rather than instead of it: choosing one fills the
+          input, so the next edit is to a working expression rather than to a blank box,
+          and the field stays the source of truth. */}
+      <div class="schedule-cron-row">
+        <input
+          value={draft.cron}
+          spellcheck={false}
+          placeholder="0 3 * * *"
+          onInput={event => change('cron', event.currentTarget.value)}
+        />
+        <select
+          aria-label="Common schedules"
+          value={preset?.cron || ''}
+          onChange={event => { if (event.currentTarget.value) change('cron', event.currentTarget.value) }}
+        >
+          <option value="">{preset ? 'Common…' : 'Custom'}</option>
+          {CRON_PRESETS.map(item => <option key={item.cron} value={item.cron}>{item.label}</option>)}
+        </select>
+      </div>
+      <small>{preset ? preset.teaches : 'minute hour day-of-month month day-of-week'}</small>
+    </label>}
     {draft.trigger_kind === 'interval' && <label>Every<input
       type="number"
       min={5}

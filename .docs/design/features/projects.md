@@ -41,39 +41,48 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - Hiding a Project removes it from desktop/mobile navigation and numeric Project shortcuts. It
   preserves the registration, `.swe-mux/` content, layout, history, settings, and live sessions.
 - The sidebar renders only visible Projects.
-  Ungrouped Projects are root rows immediately under the global `PROJECTS` header; explicit Groups render afterward as named sections.
+  Ungrouped Projects are root rows under the global `PROJECTS` header; explicit Groups render as named sections among them.
   `PROJECTS` is navigation chrome, not a synthetic Group, and cannot fold or move among Groups.
+- **Under Manual order, Groups render after every root Project; under every other mode a Group is a peer of a root Project and sorts in among them.**
+  Groups were always a block below the entire ungrouped list, ordered by a setting of their own, which meant no mode could lift a Group for the work inside it: under Recently used, a Group holding the last minute's work still sat beneath root Projects that had never been opened.
+  Placement, not a better Group key, is what fixes that, so Group placement collapsed into the one Project sort mode.
+  Manual keeps the two-tier tree because hand-placed Group positions are a separate order from hand-placed Project positions, with no single key to interleave them by.
+  Interleaving splits the root into runs, and each run is its own list element, so a Project dropped between two Groups resolves to the root rather than to whichever Group it landed nearest.
 - The `PROJECTS` header carries four controls: fold-everything, sort, a cogwheel opening the
   Projects registry, and `+` opening the registry and its Add-project dialog together.
   All four act on the tree as a whole, so none of them may scroll away with the list.
   Placement, reveal-on-hover, and the icon choices are in `ui.md`.
-- The `PROJECTS` header's sort control (`⇅`) covers **two levels**.
-  Flat options act on root Projects and Projects inside every Group: Manual order, Recently used, Name A→Z / Z→A, Newest / Oldest first.
-  A `Sort Groups` submenu acts only on explicit Groups: Manual order, Recently used, Name A→Z / Z→A.
-  Both live on one control because `⇅` already means "how is this list ordered"; the submenu keeps the common case one click deep and carries its current mode in its label, since Group order has no always-visible indicator of its own.
-- Project sorting is **one global mode**, applied to root Projects and inside every Group.
+- The `PROJECTS` header's sort control (`⇅`) offers **one flat list of modes**, with no submenu: Manual order, Recently used, Name A→Z / Z→A, Newest / Oldest first.
+  The chosen mode orders root Projects, the Projects inside every Group, and the Groups themselves among the root Projects.
+  It replaced a nested `Sort Groups` submenu, which could only order Groups among Groups and so could not answer the question it was asked; a mismatched pair of modes was possible there and read as arbitrary.
+- Project sorting is **one global mode**.
   It was per section originally, on the argument that a hand-arranged shortlist and a long alphabetical pile are both legitimate; that put a `⇅` on every Group header for a preference set the same everywhere, so the modes collapsed into one and the control moved off the headers.
-  A device upgrading from the per-section format keeps whichever mode it had actually set (see `loadSidebarOrder`), rather than being silently reset to Manual.
-  Group sorting is necessarily one setting.
-  Both sort-mode selections are device-local presentation preferences.
+  A device upgrading keeps whichever mode it had actually set (see `loadSidebarOrder`), rather than being silently reset to Manual: the retired per-section map is read first, then the retired Group-only mode, on the reasoning that a device with both was ordering its Projects by the Project setting.
+  Neither retired key is written back, so each migration fires exactly once per device.
+  The sort-mode selection is a device-local presentation preference.
 - The same header's fold control folds or unfolds **every Project row and every Group**
   at once, so tidying a long sidebar is one click rather than one per row. It offers Expand only
   once nothing on screen is folded open; expanding clears the stored fold lists outright rather
   than subtracting the visible ids, so an id left behind by something hidden or deleted while
   folded cannot survive and re-fold it later. Only what is on screen is folded — a Project hidden
   from the sidebar has no row to collapse.
-- Groups have no date modes: a Group record is not dated, and "newest Group first" does not earn
-  a column. A Group's "Recently used" rank is the most recent explicit user action for
-  any Project in it, so a Group ranks on the work the user initiated rather than its age; an
-  empty Group reads as unmeasured and sorts last.
-- Manual order is the default and the tie-break at both levels, so a sort never discards the
+- **A Group is placed by the member that leads it under the active mode**, since a Group record itself holds only a name and a position and nothing dates it.
+  Recently used takes the most recent explicit user action in it, so a Group ranks on the work the user initiated rather than its age.
+  Newest first takes its newest Project and Oldest first its oldest, each ignoring undated members: a single Project with no recorded registration date must not pull a Group of old Projects to the bottom of Oldest first.
+  Name modes compare the Group's own name against the Project names it sits among.
+  A Group with nothing measurable in it reads as unmeasured and sorts last in either direction.
+  Groups previously had no date modes at all, because their own setting had no key to offer them.
+- Manual order is the default and the tie-break for every mode, so a sort never discards the
   arrangement underneath it.
-  Placing something by hand returns *that level* to Manual and writes the order that was on screen, so the move survives instead of being re-sorted away.
+  Root Projects precede Groups in that baseline, which is what an interleaving sort falls back to when two entries are equally unmeasured.
+  Placing a Project or a Group by hand returns the sidebar to Manual and writes the order that was on screen, so the move survives instead of being re-sorted away.
+  From a sorted tree that also re-splits the root into two tiers, since that is what Manual means; the arrangement the drag produced survives it, because each list keeps the relative order the drop put it in.
   Desktop pointer dragging and Project-menu Move up/down use the same persisted reorder contract.
   Mobile Project rows require a 325 ms hold before pickup; movement beyond the 8 px hold slop remains sidebar scrolling and never previews a reorder.
 - Desktop Group headers combine collapse and reorder: press and move reorders, while press and release folds.
-  Mobile Group headers only fold because Project rows are the sidebar's sole mobile reorder target.
-  The desktop drag swallows the click it ends with.
+  Mobile Group headers fold on tap and open the Group menu on a hold, because Project rows are the sidebar's sole mobile reorder target and a phone has no right-click to give.
+  The desktop drag swallows the click it ends with, and so does the mobile hold — the hold fires under a finger that is still down, so its trailing click would otherwise fold the Group behind the menu it just opened.
+  A Group drag reorders among Groups only; Group positions are their own order, so there is no slot for a Group between two root Projects to write.
   Collapsing is presentation only: the folded Projects keep their place in the collapsed rail, numbered shortcuts, and every order.
 - **A Project drag crosses Group boundaries.** It resolves its target from the pointer across the
   whole tree rather than being confined to the list it started in, so the one gesture both reorders
@@ -105,7 +114,15 @@ persisted ordering organize Project rows without acquiring behavioral ownership.
 - A Group header's only button is `✎` (rename), revealed on hover over that header (and on
   keyboard focus; touch always shows it, having no hover). It carried a `×` that deleted the Group and
   ungrouped its Projects; that sat a pixel from the fold toggle and dissolved a Group on a stray
-  click, so the sidebar no longer deletes Groups at all. Deleting one is an API-only operation.
+  click, so no header button deletes a Group.
+- **A Group has its own context menu**, opened by right-clicking anywhere in its section that is not a Project or session row, or by holding its header on mobile.
+  It carries exactly three items: `Rename group…`, `Collapse group` / `Expand group`, and `Delete group…`.
+  The first two mirror the header's `✎` and its fold click, so the menu is a second route to them rather than the only one; delete has no other home, which is why the menu exists.
+  Removing the header `×` had left no delete path at all, and emptying a Group instead does not remove it, because empty Groups render.
+- Deleting a Group is **two clicks in that menu**, and the confirm step states what survives before offering the button: the Projects return to the root list, and no folder, session, layout, or history is touched.
+  An armed confirm is cleared whenever the menu opens, so it cannot be inherited by the next Group right-clicked.
+  The optimistic update ungroups the Projects locally and a failure re-reads the registry rather than reconstructing what the daemon did.
+  An unknown Group id is a request error rather than a server fault on both `DELETE` and `PATCH`, because either menu may have been drawn before another device deleted the Group.
 - **A Group renders whether or not it holds anything.** An empty one shows its header plus a
   `Drag a Project here` hint, which is also its drop target. Empty Groups were filtered out of the
   tree, so creating a Group appeared to do nothing and the only way to fill it pointed at a section

@@ -84,7 +84,7 @@ import {
 import {
   presentationWithTransientDrawerTab, transientDrawerTabForProject, type TransientDrawerTab,
 } from './drawerTransient'
-import type { WatchScope } from './processWatch'
+import { resolveProjectScope, type ProjectScope } from './processFleet'
 import { CogIcon, DRAWER_TAB_ICONS, NavPanelIcon, PlusIcon, SidePanelIcon, UnfoldLessIcon, UnfoldMoreIcon } from './railIcons'
 import {
   CLIPBOARD_CHANGED_EVENT, clearClipboardHistory, configureClipboardCapture,
@@ -156,6 +156,7 @@ import { adjacentMobileTab, mobileWorkspaceProjection } from './mobileWorkspace'
 import { SOFT_KEYBOARD_EVENT, dismissSoftKeyboard, rememberSoftKeyboardInset, softKeyboardHolder, softKeyboardInset } from './mobileKeyboard'
 import { MOBILE_TERMINAL_DRAFT_EVENT, mobileTerminalDraftStore } from './mobileTerminalDraft'
 import { classifyGesture, defaultMobileGestureSettings, gestureOverlayDepth, mobileGestureSettings, overlayBackEnabled, pathOwnsHorizontalScroll, resolveGestureCommand, swipeAwayCloseEnabled, type MobileGestureSettings } from './mobileGestures'
+import { SETTINGS_NAV_CLOSE, SETTINGS_NAV_TOGGLE } from './settingsTabs'
 import { dismissStack } from './dismissStack.ts'
 import { useDismissLevel } from './modalFocus'
 import { installSystemBack } from './systemBack.ts'
@@ -171,11 +172,11 @@ import {
   projectInitials, projectOpenWork, serializeCollapsedProjects, setAllCollapsed, toggleCollapsed,
 } from './sidebarProjects'
 import {
-  PROJECT_SORT_OPTIONS, SECTION_SORT_OPTIONS, SIDEBAR_ORDER_KEY,
+  PROJECT_SORT_OPTIONS, SIDEBAR_ORDER_KEY,
   isBucketCollapsed, loadSidebarOrder, mergeVisibleOrder,
-  projectRecency, projectSortLabel, pruneSidebarOrder, sectionSortLabel, serializeSidebarOrder,
-  setAllBucketsCollapsed, setProjectSortMode, sortBuckets, sortProjects,
-  toggleBucketCollapsed,
+  projectRecency, projectSortLabel, pruneSidebarOrder, serializeSidebarOrder,
+  setAllBucketsCollapsed, setProjectSortMode, sidebarRootRows, sortProjects,
+  sortRootEntries, toggleBucketCollapsed,
 } from './projectSort'
 import { PROJECT_RECENCY_EVENT, type ProjectRecencyEventDetail, type ProjectUseReason } from './projectRecency'
 import { placePendingTerminal, selectPendingTerminal, type PendingSpawnPlacement } from './pendingSession'
@@ -183,7 +184,7 @@ import { pendingAcks, pruneAcks, isUnread, projectRailStatus, projectSetRailStat
 import { isHumanPresent, watchHumanPresence } from './humanPresence'
 import { ApprovalChip } from './ApprovalChip'
 import { effectiveApprovalMode } from './approvals'
-import { activityBadges, sessionStatus } from './sessionStatus'
+import { activityBadges, sessionFaults, sessionStatus } from './sessionStatus'
 import { StateIndicator } from './StateIndicator'
 import { SessionRowBody } from './SessionRowBody'
 import type { DotShape, StandingRender } from './sessionRowConfig'
@@ -416,7 +417,10 @@ export function App() {
   // watching. Project-scoped by default, like every other Project-scoped tab — a session-scoped
   // processes view would churn its whole body on each focus change and read empty most of the
   // time, since most sessions are just their agent CLI and a conhost.
-  const [processWatchScope,setProcessWatchScope]=useState<WatchScope>('')
+  // `null` is "the tab has not been scoped", which resolves to the Project the drawer is
+  // sitting beside; `''` is the user having asked for every Project. Collapsing the two made
+  // `All projects` unselectable — it snapped straight back to the active Project.
+  const [processProjectScope,setProcessProjectScope]=useState<ProjectScope|null>(null)
   // The Schedule tab's scope, kept here for the same reason: '' is every Project's
   // schedules ("what fires tonight"), anything else is one Project's.
   const [scheduleScope,setScheduleScope]=useState<string>('')
@@ -552,6 +556,10 @@ export function App() {
   const [folderPickerOpen,setFolderPickerOpen]=useState(false)
   const [groupEdit,setGroupEdit]=useState<{id?:string;name:string}|null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Settings' own section drawer, the narrow-layout twin of the docked column. It lives
+  // here rather than inside Settings because the gesture recognizer below is the shell's,
+  // and it has to be able to work that drawer the way it works the workspace sidebar.
+  const [settingsNavOpen, setSettingsNavOpen] = useState(false)
   const [harnessSetupNeeded, setHarnessSetupNeeded] = useState(false)
   const [actionEditorOpen, setActionEditorOpen] = useState(false)
   // The section a caller asked Settings to land on, or undefined for "wherever the
@@ -623,6 +631,12 @@ export function App() {
       .catch(()=>{})
   }
   const [sortMenu,setSortMenu]=useState<{x:number;y:number}|null>(null)
+  // Held as a Group id rather than the record, so a rename landing while the menu is open
+  // redraws it with the new name instead of the one it was opened on.
+  const [groupMenu,setGroupMenu]=useState<{groupId:string;x:number;y:number}|null>(null)
+  // Two-step delete: the menu asks, and only the second click sends. A Group's Projects
+  // survive it, but the Group itself does not, so it does not go on a bare menu row.
+  const [confirmGroupDeleteId,setConfirmGroupDeleteId]=useState<string|null>(null)
   const [dragStackTab,setDragStackTabState]=useState<StackTabDrag|null>(null)
   const dragStackTabRef=useRef<StackTabDrag|null>(null)
   const suppressDragClickRef=useRef<string|null>(null)
@@ -1276,6 +1290,9 @@ export function App() {
   const longPressTimer = useRef<number | null>(null)
   const longPressOrigin = useRef<{pointerId:number;x:number;y:number}|null>(null)
   const runHeldRef = useRef(false)
+  // A Group header's hold opened its menu, so the click the hold ends with must not
+  // also fold the Group underneath it.
+  const groupHeldRef = useRef(false)
   const mobileTabHeldRef = useRef(false)
   // When the Run menu's scrim dismissed it, so the trigger's own click can tell
   // "reopen" from "the closing half of a toggle tap".
@@ -2044,21 +2061,25 @@ export function App() {
     return {id:group.id,name:group.name,items:sortProjects(items,sidebarOrder.projectSort,recentProjectRanks)}
   })
   // Groups sort by the same contract their contents do: manual order in, stable
-  // sort out, so the arrangement underneath a sort is never lost.
+  // sort out, so the arrangement underneath a sort is never lost — and by the same mode,
+  // which places them among the root Projects rather than in a block below all of them.
   //
   // Every Group here reaches the screen, one holding nothing included. Empty Groups used
   // to be filtered out between this and the render, which made "create a Group" look like
   // it had failed and left the only way to fill it — dragging a Project in — pointing at
   // a section that was not on screen. An empty Group renders as its header plus a drop hint.
-  const displayBuckets=sortBuckets(allBuckets,sidebarOrder.sectionSort,recentProjectRanks)
+  const rootEntries=sortRootEntries(ungroupedProjects,allBuckets,sidebarOrder.projectSort,recentProjectRanks)
+  // What the tree renders: each Group's section, and the runs of root Projects between them.
+  const rootRows=sidebarRootRows(rootEntries)
+  const displayBuckets=rootEntries.flatMap(entry=>entry.kind==='group'?[entry.bucket]:[])
   const displayBucketIds=displayBuckets.map(bucket=>bucket.id)
-  // Sidebar reading order starts with root Projects, then proceeds through Groups.
+  // Sidebar reading order, top to bottom, with each Group's Projects where the Group sits.
   // The collapsed rail, the numbered
   // Project commands, and the drag baseline all follow what is on screen rather
   // than the stored positions, or a sorted sidebar would disagree with itself.
   // A folded Group still contributes its Projects: collapsing hides rows, it
   // does not remove the Projects from the rail or the numbered shortcuts.
-  const displayProjects=[...ungroupedProjects,...displayBuckets.flatMap(bucket=>bucket.items)]
+  const displayProjects=rootEntries.flatMap(entry=>entry.kind==='group'?entry.bucket.items:[entry.project])
   const displayProjectIds=mergeVisibleOrder(orderedProjects.map(project=>project.id),displayProjects.map(project=>project.id))
   // Which way the toolbar's fold control points. "Everything on screen is folded"
   // rather than "anything is", so the button only offers Expand once there is
@@ -2361,8 +2382,12 @@ export function App() {
   }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
+  // Opening always lands on the content, never on the narrow layout's section drawer: a
+  // caller that named a section has already navigated, and one that did not is returning
+  // to the tab it left off on.
   const openSettings = (section?:string,setting?:string) => {
     setSettingsSection(section); setSettingsSetting(setting); setRevealToken(token=>token+1)
+    setSettingsNavOpen(false)
     setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null)
   }
   const openActionEditor = () => { setActionEditorOpen(true); setMainMenuOpen(false); setProjectMenu(null); setContextMenu(null) }
@@ -2410,8 +2435,15 @@ export function App() {
   // it, which also keeps that event from reaching the document's dismiss handler —
   // so opening this menu has to close whatever else was open itself.
   const openSortMenu=(x:number,y:number)=>{
-    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setGroupMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
+  }
+  const openGroupMenu=(groupId:string,x:number,y:number)=>{
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setSortMenu(null);setRunMenu(null);setMainMenuOpen(false)
+    // Each opening starts from "not asked yet", so a confirm armed on one Group cannot
+    // be inherited by the next menu the user opens.
+    setConfirmGroupDeleteId(null)
+    setGroupMenu({groupId,x,y})
   }
   const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail',tab?:DrawerTabId)=>{
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
@@ -2562,15 +2594,18 @@ export function App() {
       mobileWorkspace?MOBILE_HOLD_DRAG:POINTER_MOVE_DRAG,
     )
   }
-  /** Reorder the sidebar's Groups. Root Projects stay before them and Group order
-   *  is shared because it lives on each Group record. */
+  /** Reorder the sidebar's Groups. Group order lives on each Group record, so it is
+   *  shared across devices, and it is a separate order from the Project positions — which
+   *  is why Manual is the two-tier tree: there is no one key to interleave the two by. */
   const commitBucketOrder=async(nextIds:string[])=>{
     if(nextIds.join('\0')===displayBucketIds.join('\0'))return
     const nextGroupIds=nextIds
-    // Placing a Group by hand is the statement that Groups are hand-arranged,
-    // so it drops the section sort back to Manual and freezes what was on screen —
-    // the same rule a Project drag follows one level down.
-    setSidebarOrder({...sidebarOrder,sectionSort:'custom'})
+    // Placing a Group by hand is the statement that the sidebar is hand-arranged, so it
+    // drops the one sort back to Manual and freezes what was on screen — the same rule a
+    // Project drag follows. From a sorted tree that also re-splits the root into two tiers,
+    // since that is what Manual means; the arrangement the drag produced survives it,
+    // because each list keeps the relative order the drop had put it in.
+    setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))
     const expected=orderedGroups.map(group=>group.id)
     if(nextGroupIds.join('\0')===expected.join('\0'))return
     const positions=new Map(nextGroupIds.map((id,index)=>[id,index]))
@@ -2857,7 +2892,7 @@ export function App() {
   }
 
   const openProjectMenuAt=(project:Project,x:number,y:number)=>{
-    setContextMenu(null);setNoteMenu(null);setTabMenu(null);setSidebarMenu(null);setRunMenu(null);setMainMenuOpen(false)
+    setContextMenu(null);setNoteMenu(null);setTabMenu(null);setSidebarMenu(null);setRunMenu(null);setGroupMenu(null);setMainMenuOpen(false)
     setProjectMenu({project,x,y})
   }
 
@@ -3080,11 +3115,29 @@ export function App() {
     setGroupEdit(null)
   }
 
-  // No deleteGroup: the sidebar header's × was its only caller and is gone. A Group
-  // is emptied rather than deleted now — reassign its Projects (Projects manager, or
-  // the session menu's Group select) and it stops rendering, since a Group with no
-  // Projects in it is not a sidebar section. DELETE /api/project-groups/{id} still
-  // exists if this ever needs a home in the Projects registry.
+  /** Dissolve a Group, returning its Projects to the root list.
+   *
+   *  Its only caller is the Group menu's second, confirming click. The header carried a `×`
+   *  for this once, a pixel from the fold toggle, and losing it left no delete path at all:
+   *  emptying a Group by reassigning every Project one at a time still left the empty Group
+   *  on screen, since empty Groups render.
+   *
+   *  Deleting a Group is a registry write and nothing more — the daemon ungroups its
+   *  Projects and renumbers the remaining Groups, and no folder, session, layout, or
+   *  history is touched. The optimistic update mirrors exactly that, and a failure re-reads
+   *  the registry rather than trying to reconstruct what the server did or did not do. Fold
+   *  state for the id is dropped by the prune effect, which this state change triggers. */
+  const deleteGroup=async(group:ProjectGroup)=>{
+    setGroupMenu(null);setConfirmGroupDeleteId(null)
+    setProjectGroups(items=>items.filter(item=>item.id!==group.id))
+    setProjects(items=>items.map(item=>item.group_id===group.id?{...item,group_id:null}:item))
+    try{
+      await api<{ok:boolean}>('DELETE',`/api/project-groups/${group.id}`)
+    }catch(cause){
+      await refresh()
+      setError(cause instanceof Error?cause.message:String(cause))
+    }
+  }
 
   const openRename = (target: RenameTarget) => {
     setContextMenu(null)
@@ -4353,6 +4406,11 @@ export function App() {
       phrases:['close navigation','hide navigation','close navigation sidebar','hide navigation sidebar','close left sidebar','hide left sidebar'],
     } },
     { id: 'sidebar.toggle', label: 'Toggle navigation sidebar', category: 'view', available: true, run: () => setSidebarOpen(value => !value) },
+    // Settings' section drawer, which only exists in the narrow layout. Real commands
+    // rather than a special case inside the recognizer, because that is the only channel
+    // a resolved gesture has — and it makes the drawer reachable from the palette too.
+    { id: SETTINGS_NAV_TOGGLE, label: 'Toggle Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(value => !value) },
+    { id: SETTINGS_NAV_CLOSE, label: 'Close Settings sections', category: 'view', available: settingsOpen && mobileWorkspace, disabledReason: 'Open Settings on a narrow layout first', run: () => setSettingsNavOpen(false) },
     { id:'prompts.open',label:'Open prompt library',category:'input',available:true,run:()=>{setPromptScope(null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false)} },
     { id:'prompts.openProject',label:'Open prompt library for selected project',category:'input',available:!!commandProject,disabledReason:'No project selected',run:()=>{setPromptScope(commandProject||null);setPromptTargetId(null);setPromptLibraryOpen(true);setMainMenuOpen(false);setProjectMenu(null)} },
     { id:'queue.fleet',label:'Open fleet queue (every session’s queued messages)',category:'input',available:true,run:()=>openFleetQueue() },
@@ -4761,6 +4819,7 @@ export function App() {
       setProjectMenu(null)
       setSidebarMenu(null)
       setSortMenu(null)
+      setGroupMenu(null)
       setNoteMenu(null)
       setTabMenu(null)
       setEmptyMenu(null)
@@ -4815,6 +4874,7 @@ export function App() {
   useDismissLevel(() => setProjectMenu(null), !!projectMenu, 'project-menu')
   useDismissLevel(() => setSidebarMenu(null), !!sidebarMenu, 'sidebar-menu')
   useDismissLevel(() => setSortMenu(null), !!sortMenu, 'sort-menu')
+  useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')
   useDismissLevel(() => setNoteMenu(null), !!noteMenu, 'note-menu')
   useDismissLevel(() => setTabMenu(null), !!tabMenu, 'tab-menu')
   useDismissLevel(() => setEmptyMenu(null), !!emptyMenu, 'empty-menu')
@@ -4862,6 +4922,11 @@ export function App() {
   // touch listeners (and can't drop a gesture already in flight).
   const overlayPanels = useRef({ sidebarOpen: false, drawerOpen: false })
   overlayPanels.current = { sidebarOpen, drawerOpen: clipboardOpen }
+  // Settings' section drawer, for the same reason and by the same route. Only supplied
+  // to the resolver while Settings is the level back would act on: the palette or the
+  // theme picker opened over it is what a swipe then means, not the drawer underneath.
+  const settingsNav = useRef({ open: false })
+  settingsNav.current = { open: settingsNavOpen }
   useEffect(() => {
     if (!mobileWorkspace) return
     let state: { startX:number; startY:number; lastX:number; lastY:number; maxPointers:number; start:number; axis:'?'|'h'|'v'; claims:ReturnType<typeof markPointerDragClaims> } | null = null
@@ -4944,7 +5009,15 @@ export function App() {
       state = null
       if (!slot) return
       const panels = overlayPanels.current
-      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, { depth: gestureOverlayDepth(dismissStack.depth(), panels), enabled: overlayBack })
+      // `topLabel()` rather than a `settingsOpen` flag: what matters is whether Settings
+      // (or its own drawer) is the level on top, so a picker opened above it keeps the
+      // swipe for itself instead of quietly working the drawer behind it.
+      const settingsOnTop = dismissStack.topLabel() === 'settings' || dismissStack.topLabel() === 'settings-nav'
+      const command = resolveGestureCommand(slot, mobileGestures, panels, swipeAwayClose, {
+        depth: gestureOverlayDepth(dismissStack.depth(), panels),
+        enabled: overlayBack,
+        panel: settingsOnTop ? { open: settingsNav.current.open, toggle: SETTINGS_NAV_TOGGLE, close: SETTINGS_NAV_CLOSE } : undefined,
+      })
       // A short tick on recognition: without it a swipe that lands on an empty
       // command, or a tab change the eye misses, reads as "nothing happened".
       if (command) { navigator.vibrate?.(12); window.dispatchEvent(new CustomEvent('mux:command', { detail: command })) }
@@ -5246,7 +5319,7 @@ export function App() {
     const id = session.id
     const agentSession=isAgent(session)
     if(session.pending)return <section class={`terminal-pane pending-terminal-pane ${activeId===id?'focused':''}`} onPointerDown={()=>{setActiveId(id);setFocusedViewId(id)}}>
-      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div><span class="pane-state starting">{session.pending_label||'starting terminal…'}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
+      <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`}><div class="pane-identity"><span class="pane-title" title={sessionName(session)||id}>{sessionName(session)||id}</span></div>{!agentSession&&<div class="pane-path">{session.cwd}</div>}</div>
       <div class="pending-terminal-body" role="status" aria-live="polite"><span class="pending-terminal-spinner" aria-hidden="true"/><strong>{session.pending_label||'Starting terminal'}</strong><small>{session.pending_detail||'Resolving the project and opening the shell…'}</small></div>
     </section>
     const remoteBoundary=session.runtime_boundary==='remote'
@@ -5295,16 +5368,38 @@ export function App() {
     const voiceOverlayNode=voiceStripNode||conversationSurface
       ?<div class="voice-overlay-anchor"><div class="voice-overlay">{voiceStripNode}{conversationSurface}</div></div>
       :null
+    // The header names the session and nothing else. Its state is on the tab, on the sidebar
+    // row, and in the terminal the reader is already looking at, whereas the *name* is the one
+    // thing those surfaces crop: a tab is only as wide as the strip allows. The name therefore
+    // takes the column the status line used to hold, bounded by `fit-content()` in the
+    // stylesheet so a long generated title cannot squeeze the path, voice chips, or tools.
+    const paneTitle=sessionName(session)||id
+    // Faults are not state, and they have no other pane-level surface — an agent header draws
+    // no path chip, which is where the boundary warning otherwise lives — so they keep a marker
+    // beside the name rather than disappearing with the status line. A stale transcript is the
+    // one fault that looks like a healthy session: the pane may be reading a conversation this
+    // PTY is no longer running (an unfollowable /clear or /new), so it is marked visibly and
+    // not only in the tooltip. What counts as a fault is `sessionFaults`, deliberately not this
+    // file: a marker drawn from "a diagnostic string exists" fires on every healthy session.
+    const paneFaults=sessionFaults(session)
+    // The full name leads the tooltip because the rendered one is truncated. The status line
+    // follows it, unrendered: it costs no width on hover, and it keeps one reading of the state
+    // within reach of the pane without competing with the name for the bar. The routine parser
+    // line and delivery readiness ride along as detail — every observed session reports both,
+    // which is exactly why neither may raise the marker.
+    const paneTitleHint=[
+      paneTitle,
+      sessionStatus(session),
+      ...paneFaults,
+      session.parser_status!=='degraded'&&session.parser_diagnostic,
+      session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`,
+    ].filter(Boolean).join('\n')
     // `key` matters here in a way it does not for a single-child stack: a stack now
     // renders its active pane *and* its warm siblings, so without a stable identity a
     // reorder would rebuild terminals rather than move them.
     const terminalPane=<section key={id} class={`terminal-pane ${activeId === id ? 'focused' : ''} ${paneVisible ? '' : 'pane-warm'}`} aria-hidden={paneVisible?undefined:'true'} onPointerDown={() => {setActiveId(id);setFocusedViewId(id)}}>
       <div class={`pane-bar ${agentSession?'agent-pane-bar':''}`} onContextMenu={openPaneMenu} onDblClick={() => setZoomedId(current => current === id ? null : id)}>
-        {/* A stale transcript is the one fault that looks like a healthy session: the state
-            below is being read off a conversation this PTY may no longer be running (an
-            unfollowable /clear or /new). Marked visibly, not just in the tooltip, because the
-            whole failure mode is that nothing looks wrong. */}
-        <div><span class={`pane-state ${isObservedHarness(session.backend)?session.state:'unobserved'}${session.observation_stale_since?' observation-stale':''}`} title={[nonLocalBoundary&&'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable',session.observation_stale_since&&'observation stale: the followed transcript may no longer be this session’s conversation',session.observation_diagnostic,session.parser_diagnostic,session.delivery_readiness&&`delivery::${session.delivery_readiness.state} (${session.delivery_readiness.reason}) · authorized::no`].filter(Boolean).join('\n')}>{sessionStatus(session)}{session.observation_stale_since?' · stale':''}</span></div>
+        <div class="pane-identity"><span class="pane-title" title={paneTitleHint}>{paneTitle}</span>{!!paneFaults.length&&<span class="pane-fault" role="img" aria-label={`${paneFaults.length===1?'Session fault':'Session faults'}: ${paneFaults.join('; ')}`} title={paneFaults.join('\n')}>⚠</span>}</div>
         {!agentSession&&<div class={`pane-path ${remoteBoundary?'remote':boundaryUnknown?'boundary-unknown':cwdIsLive?'live':'last-known'}`} title={nonLocalBoundary?'non-local terminal boundary; local cwd, Git, transcript, hooks, shim PATH repair, and agent promotion are unavailable':cwdIsLive?`live cwd · ${displayedCwd}`:`last known (spawn) cwd · ${displayedCwd}`}>{remoteBoundary?<span>remote::</span>:boundaryUnknown?<span>boundary::unknown::</span>:cwdIsLive?'':<span>last-known::</span>}{displayedCwd}</div>}
         <div class="pane-voice">{paneVoice}</div>
         <div class="pane-tools">{deliversHarnessPrompts(session.backend)&&<button class={`pane-tool-label queue-chip${(queueSummary[session.id]?.pending||0)>0?' has-pending':''}`} aria-label={`Open the prompt queue for ${sessionName(session)}`} title={`Prompt queue · ${queueSummary[session.id]?.pending||0} pending`} onClick={()=>void openQueueForSession(session.id)}>queue{(queueSummary[session.id]?.pending||0)>0?`:${queueSummary[session.id].pending}`:''}</button>}{hasHarnessTranscript(session.backend)&&<button class="pane-tool-label transcript-chip" aria-label={`Open the transcript for ${sessionName(session)}`} title="Read transcript" onClick={()=>void openTranscriptForSession(session.id)}>transcript</button>}{/* No `proc` chip. It carries no state of its own while `queue` reports its pending count, and
@@ -5383,14 +5478,20 @@ export function App() {
       <span class="note-branch" aria-hidden="true">└</span><span class="note-copy"><strong>server :{preview.port}</strong></span>
     </button>
   }
+  /** Land a registered Preview in the app: the item itself, the Project layout it was
+   *  attached into, and — when the caller was asking to see it — focus. */
+  const attachPreview=(preview:Preview,project:Project,focus=false)=>{
+    setPreviews(current=>({...current,[preview.id]:preview}))
+    setProjects(items=>items.map(item=>item.id===project.id?project:item))
+    setLayoutMap(current=>({...current,[project.id]:parseLayout(project.layout)}))
+    if(!focus)return
+    setProjectId(project.id)
+    setFocusedViewId(preview.id)
+  }
   const openDetectedServer=async(server:{url:string},session:Session)=>{
     try{
       const result=await api<{preview:Preview;project:Project}>('POST','/api/previews',{session_id:session.id,url:server.url,attach:true})
-      setPreviews(current=>({...current,[result.preview.id]:result.preview}))
-      setProjects(items=>items.map(item=>item.id===result.project.id?result.project:item))
-      setLayoutMap(current=>({...current,[result.project.id]:parseLayout(result.project.layout)}))
-      setProjectId(session.project_id)
-      setFocusedViewId(result.preview.id)
+      attachPreview(result.preview,result.project,true)
     }catch(cause){setError(cause instanceof Error?cause.message:String(cause))}
   }
   /** `placement` is whether this row's session sits in the Project's pane tree. An unpaned one
@@ -5640,7 +5741,7 @@ export function App() {
       <header class="app-topbar">
         <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
-      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
+      <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setGroupMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
             rows, while only explicit Groups receive their own headers.
             Its four controls are the tree's own: fold, sort, the registry behind it,
@@ -5651,7 +5752,7 @@ export function App() {
         <div class="sidebar-tools sidebar-projects-header">
           <strong>PROJECTS</strong>
           <button class="sidebar-tool" disabled={!displayProjects.length} aria-label={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} title={allFolded?'Expand all Projects and Groups':'Collapse all Projects and Groups'} onClick={()=>setAllFolded(!allFolded)}>{allFolded?<UnfoldMoreIcon/>:<UnfoldLessIcon/>}</button>
-          <button class={`sidebar-tool sidebar-sort ${sidebarOrder.projectSort==='custom'&&sidebarOrder.sectionSort==='custom'?'':'active'}`} disabled={!displayProjects.length} aria-haspopup="menu" aria-expanded={!!sortMenu} aria-label="Sort Projects and Groups" title={`Sort - Projects: ${projectSortLabel(sidebarOrder.projectSort)} · Groups: ${sectionSortLabel(sidebarOrder.sectionSort)}`} onClick={event=>{event.stopPropagation();if(sortMenu){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(rect.right,rect.bottom+4)}}>⇅</button>
+          <button class={`sidebar-tool sidebar-sort ${sidebarOrder.projectSort==='custom'?'':'active'}`} disabled={!displayProjects.length} aria-haspopup="menu" aria-expanded={!!sortMenu} aria-label="Sort Projects and Groups" title={`Sort - ${projectSortLabel(sidebarOrder.projectSort)}`} onClick={event=>{event.stopPropagation();if(sortMenu){setSortMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openSortMenu(rect.right,rect.bottom+4)}}>⇅</button>
           <button data-tutorial="projects" class="sidebar-tool" aria-label="Manage Projects" title="Manage Projects" onClick={()=>openProjectsManager()}><CogIcon/></button>
           {/* Both surfaces at once: the registry opens behind the create dialog, so
               dismissing the dialog lands on the registry rather than back on the tree.
@@ -5679,16 +5780,23 @@ export function App() {
             </div></div>
           </div>
           {visibleProjects.length===0&&<button data-tutorial="empty-project" class="empty-project-cta" onClick={()=>openProjectsManager()}><strong>{projects.length?'No Projects shown':'Create your first Project'}</strong><small>{projects.length?'Open Projects to show or add an active Project.':'Open Projects to add a canonical folder.'}</small></button>}
-          {/* `data-group-id` is what a Project drag reads to decide which Group it is
-              dropping into; the root list carries the empty string for "ungrouped".
-              The root list renders while any Group exists even with nothing in it, so
+          {/* One flat sequence of Group sections and runs of root Projects, in the order
+              the active sort put them. Under Manual that is every root Project and then
+              every Group, which is one run and the two-tier tree; under any other mode the
+              root splits into the runs between the Groups.
+
+              `data-group-id` is what a Project drag reads to decide which Group it is
+              dropping into; a root run carries the empty string for "ungrouped", which is
+              why each run has to be its own list rather than one list broken up visually.
+              A root run renders while any Group exists even with nothing in it, so
               there is always somewhere to drag a Project back out to — otherwise a user
               who grouped every Project would have no way to ungroup one by hand. */}
-          {(!!ungroupedProjects.length||!!displayBuckets.length)&&<div class="sidebar-project-list sidebar-ungrouped-projects" data-group-id="">
-            {ungroupedProjects.map(project=>sidebarProjectRow(project))}
-            {!ungroupedProjects.length&&<p class="project-list-empty">Drag a Project here to ungroup it</p>}
-          </div>}
-          {displayBuckets.map(bucket=>{
+          {rootRows.map(row=>{
+            if(row.kind==='root')return <div class="sidebar-project-list sidebar-ungrouped-projects" data-group-id="" key={row.key}>
+              {row.items.map(project=>sidebarProjectRow(project))}
+              {!row.items.length&&<p class="project-list-empty">Drag a Project here to ungroup it</p>}
+            </div>
+            const bucket=row.bucket
             const bucketCollapsed=isBucketCollapsed(sidebarOrder,bucket.id)
             const peerIds=bucket.items.map(item=>item.id)
             // Folding a section hides whichever Project holds the waiting agent, so
@@ -5696,17 +5804,25 @@ export function App() {
             // and the strongest state as a dot, because a bare count cannot say that
             // something in here is waiting on you.
             const bucketStatus=bucketCollapsed?projectSetRailStatus(sessions,peerIds,ackedTurns):null
-            return <section class={`sidebar-project-list sidebar-project-bucket ${bucketCollapsed?'collapsed':''} ${bucket.items.length?'':'empty'}`} key={bucket.id} data-reorder-id={bucket.id} data-group-id={bucket.id}>
+            // The whole section is the Group's right-click target, not just its header: the
+            // header is a one-line strip, and the drop hint below it is part of the same
+            // Group. Rows inside carry their own menus and are let through untouched.
+            return <section class={`sidebar-project-list sidebar-project-bucket ${bucketCollapsed?'collapsed':''} ${bucket.items.length?'':'empty'}`} key={bucket.id} data-reorder-id={bucket.id} data-group-id={bucket.id} onContextMenu={event=>{if((event.target as Element).closest('.project-row,.session-row'))return;event.preventDefault();event.stopPropagation();openGroupMenu(bucket.id,event.clientX,event.clientY)}}>
             {/* Desktop uses the header as both drag handle and collapse toggle. Mobile
                 keeps only the tap-to-fold half because Project rows are its sole sidebar
-                reorder target. The rename button stops either parent gesture. */}
-            <header title={mobileWorkspace?`${bucket.name} - tap to ${bucketCollapsed?'expand':'collapse'}`:`${bucket.name} - click to ${bucketCollapsed?'expand':'collapse'}, drag to reorder`} onPointerDown={event=>{if(!mobileWorkspace)beginBucketPointerDrag(event,bucket.id,bucket.name)}} onClick={()=>{if(suppressDragClickRef.current===`bucket:${bucket.id}`){suppressDragClickRef.current=null;return}setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
+                reorder target, and gets the Group menu on a hold instead of the right-click
+                it has no way to perform. The rename button stops either parent gesture. */}
+            <header title={mobileWorkspace?`${bucket.name} - tap to ${bucketCollapsed?'expand':'collapse'}, hold for actions`:`${bucket.name} - click to ${bucketCollapsed?'expand':'collapse'}, drag to reorder, right-click for actions`} onPointerDown={event=>{if(mobileWorkspace){groupHeldRef.current=false;beginLongPress(event,(x,y)=>{groupHeldRef.current=true;openGroupMenu(bucket.id,x,y)})}else beginBucketPointerDrag(event,bucket.id,bucket.name)}} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={moveLongPress} onClick={()=>{if(suppressDragClickRef.current===`bucket:${bucket.id}`){suppressDragClickRef.current=null;return}
+              // The hold fires while the finger is still down, so the click it ends with
+              // would fold the Group behind the menu it just opened.
+              if(groupHeldRef.current){groupHeldRef.current=false;return}
+              setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))}}>
               <span class="bucket-chevron" aria-hidden="true">{bucketCollapsed?'▸':'▾'}</span><span>{bucket.name}</span>
               {bucketStatus&&bucketStatus.liveCount>0&&<span class={`bucket-collapsed-badge activity-${bucketStatus.activity} ${bucketStatus.unread?'unread':''}`} title={`${bucketStatus.liveCount} live session${bucketStatus.liveCount===1?'':'s'} · ${projectRailActivityLabel[bucketStatus.activity]}${bucketStatus.unread?' · unread output':''}`}><i aria-hidden="true"/>{bucketStatus.liveCount}</span>}
-              {/* Rename only. Sort lives in the PROJECTS header, and delete is gone
-                  from the sidebar entirely — a header button one pixel from the fold
-                  toggle should not be able to dissolve a Group. Emptying a Group leaves
-                  it on screen, holding the drop hint below. */}
+              {/* Rename only. Sort lives in the PROJECTS header, and delete is in the
+                  Group's context menu behind a confirm — it carried a `×` here once, one
+                  pixel from the fold toggle, and no header button should be able to
+                  dissolve a Group in a single stray click. */}
               <button class="bucket-rename" title="Rename group" aria-label={`Rename group ${bucket.name}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();const group=projectGroups.find(item=>item.id===bucket.id);if(group)setGroupEdit({id:group.id,name:group.name})}}>✎</button></header>
               {!bucketCollapsed&&bucket.items.map(project=>sidebarProjectRow(project))}
               {/* Both the explanation and the drop target: an empty Group with no body
@@ -5799,23 +5915,20 @@ export function App() {
         queueOpenToken={queueOpenToken || undefined}
         onQueueOpenAsTab={sessionId=>void openQueueTab(sessionId)}
         onChangeMapOpenAsTab={sessionId=>void openChangeMapTab(sessionId)}
-        processSnapshot={processFleet}
         projects={projects}
         // '' (all Projects) is the stored default; an unscoped tab means the Project the
         // drawer is sitting beside, so it resolves to the active one at render time and
         // follows a Project switch instead of pinning whichever was active when it opened.
-        processScope={processWatchScope&&projects.some(project=>project.id===processWatchScope)?processWatchScope:(projectId||'')}
-        onProcessScope={setProcessWatchScope}
-        onRefreshProcesses={()=>void loadProcesses()}
+        processScope={resolveProjectScope(processProjectScope,projectId||'',projects)}
+        onProcessScope={setProcessProjectScope}
         // Same resolution as the process scope: an unscoped tab follows the Project the
         // drawer is sitting beside rather than pinning whichever was active on open.
         scheduleScope={scheduleScope&&projects.some(project=>project.id===scheduleScope)?scheduleScope:(projectId||'')}
         onScheduleScope={setScheduleScope}
         profiles={profiles}
-        onOpenPreview={(sessionId,url)=>{
-          const owner=sessions.find(item=>item.id===sessionId)
-          if(owner)void openDetectedServer({url},owner)
-        }}
+        // The Processes tab registers the preview itself, so this only lands the result:
+        // focused, because attaching a preview from the drawer is a request to look at it.
+        onPreviewAttached={(preview,project)=>attachPreview(preview,project,true)}
         onOpenInspector={scope=>openProcessViewer(null,scope)}
         onOpenProjectSettings={id=>{const target=projects.find(item=>item.id===id);if(target)openProjectsManager({project:target})}}
         onOpenAutomationDashboard={()=>setAutomationOpen(true)}
@@ -6030,29 +6143,47 @@ export function App() {
       <button onClick={()=>{setSidebarMenu(null);runNamedCommand('app.redeploy')}}>Rebuild + redeploy app (keep sessions)</button>
     </div>}
 
-    {/* One sort for the whole sidebar. It was per section once, so a hand-arranged
-        shortlist and an alphabetical pile could coexist; that put a ⇅ on every Group
-        header for a preference that in practice was set the same everywhere, so the
-        modes collapsed into one and the control moved to the PROJECTS header. */}
-    {sortMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sort Projects and Groups" style={{left:clampContextMenuLeft(sortMenu.x,innerWidth),top:Math.max(4,Math.min(sortMenu.y,innerHeight-330))}}>
+    {/* A Group's own menu: the three things a Group can be told to do, in the place a
+        right-click already looks for them. Rename mirrors the header's ✎ and fold mirrors
+        clicking the header, so the menu is discoverable rather than exclusive; delete has no
+        other home, which is why it needed one. */}
+    {groupMenu&&(()=>{
+      const group=projectGroups.find(item=>item.id===groupMenu.groupId)
+      // The Group was deleted or unregistered under the open menu.
+      if(!group)return null
+      const held=projects.filter(project=>project.group_id===group.id)
+      const folded=isBucketCollapsed(sidebarOrder,group.id)
+      const confirming=confirmGroupDeleteId===group.id
+      return <div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label={`Group actions for ${group.name}`} style={{left:clampContextMenuLeft(groupMenu.x,innerWidth),top:Math.max(4,Math.min(groupMenu.y,innerHeight-220))}}>
+        <div class="context-title"><strong>{group.name}</strong><small>{held.length?`${held.length} Project${held.length===1?'':'s'}`:'Empty'}</small></div>
+        <button onClick={()=>{setGroupMenu(null);setGroupEdit({id:group.id,name:group.name})}}>Rename group…</button>
+        <button onClick={()=>{setGroupMenu(null);setSidebarOrder(toggleBucketCollapsed(sidebarOrder,group.id))}}>{folded?'Expand group':'Collapse group'}</button>
+        {!confirming&&<button class="danger" onClick={()=>setConfirmGroupDeleteId(group.id)}>Delete group…</button>}
+        {confirming&&<>
+          <div class="context-subtitle">DELETE THIS GROUP</div>
+          {/* What survives, stated before the button that does it: the fear this dialog
+              exists to answer is that the Projects go with the Group. */}
+          <div class="context-note">{held.length?`${held.length} Project${held.length===1?'':'s'} return to the root list.`:'The Group is empty.'} No folder, session, layout, or history is touched.</div>
+          <button class="danger" onClick={()=>void deleteGroup(group)}>Delete “{group.name}”</button>
+          <button onClick={()=>setConfirmGroupDeleteId(null)}>Cancel</button>
+        </>}
+      </div>
+    })()}
+
+    {/* One sort for the whole sidebar, Groups included. It was per section once, so a
+        hand-arranged shortlist and an alphabetical pile could coexist; that put a ⇅ on every
+        Group header for a preference that in practice was set the same everywhere, so the
+        modes collapsed into one and the control moved to the PROJECTS header. Group
+        placement followed it here for a sharper reason: as its own setting it could only
+        order Groups among Groups, below every root Project, so no mode could lift a Group
+        for the work inside it. */}
+    {sortMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Sort Projects and Groups" style={{left:clampContextMenuLeft(sortMenu.x,innerWidth),top:Math.max(4,Math.min(sortMenu.y,innerHeight-300))}}>
       <div class="context-title"><strong>SORT PROJECTS</strong></div>
       {PROJECT_SORT_OPTIONS.map(option=>{
         const active=sidebarOrder.projectSort===option.id
         return <button key={option.id} title={option.hint} aria-checked={active} role="menuitemradio" onClick={()=>{setSidebarOrder(setProjectSortMode(sidebarOrder,option.id));setSortMenu(null)}}>{active?'✓ ':''}{option.label}</button>
       })}
-      <div class="context-rule"/>
-      {/* One level up, from the same control: the header's ⇅ already means "how is
-          this list ordered", and the sidebar has no global Group header to hang a
-          separate control on. Behind a MenuGroup so the common case stays flat, and
-          carrying its current mode in the label since the section order has no
-          always-visible indicator of its own. */}
-      <MenuGroup id="sections" label={`Sort Groups · ${sectionSortLabel(sidebarOrder.sectionSort)}`} openId={menuGroup} onOpenChange={setMenuGroup} hint="Order the named Groups">
-        {SECTION_SORT_OPTIONS.map(option=>{
-          const active=sidebarOrder.sectionSort===option.id
-          return <button key={option.id} title={option.hint} aria-checked={active} role="menuitemradio" onClick={()=>{setSidebarOrder({...sidebarOrder,sectionSort:option.id});setSortMenu(null)}}>{active?'✓ ':''}{option.label}</button>
-        })}
-      </MenuGroup>
-      <div class="context-note">Dragging a Project or Group into place puts that level back on Manual order.</div>
+      <div class="context-note">Every mode but Manual sorts Groups in among the root Projects, keyed by the Project in them that leads. Manual keeps Groups below the root list, in the order you dragged them; placing a Project or a Group by hand is what returns the sidebar to it.</div>
     </div>}
 
     {noteMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu" role="menu" aria-label="Resource view actions" style={{left:clampContextMenuLeft(noteMenu.x,innerWidth),top:Math.max(4,Math.min(noteMenu.y,innerHeight-220))}}>
@@ -6247,7 +6378,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} navOpen={settingsNavOpen} onNavOpenChange={setSettingsNavOpen} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); setSettingsNavOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
@@ -6265,11 +6396,7 @@ export function App() {
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
     {automationOpen&&<AutomationDashboard initialSetting={settingsSetting} revealToken={revealToken} onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
-    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {
-      setPreviews(current => ({...current, [preview.id]: preview}))
-      setProjects(items => items.map(item => item.id === project.id ? project : item))
-      setLayoutMap(current => ({...current, [project.id]: parseLayout(project.layout)}))
-    }} />}
+    {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={attachPreview} />}
 
     {notificationToast&&<button class="notification-toast" aria-live="assertive" onClick={()=>{setNotificationToast(null);openNotifications()}}><strong>{notificationToast.session_name||'daemon'}</strong><span>{notificationToast.type.replaceAll('_',' ')}</span><small>open notifications</small></button>}
 

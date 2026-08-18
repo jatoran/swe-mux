@@ -12,7 +12,8 @@
 // are synchronous against the cache so hot paths like handleSessionSound stay
 // sync; an unloaded cache simply yields defaults.
 import { api } from './api.ts'
-import { clearProjectRailBlob, railConfigFromBlob, railHasProjectOverride, writeRailConfigBlob, type RailBlob, type RailConfig } from './commandRail.ts'
+import { clearProjectRailBlob, railConfigFromBlob, writeRailConfigBlob, type RailBlob, type RailConfig } from './commandRail.ts'
+import { resolveRail, type ResolvedRail } from './railScope.ts'
 
 export type SettingsProfile = 'desktop' | 'mobile'
 export type SettingsDomain = 'alerts' | 'sounds' | 'notifications' | 'commandRail' | 'fileTree' | 'drawerTabs' | 'sessionRows'
@@ -98,14 +99,26 @@ export async function saveRailConfig(config: RailConfig, projectId?: string): Pr
   await saveDomain(RAIL_PROFILE, 'commandRail', next as unknown as Record<string, unknown>)
 }
 
-export function projectRailIsCustom(projectId: string): boolean {
-  return railHasProjectOverride(railBlob(), projectId)
-}
-
-/** Drop a project's override so it inherits the global rail again. */
+/** Drop a project's override so it inherits the global rail again. Reverts a
+ *  fork to global and removes a delta's additions alike. */
 export async function clearProjectRail(projectId: string): Promise<void> {
   const next = clearProjectRailBlob(railBlob(), projectId)
   await saveDomain(RAIL_PROFILE, 'commandRail', next as Record<string, unknown>)
+}
+
+/** The raw Actions blob, for the scope-aware editing ops in `railScope.ts`. */
+export function currentRailBlob(): RailBlob | undefined {
+  return railBlob()
+}
+
+/** Effective config plus ownership, for the editors and pin surfaces. */
+export function loadResolvedRail(projectId?: string): ResolvedRail {
+  return resolveRail(railBlob(), projectId)
+}
+
+/** Persist a blob produced by the scope-aware ops (`railScope.ts`). */
+export async function saveRailBlob(blob: RailBlob): Promise<void> {
+  await saveDomain(RAIL_PROFILE, 'commandRail', blob as unknown as Record<string, unknown>)
 }
 
 // The file-tree expand state is deliberately shared across desktop and mobile —

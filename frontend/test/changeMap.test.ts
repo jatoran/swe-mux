@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
-  DEFAULT_ROLE_PALETTE, LAYOUT_ITERATIONS, MAX_HOPS, ROLE_ORDER,
-  adjacency, clampHops, disabledNote, edgeCounts, excludedNote, focusedPath, graphColor,
-  groupNodesByRole, hslToHex, layoutRequest, mixHex, neighborNodes, neighborhood, nodeColor,
-  nodeSize, seedPositions, shortPath, usablePositions,
-  type ChangeMapEdge, type ChangeMapNode,
+  DEFAULT_ROLE_PALETTE, LAYOUT_ITERATIONS, MAX_HOPS, ROLE_ORDER, SCOPE_DESCRIPTIONS,
+  SCOPE_LABELS, UNINDEXED_MARK,
+  adjacency, checkoutNote, clampHops, disabledNote, edgeCounts, excludedNote, focusedPath,
+  graphColor, groupNodesByRole, hslToHex, layoutRequest, markUnindexed, mixHex, neighborNodes,
+  neighborhood, nodeColor, nodeLabel, nodeSize, seedPositions, shortPath, unindexedCount,
+  unindexedNote, usablePositions,
+  type ChangeMapEdge, type ChangeMapNode, type ChangeMapScope,
 } from '../src/changeMap.ts'
 import { changeMapLeafId, changeMapLeafSessionId, emptyLayout, leaves, openTab, parseLayout, paneStacks, removeLeaf, resourceLeaf, terminalLeaf } from '../src/layout.ts'
 
@@ -154,6 +156,46 @@ test('what the map refused to draw is stated, not silently dropped', () => {
   const both = excludedNote({ outside_root: 2, unindexable: 3 })
   assert.match(both, /^5 edited files not shown/)
   assert.match(both, /2 outside this checkout, 3 in a generated, vendored, or hidden directory/)
+})
+
+test('a file the index has never seen is marked, not silently drawn as unreferenced', () => {
+  // Sigma's node programs are filled discs with no border channel, and colour is
+  // already spent on the three roles — the label is the only per-node surface left,
+  // and the distinction has to land somewhere.
+  const fresh = node('pkg/brandnew.py', 'seed', { indexed: false })
+  const known = node('src/swe_mux/server.py', 'seed')
+  assert.equal(nodeLabel(known), 'swe_mux/server.py')
+  assert.equal(nodeLabel(fresh), `${UNINDEXED_MARK} pkg/brandnew.py`)
+  // The list shows whole paths, the graph shows two segments, and both take the mark.
+  assert.equal(markUnindexed(fresh, 'pkg/brandnew.py'), `${UNINDEXED_MARK} pkg/brandnew.py`)
+  assert.equal(markUnindexed(known, 'src/swe_mux/server.py'), 'src/swe_mux/server.py')
+  assert.equal(unindexedCount([fresh, known, node('a.ts', 'blast')]), 1)
+  assert.equal(unindexedNote(0), '')
+  assert.match(unindexedNote(1), /1 file not in the code index yet/)
+  assert.match(unindexedNote(3), /3 files not in the code index yet/)
+})
+
+test('every scope is named and described for the selector', () => {
+  for (const scope of ['session', 'branch', 'project'] as ChangeMapScope[]) {
+    assert.ok(SCOPE_LABELS[scope].length > 0, scope)
+    assert.ok(SCOPE_DESCRIPTIONS[scope].length > 0, scope)
+  }
+})
+
+test('the header says which checkout, and what a branch is measured against', () => {
+  const checkout = {
+    root: 'D:/repo/.claude/worktrees/wt', worktree: 'wt',
+    branch: 'worktree-wt', ref: 'master', base: 'abc123', truncated: false,
+  }
+  // "since <sha>" cannot tell one worktree of several apart, and several open at
+  // once is exactly when a reader needs it to.
+  assert.equal(checkoutNote({ scope: 'branch', checkout }), 'worktree wt vs master')
+  assert.equal(checkoutNote({ scope: 'session', checkout }), 'worktree wt')
+  assert.equal(checkoutNote({ scope: 'branch', checkout: null }), '')
+  assert.equal(
+    checkoutNote({ scope: 'branch', checkout: { ...checkout, worktree: null } }),
+    'worktree-wt vs master',
+  )
 })
 
 test('dimming mixes toward the background rather than toward a fixed grey', () => {

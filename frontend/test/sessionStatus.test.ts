@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { AwaitingReason, Session, SessionState, StandingActivity, StandingActivityKind } from '../src/types.ts'
-import { activityBadges, awaitingLabel, idleLabel, sessionDotClass, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
+import { activityBadges, awaitingLabel, idleLabel, sessionDotClass, sessionFaults, sessionStatus, stateDotClass } from '../src/sessionStatus.ts'
 import { classifySoundEvent } from '../src/sessionSounds.ts'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -248,6 +248,63 @@ test('loop and cron share one glyph; the tooltip distinguishes them', () => {
   assert.equal(both[0].glyph, both[1].glyph)
   assert.notEqual(both[0].title, both[1].title)
   assert.ok(both[1].title.includes('*/5 * * * *'))
+})
+
+// The pane header draws a visible marker from `sessionFaults`, so the expensive mistake is a
+// predicate that is true of an ordinary session. It has been made once: reading the presence
+// of `parser_diagnostic` as a fault marked 17/17 live sessions, because the daemon writes that
+// line on every observed session ('tailing <id>.jsonl', 'schema v2: 801/801 recognized').
+test('a healthy session carrying routine diagnostics reports no faults', () => {
+  assert.deepEqual(sessionFaults(agent('idle', { parser_status: 'watching', parser_diagnostic: 'tailing 824e7aa5.jsonl' })), [])
+  assert.deepEqual(sessionFaults(agent('working', { parser_status: 'ready', parser_diagnostic: 'schema v2: 801/801 recognized (0% unknown)' })), [])
+  assert.deepEqual(sessionFaults(agent('idle', { runtime_boundary: 'local' })), [])
+  assert.deepEqual(sessionFaults(agent('running')), [])
+})
+
+test('a fault is the condition, never the diagnostic text that describes it', () => {
+  // Degraded parsing is a fault; its diagnostic is only the wording, and stands in for it.
+  const degraded = sessionFaults(agent('idle', { parser_status: 'degraded', parser_diagnostic: 'schema v2: 300/1000 unrecognized transcript records (30%)' }))
+  assert.equal(degraded.length, 1)
+  assert.ok(degraded[0].includes('unrecognized transcript records'))
+  // A degrade with no diagnostic recorded still reports, rather than falling silent.
+  assert.equal(sessionFaults(agent('idle', { parser_status: 'degraded' })).length, 1)
+
+  // Staleness is the fault; `observation_diagnostic` is its wording and never fires alone.
+  const stale = sessionFaults(agent('idle', { observation_stale_since: 1_700_000_000, observation_diagnostic: 'transcript x.jsonl is missing while the CLI kept reporting activity' }))
+  assert.equal(stale.length, 1)
+  assert.ok(stale[0].includes('is missing while the CLI kept reporting activity'))
+  assert.equal(sessionFaults(agent('idle', { observation_stale_since: 1_700_000_000 })).length, 1)
+  assert.deepEqual(sessionFaults(agent('idle', { observation_diagnostic: 'left over from an earlier stale window' })), [])
+})
+
+test('a non-local terminal boundary is a fault on both of its readings', () => {
+  for (const boundary of ['remote', 'unknown'] as const) {
+    const faults = sessionFaults(agent('idle', { runtime_boundary: boundary }))
+    assert.equal(faults.length, 1, `${boundary} must report exactly one fault`)
+    assert.ok(faults[0].includes('non-local terminal boundary'))
+  }
+})
+
+test('faults accumulate and stay independent of the state axis', () => {
+  const session = agent('idle', {
+    runtime_boundary: 'remote',
+    observation_stale_since: 1_700_000_000,
+    parser_status: 'degraded',
+    parser_diagnostic: 'schema v2: 300/1000 unrecognized transcript records (30%)',
+  })
+  assert.equal(sessionFaults(session).length, 3)
+  // A faulted session is still whatever state it is in: faults never touch the dot.
+  assert.equal(stateDotClass(session.state), stateDotClass('idle'))
+})
+
+test('the pane marker is driven by the shared predicate, not by inline field tests', () => {
+  const app = readFileSync(join(SRC, 'App.tsx'), 'utf8')
+  assert.ok(app.includes('const paneFaults=sessionFaults(session)'), 'the pane header must ask sessionFaults')
+  // The two strings that are set on every healthy session must not reach a visible marker.
+  const marker = app.slice(app.indexOf('const paneFaults='), app.indexOf('class="pane-fault"'))
+  for (const line of marker.split('\n').filter(line => /observation_diagnostic|parser_diagnostic/.test(line))) {
+    assert.ok(line.includes('degraded'), `a diagnostic every session carries must not reach the marker: ${line.trim()}`)
+  }
 })
 
 test('every surface renders through the shared mapping — no inline heuristics', () => {

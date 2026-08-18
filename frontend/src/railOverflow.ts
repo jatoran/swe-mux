@@ -15,6 +15,17 @@ export const RAIL_EDGE_WIDTH_PX = 28
 export const RAIL_PAGE_OVERLAP_PX = 44
 const RAIL_EDGE_TOLERANCE_PX = 1
 
+/**
+ * How far a touch travels before it is the rail's horizontal pan rather than a press on
+ * whatever it landed on.
+ *
+ * Lives here, with the rail's other pure arithmetic, because two modules have to agree on
+ * it: `RailScroller` starts panning at this distance, and `railKeyRepeat` stops treating
+ * the same press as a candidate for hold-to-repeat at it. If they disagreed, the window
+ * between the two thresholds would be a swipe that also spammed an arrow key.
+ */
+export const RAIL_PAN_SLOP_PX = 6
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value))
 }

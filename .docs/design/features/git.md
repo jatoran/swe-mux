@@ -174,6 +174,14 @@ uncommitted work together.
   serve one Project the other's number. The override is injected into `GitMonitor` as a
   `project_id -> ref` callable, so the monitor keeps knowing nothing about the Project registry,
   and a lookup that raises degrades to automatic inference rather than to no Git state.
+- `git_review.branch_changed_paths` is the same measurement asked for *paths* rather than counts,
+  and is what the Change Map's branch scope seeds from (`code-graph.md`).
+  It diffs the working tree against the merge base — one read covering committed, staged, and
+  unstaged work — and lists untracked files separately, because no diff can see those and a file
+  a branch has only just created is exactly the one worth drawing.
+  Deliberately not a `GitChangeSummary`: that truncates at `GIT_CHANGE_FILE_LIMIT` for a list a
+  human reads, while this feeds a graph query that must either cover the branch or report
+  `truncated`. `None` means no base resolved, never an empty list.
 
 ## Git drawer tab
 

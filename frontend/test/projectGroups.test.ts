@@ -45,3 +45,36 @@ test('project position 0 is honoured (?? not ||)', () => {
   )
   assert.deepEqual(groups.map(g => g.id), ['zero', 'big'])
 })
+
+test('the focused session is pinned to the top of its own Project, not of the listing', () => {
+  const groups = buildProjectGroups(
+    [group('early', 'first'), group('late', 'first'), group('focused', 'second')],
+    [session('early', 'first', 1), session('late', 'first', 100), session('focused', 'second', 50)],
+    [project('first', 'F', 0), project('second', 'S', 1)],
+    'focused',
+  )
+  // Hoisting it above its own Project heading would file the row under the wrong Project.
+  assert.deepEqual(groups.map(g => g.id), ['first', 'second'])
+  assert.deepEqual(groups[0].groups.map(g => g.session_id), ['early', 'late'])
+  assert.deepEqual(groups[1].groups.map(g => g.session_id), ['focused'])
+})
+
+test('within its Project the focused session sorts ahead of an older sibling', () => {
+  const groups = buildProjectGroups(
+    [group('old', 'sp'), group('new', 'sp')],
+    [session('old', 'sp', 1), session('new', 'sp', 100)],
+    [project('sp', 'S', 0)],
+    'new',
+  )
+  assert.deepEqual(groups[0].groups.map(g => g.session_id), ['new', 'old'])
+})
+
+test('no focused session leaves the ordering exactly as it was', () => {
+  const groups = buildProjectGroups(
+    [group('late', 'sp'), group('early', 'sp')],
+    [session('late', 'sp', 100), session('early', 'sp', 1)],
+    [project('sp', 'S', 0)],
+    null,
+  )
+  assert.deepEqual(groups[0].groups.map(g => g.session_id), ['early', 'late'])
+})

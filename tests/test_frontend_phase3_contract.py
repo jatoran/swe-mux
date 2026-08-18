@@ -229,6 +229,14 @@ def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
         'class="project-tree"'
     )
     assert 'class="sidebar-project-list sidebar-ungrouped-projects" data-group-id=""' in app
+    # One control now, not two: Group placement rides the same mode, so there is no second
+    # label to put in the button's title and no second mode to read for its active state.
+    # `sectionSort` survives in projectSort.ts only as the migration that reads the retired
+    # key off disk once — the type and its option list are gone.
+    assert "sectionSort" not in app
+    assert "SectionSortMode" not in sort and "SECTION_SORT_OPTIONS" not in sort
+    assert "migrateSectionSort" in sort
+    assert "${projectSortLabel(sidebarOrder.projectSort)}`}" in app
     assert "setAllFolded(!allFolded)" in app
     assert "setAllCollapsed(displayProjects.map(project=>project.id),folded)" in app
     assert (
@@ -263,37 +271,73 @@ def test_the_projects_header_owns_sort_and_fold_for_the_whole_tree() -> None:
         assert f"id: '{mode}'" in sort
 
 
-def test_a_group_can_be_renamed_from_the_sidebar_but_not_deleted() -> None:
-    """The × next to the fold toggle could dissolve a Group in one stray click.
+def test_a_group_is_renamed_folded_and_deleted_from_its_own_context_menu() -> None:
+    """A Group's three actions live behind a right-click, and delete asks first.
 
-    Removing it leaves no delete path in the UI; that is the intent. A Group is emptied
-    instead — reassign its Projects and it keeps its header, holding a drop hint. The
-    endpoint is untouched.
+    The header carried a `×` for delete once, a pixel from the fold toggle, and removing it
+    left no delete path at all: reassigning every Project one at a time still leaves the
+    empty Group on screen, because empty Groups render. So delete came back — in a context
+    menu, behind a confirm that says what survives it, rather than as a header button.
+    Rename and fold are mirrored there too; both still work from the header.
     """
-    app = (Path(__file__).parents[1] / "frontend" / "src" / "App.tsx").read_text(
-        encoding="utf-8"
+    root = Path(__file__).parents[1] / "frontend" / "src"
+    app = (root / "App.tsx").read_text(encoding="utf-8")
+
+    # Right-click anywhere in the section that is not a row of its own, and hold on mobile,
+    # which has no right-click to give.
+    assert "openGroupMenu(bucket.id,event.clientX,event.clientY)" in app
+    assert (
+        "beginLongPress(event,(x,y)=>{groupHeldRef.current=true;openGroupMenu(bucket.id,x,y)})"
+        in app
     )
+    assert "if((event.target as Element).closest('.project-row,.session-row'))return" in app
+    # The hold fires under the finger, so the click it ends with must not fold the Group.
+    assert "if(groupHeldRef.current){groupHeldRef.current=false;return}" in app
+    # Rename stays on the header as well; sort never comes back to it.
     assert 'class="bucket-rename" title="Rename group"' in app
-    # The handler and its only call site, not the word: the comment left where the
-    # function was names it on purpose, so the next reader does not re-add it blind.
-    assert "const deleteGroup=" not in app
-    assert "deleteGroup(group)" not in app
-    assert "'DELETE',`/api/project-groups/" not in app
-    assert "Remove group (projects become ungrouped)" not in app
+    assert 'class="bucket-sort"' not in app
+
+    # Delete is two clicks, and the second one is the only caller of the handler.
+    assert "const deleteGroup=" in app
+    assert "onClick={()=>setConfirmGroupDeleteId(group.id)}>Delete group…" in app
+    assert "onClick={()=>void deleteGroup(group)}" in app
+    assert "'DELETE',`/api/project-groups/${group.id}`" in app
+    # Opening the menu clears any armed confirm, so it cannot be inherited by the next Group.
+    assert "setConfirmGroupDeleteId(null)\n    setGroupMenu({groupId,x,y})" in app
+    # The Projects are what a user fears losing, so the confirm says they do not go.
+    assert "return to the root list." in app
+    assert "No folder, session, layout, or history is touched." in app
+    # Menus are dismiss levels, not a special case of the sidebar's own menu.
+    assert "useDismissLevel(() => setGroupMenu(null), !!groupMenu, 'group-menu')" in app
 
 
-def test_groups_sort_from_the_projects_header_and_collapse_from_their_header() -> None:
+def test_groups_sort_in_among_root_projects_and_collapse_from_their_header() -> None:
     root = Path(__file__).parents[1] / "frontend" / "src"
     app = (root / "App.tsx").read_text(encoding="utf-8")
     css = (root / "style.css").read_text(encoding="utf-8")
     sort = (root / "projectSort.ts").read_text(encoding="utf-8")
 
-    # Group ordering rides the PROJECTS header's ⇅, one level up, behind a MenuGroup.
-    assert 'MenuGroup id="sections"' in app or "MenuGroup id='sections'" in app
-    assert "sortBuckets(allBuckets,sidebarOrder.sectionSort,recentProjectRanks)" in app
-    assert "setSidebarOrder({...sidebarOrder,sectionSort:option.id})" in app
-    # Dragging a Group header is what returns Groups to Manual order.
-    assert "sectionSort:'custom'" in app
+    # Group placement rides the one PROJECTS sort, as a peer of a root Project. As its own
+    # setting it could only order Groups among Groups below the whole ungrouped pile, so no
+    # mode could lift a Group for the work inside it — the bug this replaced.
+    assert (
+        "sortRootEntries(ungroupedProjects,allBuckets,sidebarOrder.projectSort,recentProjectRanks)"
+        in app
+    )
+    assert "const rootRows=sidebarRootRows(rootEntries)" in app
+    assert "rootEntries.flatMap(entry=>entry.kind==='group'?[entry.bucket]:[])" in app
+    # Reading order interleaves too, or the rail and the numbered shortcuts would disagree
+    # with the tree they are drawn from.
+    assert (
+        "displayProjects=rootEntries.flatMap(entry=>entry.kind==='group'?entry.bucket.items:[entry.project])"
+        in app
+    )
+    # Each run of root Projects between Groups is its own droppable list.
+    assert "rootRows.map(row=>{" in app
+    assert "if(row.kind==='root')return <div" in app
+    assert "key={row.key}" in app
+    # Dragging a Group header returns the one sort to Manual, which is the two-tier tree.
+    assert app.count("setSidebarOrder(setProjectSortMode(sidebarOrder,'custom'))") == 2
     # Click folds, drag reorders; the drag swallows the click it ends with.
     assert "suppressDragClickRef.current===`bucket:${bucket.id}`" in app
     assert "setSidebarOrder(toggleBucketCollapsed(sidebarOrder,bucket.id))" in app
@@ -310,8 +354,10 @@ def test_groups_sort_from_the_projects_header_and_collapse_from_their_header() -
     assert "projectSetRailStatus(sessions,peerIds,ackedTurns)" in app
     assert ".bucket-collapsed-badge.activity-attention" in css
     assert ".sidebar-project-bucket>header .bucket-chevron" in css
-    # Sections deliberately carry no date modes: nothing dates a Group.
-    assert "created" not in sort.split("SECTION_SORT_OPTIONS")[1].split("]")[0]
+    # A Group record is not dated, so the date modes have to borrow a key from the member
+    # that leads it rather than being refused, which is what kept Groups out of them before.
+    assert "export function bucketStamp(" in sort
+    assert "const oldestFirst = mode === 'created'" in sort
 
 
 def test_pane_local_tab_rails_and_resizable_collapsible_sidebar_are_wired() -> None:

@@ -24,6 +24,7 @@ declare global {
   interface Window {
     changeMapLayoutResults: LayoutResult[]
     changeMapOpened: { path: string; worktree: string | null }[]
+    changeMapRequests: string[]
     changeMapSigma?: SigmaProbe
   }
 }
@@ -62,7 +63,19 @@ const MAP = {
   baseline_head: '4417166ac1de',
   available: true,
   disabled_reason: null,
-  worktree: null,
+  // A worktree session on its branch: the default scope in a worktree, and the one
+  // whose header has to name which checkout it is describing.
+  worktree: 'D:/repo/.claude/worktrees/wt',
+  scope: 'branch',
+  scopes: ['session', 'branch', 'project'],
+  checkout: {
+    root: 'D:/repo/.claude/worktrees/wt',
+    worktree: 'wt',
+    branch: 'worktree-wt',
+    ref: 'master',
+    base: '4417166ac1de',
+    truncated: false,
+  },
   // One edited file the graph refuses to index, so the caption that says so is on
   // screen in the same run that asserts the geometry around it.
   excluded: { outside_root: 1, unindexable: 0 },
@@ -87,6 +100,13 @@ const MAP = {
     { path: 'src/swe_mux/config.py', role: 'context', display_path: 'src/swe_mux/config.py' },
     // No `display_path`: written, then deleted. Its button must be dead, not a 404.
     { path: 'src/swe_mux/store.py', role: 'context' },
+    // Created on this branch, so the canonical index has never parsed it. Drawn,
+    // and marked, because its empty neighbourhood is an absence of data rather
+    // than a finding.
+    {
+      path: 'src/swe_mux/brandnew.py', role: 'seed', indexed: false,
+      display_path: 'src/swe_mux/brandnew.py',
+    },
   ],
   edges: [
     { source: 'src/swe_mux/mcp.py', target: 'src/swe_mux/server.py', kind: 'imports' },
@@ -102,9 +122,13 @@ const MAP = {
   lower_bound_note: 'A lower bound: only edges the indexer resolved statically are drawn.',
 }
 
-window.fetch = (async () =>
-  new Response(JSON.stringify(MAP), { status: 200, headers: { 'Content-Type': 'application/json' } })
-) as typeof fetch
+// Every request is recorded, so a spec can prove the scope the reader picked is the
+// one that reached the daemon — the answer is stubbed, so nothing else could.
+window.changeMapRequests = []
+window.fetch = (async (input: RequestInfo | URL) => {
+  window.changeMapRequests.push(String(typeof input === 'string' ? input : (input as Request).url ?? input))
+  return new Response(JSON.stringify(MAP), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}) as typeof fetch
 
 const SESSION = {
   id: 'claude-d92695', name: 'claude-d92695', project_id: 'p1', state: 'idle', backend: 'claude',

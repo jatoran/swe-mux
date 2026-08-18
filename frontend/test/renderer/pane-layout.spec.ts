@@ -83,6 +83,75 @@ for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0 }
   })
 }
 
+/**
+ * The header names the session instead of restating its state, and the name is the one field
+ * with no upper bound on its length — a generated title is a sentence. Both halves are CSS-only
+ * and invisible to tsc and the unit suite: the cap is a `fit-content()` track, and the ellipsis
+ * needs the `overflow:hidden` that also lets the track collapse before the control tracks do.
+ */
+for (const viewport of [{ name: 'desktop', width: 1200, height: 760, mobile: 0, share: 0.36 }, { name: 'mobile', width: 390, height: 780, mobile: 1, share: 0.46 }]) {
+  test(`a long session name is truncated rather than crowding the pane controls on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    await page.goto(`/pane-harness.html?overlay=0&mobile=${viewport.mobile}`)
+    await expect(page.locator('.pane-title')).toBeVisible()
+    const header = await page.evaluate(() => {
+      const at = (selector: string) => {
+        const { x, y, width, height } = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect()
+        return { x, y, width, height, right: x + width, middle: y + height / 2 }
+      }
+      const title = document.querySelector<HTMLElement>('.pane-title')!
+      return {
+        bar: at('.pane-bar'), title: at('.pane-title'), chip: at('.pane-voice .voice-chip'), tools: at('.pane-tools'),
+        clipped: title.scrollWidth > title.clientWidth,
+        // No status text left in the bar; the state reading it replaced lives in the tooltip.
+        states: document.querySelectorAll('.pane-bar .pane-state').length,
+      }
+    })
+    expect(header.states).toBe(0)
+    expect(header.clipped).toBe(true)
+    expect(header.title.width).toBeLessThanOrEqual(header.bar.width * viewport.share)
+    // The chips and tools keep their full width, and everything stays on the one row.
+    expect(header.chip.width).toBeGreaterThan(0)
+    expect(header.title.right).toBeLessThanOrEqual(header.chip.x)
+    expect(header.chip.right).toBeLessThanOrEqual(header.tools.x)
+    expect(header.tools.right).toBeLessThanOrEqual(header.bar.right)
+    expect(Math.round(header.title.middle)).toBe(Math.round(header.tools.middle))
+  })
+
+  /**
+   * The fault marker is the pane's only report of a fault that has no other surface here, so
+   * "drawn but zero-width" or "pushed past the track's cap" is the same as absent. The name is
+   * the thing that must yield: it is already truncated, and the whole of it is in the tooltip.
+   */
+  test(`the fault marker survives beside a name too long for the bar on ${viewport.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    await page.goto(`/pane-harness.html?overlay=0&fault=1&mobile=${viewport.mobile}`)
+    const marker = page.locator('.pane-fault')
+    await expect(marker).toBeVisible()
+    const header = await page.evaluate(() => {
+      const at = (selector: string) => {
+        const { x, y, width, height } = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect()
+        return { x, y, width, height, right: x + width, middle: y + height / 2 }
+      }
+      const title = document.querySelector<HTMLElement>('.pane-title')!
+      return {
+        bar: at('.pane-bar'), identity: at('.pane-identity'), title: at('.pane-title'),
+        fault: at('.pane-fault'), chip: at('.pane-voice .voice-chip'),
+        clipped: title.scrollWidth > title.clientWidth,
+      }
+    })
+    expect(header.fault.width).toBeGreaterThan(0)
+    // Inside the capped identity track, after the name, and clear of the voice chips.
+    expect(header.fault.right).toBeLessThanOrEqual(header.identity.right + 1)
+    expect(header.fault.x).toBeGreaterThanOrEqual(header.title.right)
+    expect(header.fault.right).toBeLessThanOrEqual(header.chip.x)
+    expect(header.identity.width).toBeLessThanOrEqual(header.bar.width * viewport.share)
+    // The name gave up the width, not the marker, and the row did not wrap.
+    expect(header.clipped).toBe(true)
+    expect(Math.round(header.fault.middle)).toBe(Math.round(header.title.middle))
+  })
+}
+
 test('the pane-local dictation layer stays below modal overlays', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 })
   await page.goto('/pane-harness.html?overlay=1&mobile=0')

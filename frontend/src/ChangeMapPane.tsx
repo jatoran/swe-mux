@@ -6,10 +6,11 @@ import { SettingLink } from './SettingLink'
 import { MOBILE_QUERY } from './deviceSettings'
 import {
   DEFAULT_ROLE_PALETTE, HOP_CHOICES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_ORDER,
-  adjacency, clampHops, disabledNote, edgeCounts, excludedNote, focusedPath, graphColor,
-  groupNodesByRole, layoutRequest, mixHex, neighborNodes, neighborhood, nodeColor,
-  shortPath, usablePositions,
-  type ChangeMap, type ChangeMapNode, type LayoutResult, type RolePalette,
+  SCOPE_DESCRIPTIONS, SCOPE_LABELS, UNINDEXED_MARK,
+  adjacency, checkoutNote, clampHops, disabledNote, edgeCounts, excludedNote, focusedPath,
+  graphColor, groupNodesByRole, layoutRequest, markUnindexed, mixHex, neighborNodes,
+  neighborhood, nodeColor, nodeLabel, unindexedCount, unindexedNote, usablePositions,
+  type ChangeMap, type ChangeMapNode, type ChangeMapScope, type LayoutResult, type RolePalette,
 } from './changeMap'
 import type { Project, Session } from './types'
 
@@ -81,7 +82,10 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
   const [data, setData] = useState<ChangeMap | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [unify, setUnify] = useState(false)
+  // Empty means "let the daemon decide", which is what makes a worktree default to
+  // its branch without the client having to know it is in one. A reader's explicit
+  // pick is remembered for as long as the pane is mounted.
+  const [scope, setScope] = useState<ChangeMapScope | ''>('')
   const [hops, setHops] = useState(1)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [mobile, setMobile] = useState(isMobile)
@@ -118,7 +122,8 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
     if (!sid) { setData(null); return }
     setLoading(true)
     try {
-      setData(await api<ChangeMap>('GET', `/api/sessions/${sid}/change-map?unify=${unify}&hops=${hops}`))
+      const query = `hops=${hops}${scope ? `&scope=${scope}` : ''}`
+      setData(await api<ChangeMap>('GET', `/api/sessions/${sid}/change-map?${query}`))
       setError('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -127,7 +132,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
       setLoading(false)
     }
   }
-  useEffect(() => { void load() }, [sid, run, unify, hops])
+  useEffect(() => { void load() }, [sid, run, scope, hops])
   // The map only changes when an agent writes a file, and a turn boundary is where a
   // write becomes a recorded fact. Event-driven rather than polled for the same reason
   // the timeline is: nothing here moves between turns.
@@ -139,7 +144,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
       window.removeEventListener('mux:turn-ended', refresh)
       window.removeEventListener('mux:transcript-changed', refresh)
     }
-  }, [sid, run, unify, hops])
+  }, [sid, run, scope, hops])
   // A selection naming a file the newest map no longer holds must not stick.
   useEffect(() => {
     if (selectedPath && !data?.nodes.some(node => node.path === selectedPath)) setSelectedPath(null)
@@ -332,7 +337,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
       graph.addNode(item.id, {
         x: item.x, y: item.y, size: item.size,
         color: nodeColor(node, palette),
-        label: shortPath(item.id),
+        label: nodeLabel(node),
         zIndex: node.role === 'seed' ? 2 : node.role === 'blast' ? 1 : 0,
       })
     }
@@ -361,10 +366,18 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
     }
   }, [data, showGraph, rebuildToken])
 
+  // Offered scopes come from the daemon, because only it knows whether this
+  // checkout has a base to measure a branch against. The served scope is what the
+  // control shows, so a request that fell back never leaves the selector lying.
+  const offered = data?.scopes?.length ? data.scopes : (['session', 'project'] as ChangeMapScope[])
+  const activeScope = data?.scope || scope || 'session'
   const controls = <div class="change-map-controls">
-    <label class="change-map-unify" title="Show every session's edits since the baseline, one hue per session">
-      <input type="checkbox" checked={unify} disabled={!sid} onChange={event => setUnify(event.currentTarget.checked)} />
-      <span>unify sessions</span>
+    <label class="change-map-scope" title={SCOPE_DESCRIPTIONS[activeScope]}>
+      <span>show</span>
+      <select value={activeScope} disabled={!sid}
+        onChange={event => setScope(event.currentTarget.value as ChangeMapScope)}>
+        {offered.map(choice => <option key={choice} value={choice}>{SCOPE_LABELS[choice]}</option>)}
+      </select>
     </label>
     <label class="change-map-hops" title="How many dependency steps of blast radius to include">
       <span>hops</span>
@@ -375,10 +388,16 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
     </label>
   </div>
 
+  // What this map is measured from. The branch scope says which checkout and
+  // against what, because "since <sha>" is not enough to tell one worktree of
+  // several apart — and that is exactly when a reader has several open.
+  const measuredFrom = data
+    ? checkoutNote(data) || (data.baseline_head ? `since ${data.baseline_head.slice(0, 8)}` : 'no baseline commit')
+    : 'no baseline commit'
   const header = <header class="change-map-header">
     <div>
       <strong>Change Map</strong>
-      <small>{data?.baseline_head ? `since ${data.baseline_head.slice(0, 8)}` : 'no baseline commit'}</small>
+      <small>{measuredFrom}</small>
     </div>
     {onPopOut && <button type="button" class="change-map-popout"
       title="Open this change map as a workspace tab"
@@ -424,10 +443,12 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
       {/* "Wrote nothing mappable" is a different answer from "wrote nothing", and
           a session that only touched scratch files deserves the first one. */}
       <p>{data.empty_reason === 'excluded'
-        ? 'Every source file this session edited sits outside the indexed project tree.'
-        : data.empty_reason === 'no_edits'
-          ? 'No source edits in this session yet.'
-          : 'Nothing to map for this session yet.'}</p>
+        ? 'Every source file edited here sits outside the indexed project tree.'
+        : data.scope === 'branch'
+          ? 'This branch has not changed a source file the index covers.'
+          : data.empty_reason === 'no_edits'
+            ? 'No source edits in this session yet.'
+            : 'Nothing to map for this session yet.'}</p>
       {excluded
         ? <p class="change-map-off-hint">{excluded}</p>
         : <p class="change-map-off-hint">The map fills in on the turn after this session writes a source file.</p>}
@@ -435,7 +456,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
     {footer}
   </section>
 
-  const legend = unify && data.sessions.length
+  const legend = data.scope === 'project' && data.sessions.length
     ? <div class="change-map-legend" role="list" aria-label="Sessions">
       {data.sessions.map(item => <span key={item.id} role="listitem" class="change-map-legend-item">
         <b style={{ background: graphColor(item.hue, DEFAULT_ROLE_PALETTE.seed) }} aria-hidden="true" />
@@ -469,6 +490,12 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
     {!!selected.sessions?.length && <small>edited by {selected.sessions
       .map(id => data.sessions.find(item => item.id === id)?.name || id.slice(0, 8))
       .join(', ')}</small>}
+    {/* Without this, an unindexed file's empty neighbourhood reads as "nothing
+        depends on it" — a conclusion, where the truth is an absence of data. */}
+    {selected.indexed === false && <small class="change-map-unindexed">
+      {UNINDEXED_MARK} not in the code index yet — new on this branch, so nothing
+      here can link to it until it lands.
+    </small>}
     {/* The graph draws this; a list cannot, so the neighbours are spelled out where
         there is no picture to read them from. */}
     {!!neighbors.length && <ul class="change-map-neighbors" aria-label="Linked files">
@@ -476,7 +503,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
         <button type="button" class={`change-map-role role-${node.role}`}
           onClick={() => setSelectedPath(node.path)}>
           <b aria-hidden="true" />
-          <code>{node.path}</code>
+          <code>{markUnindexed(node, node.path)}</code>
         </button>
       </li>)}
     </ul>}
@@ -500,7 +527,7 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
           {group.nodes.map(node => <li key={node.path}>
             <button type="button" class={selectedPath === node.path ? 'active' : ''}
               onClick={() => setSelectedPath(selectedPath === node.path ? null : node.path)}>
-              <code>{node.path}</code>
+              <code>{markUnindexed(node, node.path)}</code>
               <span>{degrees[node.path] || 0}</span>
             </button>
           </li>)}
@@ -516,15 +543,24 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
       </div>}
     </div>
 
-  // Three honest captions the reader needs to read the picture correctly: what the
-  // node cap dropped, what the indexer's admission rules dropped, and the "seeds but
-  // no links" case where nothing imports the edited files yet — without them, a ring
-  // of disconnected dots (or a missing file you know you changed) is a puzzle.
+  // The captions a reader needs to read the picture correctly: what the node cap
+  // dropped, what the indexer's admission rules dropped, which nodes the index has
+  // never seen, whether a branch request could not be served, and the "seeds but no
+  // links" case. Without them, a ring of disconnected dots — or a missing file you
+  // know you changed — is a puzzle.
+  const unindexed = unindexedNote(unindexedCount(nodes))
   const status = <div class="change-map-status">
     {data.truncated && data.totals && <small class="change-map-truncated">
       Showing {data.totals.shown} of {data.totals.blast + data.totals.context + nodes.filter(n => n.role === 'seed').length} reachable files — blast radius capped for legibility.
     </small>}
+    {data.checkout?.truncated && <small class="change-map-truncated">
+      This branch changes more files than the map will seed — showing the first of them.
+    </small>}
+    {data.scope_fallback === 'no_comparison_base' && <small class="change-map-truncated">
+      This checkout has no comparison base, so the branch view is unavailable — showing this session's own edits.
+    </small>}
     {!!excluded && <small class="change-map-note-inline">{excluded}</small>}
+    {!!unindexed && <small class="change-map-note-inline">{unindexed}</small>}
     {!mobile && nodes.length > 0 && edges.length === 0 && <small class="change-map-note-inline">
       No dependency links found for these files. Nothing in the indexed project tree imports or calls them yet.
     </small>}

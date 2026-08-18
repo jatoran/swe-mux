@@ -122,7 +122,7 @@ test('a session heading never restates its Project or its only row', async ({ pa
   await page.waitForSelector(SESSION_ROWS)
 
   const headings = await page.evaluate(() =>
-    [...document.querySelectorAll('.process-session-group > .process-session-heading')].map(heading => ({
+    [...document.querySelectorAll('.process-session-group .process-session-heading')].map(heading => ({
       title: (heading.querySelector('strong') as HTMLElement).innerText.trim(),
       rollup: (heading.querySelector('small') as HTMLElement | null)?.innerText.trim() || '',
     })))

@@ -100,3 +100,8 @@ live_telemetry and not live_quota"`, `uv run ruff check src/swe_mux tests packag
 `uv run mypy`. Frontend (in `frontend/`): `npx tsc --noEmit`, `npm test`.
 
 These are exactly what `.worktree-verify` runs.
+
+The Playwright renderer suite (`npm run test:renderer`, in `frontend/`) is CI-only and
+binds a port: it drives a Vite dev server on 4174 with `reuseExistingServer`, so a second
+checkout that finds 4174 taken runs its whole suite against *the other checkout's* code.
+From a worktree, give it its own: `RENDERER_PORT=4176 npm run test:renderer`.

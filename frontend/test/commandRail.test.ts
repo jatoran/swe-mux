@@ -4,7 +4,7 @@ import {
   BUILTIN_RAIL, adoptLegacyPlacement, clearProjectRailBlob, defaultRailConfig, itemDefaultSurface,
   mergeRailCatalog, migrateLegacyRail, normalizeRailConfig, railConfigFromBlob, railHasProjectOverride,
   railItemVisible, railPayload, resolveRailRows, writeRailConfigBlob,
-  type LegacyRailItem, type RailConfig, type RailContext, type RailItem,
+  type LegacyRailItem, type RailBlob, type RailConfig, type RailContext, type RailItem,
 } from '../src/commandRail.ts'
 import { AGENT_NEWLINE } from '../src/terminalKeys.ts'
 
@@ -28,7 +28,7 @@ test('the default layout seeds one row per surface, identical on both devices', 
 test('default rail groups editing helpers after Down and ends with Attach', () => {
   assert.deepEqual(ids(defaultRailConfig(), 'strip'), [
     'relaunch', 'copyReply', 'copyResume', 'branch', 'approveOnce', 'paste', 'clipboardHistory', 'actionsDrawer', 'kbdToggle',
-    'esc', 'enter', 'tab', 'ctrlC', 'up', 'down',
+    'esc', 'enter', 'tab', 'shiftTab', 'ctrlC', 'up', 'down',
     'markdownDivider', 'markdownCodeFence', 'clearInput', 'restoreInput',
     'left', 'right', 'attach',
   ])
@@ -49,7 +49,7 @@ test('desktop and mobile layouts are edited independently', () => {
   config.layouts.mobile.strip[0].items = ['esc', 'enter']
   assert.deepEqual(ids(config, 'strip', { device: 'mobile', backend: 'claude' }), ['esc', 'enter'])
   // The desktop layout is untouched by the mobile edit.
-  assert.equal(ids(config, 'strip').length, 22)
+  assert.equal(ids(config, 'strip').length, 23)
 })
 
 test('an item placed in no row is simply absent from that device', () => {
@@ -282,6 +282,27 @@ test('clearing a project override reverts it to the global config', () => {
   const cleared = clearProjectRailBlob(writeRailConfigBlob(undefined, custom, 'proj-a'), 'proj-a')
   assert.equal(railHasProjectOverride(cleared, 'proj-a'), false)
   assert.deepEqual(ids(railConfigFromBlob(cleared, 'proj-a'), 'strip'), ids(defaultRailConfig(), 'strip'))
+})
+
+test('a project delta overlays the global config on the render path', () => {
+  // The overlay semantics live in railScope.test.ts; this pins the storage
+  // shape: `mode: 'delta'` in a project slot resolves as global-plus-additions
+  // wherever `railConfigFromBlob` is the reader (panes, drawer, voice).
+  const blob: RailBlob = {
+    projects: {
+      'proj-a': {
+        mode: 'delta',
+        items: [{ id: 'proj:skill:ship', type: 'skill', label: 'ship', text: 'ship' }],
+        layouts: { desktop: { panel: [{ id: 'proj-row', label: 'Project', items: ['proj:skill:ship'] }] } },
+      },
+    },
+  }
+  const effective = railConfigFromBlob(blob, 'proj-a')
+  assert.deepEqual(ids(effective, 'panel'), [...ids(defaultRailConfig(), 'panel'), 'proj:skill:ship'])
+  assert.deepEqual(ids(effective, 'strip'), ids(defaultRailConfig(), 'strip'))
+  // Global and other projects never see the addition.
+  assert.equal(ids(railConfigFromBlob(blob), 'panel').includes('proj:skill:ship'), false)
+  assert.equal(ids(railConfigFromBlob(blob, 'proj-b'), 'panel').includes('proj:skill:ship'), false)
 })
 
 test('a pre-layout blob is migrated per scope, by shape rather than by version', () => {
