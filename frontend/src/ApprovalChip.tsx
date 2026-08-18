@@ -1,5 +1,7 @@
+import { createPortal } from 'preact/compat'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { api } from './api'
+import { anchoredPopoverStyle } from './providerAccountDisplay'
 import {
   APPROVAL_MODES,
   MODE_DESCRIPTIONS,
@@ -62,6 +64,8 @@ export function ApprovalChip({ session }: Props) {
   // closed chip re-rendering once a second in every pane on screen.
   const [now, setNow] = useState(() => Date.now() / 1000)
   const wrap = useRef<HTMLDivElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const [menuStyle, setMenuStyle] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     // A shell pane has no permission requests to answer, and this component
@@ -105,16 +109,42 @@ export function ApprovalChip({ session }: Props) {
   // the same way every other dismissable level closes (`dismissStack.ts`).
   useDismissLevel(() => setOpen(false), open, 'approval-menu')
 
+  // Anchored from the chip's viewport rect, because the menu is portalled to the
+  // body rather than positioned inside the chip. It has to be: `.pane-voice` is a
+  // horizontal scroller with a mask, and an `overflow-x: auto` ancestor clips an
+  // absolutely-positioned descendant on *both* axes — the menu rendered fine and
+  // was cropped to nothing, which looks exactly like a control that does not work.
+  const position = useCallback(() => {
+    const rect = wrap.current?.getBoundingClientRect()
+    if (rect) {
+      setMenuStyle(
+        anchoredPopoverStyle(rect, true, { width: innerWidth, height: innerHeight }),
+      )
+    }
+  }, [])
+
   // A pointer-down anywhere else closes it, which is what makes a chip menu feel
-  // like a menu rather than a panel you have to click twice to leave.
+  // like a menu rather than a panel you have to click twice to leave. The menu is
+  // portalled, so it is not inside `wrap` and has to be tested separately.
   useEffect(() => {
     if (!open) return
+    position()
     const onDown = (event: PointerEvent) => {
-      if (!wrap.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (!wrap.current?.contains(target) && !menu.current?.contains(target)) setOpen(false)
     }
+    const reposition = () => position()
     window.addEventListener('pointerdown', onDown, true)
-    return () => window.removeEventListener('pointerdown', onDown, true)
-  }, [open])
+    window.addEventListener('resize', reposition)
+    // Capturing, so a pane or drawer scrolling under the chip moves the menu with
+    // it rather than leaving it stranded over the wrong pane.
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
+  }, [open, position])
 
   const choose = useCallback(
     async (mode: ApprovalMode) => {
@@ -160,8 +190,8 @@ export function ApprovalChip({ session }: Props) {
       >
         appr:{label}
       </button>
-      {open && (
-        <div class="approval-menu" role="menu">
+      {open && createPortal(
+        <div ref={menu} class="approval-menu ui-portal" role="menu" style={menuStyle}>
           {status ? (
             <>
               {APPROVAL_MODES.map(mode => {
@@ -204,7 +234,8 @@ export function ApprovalChip({ session }: Props) {
             <p class="approval-menu-note">{error || 'Reading approval settings…'}</p>
           )}
           {error && status && <p class="approval-menu-note approval-error">{error}</p>}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
