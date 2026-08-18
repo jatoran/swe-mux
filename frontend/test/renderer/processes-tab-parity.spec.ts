@@ -77,7 +77,9 @@ test('the tab opens scoped to its Project, and the runtime is not filed under on
   await page.goto('/processes-tab-harness.html')
   await page.waitForSelector(ROWS)
 
-  const projects = await page.locator('.processes-tab .process-project-group > h2').allInnerTexts()
+  // Rendered uppercase by `text-transform`, so compared case-insensitively.
+  const projects = (await page.locator('.processes-tab .process-project-group > h2').allInnerTexts())
+    .map(label => label.toLowerCase())
   expect(projects).toEqual(['project::swe-mux'])
   // The other Project's session and the swe-mux runtime are both out of scope.
   await expect(page.locator('.processes-tab', { hasText: 'pwsh.exe' })).toHaveCount(0)
