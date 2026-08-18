@@ -16,6 +16,8 @@ import { ThemePicker } from './ThemePicker'
 import { uiScaleKeyboardIntent, uiScaleLabel, UI_SCALE_STEPS, type UiScale } from './uiScale'
 import { CLAUDE_MAX_COLUMN_STEPS, claudeMaxColumnsLabel, type ClaudeMaxColumns } from './terminalViewport'
 import { currentProfile } from './deviceSettings'
+import { DRAWER_TABS, type DrawerTabId } from './drawerTabs'
+import { canHideDrawerTab } from './drawerVisibility'
 import { enableMobileVoice } from './mobileVoice'
 import { TailscaleConnection, PhoneDnsChecklist, FirewallPanel, type RemoteStatus, type FirewallStatus } from './remoteConnection'
 import { WslBridgePanel } from './WslBridgePanel'
@@ -93,6 +95,7 @@ type Config = {
   approval_auto_enabled:boolean;approval_allow_all_permitted:boolean
   approval_grant_ttl_minutes:number;approval_max_auto_per_grant:number
   approval_hook_timeout_seconds:number
+  approval_keystroke_delivery:boolean;approval_keystroke_window_seconds:number
   automation_enabled:boolean;automation_retention_days:number;automation_concurrency:number
   automation_queue_size:number;automation_max_input_tokens:number;automation_max_output_tokens:number
   automation_daily_token_budget:number;automation_daily_budget_usd:number;automation_rule_daily_token_budget:number
@@ -195,7 +198,10 @@ const noteChordState = (overrides:Record<string,string>,chord:string):NoteChordS
   !(chord in overrides) ? 'default' : overrides[chord]===''?'release':'bind'
 
 
-export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[] }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[] }) {
+export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage:openUsage, onOpenAutomation:openAutomation, onStartTutorial, initialSection, voiceCommands=[], drawerHiddenTabs=[], onDrawerTabHidden, onShowAllDrawerTabs }: { activeUiScale:UiScale;onUiScalePreview:(config:Record<string,unknown>)=>UiScale;onClose: () => void; onOpenUsage?:() => void;onOpenAutomation?:()=>void;onStartTutorial?:()=>void; initialSection?:string;voiceCommands?:Command[];
+  /** Side-panel tab visibility, owned by the composition root so this mirror and the
+   *  drawer's own context menu edit one value rather than two copies of it. */
+  drawerHiddenTabs?:readonly DrawerTabId[];onDrawerTabHidden?:(tab:DrawerTabId,hidden:boolean)=>void;onShowAllDrawerTabs?:()=>void }) {
   const [config, setConfig] = useState<Config | null>(null)
   const [draft, setDraft] = useState<Config | null>(null)
   const [rules, setRules] = useState('version = 1\n')
@@ -1229,6 +1235,9 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Grant expires after this many minutes<input type="number" min="1" max="480" value={draft.approval_grant_ttl_minutes} onInput={e=>change('approval_grant_ttl_minutes',Number(e.currentTarget.value))} /></label>
           <label>Requests one grant may answer<input type="number" min="1" max="5000" value={draft.approval_max_auto_per_grant} onInput={e=>change('approval_max_auto_per_grant',Number(e.currentTarget.value))} /></label>
           <label>Seconds the CLI waits for an answer<input type="number" min="1" max="60" step="0.5" value={draft.approval_hook_timeout_seconds} onInput={e=>change('approval_hook_timeout_seconds',Number(e.currentTarget.value))} /></label>
+          <label class="check"><span>Deliver approvals by keypress when the CLI ignores the answer</span><input type="checkbox" checked={draft.approval_keystroke_delivery} onChange={e=>change('approval_keystroke_delivery',e.currentTarget.checked)} /></label>
+          <label>Seconds to wait for the dialog before giving up<input type="number" min="1" max="300" step="1" value={draft.approval_keystroke_window_seconds} onInput={e=>change('approval_keystroke_window_seconds',Number(e.currentTarget.value))} /></label>
+          <p>Measured on Claude Code 2.1.234: the CLI runs swe-mux's permission hook, swe-mux answers in a quarter of a second, and the prompt still appears — the documented answer channel exists but does nothing. With the setting above on, an approval swe-mux has <em>already decided</em> from the structured request is delivered as a keypress once that session's own screen is showing the dialog it decided. It cannot decide anything: a trust dialog, a <code>/clear</code> confirmation, or a login raises no permission request, so none of them can be answered this way. If the keypress never lands, the approval becomes an ordinary visible prompt on its usual five-second boundary — the same as leaving this off.</p>
           <p>Every grant is bound twice, by the clock and by the count above, and belongs to one conversation: <code>/clear</code>, resume, Branch, and any conversation rollover drop it back to waiting. Leaving both bounds in place is what keeps this from becoming standing authority you forget you granted.</p>
           <p><strong>Some requests are never answered automatically, in any mode.</strong> Pushes and forced Git operations, recursive or forced deletes, <code>sudo</code>, piping a download into a shell, outbound uploads, package publishes, GitHub and infrastructure writes, and anything touching a credential path all still come to you. swe-mux also never <em>denies</em> on your behalf — the only two answers it gives are “approved” and “ask the human”.</p>
           <p>Which requests count as routine is a per-Project decision, in that Project's <code>.swe-mux/config.toml</code> (<code>approval_allow</code>), along with <code>approval_ceiling</code>, which caps the strongest mode any session there may hold. Unset means swe-mux's defaults: reads, search, and inert local writes such as editor task files. The CLI wait above only bounds a stall; if swe-mux does not answer in time the ordinary prompt appears, so a wedged daemon costs you seconds rather than a hung agent.</p>
@@ -1549,6 +1558,17 @@ export function Settings({ activeUiScale, onUiScalePreview, onClose, onOpenUsage
           <label>Drawer tabs<select value={draft.drawer_tab_display} onChange={e=>change('drawer_tab_display',e.currentTarget.value as Config['drawer_tab_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <label>Right rail<select value={draft.utility_rail_display} onChange={e=>change('utility_rail_display',e.currentTarget.value as Config['utility_rail_display'])}><option value="icon">Icons</option><option value="title">Titles</option></select></label>
           <p>The drawer's tab strips and the always-visible desktop rail keep independent icon or title modes.</p>
+          <h3>Visible panels</h3>
+          <div class="drawer-tab-visibility" role="group" aria-label="Visible side panels">{DRAWER_TABS.map(tab=>{
+            const shown=!drawerHiddenTabs.includes(tab.id)
+            const blocked=shown&&!canHideDrawerTab(drawerHiddenTabs,tab.id)
+            return <label key={tab.id} title={blocked?'The side panel must keep at least one tab.':tab.title}>
+              <input type="checkbox" checked={shown} disabled={blocked||!onDrawerTabHidden} onChange={()=>onDrawerTabHidden?.(tab.id,shown)} />
+              <span>{tab.label}</span>
+            </label>
+          })}</div>
+          <div class="theme-actions"><button disabled={!drawerHiddenTabs.length||!onShowAllDrawerTabs} onClick={()=>onShowAllDrawerTabs?.()}>Show all panels</button></div>
+          <p>Unchecking a panel removes it from the side panel's tab strips and from the desktop rail. It changes nothing else: the panel keeps its place in your arrangement, and opening it by name — from the command palette, a voice command, or a menu row that names it — still shows it for as long as it stays selected. The same list is on the right-click menu of any panel tab, which is where you will be when you want it. This is one setting for every Project, kept on this device alongside the arrangement itself.</p>
           <h3>Interface scale</h3>
           <label>Desktop interface scale<select value={String(draft.ui_scale_desktop)} onChange={e=>changeUiScale('ui_scale_desktop',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
           <label>Mobile interface scale<select value={String(draft.ui_scale_mobile)} onChange={e=>changeUiScale('ui_scale_mobile',e.currentTarget.value)}>{UI_SCALE_STEPS.map(step=><option value={String(step)}>{uiScaleLabel(step)}</option>)}</select></label>
