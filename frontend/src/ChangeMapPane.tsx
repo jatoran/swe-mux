@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { api } from './api'
+import { SettingLink } from './SettingLink'
 import { MOBILE_QUERY } from './deviceSettings'
 import {
   DEFAULT_ROLE_PALETTE, HOP_CHOICES, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_ORDER,
@@ -398,11 +399,16 @@ export function ChangeMapPane({ session, project, onPopOut, onOpenFile }: Props)
 
   if (!data.available) {
     const { note, hint } = disabledNote(data.disabled_reason)
+    // Only the automation case has a switch behind it. `unsupported` needs a different
+    // daemon build and `no_project` needs a Project, so neither gets a link that would
+    // land on a control that cannot fix them.
+    const gated = data.disabled_reason === 'automation_disabled' && !!projectId
     return <section class="change-map-pane">
       {header}
-      <div class="change-map-off">
+      <div class={`change-map-off${gated ? ' setting-gate' : ''}`}>
         <p>{note}</p>
         <p class="change-map-off-hint">{hint}</p>
+        {gated && <SettingLink target="project.codeGraph" projectId={projectId}>Turn on Code-structure graph</SettingLink>}
         {!projectId && <p class="change-map-off-hint">This session is not attached to a registered Project.</p>}
       </div>
       {footer}

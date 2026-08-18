@@ -1280,9 +1280,44 @@ body {
 .settings-panel>header .settings-search-results>button>small{color:var(--muted)}
 .settings-panel>header .settings-search-results>p{margin:0;padding:11px 9px;color:var(--muted)}
 .settings-search-scrim{position:fixed;inset:0;z-index:2}
-/* A picked result is scrolled to and flashed: on a long tab the control is often
-   several screens down, and arriving with no cue reads as nothing happening. */
-.settings-content .settings-search-hit{outline:2px solid var(--green);outline-offset:3px;background:color-mix(in srgb,var(--green) 20%,transparent)}
+/* The arrival cue, shared by a picked search result and by a deep link from a gated surface
+   (`settingReveal.ts`). On a long tab the control is often several screens down, and arriving
+   with no cue reads as nothing having happened. Two slow pulses rather than a static box:
+   after a whole overlay has just opened, a still outline is easy to miss, and motion is the
+   only channel left once the control is already on screen. Deliberately not scoped to
+   `.settings-content` — the Projects registry and the Automation dashboard own switches too,
+   and each is a deep-link destination. */
+.setting-flash{
+  outline:2px solid var(--green);outline-offset:3px;
+  background:color-mix(in srgb,var(--green) 20%,transparent);
+  animation:setting-flash 1.8s ease-out 1 both
+}
+@keyframes setting-flash{
+  0%{outline-color:var(--green);background:color-mix(in srgb,var(--green) 32%,transparent)}
+  22%{outline-color:color-mix(in srgb,var(--green) 25%,transparent);background:color-mix(in srgb,var(--green) 7%,transparent)}
+  44%{outline-color:var(--green);background:color-mix(in srgb,var(--green) 32%,transparent)}
+  100%{outline-color:color-mix(in srgb,var(--green) 50%,transparent);background:transparent}
+}
+/* Reduced motion keeps the cue and drops the pulsing: the outline and tint carry the
+   information, the animation is only what makes them noticed. */
+@media(prefers-reduced-motion:reduce){.setting-flash{animation:none}}
+/* The one control every gated surface offers, in two shapes: `inline` sits inside a sentence,
+   the default stands on its own. One component (`SettingLink.tsx`), so a new gated surface
+   cannot invent a fifth appearance for "take me to the switch". */
+.setting-link{
+  min-height:26px;display:inline-flex;align-items:center;gap:5px;
+  border:1px solid color-mix(in srgb,var(--green) 55%,var(--line));border-radius:0;
+  padding:2px 9px;background:color-mix(in srgb,var(--green) 10%,transparent);
+  color:var(--green);font:inherit;text-align:left;cursor:pointer
+}
+.setting-link:hover{background:color-mix(in srgb,var(--green) 20%,transparent)}
+.setting-link.inline{min-height:0;border:0;padding:0;background:transparent;text-decoration:underline}
+.setting-link.inline:hover{background:transparent;color:var(--text)}
+/* The standard shape of a gated surface's notice: what is off, what it would do, and the
+   link. A grid so the link never sits flush against the prose above it. */
+.setting-gate{display:grid;justify-items:start;gap:7px;margin:8px 0;padding:10px;border:1px solid var(--line);background:color-mix(in srgb,var(--green) 5%,transparent)}
+.setting-gate p{margin:0;color:var(--muted);line-height:1.5}
+.setting-gate strong{color:var(--text)}
 .settings-body{min-height:0;overflow:hidden!important;display:grid!important;grid-template-columns:185px minmax(0,1fr)!important;align-content:stretch!important;gap:0!important;background:var(--panel)!important}
 .settings-tabs{min-height:0;overflow:auto;display:flex;flex-direction:column;padding:6px;border-right:1px solid var(--line);background:var(--bg)}
 /* The extra left padding is the group indent: entries sit visibly inside the heading
@@ -2493,6 +2528,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .schedule-editor label em{font-style:normal;opacity:.8}
 .schedule-editor input,.schedule-editor select,.schedule-editor textarea{min-width:0;padding:5px 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:9px}
 .schedule-editor textarea{resize:vertical;line-height:1.5}
+/* The expression and its presets share one row. Both columns shrink (`minmax(0,…)`),
+   because a select sized to its longest option would otherwise push the input out of a
+   380px column. The expression gets the wider share: it is the field being edited. */
+.schedule-cron-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:5px}
 .schedule-editor input:focus,.schedule-editor select:focus,.schedule-editor textarea:focus{outline:0;border-color:var(--green)}
 /* Qualified by `.schedule-editor` on purpose: the column rule above is two classes deep,
    so a bare `.schedule-check` loses to it and the hint below the checkbox stops wrapping,

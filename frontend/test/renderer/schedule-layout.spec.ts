@@ -97,6 +97,42 @@ test('the editor replaces the list and previews the next fires from the daemon',
   expect(overflow).toBeLessThanOrEqual(1)
 })
 
+test('the cron field and its presets share one row, and a preset fills the field', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 })
+  await page.goto('/schedule-harness.html')
+  await page.waitForSelector(ROW)
+  await page.getByRole('button', { name: 'new…' }).click()
+
+  const row = page.locator('.schedule-cron-row')
+  const input = row.locator('input')
+  const select = row.locator('select')
+  // One row means one row: a select that pushed itself onto a second line would take the
+  // width the expression needs, which is the whole reason both columns shrink.
+  const [inputBox, selectBox] = await Promise.all([input.boundingBox(), select.boundingBox()])
+  expect(inputBox!.y).toBeCloseTo(selectBox!.y, 0)
+  expect(selectBox!.x).toBeGreaterThan(inputBox!.x)
+  const overflow = await page.evaluate(() => {
+    const editor = document.querySelector('.schedule-editor') as HTMLElement
+    return editor.scrollWidth - editor.clientWidth
+  })
+  expect(overflow).toBeLessThanOrEqual(1)
+
+  // Choosing one writes the expression into the field, and the hint under the row becomes
+  // the piece of syntax that expression demonstrates.
+  await select.selectOption('0 13 1,15 * *')
+  await expect(input).toHaveValue('0 13 1,15 * *')
+  await expect(page.locator('.schedule-editor label', { has: row }).locator('small'))
+    .toContainText('A comma is a list')
+  // And the daemon is still the only thing that says when it fires.
+  await expect(page.locator('.schedule-preview')).toContainText('Next:')
+
+  // A hand-edited expression is no longer any preset, and says so rather than keeping a
+  // stale label.
+  await input.fill('0 10 * * *')
+  await expect(select).toHaveValue('')
+  await expect(select.locator('option').first()).toHaveText('Custom')
+})
+
 test('at phone width the rows still fit and the controls stay tappable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
   await page.goto('/schedule-harness.html')
