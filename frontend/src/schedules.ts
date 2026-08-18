@@ -94,6 +94,64 @@ export type ScheduleDraft = {
   follow_ups: string[]
 }
 
+/** A named cron expression, and the piece of the syntax it demonstrates.
+ *
+ *  The list is short and each entry earns its place twice: it is a rhythm people
+ *  actually want, and between them they cover every part of the five-field grammar -
+ *  fixed values, names, ranges, lists, steps, and the day-of-month field. Picking one
+ *  fills the field, so the next thing a person does is edit a working expression
+ *  rather than write one from a blank box.
+ *
+ *  `teaches` is shown under the row for whichever preset the current expression
+ *  matches, which is why matching is by exact string: a paraphrase of what the user
+ *  typed would be a second, weaker cron implementation in the browser. */
+export type CronPreset = { label: string; cron: string; teaches: string }
+
+export const CRON_PRESETS: CronPreset[] = [
+  {
+    label: 'Every day at 09:00',
+    cron: '0 9 * * *',
+    teaches: 'The five fields are minute, hour, day-of-month, month, day-of-week. Fix the first two, leave the rest as * for "every".',
+  },
+  {
+    label: 'Every weekday at 09:00',
+    cron: '0 9 * * mon-fri',
+    teaches: 'The last field is the weekday, and it takes names and ranges: mon-fri is Monday through Friday.',
+  },
+  {
+    label: 'Every Monday at 09:00',
+    cron: '0 9 * * mon',
+    teaches: 'Weekly is just one weekday. Pin the day-of-week field and leave day-of-month as *.',
+  },
+  {
+    label: 'Every Wednesday at 13:00',
+    cron: '0 13 * * wed',
+    teaches: 'Cron counts days and months, never weeks, so there is no "every other Wednesday". For a fortnightly rhythm use the 1st and 15th below, or an interval trigger.',
+  },
+  {
+    label: 'The 1st and 15th at 13:00',
+    cron: '0 13 1,15 * *',
+    teaches: 'A comma is a list: 1,15 is the first and fifteenth of the month. This is the closest cron gets to every other week.',
+  },
+  {
+    label: 'Every 30 minutes',
+    cron: '*/30 * * * *',
+    teaches: 'A slash is a step: */30 in the minute field means every 30th minute, and the same works in any field.',
+  },
+  {
+    label: 'First of the month at 03:00',
+    cron: '0 3 1 * *',
+    teaches: 'The third field is the day of the month. With a weekday of * this fires on that date whatever day it lands on.',
+  },
+]
+
+/** The preset one expression matches exactly, if any. Whitespace-tolerant, because
+ *  the daemon normalizes the expression it stores and the field is free text. */
+export function presetForCron(cron: string): CronPreset | undefined {
+  const normalized = cron.trim().split(/\s+/).join(' ').toLowerCase()
+  return CRON_PRESETS.find(preset => preset.cron === normalized)
+}
+
 export const BLOCKED_LABELS: Record<string, string> = {
   project_missing: 'this Project is no longer registered',
   automation_disabled: 'Scheduled runs is off for this Project',

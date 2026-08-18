@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
-  cadenceLabel, draftFromSchedule, draftToBody, durationLabel, emptyDraft, needsAttention,
-  orderSchedules, outcomeLabel, untilLabel, type Schedule,
+  CRON_PRESETS, cadenceLabel, draftFromSchedule, draftToBody, durationLabel, emptyDraft,
+  needsAttention, orderSchedules, outcomeLabel, presetForCron, untilLabel, type Schedule,
 } from '../src/schedules.ts'
 
 const schedule = (overrides: Partial<Schedule> = {}): Schedule => ({
@@ -115,7 +115,12 @@ test('the tab never computes a fire time of its own', () => {
   const helpers = readFileSync(join(import.meta.dirname, '..', 'src', 'schedules.ts'), 'utf8')
   assert.ok(tab.includes("'/api/schedules/preview'"), 'the editor must ask the daemon for its preview')
   for (const source of [tab, helpers]) {
-    assert.doesNotMatch(source, /cron.*(split|match)\(/i)
+    // Calendar arithmetic over an expression is the thing being forbidden - working out
+    // which weekday or hour a field lands on. Splitting one to normalize whitespace for an
+    // exact preset match is not that: it decides which label to show, never when to fire.
+    for (const arithmetic of ['getDay(', 'getUTCDay(', 'setHours(', 'setDate(', 'setMonth(']) {
+      assert.ok(!source.includes(arithmetic), arithmetic)
+    }
   }
 })
 
@@ -126,4 +131,45 @@ test('the tab renders a blocked schedule as blocked and offers the fix', () => {
   // Revealing a session or opening settings is acting on something other than the
   // terminal underneath, so the mobile drawer gets out of the way.
   assert.ok(tab.includes('onDone()'))
+})
+
+test('every cron preset is a legal expression the field can hold, and each teaches something', () => {
+  // The daemon parses these, so a typo here is a preset that produces a 400 on save.
+  // Five fields, and nothing our parser does not accept: values, names, ranges, lists,
+  // steps, and `*`.
+  const FIELD = /^(\*|[0-9a-z]+(-[0-9a-z]+)?)(\/\d+)?(,(\*|[0-9a-z]+(-[0-9a-z]+)?)(\/\d+)?)*$/
+  for (const preset of CRON_PRESETS) {
+    const fields = preset.cron.split(' ')
+    assert.equal(fields.length, 5, preset.label)
+    for (const field of fields) assert.match(field, FIELD, `${preset.label}: ${field}`)
+    assert.ok(preset.teaches.length > 20, preset.label)
+    assert.equal(preset.cron, preset.cron.trim().toLowerCase())
+  }
+  // Between them they cover every part of the grammar, which is the point of the list.
+  const all = CRON_PRESETS.map(preset => preset.cron).join(' ')
+  for (const token of ['*', ',', '-', '/', 'mon', 'wed']) {
+    assert.ok(all.includes(token), `no preset demonstrates ${token}`)
+  }
+  assert.equal(new Set(CRON_PRESETS.map(preset => preset.cron)).size, CRON_PRESETS.length)
+})
+
+test('a preset is matched from the expression, not remembered from the click', () => {
+  // Which is what makes an edited expression read as Custom, and an edit that lands back
+  // on a preset read as that preset again.
+  assert.equal(presetForCron('0 9 * * *')?.label, 'Every day at 09:00')
+  assert.equal(presetForCron('  0   9  *  *  * ')?.label, 'Every day at 09:00')
+  assert.equal(presetForCron('0 9 * * MON')?.label, 'Every Monday at 09:00')
+  assert.equal(presetForCron('0 10 * * *'), undefined)
+  assert.equal(presetForCron(''), undefined)
+})
+
+test('the fortnightly case is named rather than faked', () => {
+  // Cron counts days and months, never weeks, so "every other Wednesday" cannot be an
+  // expression. The preset people ask for says so and points at the two things that do
+  // work, instead of shipping a lookalike that quietly fires weekly.
+  const weekly = CRON_PRESETS.filter(preset => preset.cron === '0 13 * * wed')
+  assert.equal(weekly.length, 1, 'the Wednesday preset must exist')
+  assert.match(weekly[0].teaches, /never weeks/)
+  assert.match(weekly[0].teaches, /interval/)
+  assert.ok(CRON_PRESETS.some(preset => preset.cron === '0 13 1,15 * *'))
 })

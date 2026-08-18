@@ -2455,6 +2455,10 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .schedule-editor label em{font-style:normal;opacity:.8}
 .schedule-editor input,.schedule-editor select,.schedule-editor textarea{min-width:0;padding:5px 7px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:9px}
 .schedule-editor textarea{resize:vertical;line-height:1.5}
+/* The expression and its presets share one row. Both columns shrink (`minmax(0,…)`),
+   because a select sized to its longest option would otherwise push the input out of a
+   380px column. The expression gets the wider share: it is the field being edited. */
+.schedule-cron-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:5px}
 .schedule-editor input:focus,.schedule-editor select:focus,.schedule-editor textarea:focus{outline:0;border-color:var(--green)}
 /* Qualified by `.schedule-editor` on purpose: the column rule above is two classes deep,
    so a bare `.schedule-check` loses to it and the hint below the checkbox stops wrapping,
