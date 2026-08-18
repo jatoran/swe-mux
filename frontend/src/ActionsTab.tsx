@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { ComponentChildren } from 'preact'
-import { railPayload, resolveRailRows, type RailBackend, type RailItem } from './commandRail'
+import { allRailBackends, isBuiltinRailId, railPayload, resolveRailRows, type RailBackend, type RailItem } from './commandRail'
+import { pinPrompt, pinSkill, pinnedPromptItem, pinnedSkillItem, removeScopedRailItem, resolveRail } from './railScope'
 import { activatePromptRailItem } from './promptRail'
-import { currentProfile, loadRailConfig } from './deviceSettings'
+import { currentProfile, currentRailBlob, loadRailConfig, saveRailBlob } from './deviceSettings'
 import { api } from './api'
 import {
   filterSkills, groupSkills, inventoryNote, skillLabel, skillTitle,
@@ -11,6 +12,7 @@ import {
 import type { Session } from './types'
 import { harnessDisplayName, isAgentBackend } from './harnessRegistry'
 import { PromptsTab, type PromptsTabProps } from './PromptsTab'
+import type { PromptTemplate } from './PromptLibrary'
 import { sessionDisplayName } from './sessionNames'
 
 // The Actions drawer combines three catalogs that can act on the focused session:
@@ -108,10 +110,22 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
   const [sections, setSections] = useState<Record<ActionSectionId, boolean>>(initialSectionState)
   const backend = (session?.backend || 'shell') as RailBackend
   const isAgent = isAgentBackend(backend)
+  // Bumped when any surface edits the Action config, so Quick actions and the
+  // pin toggles below re-read it without a remount.
+  const [railRev, setRailRev] = useState(0)
+  useEffect(() => {
+    const on = () => setRailRev(value => value + 1)
+    window.addEventListener('mux:settings-changed', on)
+    return () => window.removeEventListener('mux:settings-changed', on)
+  }, [])
   const rows = useMemo(
     () => resolveRailRows(loadRailConfig(session?.project_id), 'panel', { device: currentProfile(), backend }),
-    [session?.project_id, backend],
+    [session?.project_id, backend, railRev],
   )
+  // Effective catalog for the pin toggles: pinning creates a placed Action
+  // button in one tap (`railScope.ts`), scoped to the project when the skill or
+  // template itself is project-scoped.
+  const railResolved = useMemo(() => resolveRail(currentRailBlob(), session?.project_id), [session?.project_id, railRev])
   useEffect(() => {
     const on = (event: Event) => setKillArmed((event as CustomEvent<string | null>).detail === session?.id)
     window.addEventListener('mux:kill-armed', on)
@@ -195,6 +209,45 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
     onDone()
   }
 
+  // One-tap pinning: a discovered skill (or a prompt template, below) becomes a
+  // placed Quick-actions button on both devices without opening the editor. A
+  // project-scoped source pins to the project; everything else pins globally.
+  const togglePinSkill = (skill: AgentSkill, pinned: RailItem | null) => {
+    const blob = currentRailBlob()
+    if (pinned) {
+      if (isBuiltinRailId(pinned.id)) { setNote(`“${pinned.label}” is a built-in button — manage it from Configure Actions.`); return }
+      void saveRailBlob(removeScopedRailItem(blob, session?.project_id, pinned.id))
+      return
+    }
+    void saveRailBlob(pinSkill(blob, session?.project_id, {
+      name: skill.name,
+      label: skillLabel(skill),
+      kind: skill.kind,
+      backend,
+      projectScoped: skill.scope === 'project',
+    }))
+  }
+
+  const promptPin = {
+    isPinned: (template: PromptTemplate) => !!pinnedPromptItem(railResolved.config, template.key),
+    toggle: (template: PromptTemplate) => {
+      const blob = currentRailBlob()
+      const existing = pinnedPromptItem(railResolved.config, template.key)
+      if (existing) {
+        void saveRailBlob(removeScopedRailItem(blob, session?.project_id, existing.id))
+        return
+      }
+      void saveRailBlob(pinPrompt(blob, session?.project_id, {
+        key: template.key,
+        id: template.id,
+        title: template.title,
+        backends: template.backends,
+        allBackends: allRailBackends(),
+        projectScoped: template.scope === 'project',
+      }))
+    },
+  }
+
   // These two built-ins open this drawer, so running either from inside the drawer
   // would be a no-op; they are filtered out of every row entirely.
   const visibleRows = session ? rows
@@ -273,20 +326,32 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
         {inventory && !!inventory.skills.length && !matched.length && <p class="drawer-empty">No skill matches “{query}”.</p>}
         {groups.map(group => <div key={group.scope} class="drawer-skill-group">
           <h5>{group.label}</h5>
-          {group.skills.map(skill => <button
-            key={skill.path}
-            class={skill.shadowed_by ? 'shadowed' : undefined}
-            title={skillTitle(skill)}
-            onClick={() => insertSkill(skill)}
-          >
-            <span>
-              <code>{skill.invocation}</code>
-              {skillLabel(skill) !== skill.name && <em>{skillLabel(skill)}</em>}
-              {skill.added_after_start && <b class="skill-flag warn" title="Added after this agent loaded">new</b>}
-              {!skill.implicit && <b class="skill-flag" title="Explicit-only: the agent never invokes this on its own">explicit</b>}
-            </span>
-            <small>{skill.short_description || skill.description || skill.origin}</small>
-          </button>)}
+          {group.skills.map(skill => {
+            const pinned = pinnedSkillItem(railResolved.config, skill.name)
+            return <div class="drawer-skill-row" key={skill.path}>
+              <button
+                class={skill.shadowed_by ? 'shadowed' : undefined}
+                title={skillTitle(skill)}
+                onClick={() => insertSkill(skill)}
+              >
+                <span>
+                  <code>{skill.invocation}</code>
+                  {skillLabel(skill) !== skill.name && <em>{skillLabel(skill)}</em>}
+                  {skill.added_after_start && <b class="skill-flag warn" title="Added after this agent loaded">new</b>}
+                  {!skill.implicit && <b class="skill-flag" title="Explicit-only: the agent never invokes this on its own">explicit</b>}
+                </span>
+                <small>{skill.short_description || skill.description || skill.origin}</small>
+              </button>
+              <button
+                class={`skill-pin${pinned ? ' on' : ''}`}
+                aria-pressed={!!pinned}
+                title={pinned
+                  ? `Remove the “${pinned.label}” button from your Actions`
+                  : `Add a button for this ${skill.kind === 'command' ? 'command' : 'skill'} to Quick actions on both devices${skill.scope === 'project' ? ' — this project only' : ''}`}
+                onClick={() => togglePinSkill(skill, pinned)}
+              >{pinned ? 'Pinned' : 'Pin'}</button>
+            </div>
+          })}
         </div>)}
         {disclosure && <p class="drawer-skill-note">{disclosure}</p>}
       </div>
@@ -310,6 +375,7 @@ export function ActionsTab({ session, onDone, onConfigureActions, project, backe
         sessions={sessions}
         onSend={onSend}
         preselect={preselect}
+        pin={promptPin}
       />
     </ActionSection>
   </div>
