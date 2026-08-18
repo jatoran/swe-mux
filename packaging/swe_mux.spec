@@ -21,6 +21,13 @@ hiddenimports = []
 # source graph references it, so a bundle built without collecting it explicitly
 # has no IANA database, and every schedule that names a timezone fails in the
 # frozen app while working in a source run (`design/features/scheduled-runs.md`).
+#
+# `en_core_web_sm`, `spacy`, and `misaki` back the Kokoro TTS G2P (Phase 10.5):
+# the spaCy model is a data package `spacy.load()` resolves at runtime, spaCy's
+# language modules are imported by registry name rather than by source
+# reference, and misaki ships its lexicon as package data. Missing any of the
+# three surfaces only in the frozen app ("Can't find model 'en_core_web_sm'"),
+# never in a source run.
 for package in (
     "PIL",
     "pystray",
@@ -29,6 +36,9 @@ for package in (
     "tree_sitter",
     "tree_sitter_language_pack",
     "tzdata",
+    "spacy",
+    "en_core_web_sm",
+    "misaki",
 ):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
