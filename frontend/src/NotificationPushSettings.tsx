@@ -123,7 +123,7 @@ export function NotificationAlertSettings() {
       {(Object.keys(profileLabels) as SettingsProfile[]).map(id => <button type="button" key={id} aria-pressed={profile === id} class={profile === id ? 'is-active' : ''} onClick={() => setProfile(id)}>{profileLabels[id]}{id === currentProfile() ? ' (this device)' : ''}</button>)}
     </div>
 
-    <div class="alert-master">
+    <div class="alert-master" data-setting="alerts_enabled">
       <div><strong>Enable alerts for {profileLabels[profile]}</strong><p>One mute switch for every interruptive alert on this device class. Channel and event choices are preserved while muted.</p></div>
       <input aria-label={`Enable alerts for ${profileLabels[profile]}`} type="checkbox" checked={alerts.enabled} onChange={event => changeAlerts({ ...alerts, enabled: event.currentTarget.checked })} />
     </div>

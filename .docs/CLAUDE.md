@@ -35,6 +35,11 @@
   `design/features/workspace-layout.md`, `technical/frontend/workspace-state.md`
 - Changing browser chrome, sidebar interaction, settings, focus, or overlays:
   `design/features/ui.md`, `technical/frontend/packages.md`
+- Adding a surface that goes inert behind a switch, or changing how one reaches that switch
+  (the deep link, the scroll-and-flash arrival, the `data-setting` marks):
+  `design/features/setting-links.md`, `design/features/ui.md`,
+  `technical/frontend/packages.md`; per-Project opt-ins themselves:
+  `design/features/automation-enablement.md`
 - Changing what shows or hides the mobile soft keyboard: `design/features/ui.md`,
   `technical/frontend/packages.md`; open ask against the vendored note editor:
   `development/CONTINUITY_TOUCH_KEYBOARD_ASK.md`

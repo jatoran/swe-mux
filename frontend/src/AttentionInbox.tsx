@@ -13,6 +13,9 @@
 // Nothing here is pushed. This is a surface you open; the daemon holds no push
 // route for ranked items.
 import { useEffect, useState } from 'preact/hooks'
+import { SettingLink } from './SettingLink'
+import { PROJECT_AUTOMATIONS_CHANGED, fetchProjectAutomations } from './projectAutomations'
+import type { Project } from './types'
 import {
   CHANNEL_HINTS, CHANNEL_LABELS, CHANNEL_ORDER,
   budgetLine, decideAttentionRule, fanoutHeadline, fetchAttentionInbox,
@@ -20,11 +23,17 @@ import {
   type AttentionInbox as InboxData, type AttentionItem,
 } from './attention'
 
-export function AttentionInbox({onOpenSession}:{onOpenSession:(sessionId:string)=>void}) {
+export function AttentionInbox({onOpenSession,project}:{
+  onOpenSession:(sessionId:string)=>void
+  /** The Project whose opt-in is reported when nothing is ranked. The inbox itself is
+   *  fleet-wide; ranking is permitted per Project, so the empty state can only name one. */
+  project?:Project
+}) {
   const [data,setData]=useState<InboxData|null>(null)
   const [error,setError]=useState('')
   const [busy,setBusy]=useState(false)
   const [showDigest,setShowDigest]=useState(false)
+  const [rankingOn,setRankingOn]=useState<boolean|null>(null)
 
   const load=()=>{fetchAttentionInbox().then(setData).catch(cause=>setError(cause instanceof Error?cause.message:String(cause)))}
   useEffect(()=>{
@@ -34,6 +43,19 @@ export function AttentionInbox({onOpenSession}:{onOpenSession:(sessionId:string)
     window.addEventListener('mux:turn-ended',refresh)
     return()=>{window.clearInterval(interval);window.removeEventListener('mux:turn-ended',refresh)}
   },[])
+
+  useEffect(()=>{
+    if(!project?.id){setRankingOn(null);return}
+    let stale=false
+    const read=()=>{
+      fetchProjectAutomations(project.id)
+        .then(state=>{if(!stale)setRankingOn(state.enabled.includes('attention_ranking'))})
+        .catch(()=>{if(!stale)setRankingOn(null)})
+    }
+    read()
+    window.addEventListener(PROJECT_AUTOMATIONS_CHANGED,read)
+    return()=>{stale=true;window.removeEventListener(PROJECT_AUTOMATIONS_CHANGED,read)}
+  },[project?.id])
 
   const write=async(operation:()=>Promise<unknown>)=>{
     if(busy)return
@@ -62,7 +84,15 @@ export function AttentionInbox({onOpenSession}:{onOpenSession:(sessionId:string)
       Your rule holds {rule.incident_class.replaceAll('_',' ')} items in the inbox{rule.expires_at?` until ${new Date(rule.expires_at*1000).toLocaleDateString()}, when it comes back for review`:''}.
       <button disabled={busy} onClick={()=>void write(()=>decideAttentionRule(rule.incident_class,rule.channel,false))}>drop rule</button>
     </p>)}
-    {total===0&&<p class="notification-empty">Nothing is ranked. Enable attention ranking for a Project to route its findings here.</p>}
+    {/* "Nothing is ranked" is two different statements. With ranking permitted it means a
+        quiet fleet; without it, nothing will ever be ranked for this Project however busy it
+        gets, and the switch is one click away. */}
+    {total===0&&(rankingOn===false&&project
+      ? <div class="setting-gate">
+        <p><strong>Attention ranking is off for {project.name}.</strong> Findings from its sessions are recorded, but nothing is ranked into this inbox until the Project opts in.</p>
+        <SettingLink target="project.attentionRanking" projectId={project.id}>Turn on Attention ranking</SettingLink>
+      </div>
+      : <p class="notification-empty">Nothing is ranked. Enable attention ranking for a Project to route its findings here.</p>)}
     {channels.map(channel=>{
       const items=data.channels[channel]||[]
       if(!items.length)return null

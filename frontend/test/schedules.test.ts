@@ -122,7 +122,10 @@ test('the tab never computes a fire time of its own', () => {
 test('the tab renders a blocked schedule as blocked and offers the fix', () => {
   const tab = readFileSync(join(import.meta.dirname, '..', 'src', 'ScheduleTab.tsx'), 'utf8')
   assert.ok(tab.includes('schedule.blocked &&'), 'a row that cannot fire must say so')
-  assert.ok(tab.includes('onOpenProjectSettings(schedule.project_id)'), 'and point at the opt-in')
+  // Both reasons a row cannot fire are switches, and each offers the one that is holding
+  // it: the Project's opt-in, or the install-wide stop.
+  assert.ok(tab.includes("target=\"project.scheduledRuns\" projectId={schedule.project_id}"), 'and point at the opt-in')
+  assert.ok(tab.includes("target=\"schedules.install\""), 'and at the install switch')
   // Revealing a session or opening settings is acting on something other than the
   // terminal underneath, so the mobile drawer gets out of the way.
   assert.ok(tab.includes('onDone()'))
