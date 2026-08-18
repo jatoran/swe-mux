@@ -483,6 +483,10 @@ responsive controls.
   A caller that names a section still wins, such as Voice from the read-aloud chip or Accounts from the account switcher, because that caller knows where the user needs to be.
   Only an unqualified open restores the remembered tab, and a pending search jump always beats a
   remembered section because that caller named an exact control rather than a region.
+  A caller may also name **the control itself** rather than a section: a surface that is inert
+  because a switch is off links to that switch, and Settings scrolls to it and flashes it on
+  arrival (`setting-links.md`). Those links reach the Projects registry and the Automation
+  dashboard the same way, since each owns switches Settings does not.
   It is a device preference rather than App state so it survives a reload, and it is validated
   against the live tab list, so a renamed or removed tab degrades to General instead of
   rendering an empty panel.
@@ -1417,6 +1421,32 @@ responsive controls.
   Notifications is neither and sits last.
   Session history, usage, and automation stay modal, as do the process *inspector* and the *fleet queue*.
   They are wide, table-shaped surfaces that a ~380 px column serves badly, and none decides anything that has to be read off a terminal.
+- **A tab is drawn unless it is structurally absent or the user put it away, and those two are kept apart.**
+  Structural absence means the tab has nothing to act on and nothing the user does inside swe-mux changes that; Transcript on a shell session is the entire list.
+  It is never persisted and no control offers to restore it.
+  Hiding is the user's own choice, made from the tab's context menu.
+  Git is deliberately not gated on whether the Project's folder is a repository, because that is the one case where the tab has a decision to offer (`git.md`).
+- **Hidden is one global set, device-local, exactly like the arrangement it filters.**
+  Visibility *is* arrangement: which tabs exist is not a property that may vary by Project while their position, stack membership, and split ratio do not.
+  Per-Project visibility would also be the only structural property that changes as you switch Projects, which is what would let a split pane hold content on one Project and nothing on the next.
+  Device-local means a phone can carry a tighter rail than the desktop, which is where the cost of fourteen tabs is actually paid.
+  It is read synchronously at startup so no tab is drawn and then taken away again.
+- **Hiding is a render filter and never a layout mutation.**
+  Layout normalization keeps every registered tab in the tree exactly once and re-inserts a missing one at its *canonical* position, so removing a hidden tab from the layout would silently discard wherever the user had dragged it the moment they showed it again.
+- **The way back is where the way out was.**
+  Right-clicking any tab — or long-pressing one on mobile, which already opens this menu — offers `Hide <tab>` flat, and a `Panels · N of 14` group holding the full checklist and `Show all`.
+  The count is on the group header, so a rail missing something says so without being opened.
+  The same checklist is mirrored in Settings → Appearance → Visible panels, which is the reachable path on mobile and the searchable one everywhere.
+  Settings alone would have been the wrong home: the rail is where a missing tab is noticed, and a settings page is not where anyone looks for chrome they removed by right-clicking.
+- **Hiding the last remaining tab is refused rather than allowed and recovered from**, because the restore control lives on the tab strip.
+  The bound counts the hidden set alone and ignores structural availability, so the answer does not change with the focused session and Settings can render the identical checklist without one.
+- **Explicit navigation is never filtered.**
+  A palette entry, a voice command, or a menu row that names a surface has already said "show me this", so a hidden tab reached by name is *peeked* — shown for as long as it stays selected — rather than quietly unhidden.
+  Hiding is about the resting rail, not about what you can ask for.
+  A peek never overrides structural absence.
+- A pane whose every tab is filtered out is dropped and its space handed back to its sibling, rather than drawn as an empty box under whichever heading the selection fell back to.
+  The split survives in the layout either way.
+  A drawer with nothing left at all — reachable only by the structural filter taking the remainder — carries its own `Choose panels…` control, because a drawer with no tab strip has no context menu to right-click.
 - Actions replaces the former separate Commands and Prompts tabs.
   Saved drawer layouts, orders, and selected tabs map either legacy id to one `actions` singleton on read, with the first encountered position winning so migration cannot duplicate a tab.
   Existing `RailConfig` data is not rewritten; its `panel` layouts become the Quick actions section unchanged.

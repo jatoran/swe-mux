@@ -46,6 +46,8 @@ import { AccountSwitcher, providerGlyph } from './ProviderAccounts'
 import { PromptLibrary } from './PromptLibrary'
 import { PROMPT_RAIL_EVENT } from './promptRail'
 import { UtilityDrawer } from './UtilityDrawer'
+import { SettingLink } from './SettingLink'
+import { OPEN_SETTING_EVENT, settingTarget, type OpenSettingDetail, type SettingTargetId } from './settingTargets'
 import { OverflowRail } from './RailScroller'
 import {
   DRAWER_COLLAPSE_WIDTH, DRAWER_PROJECT_STATE_KEY, DRAWER_REOPEN_WIDTH,
@@ -71,6 +73,10 @@ import {
   dragCollapsedAtWidth, navigationSidebarCommandState,
 } from './sidebarResize'
 import { normalizeDrawerTabOrder } from './drawerTabOrder'
+import {
+  DRAWER_HIDDEN_KEY, canHideDrawerTab, drawerTabVisible, parseHiddenDrawerTabs,
+  serializeHiddenDrawerTabs, withDrawerTabHidden,
+} from './drawerVisibility'
 import {
   DRAWER_NOTE_KEY, claimDrawerNote, drawerNoteFor, isDrawerOwned, parseDrawerNotes,
   pruneDrawerNotes, serializeDrawerNotes, type DrawerNoteMap,
@@ -491,7 +497,7 @@ export function App() {
   const [noteMenu,setNoteMenu]=useState<NoteContext>(null)
   const [tabMenu,setTabMenu]=useState<TabContext>(null)
   const [emptyMenu, setEmptyMenu] = useState<{x:number;y:number} | null>(null)
-  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail'}|null>(null)
+  const [drawerDisplayMenu,setDrawerDisplayMenu]=useState<{x:number;y:number;surface:'tabs'|'rail';tab?:DrawerTabId}|null>(null)
   const [zoomedId, setZoomedId] = useState<string | null>(null)
   const [keybindings, setKeybindings] = useState<Record<string, string>>({ 'ctrl+alt+t': 'session.spawnShell', 'ctrl+alt+p': 'palette.open' })
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
@@ -517,7 +523,7 @@ export function App() {
   // Which Project the registry should land on, and whether on its record or its
   // settings. Projects is the only per-Project editor, so every "project settings"
   // entry point is a preselection of it rather than a second surface.
-  const [projectsManagerFocus,setProjectsManagerFocus]=useState<{projectId:string}|null>(null)
+  const [projectsManagerFocus,setProjectsManagerFocus]=useState<{projectId:string;setting?:string}|null>(null)
   // null closed; a string scopes the browser to one project, '' shows every project.
   // The Notes drawer tab lists the active Project by default; the app menu's unscoped
   // entry point flips it to every Project. Device-local UI state, not a modal.
@@ -546,6 +552,12 @@ export function App() {
   // user left off" - Settings remembers its own last tab, so an unqualified open must
   // stay unqualified rather than assert General.
   const [settingsSection, setSettingsSection] = useState<string|undefined>(undefined)
+  // The exact control a deep link asked for (`settingTargets.ts`), and a counter that changes
+  // on every request. The counter is what makes the same link work twice: the surface it
+  // opens is often already open on the right tab, where nothing about the props would
+  // otherwise differ, and "nothing happened" is exactly the failure these links exist to fix.
+  const [settingsSetting, setSettingsSetting] = useState<string|undefined>(undefined)
+  const [revealToken, setRevealToken] = useState(0)
   // Which MenuGroup is expanded in the app menu; null collapses every group.
   const [menuGroup,setMenuGroup]=useState<string|null>(null)
   const [tutorialOpen,setTutorialOpen]=useState(()=>shouldStartTutorial())
@@ -674,6 +686,11 @@ export function App() {
   const dragDrawerLayoutRef=useRef<DrawerLayout|null>(null)
   const dragDrawerTargetRef=useRef<{stackId:string;kind:'join'|'split';edge?:DrawerEdge}|null>(null)
   const [drawerAnnouncement,setDrawerAnnouncement]=useState('')
+  // Which tabs the user has put away. Global and device-local, exactly like the
+  // arrangement above it: visibility is arrangement, and the layout it filters is
+  // read synchronously at boot so no tab is drawn and then taken away again.
+  const [hiddenDrawerTabs,setHiddenDrawerTabs]=useState<DrawerTabId[]>(
+    ()=>parseHiddenDrawerTabs(localStorage.getItem(DRAWER_HIDDEN_KEY)))
   const drawerLauncherTabs=useMemo(()=>drawerTabs(drawerLayout).map(drawerTab),[drawerLayout])
   const [clipboardEnabled,setClipboardEnabled]=useState(true)
   // A momentary drawer belongs only to the Project that opened it. Clear the state
@@ -757,8 +774,26 @@ export function App() {
       desktop_expanded:open,
     }))
   }
+  const setDrawerTabHidden=(tab:DrawerTabId,hidden:boolean)=>{
+    setHiddenDrawerTabs(current=>{
+      const next=withDrawerTabHidden(current,tab,hidden)
+      storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs(next))
+      return next
+    })
+    setDrawerAnnouncement(`${drawerTab(tab).label} ${hidden?'hidden':'shown'}`)
+  }
+  const showAllDrawerTabs=()=>{
+    setHiddenDrawerTabs(()=>{
+      storeDrawerValue(DRAWER_HIDDEN_KEY,serializeHiddenDrawerTabs([]))
+      return []
+    })
+    setDrawerAnnouncement('All side panels shown')
+  }
   const selectDrawerTab=(tab:DrawerTabId,targetProject=projectId)=>{
-    setTransientDrawer(null)
+    // A hidden tab reached by name — the palette, a voice command, a menu row that says
+    // "Notes…" — is peeked for as long as it stays selected rather than unhidden. The
+    // request was to see it now, not to change what the rail carries from here on.
+    setTransientDrawer(hiddenDrawerTabs.includes(tab)?{projectId:targetProject,tab}:null)
     updateDrawerPresentation(targetProject,current=>activateDrawerTab(current,drawerLayoutRef.current,tab))
   }
   /** Open the drawer on a specific tab (or toggle that tab shut if it is already showing). */
@@ -1906,6 +1941,11 @@ export function App() {
           if(event.type==='project_files_changed')window.dispatchEvent(new CustomEvent('mux:project-files-changed',{detail:{projectId:event.payload?.project_id,paths:event.payload?.paths||[]}}))
           if(event.type==='project_used')applyProjectUse(String(event.payload?.project_id||''),Number(event.payload?.last_used_at||0))
           if(event.type==='agent_context_changed')window.dispatchEvent(new CustomEvent('mux:agent-context-changed',{detail:{projectId:event.payload?.project_id}}))
+          // A Project's opt-in table changed. Every surface that goes inert without one
+          // (`projectAutomations.ts`) drops its cached answer on this, so turning an
+          // automation on in the registry clears that surface's gate notice immediately
+          // instead of on its next remount.
+          if(event.type==='project_configuration_changed')window.dispatchEvent(new CustomEvent('mux:project-automations-changed',{detail:{projectId:String(event.payload?.project_id||'')}}))
           // Queue tabs and pane chips live-update off these; payloads carry ids/counts only.
           if(event.type==='queue_updated'||event.type==='queue_delivery'){window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{sessionId:event.session_id}}));refreshQueueSummary()}
           if(event.type==='spawn_request_drafted'||event.type==='spawn_request_decided')window.dispatchEvent(new CustomEvent('mux:queue-changed',{detail:{projectId:event.payload?.project_id}}))
@@ -2229,7 +2269,10 @@ export function App() {
   }, [focusHydrated,sessions, projectId, activeId, focusedViewId, zoomedId, layoutMap])
   // Settings is global-only. Anything scoped to one Project lives in the Projects
   // registry (`openProjectsManager`), which is the single per-Project editor.
-  const openSettings = (section?:string) => { setSettingsSection(section); setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null) }
+  const openSettings = (section?:string,setting?:string) => {
+    setSettingsSection(section); setSettingsSetting(setting); setRevealToken(token=>token+1)
+    setSettingsOpen(true); setMainMenuOpen(false); setProjectMenu(null)
+  }
   const openActionEditor = () => { setActionEditorOpen(true); setMainMenuOpen(false); setProjectMenu(null); setContextMenu(null) }
   const noteIdForTarget=(target:NoteTarget)=>target.kind==='worktree-file'
     ? target.worktree?worktreeFileResourceId(target.worktree,target.resourceId):''
@@ -2278,9 +2321,9 @@ export function App() {
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setDrawerDisplayMenu(null);setMainMenuOpen(false)
     setSortMenu({x,y})
   }
-  const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail')=>{
+  const openDrawerDisplayMenu=(x:number,y:number,surface:'tabs'|'rail',tab?:DrawerTabId)=>{
     setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setSortMenu(null);setNoteMenu(null);setTabMenu(null);setEmptyMenu(null);setMainMenuOpen(false)
-    setDrawerDisplayMenu({x,y,surface})
+    setDrawerDisplayMenu({x,y,surface,tab})
   }
   const groupIdFor=(project:Project)=>
     project.group_id&&projectGroups.some(group=>group.id===project.group_id)?project.group_id:null
@@ -2830,10 +2873,52 @@ export function App() {
     }catch{/* the dialog still registers a Project without its optional setup commands */}
   }
 
-  const openProjectsManager=(focus?:{project:Project})=>{
-    setProjectsManagerFocus(focus?{projectId:focus.project.id}:null)
+  const openProjectsManager=(focus?:{project:Project;setting?:string})=>{
+    setProjectsManagerFocus(focus?{projectId:focus.project.id,setting:focus.setting}:null)
+    setRevealToken(token=>token+1)
     setProjectsManagerOpen(true);setMainMenuOpen(false);setSidebarMenu(null);setProjectMenu(null)
   }
+
+  /**
+   * Route a deep link from a gated surface to the switch that ungates it.
+   *
+   * Every "this is off — turn it on" control in the app arrives here, because opening one of
+   * the three overlays that own switches means closing whichever other one is up, and only
+   * this component knows which that is. The overlay then scrolls to the control and flashes
+   * it (`settingReveal.ts`); this function's whole job is choosing the overlay and handing it
+   * the id.
+   *
+   * A Project target with no Project is the one refusal: naming the switch and then opening a
+   * registry on some other Project's row would be worse than saying so.
+   */
+  const openSettingTarget=(id:SettingTargetId,requestedProject?:string)=>{
+    const target=settingTarget(id)
+    setContextMenu(null);setProjectMenu(null);setSidebarMenu(null);setMainMenuOpen(false)
+    if(mobileWorkspace)setClipboardOpen(false)
+    if(target.surface==='project'){
+      const owner=projects.find(project=>project.id===(requestedProject||projectId))
+      if(!owner){setError('Select a Project first — that switch belongs to one Project.');return}
+      setSettingsOpen(false);setUsageOpen(false);setAutomationOpen(false)
+      openProjectsManager({project:owner,setting:target.setting})
+      return
+    }
+    if(target.surface==='automation'){
+      setSettingsOpen(false);setUsageOpen(false);setProjectsManagerOpen(false)
+      setSettingsSetting(target.setting);setRevealToken(token=>token+1);setAutomationOpen(true)
+      return
+    }
+    setUsageOpen(false);setAutomationOpen(false);setProjectsManagerOpen(false)
+    openSettings(target.section,target.setting)
+  }
+
+  useEffect(()=>{
+    const onOpenSetting=(event:Event)=>{
+      const detail=(event as CustomEvent<OpenSettingDetail>).detail
+      if(detail?.target)openSettingTarget(detail.target,detail.projectId)
+    }
+    window.addEventListener(OPEN_SETTING_EVENT,onOpenSetting)
+    return()=>window.removeEventListener(OPEN_SETTING_EVENT,onOpenSetting)
+  })
 
   const closeTutorial=()=>{
     completeTutorial()
@@ -5072,7 +5157,9 @@ export function App() {
     // own scroller so a long chip set can never push the pane tools out of the bar.
     const paneVoice=agentVoice&&voiceStatus?<>
       {voiceAvailable&&<button class={`voice-chip ${voiceMode}`} aria-label={`Read aloud mode for ${sessionName(session)}: ${voiceModeLabel(voiceMode)}. Click to change.`} title={`Read aloud: ${voiceModeLabel(voiceMode)} · click to cycle off → on demand → auto`} onClick={()=>cycleVoiceMode(session)}>tts:{voiceMode==='on_demand'?'tap':voiceMode}</button>}
-      {!voiceAvailable&&<button class="voice-chip mobile-voice-action" aria-label="Set up read aloud" title="Read aloud is disabled · open Voice settings" onClick={()=>openSettings('Voice')}>tts:setup</button>}
+      {/* Read aloud is off (or unconfigured): the chip stays and becomes the way to fix
+          that, landing on the switch rather than on the Voice tab. */}
+      {!voiceAvailable&&<SettingLink target="voice.tts" class="voice-chip mobile-voice-action" title="Read aloud is disabled · open its switch">tts:setup</SettingLink>}
       {/* Beside `tts:` because both chips answer the same question — what mux
           does for this session without being asked each time — and the pane bar
           is the one surface that is visible for as long as the pane is. Unlike
@@ -5119,7 +5206,7 @@ export function App() {
         onRestart={canRestartCold(session)?()=>void relaunchSession(session):undefined}
         onOpenTranscript={hasHarnessTranscript(session.backend)?()=>void openTranscriptForSession(session.id):undefined}
       />}
-      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onConfigureWidth={()=>openSettings('Terminals')} onBranch={()=>void branchSession(session)} />
+      <TerminalPane session={session} onState={updateSession} startupOrigin={startupOrigins.current[session.id]} onStartupTiming={(milestone,elapsedMs)=>recordClientStartupTiming(session.id,milestone,elapsedMs)} broadcast={broadcast} keybindings={keybindings} scrollback={xtermScrollback} rendererPreference={terminalRenderer} windowsPty={windowsPty} mobileInput={mobileInput} uiScale={uiScale} visible={paneVisible} claudeMaxColumns={claudeMaxColumns} onConfigureRail={openActionEditor} onBranch={()=>void branchSession(session)} />
     </section>
     if(insideStack)return terminalPane
     return <section data-tutorial="workspace-pane" class="pane-stack singleton-stack"><OverflowRail className="stack-tabs" itemLabel="terminal tabs" wrapperClassName="stack-tabs-rail" activeKey={id} stripProps={{'data-tutorial':'tab-strip',role:'tablist','aria-label':'Terminal tabs'}}>
@@ -5398,7 +5485,7 @@ export function App() {
           or it would close the menu on pointer-down and the click would reopen
           it, so a second tap could never collapse what the first opened. */}
       <button class="mobile-project-name" type="button" data-menu-toggle aria-haspopup="menu" aria-expanded={!!projectMenu} disabled={!activeProject} title={activeProject?`${activeProject.name} — Project actions`:'No Project selected'} onClick={event=>{if(!activeProject)return;if(projectMenu){setProjectMenu(null);return}const rect=event.currentTarget.getBoundingClientRect();openProjectMenuAt(activeProject,rect.left,rect.bottom+4)}} onContextMenu={event=>{if(!activeProject)return;event.preventDefault();if(projectMenu){setProjectMenu(null);return}openProjectMenuAt(activeProject,event.clientX,event.clientY)}}>{activeProject?.name||'No Project'}</button>
-      {voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>}
+      {voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>}
       {/* Tap opens the launcher; hold repeats the last launch straight away,
           which is the common case once a Project settles on one backend. The
           long-press fires while the finger is down, so the click it is followed
@@ -5438,7 +5525,7 @@ export function App() {
 
     <div class={`workspace ${sidebarCollapsed?'sidebar-collapsed':''} ${clipboardOpen&&!mobileWorkspace?'drawer-open':''} ${drawerTabDisplay==='title'?'drawer-tabs-title':''}`} style={{'--sidebar-width':`${sidebarWidth}px`,'--drawer-width':`${renderedDrawerWidth}px`,'--utility-rail-width':`${utilityRailWidth}px`} as JSX.CSSProperties}>
       <header class="app-topbar">
-        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled} onOpenSettings={()=>openSettings('Voice')}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
+        <div class="app-identity"><button class="sidebar-collapse" aria-label={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'} onClick={toggleSidebar}>{sidebarCollapsed?'»':'«'}</button><span class="daemon-ok" title="daemon::connected" aria-label="daemon connected"><i aria-hidden="true" /></span><strong class="desktop-project-name" title={activeProject?.name||'No Project selected'}>{activeProject?.name||'No Project'}</strong>{voiceStatus&&<ConversationToggle conversation={conversation} configured={!!voiceStatus.stt_enabled}/>} {activeProject&&<button data-tutorial="run" class="project-run-header" aria-haspopup="menu" aria-expanded={runMenu?.project.id===activeProject.id} title={`Run in ${activeProject.name}`} onClick={event=>toggleRunMenu(activeProject,event.currentTarget)}>▶ Run</button>}</div>
       </header>
       <aside ref={sidebarRef} class={`sidebar ${sidebarOpen ? 'open' : ''}`} onContextMenu={event=>{const target=event.target as Element;if(target.closest('.sidebar-heading,.project-row,.session-row,.sidebar-note-row,.sidebar-footer'))return;event.preventDefault();setContextMenu(null);setProjectMenu(null);setNoteMenu(null);setSortMenu(null);setMainMenuOpen(false);setSidebarMenu({x:event.clientX,y:event.clientY})}}>
         {/* PROJECTS names the whole navigation tree. Ungrouped Projects are root
@@ -5635,7 +5722,8 @@ export function App() {
         tabDisplay={drawerTabDisplay}
         onTabDragStart={beginDrawerTabDrag}
         onProjectionTabReorder={beginMobileDrawerTabDrag}
-        onTabDisplayMenu={(x,y)=>openDrawerDisplayMenu(x,y,'tabs')}
+        hiddenTabs={hiddenDrawerTabs}
+        onTabDisplayMenu={(x,y,tab)=>openDrawerDisplayMenu(x,y,'tabs',tab)}
         draggingTab={dragDrawerTab}
         announcement={drawerAnnouncement}
         promptPreselect={promptPreselect}
@@ -5667,7 +5755,9 @@ export function App() {
           them would only repeat the same icons and spend a column doing it. Mobile reaches the
           same tabs through the drawer's own tab strip after a two-finger swipe. */}
       {!mobileWorkspace&&!clipboardOpen&&<nav class={`utility-rail ${utilityRailDisplay==='title'?'title-mode':'icon-mode'}`} aria-label="Side panel">
-        {drawerLauncherTabs.filter(tab=>tab.id!=='transcript'||hasHarnessTranscript(active?.backend)).map(tab=>{
+        {/* The same predicate the open drawer's strips use. No `peek`: this rail is only
+            rendered while the drawer is closed, and a peek exists only while one is open. */}
+        {drawerLauncherTabs.filter(tab=>drawerTabVisible(tab.id,{hidden:hiddenDrawerTabs,hasTranscript:hasHarnessTranscript(active?.backend)})).map(tab=>{
           const Icon=DRAWER_TAB_ICONS[tab.id]
           // No selected state to draw: the rail is only rendered while the drawer is closed,
           // so no tab it lists is showing anywhere.
@@ -5680,7 +5770,7 @@ export function App() {
             onContextMenu={event=>{
               event.preventDefault()
               event.stopPropagation()
-              openDrawerDisplayMenu(event.clientX,event.clientY,'rail')
+              openDrawerDisplayMenu(event.clientX,event.clientY,'rail',tab.id)
             }}
             onClick={()=>showDrawerTab(tab.id)}
           >{utilityRailDisplay==='title'?<span class="drawer-tab-title">{tab.label}</span>:<Icon/>}{tab.id==='notifications'&&notificationUnread>0&&<i class="drawer-badge">{notificationUnread>99?'99+':notificationUnread}</i>}</button>
@@ -5895,9 +5985,46 @@ export function App() {
       {unpanned.map(session => <button role="menuitem" onClick={() => runNamedCommand(`session.attach(${session.id})`)}>{sessionStateDot(session,rowConfig.dotShape,null,sessionStandingMark(session,rowConfig))}{sessionName(session)}</button>)}
     </div>}
 
-    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-140))}}>
+    {drawerDisplayMenu&&<div ref={el=>fitMenuInViewport(el)} class="context-menu drawer-display-menu" role="menu" aria-label={`${drawerDisplayMenu.surface==='tabs'?'Drawer tabs':'Right rail'} options`} style={{left:clampContextMenuLeft(drawerDisplayMenu.x,innerWidth),top:Math.max(4,Math.min(drawerDisplayMenu.y,innerHeight-200))}}>
       <div class="context-title"><strong>{drawerDisplayMenu.surface==='tabs'?'DRAWER TABS':'RIGHT RAIL'}</strong></div>
       {(()=>{const display=drawerDisplayMenu.surface==='tabs'?drawerTabDisplay:utilityRailDisplay;return <button role="menuitemcheckbox" aria-checked={display==='title'} onClick={()=>void persistDrawerDisplay(drawerDisplayMenu.surface,display==='icon'?'title':'icon')}>{display==='title'?'✓ ':''}Text labels</button>})()}
+      <div class="context-rule" />
+      {/* Hiding the tab you right-clicked is the common action and stays flat; the full
+          checklist that undoes it is one row down, and its label carries the count so a
+          rail missing something says so without being opened. Refusing to hide the last
+          tab is what keeps this menu reachable at all — it lives on the tab strip. */}
+      {drawerDisplayMenu.tab&&(()=>{
+        const tab=drawerDisplayMenu.tab
+        const blocked=!canHideDrawerTab(hiddenDrawerTabs,tab)
+        return <button
+          role="menuitem"
+          disabled={blocked}
+          title={blocked?'The side panel must keep at least one tab.':undefined}
+          onClick={()=>{setDrawerDisplayMenu(null);setDrawerTabHidden(tab,true)}}
+        >Hide {drawerTab(tab).label}</button>
+      })()}
+      <MenuGroup
+        id="drawer-visible-tabs"
+        label={`Panels · ${DRAWER_TABS.length-hiddenDrawerTabs.length} of ${DRAWER_TABS.length}`}
+        openId={menuGroup}
+        onOpenChange={setMenuGroup}
+        hint="Choose which tabs the side panel carries"
+      >
+        {DRAWER_TABS.map(tab=>{
+          const shown=!hiddenDrawerTabs.includes(tab.id)
+          const blocked=shown&&!canHideDrawerTab(hiddenDrawerTabs,tab.id)
+          return <button
+            key={tab.id}
+            role="menuitemcheckbox"
+            aria-checked={shown}
+            disabled={blocked}
+            title={blocked?'The side panel must keep at least one tab.':tab.title}
+            onClick={()=>setDrawerTabHidden(tab.id,shown)}
+          >{shown?'✓ ':''}{tab.label}</button>
+        })}
+        <div class="context-rule" />
+        <button role="menuitem" disabled={!hiddenDrawerTabs.length} onClick={()=>{setDrawerDisplayMenu(null);showAllDrawerTabs()}}>Show all</button>
+      </MenuGroup>
       <div class="context-rule" />
       <button role="menuitem" disabled={!clipboardOpen} onClick={()=>{setDrawerDisplayMenu(null);setClipboardOpen(false)}}>Collapse utility drawer</button>
     </div>}
@@ -5965,7 +6092,7 @@ export function App() {
 
     {historyOpen&&<HistoryBrowser projects={orderedProjects} initialProjectId={historyScope} initialEntryId={historyEntry} onClose={()=>setHistoryOpen(false)} onResume={resumeHistoryEntry} onSecondOpinion={previewSecondOpinion} onHandoff={openHandoff}/>}
 
-    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
+    {projectsManagerOpen&&<ProjectsManager projects={projects} groups={projectGroups} sessions={sessions} profiles={profiles} initialProjectId={projectsManagerFocus?.projectId} initialSetting={projectsManagerFocus?.setting} revealToken={revealToken} onClose={()=>{setProjectsManagerOpen(false);setProjectsManagerFocus(null)}} onAdd={()=>void createProject()} onAddGroup={()=>setGroupEdit({name:''})} onOpen={project=>{setProjectId(project.id);setProjectsManagerOpen(false)}} onPatch={patchManagedProject} onRemove={removeProject}/>}
 
     {projectCreateOpen&&<div class="modal-layer project-registry-dialog-layer" onMouseDown={event=>event.target===event.currentTarget&&setProjectCreateOpen(false)}>
       <form data-tutorial="project-form" class="modal" onSubmit={event=>{event.preventDefault();void submitProject()}}>
@@ -6007,7 +6134,7 @@ export function App() {
 
     {sendToAgent&&<SendToAgentPicker request={sendToAgent} projects={orderedProjects} sessions={sessions} onClose={()=>setSendToAgent(null)} onSend={deliverToAgent}/>}
 
-    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} voiceCommands={commands} onStartTutorial={startTutorial} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
+    {settingsOpen && <Settings activeUiScale={uiScale} onUiScalePreview={previewUiScaleConfig} initialSection={settingsSection} initialSetting={settingsSetting} revealToken={revealToken} voiceCommands={commands} onStartTutorial={startTutorial} drawerHiddenTabs={hiddenDrawerTabs} onDrawerTabHidden={setDrawerTabHidden} onShowAllDrawerTabs={showAllDrawerTabs} onOpenUsage={()=>{setSettingsOpen(false);setUsageOpen(true)}} onOpenAutomation={()=>{setSettingsOpen(false);setAutomationOpen(true)}} onClose={() => { setSettingsOpen(false); void refresh(); void loadProfiles(); void loadConfig(false) }} />}
 
     {harnessSetupNeeded && !settingsOpen && <HarnessSetup onDone={()=>{setHarnessSetupNeeded(false); void loadConfig(false); void refresh()}} onConfigureMore={()=>{setHarnessSetupNeeded(false); openSettings('Agents')}} />}
 
@@ -6023,7 +6150,7 @@ export function App() {
     {networkUsageOpen&&<NetworkUsageModal onClose={()=>setNetworkUsageOpen(false)}/>}
     {storageUsageOpen&&<StorageUsageModal onClose={()=>setStorageUsageOpen(false)}/>}
     {fleetQueue&&<FleetQueue projects={projects} initialProjectId={fleetQueue.projectId} onOpenQueue={sessionId=>void openQueueForSession(sessionId)} onClose={()=>setFleetQueue(null)}/>}
-    {automationOpen&&<AutomationDashboard onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
+    {automationOpen&&<AutomationDashboard initialSetting={settingsSetting} revealToken={revealToken} onClose={()=>setAutomationOpen(false)} onConfigure={()=>{setAutomationOpen(false);openSettings('Automation')}} onOpenSession={sessionId=>{const session=sessions.find(item=>item.id===sessionId);if(!session){setError('The automation session is no longer live.');return}setAutomationOpen(false);void selectSession(session)}}/>}
 
     {processViewerOpen && <ProcessPanel initialSessionId={processSession?.id||null} initialProjectId={processScope} sessions={sessions} projects={projects} onClose={() => {setProcessViewerOpen(false);setProcessSession(null)}} onAttached={(preview, project) => {
       setPreviews(current => ({...current, [preview.id]: preview}))

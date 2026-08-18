@@ -223,6 +223,20 @@ class HarnessDescriptor:
     # selector that changes nothing, and the operator would believe requests were
     # being answered while every one of them sat waiting.
     hook_approval_decisions: bool
+    # The keystroke that accepts this CLI's permission dialog when its default
+    # option is highlighted, or None when mux has not measured one.
+    #
+    # This is the *delivery* half of an approval mux has already decided through
+    # `hook_approval_decisions`, for CLIs that publish the request but ignore the
+    # answer. It is never a way to decide anything: nothing may be typed without a
+    # matching structured request, so a trust dialog or a `/clear` confirmation —
+    # neither of which raises a permission request — can never be answered here.
+    #
+    # Declared rather than assumed because "Enter accepts" is a measured property
+    # of one CLI's dialog at one version, and the cost of it drifting is a
+    # keystroke sent into whatever replaced the dialog. `tests/fixtures/pty_tails/`
+    # pins the screens this is read against.
+    approval_accept_key: str | None
 
     state_sources: tuple[StateSource, ...]
     measurement_source: MeasurementSource
@@ -703,6 +717,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # `hookSpecificOutput.decision` back off the hook's stdout. No response
         # means `ask`, so the channel fails open by construction.
         hook_approval_decisions=True,
+        # Measured on Claude Code 2.1.x: the permission dialog opens with its
+        # accept option highlighted, so Enter accepts.
+        approval_accept_key="\r",
         state_sources=("transcript", "hook", "pty", "cli_state"),
         measurement_source="transcript",
         reports_conversation_rollover=True,
@@ -791,6 +808,9 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # so the only lever is spawn-time `approval_policy`/`sandbox_mode`, which
         # is whole-session and cannot change while the CLI runs.
         hook_approval_decisions=False,
+        # Unmeasured. Codex publishes no resolution evidence at all, so a typed
+        # answer here could not even be confirmed after the fact.
+        approval_accept_key=None,
         state_sources=("transcript", "hook", "pty"),
         measurement_source="transcript",
         reports_conversation_rollover=False,
@@ -878,6 +898,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # Nothing reads a value back, so mux can report an approval here but not
         # answer one.
         hook_approval_decisions=False,
+        approval_accept_key=None,
         state_sources=("hook", "transcript", "pty"),
         measurement_source="transcript",
         reports_conversation_rollover=True,
@@ -960,6 +981,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # pi's extension emits no permission event at all (`PermissionRequest` is
         # absent from its hook set), so there is nothing here to answer.
         hook_approval_decisions=False,
+        approval_accept_key=None,
         # `pty` is a working-only reading, pinned to a captured pi 0.84.1 screen
         # (`working.pi_spinner`). It can veto delivery and detect activity; it
         # never grants idle, which hooks and the transcript already prove.
@@ -1051,6 +1073,7 @@ HARNESSES: dict[str, HarnessDescriptor] = {
         # decision and cannot make one. Flipping this to True is a plugin change,
         # not a registry edit.
         hook_approval_decisions=False,
+        approval_accept_key=None,
         # opencode keeps conversations as rows in `opencode.db`, not as an
         # append-only file, so the byte-offset transcript tailer has nothing to
         # attach to and `transcript` is absent from the state sources. Its

@@ -1280,9 +1280,44 @@ body {
 .settings-panel>header .settings-search-results>button>small{color:var(--muted)}
 .settings-panel>header .settings-search-results>p{margin:0;padding:11px 9px;color:var(--muted)}
 .settings-search-scrim{position:fixed;inset:0;z-index:2}
-/* A picked result is scrolled to and flashed: on a long tab the control is often
-   several screens down, and arriving with no cue reads as nothing happening. */
-.settings-content .settings-search-hit{outline:2px solid var(--green);outline-offset:3px;background:color-mix(in srgb,var(--green) 20%,transparent)}
+/* The arrival cue, shared by a picked search result and by a deep link from a gated surface
+   (`settingReveal.ts`). On a long tab the control is often several screens down, and arriving
+   with no cue reads as nothing having happened. Two slow pulses rather than a static box:
+   after a whole overlay has just opened, a still outline is easy to miss, and motion is the
+   only channel left once the control is already on screen. Deliberately not scoped to
+   `.settings-content` — the Projects registry and the Automation dashboard own switches too,
+   and each is a deep-link destination. */
+.setting-flash{
+  outline:2px solid var(--green);outline-offset:3px;
+  background:color-mix(in srgb,var(--green) 20%,transparent);
+  animation:setting-flash 1.8s ease-out 1 both
+}
+@keyframes setting-flash{
+  0%{outline-color:var(--green);background:color-mix(in srgb,var(--green) 32%,transparent)}
+  22%{outline-color:color-mix(in srgb,var(--green) 25%,transparent);background:color-mix(in srgb,var(--green) 7%,transparent)}
+  44%{outline-color:var(--green);background:color-mix(in srgb,var(--green) 32%,transparent)}
+  100%{outline-color:color-mix(in srgb,var(--green) 50%,transparent);background:transparent}
+}
+/* Reduced motion keeps the cue and drops the pulsing: the outline and tint carry the
+   information, the animation is only what makes them noticed. */
+@media(prefers-reduced-motion:reduce){.setting-flash{animation:none}}
+/* The one control every gated surface offers, in two shapes: `inline` sits inside a sentence,
+   the default stands on its own. One component (`SettingLink.tsx`), so a new gated surface
+   cannot invent a fifth appearance for "take me to the switch". */
+.setting-link{
+  min-height:26px;display:inline-flex;align-items:center;gap:5px;
+  border:1px solid color-mix(in srgb,var(--green) 55%,var(--line));border-radius:0;
+  padding:2px 9px;background:color-mix(in srgb,var(--green) 10%,transparent);
+  color:var(--green);font:inherit;text-align:left;cursor:pointer
+}
+.setting-link:hover{background:color-mix(in srgb,var(--green) 20%,transparent)}
+.setting-link.inline{min-height:0;border:0;padding:0;background:transparent;text-decoration:underline}
+.setting-link.inline:hover{background:transparent;color:var(--text)}
+/* The standard shape of a gated surface's notice: what is off, what it would do, and the
+   link. A grid so the link never sits flush against the prose above it. */
+.setting-gate{display:grid;justify-items:start;gap:7px;margin:8px 0;padding:10px;border:1px solid var(--line);background:color-mix(in srgb,var(--green) 5%,transparent)}
+.setting-gate p{margin:0;color:var(--muted);line-height:1.5}
+.setting-gate strong{color:var(--text)}
 .settings-body{min-height:0;overflow:hidden!important;display:grid!important;grid-template-columns:185px minmax(0,1fr)!important;align-content:stretch!important;gap:0!important;background:var(--panel)!important}
 .settings-tabs{min-height:0;overflow:auto;display:flex;flex-direction:column;padding:6px;border-right:1px solid var(--line);background:var(--bg)}
 /* The extra left padding is the group indent: entries sit visibly inside the heading
@@ -1336,6 +1371,14 @@ body {
    surrounding help text because it is a statement about *this device*, and the
    two scale selects are otherwise indistinguishable in effect from here. */
 .settings-content p.settings-scale-active{border-left:2px solid var(--accent);padding-left:9px;color:var(--text)}.settings-content button{border-radius:0}
+/* Side-panel visibility: fourteen short names, so a two-column grid of check rows
+   rather than the panel's usual label-and-control pair, which would leave each name
+   marooned against a full-width column of nothing. Overrides the `display:grid` those
+   labels otherwise inherit, and releases the checkbox from column 2 with it. */
+.drawer-tab-visibility{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:0 12px;margin:8px 0;max-width:82ch}
+.settings-content .drawer-tab-visibility label{display:flex;align-items:center;gap:8px;padding:4px 0;color:var(--text)}
+.settings-content .drawer-tab-visibility label>input{grid-column:auto;margin:0}
+.settings-content .drawer-tab-visibility label:has(>input:disabled){color:var(--muted)}
 .settings-errors{border-bottom:1px solid var(--red)!important;background:color-mix(in srgb,var(--red) 8%,var(--panel))!important}.settings-errors h3,.settings-errors p{color:var(--red)}
 .settings-loading{display:grid;place-content:center;min-height:180px;color:var(--muted)}
 .profile-browser{min-height:390px;display:grid;grid-template-columns:260px minmax(0,1fr);margin-top:12px;border:1px solid var(--line);background:var(--bg)}
@@ -3103,6 +3146,13 @@ continuity-editor.note-editor{display:block;min-width:0;min-height:0;overflow:hi
 .git-change-file del{color:var(--muted)}
 .git-change-file i{color:var(--muted);font-style:normal}
 .git-change-empty{margin:0;padding:3px 0;color:var(--muted);font-size:8px;line-height:1.35}
+/* The Git tab on a Project with no repository: prose and one action, so it reads as a
+   column rather than as the dense worktree table it replaces. `.git-state` centres its
+   text for one-line statuses, which is wrong for a paragraph, hence the override. */
+.git-init{padding:10px}
+.git-init .git-state:not(.error){text-align:left;padding:6px 0;color:var(--text)}
+.git-init .drawer-empty{margin:6px 0;text-align:left}
+.git-init code{overflow-wrap:anywhere}
 .git-map-actions{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding-top:2px}
 .git-map-actions button{min-height:26px;padding:0 8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font:inherit;font-size:8px;cursor:pointer}
 .git-map-actions button:hover:not(:disabled){border-color:var(--accent)}

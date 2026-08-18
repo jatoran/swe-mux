@@ -97,6 +97,54 @@ small:
    decision: without it a wedged daemon costs the agent ten minutes before the CLI gives up and
    shows the prompt.
 
+### When the CLI publishes the request and ignores the answer
+
+Measured on Claude Code 2.1.234, three times, with the hook timeout set to none, 5 s, and 30 s:
+the CLI fires `PermissionRequest`, runs mux's hook, mux answers `allow` in 0.247 s — and the
+prompt appears anyway a **constant 6.02 s later**. A gap that does not move with the timeout is
+not a timeout; the documented decision channel exists and does nothing on that build.
+
+So the decision is delivered as a keystroke instead. **This is not the screen-driven design this
+document rejects above, and the difference is the whole point:** the decision still comes from
+the structured `PermissionRequest` payload — tool, arguments, floor, grant — and only the
+*delivery* touches the terminal. `HarnessDescriptor.approval_accept_key` declares the key
+(`\r` for Claude, `None` everywhere else, because guessing it is how a deny becomes an approve).
+
+Three gates stand between a decision and a keypress, and each closes one way this could type
+into the wrong thing:
+
+- **A matching structured request must exist.** A trust dialog, a `/clear` confirmation, a
+  login, and a startup dialog raise no permission request, so no watcher is ever armed for them
+  and none of them is reachable from here. This is the gate that separates this from a blind
+  Enter at the screen, and it is the reason the mechanism is acceptable at all.
+- **This session's own screen must classify as `approval`**, re-read immediately before the
+  write rather than when the watcher started.
+- **The dialog must still be the one that was decided**, so a first prompt the user answered and
+  a second that replaced it cannot inherit the first one's grant.
+
+**The ordinary stabilization timer stays armed underneath.** If any gate never opens — the
+window expires, the screen never shows a dialog, the write raises, the session has no write path
+— the approval becomes visible attention on its usual 5 s boundary, which is exactly the
+behaviour with keystroke delivery switched off. The inverted arrangement, retiring the visible
+approval on the strength of a keystroke that might not arrive, is the one that could leave a
+session parked at a dialog nothing is showing the operator, so the cancel happens only *after*
+the write lands.
+
+Two consequences worth stating:
+
+- `approval_detected` now fires for an auto-approved request, because the safety net is armed.
+  That event is internal to delivery readiness (it blocks typing while a dialog may be up, which
+  is true) and is not attention; `approval_needed`, which every attention consumer reads, still
+  never fires for a request mux answered.
+- **The watcher self-retires.** A CLI that honours the hook decision never draws the dialog, so
+  the screen gate never opens, nothing is typed, and the watcher expires silently. No detection
+  of CLI capability is needed anywhere.
+
+There is one residual risk that cannot be designed away: between the screen check and the write
+landing, the dialog could resolve, and the key would reach the composer. The voice approval path
+has carried the same race in production since it shipped. It is small, not zero, and
+`approval_keystroke_delivery` is the switch that removes it.
+
 **It interacts with status detection in the helpful direction.** Today an auto-approved tool is
 the documented false-attention bug (`status-detection.md` § Delegated approvals: Codex's own
 reviewer answers, nothing records the decision, and the only evidence is the tool finishing —
@@ -114,7 +162,7 @@ answered while every one of them sat waiting.
 
 | Harness | Can answer | Why |
 | --- | --- | --- |
-| claude | yes | `PermissionRequest` returns a decision on stdout |
+| claude | yes | `PermissionRequest` returns a decision on stdout. Measured 2.1.234 does not honour it, so delivery falls back to the declared `approval_accept_key` |
 | codex | no | fires `permission_request`, has no resolution hook, and writes zero approval records. Its only lever is spawn-time `approval_policy`/`sandbox_mode`, which is whole-session and cannot change while the CLI runs |
 | omp | no | emits `PermissionRequest` and `approval_resolved` as one-way notifications |
 | pi | no | emits no permission event at all |
@@ -132,7 +180,7 @@ structural precedent in the codebase.
 - **Install-wide** (`config.py`, Settings): `approval_auto_enabled` (default **off** — with it
   off, `PermissionRequest` is observed exactly as before and no session can hold a non-`wait`
   mode), `approval_grant_ttl_minutes`, `approval_max_auto_per_grant`,
-  `approval_hook_timeout_seconds`, and `approval_allow_all_permitted`. The last is separate from
+  `approval_hook_timeout_seconds`, `approval_allow_all_permitted`, `approval_keystroke_delivery` (default on) and `approval_keystroke_window_seconds`. The last is separate from
   the master switch because "let mux answer the boring ones" and "let mux answer everything" are
   different decisions, and the first is the one most installs want.
 - **Per-Project** (`.swe-mux/config.toml`): `approval_allow`, the `Tool` / `Tool(pattern)` rules
@@ -251,6 +299,10 @@ path itself works immediately, because the daemon owns the answer.
   `_note_auto_approval`)
 - Shim decision relay: `src/swe_mux/hook_client.py`
 - Generated hook settings and the decision timeout: `src/swe_mux/adapters/claude.py`
+- Keystroke delivery: `src/swe_mux/observation.py` (`_deliver_decided_approval`,
+  `_keystroke_delivery_key`), the per-session write path
+  (`Session.approval_input_sink`, wired by `SessionManager._attach_operator_input`
+  from the factory the server installs)
 - Endpoints: `src/swe_mux/server.py`
 - Project fields: `src/swe_mux/project_files.py`
 - UI: `frontend/src/ApprovalChip.tsx`, `frontend/src/approvals.ts`,

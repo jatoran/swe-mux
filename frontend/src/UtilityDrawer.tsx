@@ -17,6 +17,7 @@ import {
   drawerCollapseHostStack, drawerTabs, setDrawerSplitRatio,
   type DrawerLayout, type DrawerNode, type DrawerProjectPresentation, type DrawerStack,
 } from './drawerLayout'
+import { drawerTabVisible, visibleDrawerTabs } from './drawerVisibility'
 import { ProcessesTab } from './ProcessesTab'
 import { ScheduleTab } from './ScheduleTab'
 import type { WatchScope, WatchSnapshot } from './processWatch'
@@ -132,8 +133,11 @@ type Props = {
   /** Mobile only: hold-then-drag reorder of the flattened projection rail. Runs alongside
    *  the projection's long-press menu — a still hold opens the menu, a drag reorders. */
   onProjectionTabReorder?: (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => void
-  /** Open the drawer-tab Icons/Titles preference menu from any drawer tab. */
-  onTabDisplayMenu: (x: number, y: number) => void
+  /** Tabs the user has put away. Global and device-local, like the arrangement itself. */
+  hiddenTabs: readonly DrawerTabId[]
+  /** Open the drawer-tab display / visibility menu. The tab it was opened from, when it
+   *  was opened from one, is what the menu's `Hide …` row acts on. */
+  onTabDisplayMenu: (x: number, y: number, tab?: DrawerTabId) => void
   /** True while a tab is being dragged, so the strip can suppress its own click. */
   draggingTab: DrawerTabId | null
   /** Template handed off by an Action rail button that needs its fields filled. */
@@ -183,7 +187,7 @@ export function UtilityDrawer(props: Props) {
 
   useEffect(() => () => cancelTabLongPress(), [])
 
-  const beginTabLongPress = (event: JSX.TargetedPointerEvent<HTMLElement>) => {
+  const beginTabLongPress = (event: JSX.TargetedPointerEvent<HTMLElement>, id: DrawerTabId) => {
     if (!mobile || event.pointerType !== 'touch' || !event.isPrimary) return
     cancelTabLongPress()
     const { pointerId, clientX: x, clientY: y } = event
@@ -205,7 +209,7 @@ export function UtilityDrawer(props: Props) {
       if (tabLongPressRef.current !== state) return
       suppressTabClickUntilRef.current = performance.now() + 700
       navigator.vibrate?.(20)
-      props.onTabDisplayMenu(x, y)
+      props.onTabDisplayMenu(x, y, id)
     }, 550)
     tabLongPressRef.current = state
   }
@@ -214,10 +218,15 @@ export function UtilityDrawer(props: Props) {
   const mobileStack: DrawerStack = { type: 'stack', id: 'mobile-projection', tabs: stackOrder }
   // Mobile flattens the tree to one stack, so that stack is trivially its own top-right.
   const collapseHostId = mobile ? mobileStack.id : drawerCollapseHostStack(layout.root).id
-  // Transcript needs a harness transcript. Insight does not: its Timeline segment
-  // gates itself, and its Findings segment is Project-aware, so a shell session
-  // still reaches its findings there.
-  const tabAvailable = (id: DrawerTabId) => id !== 'transcript' || hasHarnessTranscript(session?.backend)
+  // Structural availability and the user's hidden set, resolved together in
+  // `drawerVisibility.ts` so the launcher rail outside this component answers the same
+  // question the same way. A hidden tab reached by name is peeked, not unhidden.
+  const visibility = {
+    hidden: props.hiddenTabs,
+    hasTranscript: hasHarnessTranscript(session?.backend),
+    peek: props.transientTab ?? null,
+  }
+  const tabAvailable = (id: DrawerTabId) => drawerTabVisible(id, visibility)
   // Acting closes the drawer on mobile (it covers the surface just acted on) and
   // leaves it open on desktop, where the column sits beside that surface and a
   // second insert (or a second file) is the common next action.
@@ -380,14 +389,15 @@ export function UtilityDrawer(props: Props) {
           scope={props.scheduleScope}
           onScope={props.onScheduleScope}
           onOpenSession={props.onOpenSession}
-          onOpenProjectSettings={props.onOpenProjectSettings}
-          // `onDone` on purpose: revealing the session a schedule started, or
-          // opening the Project's opt-in, is acting on something other than the
-          // terminal underneath, so on mobile the drawer gets out of the way.
+          // A blocked schedule's way out is a `SettingLink`, which routes itself and closes
+          // this drawer on mobile like every other settings navigation.
+          // `onDone` on purpose: revealing the session a schedule started is acting on
+          // something other than the terminal underneath, so on mobile the drawer gets out
+          // of the way.
           onDone={onDone}
         />
       case 'notifications':
-        return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} />
+        return <NotificationsTab data={props.notifications} onOpenSession={props.onOpenSession} onChanged={props.onNotificationsChanged} project={project} />
     }
   }
   const scopeContext = (tab: DrawerTabId) => {
@@ -428,7 +438,7 @@ export function UtilityDrawer(props: Props) {
       'aria-label':projection ? 'Panel sections' : `Panel section ${stack.id}`,
     }}
   >
-    {stack.tabs.filter(tabAvailable).map((id, index, visibleTabs) => {
+    {visibleDrawerTabs(stack.tabs, visibility).map((id, index, visibleTabs) => {
       const item = drawerTab(id)
       return <button
         id={tabDomId(stack.id, id)}
@@ -449,12 +459,12 @@ export function UtilityDrawer(props: Props) {
         class={`${id === selected ? 'active' : ''} ${props.draggingTab === id ? 'dragging' : ''}`}
         title={`${item.title}${item.scope === 'session' ? ' - session scoped' : ''}${projection ? '' : ' - drag to rearrange or split'}`}
         onPointerDown={projection
-          ? event => { beginTabLongPress(event); props.onProjectionTabReorder?.(event, id) }
+          ? event => { beginTabLongPress(event, id); props.onProjectionTabReorder?.(event, id) }
           : event => props.onTabDragStart(event, id)}
         onContextMenu={event => {
           event.preventDefault()
           event.stopPropagation()
-          props.onTabDisplayMenu(event.clientX, event.clientY)
+          props.onTabDisplayMenu(event.clientX, event.clientY, id)
         }}
         onClick={() => {
           if (performance.now() < suppressTabClickUntilRef.current) return
@@ -476,7 +486,7 @@ export function UtilityDrawer(props: Props) {
   </OverflowRail>
 
   const renderStack = (stack: DrawerStack, selectedOverride?: DrawerTabId) => {
-    const visibleTabs=stack.tabs.filter(tabAvailable)
+    const visibleTabs=visibleDrawerTabs(stack.tabs, visibility)
     const requested = selectedOverride || presentation.selected_tabs[stack.id] || visibleTabs[0]
     const selected = visibleTabs.includes(requested) ? requested : visibleTabs[0]
     const active = drawerTab(selected)
@@ -562,11 +572,44 @@ export function UtilityDrawer(props: Props) {
     window.addEventListener('keydown', key, true)
   }
 
-  const renderNode = (node: DrawerNode): JSX.Element => {
-    if (node.type === 'stack') return renderStack(node)
+  /**
+   * The drawer with nothing left to draw.
+   *
+   * `canHideDrawerTab` stops the user hiding the last tab, so reaching this needs the
+   * *structural* filter to take the remainder — hide everything but Transcript, then
+   * focus a shell session. Rare, but a drawer with no tab strip has no context menu to
+   * right-click, so it carries its own way back rather than sending the reader to
+   * Settings to guess what happened.
+   */
+  const renderEmptyDrawer = () => <section class="drawer-pane">
+    <div class="drawer-body">
+      <div class="drawer-pane-heading">
+        <h2 class="drawer-panel-title">Side panel</h2>
+        <button class="drawer-collapse" aria-label="Collapse side panel" title="Collapse side panel" onClick={onClose}>×</button>
+      </div>
+      <p class="drawer-empty">Nothing to show here. Every panel is either hidden or unavailable for the focused session.</p>
+      <p class="drawer-empty">
+        <button onClick={event => {
+          const rect = event.currentTarget.getBoundingClientRect()
+          props.onTabDisplayMenu(rect.left, rect.bottom)
+        }}>Choose panels…</button>
+      </p>
+    </div>
+  </section>
+
+  // A pane whose every tab is hidden (or structurally absent) is dropped and its space
+  // handed back to its sibling, rather than drawn as an empty box under whichever
+  // heading the selection happened to fall back to. The layout keeps the split either
+  // way, so showing the tab again restores the arrangement exactly.
+  const renderNode = (node: DrawerNode): JSX.Element | null => {
+    if (node.type === 'stack') return node.tabs.some(tabAvailable) ? renderStack(node) : null
+    const first = renderNode(node.first)
+    const second = renderNode(node.second)
+    if (!first) return second
+    if (!second) return first
     const updateRatio = (ratio: number) => props.onLayout(setDrawerSplitRatio(layout, node.id, ratio))
     return <div key={node.id} class={`drawer-split ${node.direction}`} data-drawer-split-id={node.id}>
-      <div class="drawer-split-branch drawer-split-first" style={{ flex: `${node.ratio} 1 0` }}>{renderNode(node.first)}</div>
+      <div class="drawer-split-branch drawer-split-first" style={{ flex: `${node.ratio} 1 0` }}>{first}</div>
       <div
         class="drawer-splitter"
         role="separator"
@@ -591,7 +634,7 @@ export function UtilityDrawer(props: Props) {
           updateRatio(ratio)
         }}
       />
-      <div class="drawer-split-branch drawer-split-second" style={{ flex: `${1 - node.ratio} 1 0` }}>{renderNode(node.second)}</div>
+      <div class="drawer-split-branch drawer-split-second" style={{ flex: `${1 - node.ratio} 1 0` }}>{second}</div>
     </div>
   }
 
@@ -630,7 +673,9 @@ export function UtilityDrawer(props: Props) {
       }}
     >
       <div class="drawer-tree">
-        {mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root)}
+        {(mobile ? mobileStack.tabs : drawerTabs(layout)).some(tabAvailable)
+          ? (mobile ? renderStack(mobileStack, focusedTab) : renderNode(layout.root))
+          : renderEmptyDrawer()}
       </div>
       <span class="sr-only" aria-live="polite">{props.announcement}</span>
     </aside>

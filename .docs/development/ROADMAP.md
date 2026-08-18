@@ -172,7 +172,8 @@ Phase 1  Evidence replay + delivery-readiness contract                      [don
                                         -> Phase 9  SSH/native attach           [descoped to decision-gated]
                                           -> Phase 10  WSL bridge + Linux/macOS [Windows+Linux done; macOS unproven]
                                             -> Phase 10.5 Distribution licensing + voice-stack replacement [open]
-                                              -> Phase 11  Public packaging and release  [open]
+                                              -> Phase 10.6 Mux assistant: conversational fleet operation [open]
+                                                -> Phase 11  Public packaging and release  [open]
 ```
 
 Phase 3 interface work may proceed alongside Phase 2 when it does not depend on unfinished
@@ -3100,6 +3101,121 @@ Numbers ("996", "58") and abbreviations ("ConPTY") already resolve correctly, an
 - [ ] No espeak-ng binary, data directory, or Python wrapper exists anywhere in the closure, and the G2P fails loudly rather than silently falling back if one appears.
 - [ ] `LICENSE`, `NOTICE`, `CONTRIBUTING.md`, and a generated `THIRD-PARTY-NOTICES.md` exist, and the notices file regenerates from the lockfiles with no manual edit.
 - [ ] A fresh install speaks using the OS voice with no download, and Kokoro is one explicit, hash-verified download away.
+
+## Phase 10.6 - The Mux assistant: conversational fleet operation
+
+A conversational operator for the whole workspace: the control plane given a voice and a chat surface.
+It is not another coding agent and not an observer.
+It never writes code, never touches a PTY directly, and never acts on its own initiative.
+It converses, reads the fleet through the existing read models, and drives the same command registry the operator's fingers do.
+It is reachable three ways with one brain behind all of them: falling through from a wake-word utterance the deterministic grammar does not match, explicitly opening the assistant surface, or typing into the same dialog, because voice-first does not mean voice-only.
+
+The research base: Home Assistant's hybrid intent routing (local templates first, LLM only on no-match) and its measured ~9.5x latency win from streaming the pipeline rather than the model (Voice Chapter 11); LiveKit's preemptive generation and semantic turn detection; the RealtimeSTT/RealtimeTTS chunked-synthesis pattern; Willow's 500 ms grammar-path budget.
+The existing reflex path already embodies most of these and is not touched by this phase.
+
+### Standing decisions extended, not reopened
+
+- **No model in the command path** stands.
+  The assistant is a fallback tier behind the deterministic grammar, never in front of it.
+  A wake-word utterance the grammar or a fuzzy pass matches acts in ~300 ms exactly as today; only an unmatched utterance routes to the assistant instead of dying as a spoken refusal.
+- **The model never emits an identifier and never executes** stands.
+  It proposes command and target names; deterministic code resolves them against real entities exactly as a spoken grammar phrase would, and a failed resolution returns structured candidates rather than acting.
+- **Voice compiles to the existing command registry** stands.
+  The assistant's single action tool is a registry bridge; no parallel action table exists.
+- **Freshness and confidence are computed by the system, never self-assessed** stands.
+  Status figures in assistant replies come from tool results, and staleness qualifiers are appended from provenance fields by deterministic code.
+- **Wake words remain the boundary for the ambient stream** and disappear only inside dialog modes, where a single addressee removes the ambiguity the marker exists to resolve.
+
+### Routing tiers
+
+1. **Tier 1 - the existing deterministic grammar.** Unchanged, offline, sub-second.
+2. **Tier 2 - fuzzy match over the same compiled grammar** (token-level, rapidfuzz-style, milliseconds, offline).
+   It absorbs STT noise ("shesh in three" -> "session three") before any model is paid for.
+   A fuzzy match above threshold acts like a grammar match; below it, the utterance falls through.
+3. **Tier 3 - the assistant.** Cloud model, tool calls, confirmation policy, dialog state.
+   Offline, the lane reports itself offline and tiers 1-2 keep working.
+
+### Interaction contract (final state)
+
+- No wake word inside an assistant dialog: endpoint plus end-of-turn detection ends the user's turn, barge-in ends the assistant's, and a follow-up window (~8 s) keeps the channel open after a reply, longest after a question.
+- Dialog state is daemon-owned - history, pending confirmations, list context - so any device resumes the same conversation and a dropped tab never orphans a half-confirmed action (unclaimed confirmations expire).
+- Anaphora resolves against dialog state: "it", "the second one", "same for pixel lab".
+- Replies follow the short-response protocol: answer first, one or two sentences, detail on request.
+- Replies are dual-form from day one: display text and separately paced speech text, the existing `voiceQueries.ts` pattern.
+- Streaming end to end: tokens stream to the surface, sentence boundaries are emitted as events (the seam TTS chunking consumes), actions execute as they resolve mid-stream, and slow tool fetches are narrated.
+- The assistant may also speak as a delivery channel for attention ranking, inside the existing interrupt budget; it delivers, it never decides.
+- Asked for something that is coding, it routes rather than attempts: queue to an existing session or offer a spawn.
+
+### Trust policy
+
+Per action class, user-tunable, enforced by the daemon rather than by prompt:
+
+- Reads and per-device navigation: execute silently.
+- Reversible mutations (queue a message, append to a note, spawn): spoken/displayed restatement with a cancel window before execution.
+- Consequential mutations (send-now to a live agent, interrupt, end session): explicit confirmation.
+- Provider approvals: the existing fingerprinted two-step challenge, unchanged; no bulk approval exists.
+- Every assistant-executed action lands in the dialog history as an auditable "asked / ran / outcome" record.
+- All writes travel existing paths (queue, spawn API, terminal action bus, guarded approval), so `NON_OVERRIDABLE_REASONS` and the approval floor bind structurally.
+
+### Topology
+
+Thin satellites around a daemon that owns the conversation, the intelligence, and every durable side effect:
+
+- Device-local by necessity: microphone, speaker, and the 32 ms loop around the mic (VAD, endpointing, barge-in), plus earcons.
+- Device-local by nature: UI actions (focus, drawer, navigation) and the composer-merging send path, dispatched to the device the current dialog turn came from (device presence identifies it); with no client attached these are the only actions the assistant refuses, and it says so.
+- Daemon-owned: STT decode, TTS synthesis and clips, the assistant brain, dialog state, pending confirmations, the trust policy, and the budget ledger.
+
+### Model stack
+
+- **Brain: a configurable OpenRouter model slot**, default `openai/gpt-5.6-terra` (verified on the live catalog: tool calling, 1M context, $2/M in $12/M out), with `openai/gpt-5.6-luna` documented as the cheap alternative and fast open-weight providers as the latency alternative.
+  Spend is recorded in the shared automation ledger under `builtin:assistant` with an independent daily budget.
+  Explicitly no local LLM: a 1-4B model on desktop CPU emits one tool call in 3-8 s, slower than the cloud by 5-10x.
+- **Prompt: two layers.** A static primer (swe-mux concepts, command catalog semantics, response protocol) behind provider prompt caching, and a per-turn snapshot of the fleet projection, project/session index with canonical addresses, focused session, and pending confirmations - a few KB assembled from read models that already exist.
+  Most questions answer with zero tool round trips.
+- **STT: unchanged** (Silero VAD, faster-whisper, two decode profiles); assistant-lane turns decode on the dictation profile.
+  Moonshine and distil models remain configuration options for CPU-only hosts, not architecture.
+- **End-of-turn detection for dialog modes: deterministic heuristics first** (trailing conjunction/filler lengthens the tail, a complete clause shortens it), with a small open turn-detector model as the measured upgrade path only if heuristics misfire.
+- **TTS: the Phase 10.5 stack** (Kokoro-82M via direct onnxruntime, OS-voice default and fallback), with sentence-chunked streaming synthesis and GPU execution providers load-bearing rather than optional, and file-based earcons (endpoint ack, cancel-window tick) because a 0 ms acknowledgment is what makes 1-2 s of brain latency feel fine.
+  The `tts_summary_model` role folds into the assistant.
+
+### Tool surface
+
+- Read tools, composite and one-call: fleet overview, session detail, transcript slice, history search, project notes, git status, queue state, scan-timeline highlights where enabled.
+  Shaped like the mux MCP tools because that shape was designed for this consumer.
+- One action tool: `run_command(name, args-by-name)` into the command registry, with deterministic name resolution and structured ambiguity candidates.
+- Latency budget for the lane: endpoint ~350 ms + decode 150-250 ms + TTFT 300-800 ms + first TTS chunk 300-1000 ms, roughly 1.2-2.5 s end of speech to first audio, with the earcon at ~350 ms.
+
+### Build order inside the phase: text-first, by design
+
+The brain, context assembly, tool bridge, name resolution, trust policy, dialog state, and audit trail are modality-independent; a text chat exercises all of them and iterates faster than debugging through STT noise.
+The text surface is permanent, not scaffolding.
+Voice attachment afterwards is a wiring task because STT, TTS, endpointing, and barge-in already exist.
+Day-one rules that make the adaptation clean: dual-form responses, confirmation as typed state rather than prose, sentence-boundary streaming events, and the short-response protocol from the first prompt.
+
+### Surface
+
+- The assistant lives in the existing voice/Talk overlay as a toggleable conversation view, enlarged for real back-and-forth visibility, with streaming replies, confirmation cards, and the dialog history.
+- The same dialog is reachable with Talk off as a pure text chat.
+- Voice mode adds the earcons, spoken replies through the existing segmented-clip pipeline, follow-up window, and barge-in.
+
+### Implementation checklist
+
+- [ ] Daemon `assistant.py`: dialog store (SQLite, one worker thread, mirroring `voice_clips`), OpenRouter streaming client with tool calls, context assembly, trust-policy engine, budget ledger entry `builtin:assistant`, typed `AssistantError` diagnostics that never touch PTY/session/transcript state.
+- [ ] Tool bridge: daemon-side read tools over existing read models; `run_command` proposals delivered to the turn's originating device over the event stream; deterministic name resolution with candidate lists.
+- [ ] HTTP/WS surface: create/continue/interrupt a dialog turn, stream events (tokens, sentence boundaries, tool status, action proposals, confirmation state), confirm/cancel a pending action, dialog history read.
+- [ ] Frontend: conversation view in the voice overlay (toggleable, taller), streaming renderer, confirmation cards, UI-action executor over the command registry, tier-2 fuzzy matcher in front of the assistant fallback, follow-up window, earcons, TTS attachment via the existing application-speech path.
+- [ ] Config: `assistant_enabled`, `assistant_model`, `assistant_daily_budget_usd`, `assistant_max_context_kb`, per-action-class trust levels.
+- [ ] Logging: every turn, tool call, resolution, confirmation, and refusal logged with dialog and turn ids; latency stages recorded like the STT stage breakdown.
+- [ ] Tests: tool-bridge resolution and refusal paths, trust-policy classes, dialog-state expiry, context assembly bounds, dual-form response contract, streaming event order; frontend tests for the conversation view and confirmation cards.
+- [ ] Docs: new `design/features/assistant.md`, routing-table entry, `design/features/voice.md` cross-reference, `design/interfaces.md` endpoints, `technical/backend/packages.md` module entry.
+
+### Phase 10.6 exit criteria
+
+- [ ] A typed dialog can list the fleet, answer status questions with system-computed freshness, queue a reworded message, spawn a session, and walk a guarded approval, all through the registry bridge with the trust policy enforced daemon-side.
+- [ ] The same dialog continues across two devices against one daemon-owned state.
+- [ ] An unmatched wake-word utterance reaches the assistant instead of a refusal, and the reflex path's measured latency is unchanged.
+- [ ] Assistant replies play through the existing segmented TTS pipeline with barge-in working, and the assistant lane reports itself offline cleanly with tiers 1-2 unaffected.
+- [ ] Spend appears in the automation ledger under `builtin:assistant` and stops at the daily budget.
 
 ## Phase 11 — Public packaging and release
 

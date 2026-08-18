@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { SettingLink } from './SettingLink'
 import {
   CLIPBOARD_CHANGED_EVENT,
   clearClipboardHistory,
@@ -185,7 +186,10 @@ export function ClipboardTab({ onInsert, onDone, onOpenSettings }: Props) {
   const retention = history?.retention_hours ? `${history.retention_hours}h` : 'until evicted'
   return <>
       <p class="drawer-status">{history ? `${history.count} kept · ${history.persist ? 'saved to disk' : 'memory only'} · ${retention}` : 'loading…'}</p>
-      {history && !history.enabled && <p class="clipboard-disabled">Clipboard history is off. <button class="link" onClick={onOpenSettings}>Turn it on in Settings → Input</button>.</p>}
+      {history && !history.enabled && <div class="setting-gate">
+        <p><strong>Clipboard history is off.</strong> Nothing copied inside swe-mux is being kept, so this panel stays empty however much you copy.</p>
+        <SettingLink target="clipboard.history">Turn on clipboard history</SettingLink>
+      </div>}
       <div class="clipboard-search">
         <input ref={search} value={query} onInput={event => setQuery(event.currentTarget.value)} onKeyDown={onSearchKey} placeholder="Filter copied text…" aria-label="Filter clipboard history" />
       </div>

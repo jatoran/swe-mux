@@ -265,6 +265,20 @@ async def repository_identity(project_root: str | Path) -> tuple[str, str]:
         _run_git_bytes(project_root, "rev-parse", "--show-toplevel"),
         _run_git_bytes(project_root, "rev-parse", "--git-common-dir"),
     )
+    # "This folder is not a repository yet" is a state the Git tab offers an action for
+    # (`git_init.initialize_repository`), so it has to arrive as its own code rather than
+    # as Git's generic `fatal:`. Narrow on purpose: 128 is Git's fatal exit, so a missing
+    # binary (1) and a timeout (124) fall through, and requiring the folder to exist with
+    # no `.git` of its own keeps a corrupt or unreadable repository out of it - offering
+    # to initialize one of those would reinitialize a repository the user still has.
+    if (
+        root_result.code == 128
+        and Path(project_root).is_dir()
+        and not (Path(project_root) / ".git").exists()
+    ):
+        raise GitReviewError(
+            "not_git_repository", "Project folder is not a Git repository", 404
+        )
     root = (
         _require_success(root_result, "resolving the repository").decode("utf-8", "replace").strip()
     )

@@ -673,6 +673,23 @@ class Config:
     # answer everything" are different decisions, and the first is the one most
     # installs want.
     approval_allow_all_permitted: bool = True
+    # Deliver an already-decided approval as a keystroke when the CLI publishes
+    # the request but ignores the answer. Measured on Claude Code 2.1.234: the
+    # `PermissionRequest` hook fires, mux answers `allow` in 0.25 s, and the CLI
+    # shows the prompt anyway a constant ~6 s later regardless of the hook
+    # timeout — so the documented decision channel exists and does nothing.
+    #
+    # This types only what the structured request already authorized, only while
+    # this session's own screen is showing that dialog. It cannot decide
+    # anything, so a trust dialog or a `/clear` confirmation — neither of which
+    # raises a permission request — is unreachable from here. On by default
+    # because a decided approval that never arrives is the failure it exists to
+    # fix; a CLI that starts honouring the hook silently retires it, since the
+    # dialog never appears for the watcher to answer.
+    approval_keystroke_delivery: bool = True
+    # How long a decided approval waits for its dialog to appear before the
+    # watcher gives up and lets the ordinary visible approval stand.
+    approval_keystroke_window_seconds: float = 30.0
     # Phase 5 agent-to-agent messaging (`mux.notify`). The tool exists by
     # default because a notify lands as an inert draft unless the *receiving*
     # session opted in to accepting agent messages.
@@ -1152,6 +1169,8 @@ def _validate(config: Config) -> None:
         errors["approval_max_auto_per_grant"] = "must be between 1 and 5000 requests"
     if not 1 <= config.approval_hook_timeout_seconds <= 60:
         errors["approval_hook_timeout_seconds"] = "must be between 1 and 60 seconds"
+    if not 1 <= config.approval_keystroke_window_seconds <= 300:
+        errors["approval_keystroke_window_seconds"] = "must be between 1 and 300 seconds"
     for field_name in ("auto_delivery_quiet_start", "auto_delivery_quiet_end"):
         value = str(getattr(config, field_name) or "")
         if value and not QUIET_TIME.fullmatch(value):
