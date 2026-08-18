@@ -38,7 +38,7 @@ from uuid import uuid4
 from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 from aiohttp.multipart import BodyPartReader
 
-from . import git_review, session_titles
+from . import git_init, git_review, session_titles
 from .adapters import BackendAdapter, ShellAdapter, build_agent_adapter
 from .agent_context import AgentContextConflict, AgentContextService
 from .agent_environment import discover_agent_environment
@@ -997,6 +997,7 @@ def create_app(
             web.get("/api/git/provenance", git_provenance),
             web.get("/api/git/commits/{oid}/changes", git_commit_changes),
             web.get("/api/git/diff", git_diff),
+            web.post("/api/git/init", init_repository),
             web.post("/api/git/worktrees", create_worktree),
             web.post("/api/git/worktrees/session", spawn_worktree_session),
             web.delete("/api/git/worktrees", remove_worktree),
@@ -11847,6 +11848,60 @@ def _ensure_worktree_parent(config: Config, target: Path) -> None:
         "worktree_parent_created path=%s configured_root=%s",
         parent,
         configured_root,
+    )
+
+
+async def init_repository(request: web.Request) -> web.Response:
+    """Create a Git repository for a Project whose folder does not have one yet."""
+
+    operation_id = uuid4().hex
+    body = await request.json()
+    project = request.app["projects"].projects.get(str(body.get("project_id", "")))
+    if project is None:
+        raise git_review.GitReviewError("project_not_found", "unknown Project", 404)
+    if not Path(project.root).is_dir():
+        raise git_review.GitReviewError(
+            "root_unavailable", "the Project's folder no longer exists", 404
+        )
+    # Re-checked here rather than trusted from whatever the caller last read: `git init`
+    # on a folder Git already tracks reinitializes it, which is not what any caller of
+    # this endpoint is asking for.
+    try:
+        await git_review.repository_identity(project.root)
+    except git_review.GitReviewError as exc:
+        if exc.code != "not_git_repository":
+            raise
+    else:
+        raise git_review.GitReviewError(
+            "already_initialized", "this Project is already inside a Git repository", 409
+        )
+    log.info(
+        "repository_init_started operation_id=%s project_id=%s root=%s",
+        operation_id,
+        project.id,
+        project.root,
+    )
+    try:
+        result = await git_init.initialize_repository(project.root, operation_id=operation_id)
+    except git_init.RepositoryInitError as exc:
+        log.warning(
+            "repository_init_failed operation_id=%s project_id=%s root=%s",
+            operation_id,
+            project.id,
+            project.root,
+        )
+        return json_response(
+            {"error": str(exc), "code": "git_error", "operation_id": operation_id}, 400
+        )
+    await request.app["events"].emit("git_changed", project_id=project.id)
+    return json_response(
+        {
+            "ok": True,
+            "root": result.root,
+            "branch": result.branch,
+            "gitignore": result.gitignore,
+            "operation_id": operation_id,
+        }
     )
 
 
